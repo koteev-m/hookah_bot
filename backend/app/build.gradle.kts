@@ -1,0 +1,41 @@
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
+plugins {
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ktor)
+    application
+}
+
+application {
+    mainClass.set("com.hookah.platform.backend.MainKt")
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+dependencies {
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.netty)
+    implementation(libs.ktor.server.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.ktor.server.call.logging)
+    implementation(libs.ktor.server.call.id)
+    implementation(libs.ktor.server.default.headers)
+    implementation(libs.ktor.client.java)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.client.logging)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.logback.classic)
+    implementation(libs.slf4j.api)
+
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.ktor.server.test.host)
+}
+
+tasks.withType<KotlinCompile>().configureEach {
+    compilerOptions.freeCompilerArgs.addAll(
+        listOf("-Xjsr305=strict")
+    )
+}

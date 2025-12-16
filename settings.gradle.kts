@@ -1,1 +1,10 @@
-rootProject.name = "Hookah_bot"
+rootProject.name = "hookah-bot"
+
+include("backend")
+include("backend:app")
+
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+    }
+}

@@ -1,0 +1,12 @@
+.git
+.gradle
+**/build
+**/.idea
+**/.vscode
+miniapp/node_modules
+miniapp/dist
+node_modules
+*.iml
+**/out
+.DS_Store
+.env
