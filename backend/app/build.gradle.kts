@@ -29,6 +29,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.logback.classic)
     implementation(libs.slf4j.api)
+    implementation(libs.flyway.core)
+    implementation(libs.flyway.postgresql)
+    implementation(libs.postgresql)
+    implementation(libs.hikaricp)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.ktor.server.test.host)

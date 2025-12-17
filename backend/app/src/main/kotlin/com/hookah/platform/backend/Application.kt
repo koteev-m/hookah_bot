@@ -1,5 +1,7 @@
 package com.hookah.platform.backend
 
+import com.hookah.platform.backend.db.DbConfig
+import com.hookah.platform.backend.db.DatabaseFactory
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.java.Java
@@ -11,8 +13,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
-import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.application.ApplicationStopped
+import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.config.ApplicationConfig
@@ -32,6 +34,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.head
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -44,6 +48,9 @@ private val logger = LoggerFactory.getLogger("Application")
 
 @Serializable
 private data class HealthResponse(val status: String)
+
+@Serializable
+private data class DbHealthResponse(val status: String, val message: String? = null)
 
 @Serializable
 private data class VersionResponse(
@@ -60,6 +67,7 @@ fun Application.module() {
     }
 
     val appConfig = environment.config
+    val dbConfig = DbConfig.from(appConfig)
     val appEnv = appConfig.optionalString("app.env") ?: "dev"
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }
@@ -71,9 +79,16 @@ fun Application.module() {
         }
     }
 
+    val dataSource = DatabaseFactory.init(dbConfig)
+
+    if (dataSource != null) {
+        logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
+    }
+
     environment.monitor.subscribe(ApplicationStopping) {
         logger.info("Application stopping, closing resources")
         httpClient.close()
+        DatabaseFactory.close(dataSource)
     }
     environment.monitor.subscribe(ApplicationStopped) {
         logger.info("Application stopped")
@@ -97,6 +112,45 @@ fun Application.module() {
     routing {
         get("/health") {
             call.respond(HealthResponse(status = "ok"))
+        }
+
+        get("/db/health") {
+            val dataSourceToUse = dataSource
+            if (dataSourceToUse == null) {
+                call.respond(HttpStatusCode.ServiceUnavailable, DbHealthResponse(status = "disabled"))
+                return@get
+            }
+
+            try {
+                val isOk = withContext(Dispatchers.IO) {
+                    dataSourceToUse.connection.use { connection ->
+                        connection.createStatement().use { statement ->
+                            statement.executeQuery("SELECT 1").use { resultSet ->
+                                resultSet.next()
+                            }
+                        }
+                    }
+                }
+
+                if (isOk) {
+                    call.respond(DbHealthResponse(status = "ok"))
+                } else {
+                    call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        DbHealthResponse(status = "error", message = "db_unavailable")
+                    )
+                }
+            } catch (e: Exception) {
+                val safeMessage = (e.message ?: "unknown error")
+                    .replace(Regex("[\\r\\n\\t]"), " ")
+                    .take(200)
+                logger.warn("DB health check failed: {} {}", e::class.simpleName, safeMessage)
+                logger.debug("DB health check failed", e)
+                call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    DbHealthResponse(status = "error", message = "db_unavailable")
+                )
+            }
         }
 
         get("/version") {
@@ -220,3 +274,6 @@ private suspend fun ApplicationCall.redirectToMiniAppRoot() {
 
 private fun ApplicationConfig.optionalString(path: String): String? =
     if (propertyOrNull(path) != null) property(path).getString() else null
+
+private fun redactJdbcUrl(jdbcUrl: String): String =
+    jdbcUrl.replace(Regex("(?i)(password)=([^&;]+)"), "$1=***")
