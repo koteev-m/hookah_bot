@@ -15,6 +15,15 @@
 ### Эндпойнты
 - `GET /health` → `{ "status": "ok" }`
 - `GET /version` → сведения о версии/окружении
+- `GET /db/health` → проверка соединения с Postgres (возвращает `disabled`, если БД не настроена)
+
+## Database (Postgres + Flyway)
+- Скопировать переменные окружения: `cp .env.example .env`
+- Для локальной разработки PostgreSQL: `docker compose up -d postgres`
+- Загрузить переменные окружения в shell (bash): `set -a; source .env; set +a`
+- Запустить backend: `./gradlew :backend:app:run`
+- Проверить: `curl -f http://localhost:8080/db/health`
+- В Docker backend подключается к `postgres:5432`, снаружи Docker — к `localhost:5432`
 
 ## Mini App локально
 ```bash

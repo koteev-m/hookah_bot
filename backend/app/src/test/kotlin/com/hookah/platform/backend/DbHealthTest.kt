@@ -9,16 +9,16 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class HealthTest {
+class DbHealthTest {
     @Test
-    fun `health endpoint returns ok`() = testApplication {
+    fun `db health endpoint returns disabled when db is not configured`() = testApplication {
         environment {
             config = MapApplicationConfig("db.jdbcUrl" to "")
         }
         application { module() }
 
-        val response = client.get("/health")
-        assertEquals(HttpStatusCode.OK, response.status)
-        assertTrue(response.bodyAsText().contains("ok"))
+        val response = client.get("/db/health")
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertTrue(response.bodyAsText().contains("disabled"))
     }
 }

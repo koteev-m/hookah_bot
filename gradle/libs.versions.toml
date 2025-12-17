@@ -4,6 +4,9 @@ ktor = "3.3.3"
 logback = "1.5.12"
 slf4j = "2.0.16"
 kotlinx-serialization = "1.7.3"
+flyway = "11.19.0"
+postgresql = "42.7.8"
+hikaricp = "7.0.2"
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
@@ -31,3 +34,7 @@ logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "lo
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }

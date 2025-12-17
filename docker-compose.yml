@@ -30,6 +30,9 @@ services:
       APP_HTTP_PORT: ${APP_HTTP_PORT:-8080}
       MINIAPP_DEV_SERVER_URL: ${MINIAPP_DEV_SERVER_URL:-}
       MINIAPP_STATIC_DIR: ${MINIAPP_STATIC_DIR:-}
+      DB_JDBC_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "8080:8080"
     depends_on:
