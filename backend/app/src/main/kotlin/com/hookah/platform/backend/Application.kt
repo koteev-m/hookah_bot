@@ -2,10 +2,25 @@ package com.hookah.platform.backend
 
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
+import com.hookah.platform.backend.telegram.TelegramApiClient
+import com.hookah.platform.backend.telegram.TelegramBotConfig
+import com.hookah.platform.backend.telegram.TelegramBotRouter
+import com.hookah.platform.backend.telegram.TelegramUpdate
+import com.hookah.platform.backend.telegram.debugTelegramException
+import com.hookah.platform.backend.telegram.db.ChatContextRepository
+import com.hookah.platform.backend.telegram.db.DialogStateRepository
+import com.hookah.platform.backend.telegram.db.IdempotencyRepository
+import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.TableTokenRepository
+import com.hookah.platform.backend.telegram.db.UserRepository
+import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.java.Java
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.request
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
@@ -23,6 +38,7 @@ import io.ktor.server.plugins.callid.CallId
 import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
+import io.ktor.server.request.receive
 import io.ktor.server.request.queryString
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
@@ -32,10 +48,19 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.head
+import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -66,6 +91,11 @@ fun Application.module() {
         prettyPrint = false
     }
 
+    val telegramJson = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = false
+    }
+
     val appConfig = environment.config
     val dbConfig = DbConfig.from(appConfig)
     val appEnv = appConfig.optionalString("app.env") ?: "dev"
@@ -85,9 +115,100 @@ fun Application.module() {
         logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
     }
 
+    val telegramConfig = TelegramBotConfig.from(appConfig)
+    var telegramScope: CoroutineScope? = null
+    var telegramApiClient: TelegramApiClient? = null
+    var telegramRouter: TelegramBotRouter? = null
+    if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
+        telegramScope = CoroutineScope(
+            SupervisorJob() + Dispatchers.Default + CoroutineName("telegram-bot")
+        )
+        val botScope = telegramScope!!
+        val requestTimeoutMs = (telegramConfig.longPollingTimeoutSeconds + 15L) * 1000
+        val socketTimeoutMs = (telegramConfig.longPollingTimeoutSeconds + 10L) * 1000
+        telegramApiClient = TelegramApiClient(
+            token = telegramConfig.token!!,
+            client = HttpClient(Java) {
+                install(ContentNegotiation) { json(telegramJson) }
+                install(HttpTimeout) {
+                    connectTimeoutMillis = 10_000
+                    socketTimeoutMillis = socketTimeoutMs
+                    requestTimeoutMillis = requestTimeoutMs
+                }
+            },
+            json = telegramJson
+        )
+        telegramRouter = TelegramBotRouter(
+            config = telegramConfig,
+            apiClient = telegramApiClient,
+            idempotencyRepository = IdempotencyRepository(dataSource),
+            userRepository = UserRepository(dataSource),
+            tableTokenRepository = TableTokenRepository(dataSource),
+            chatContextRepository = ChatContextRepository(dataSource),
+            dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
+            ordersRepository = OrdersRepository(dataSource),
+            staffCallRepository = StaffCallRepository(dataSource),
+            venueAccessRepository = VenueAccessRepository(dataSource),
+            json = telegramJson,
+            scope = botScope
+        )
+
+        when (telegramConfig.mode) {
+            TelegramBotConfig.Mode.LONG_POLLING -> {
+                val router = telegramRouter
+                if (router != null) {
+                    botScope.launch {
+                        var offset: Long? = null
+                        while (isActive) {
+                            val updates: List<TelegramUpdate> = try {
+                                telegramApiClient.getUpdates(
+                                    offset,
+                                    telegramConfig.longPollingTimeoutSeconds
+                                )
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                logger.warn("Telegram long polling error: {}", sanitizeTelegramForLog(e.message))
+                                logger.debugTelegramException(e) { "Telegram long polling exception" }
+                                delay(1000)
+                                continue
+                            }
+
+                            val sortedUpdates = updates.sortedBy { it.updateId }
+                            for (update in sortedUpdates) {
+                                try {
+                                    router.process(update)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    logger.warn(
+                                        "Telegram update processing failed id={}: {}",
+                                        update.updateId,
+                                        sanitizeTelegramForLog(e.message)
+                                    )
+                                    logger.debugTelegramException(e) {
+                                        "Telegram update processing exception id=${update.updateId}"
+                                    }
+                                } finally {
+                                    offset = update.updateId + 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            TelegramBotConfig.Mode.WEBHOOK -> {
+                logger.info("Telegram webhook mode enabled at {}", telegramConfig.webhookPath)
+            }
+        }
+    }
+
     environment.monitor.subscribe(ApplicationStopping) {
         logger.info("Application stopping, closing resources")
         httpClient.close()
+        telegramApiClient?.close()
+        telegramScope?.cancel()
         DatabaseFactory.close(dataSource)
     }
     environment.monitor.subscribe(ApplicationStopped) {
@@ -166,6 +287,31 @@ fun Application.module() {
         }
 
         miniAppRoutes(miniAppDevServerUrl, miniAppStaticDir, httpClient)
+
+        if (telegramConfig.enabled && telegramConfig.mode == TelegramBotConfig.Mode.WEBHOOK) {
+            val router = telegramRouter
+            if (router != null) {
+                post(telegramConfig.webhookPath) {
+                    val secret = telegramConfig.webhookSecretToken
+                    if (!secret.isNullOrBlank()) {
+                        val header = call.request.headers["X-Telegram-Bot-Api-Secret-Token"]
+                        if (header != secret) {
+                            call.respond(HttpStatusCode.Forbidden)
+                            return@post
+                        }
+                    }
+                    try {
+                        val update = call.receive<TelegramUpdate>()
+                        router.process(update)
+                        call.respond(HttpStatusCode.OK)
+                    } catch (e: Exception) {
+                        logger.warn("Webhook processing failed: {}", sanitizeTelegramForLog(e.message))
+                        logger.debugTelegramException(e) { "Webhook processing exception" }
+                        call.respond(HttpStatusCode.InternalServerError)
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -61,5 +61,20 @@ curl http://localhost:8080/version
 ## Mini App статика
 - Если нет dev-сервера, можно собрать `npm run build` и указать `MINIAPP_STATIC_DIR=miniapp/dist`, после чего открыть `http://localhost:8080/miniapp/`.
 
-## Дальнейшие шаги
-- На следующих шагах добавим telegram bot модуль и режимы long polling/webhook; пока только backend skeleton.
+## Telegram Bot (long polling / webhook)
+- Скопировать `.env.example` → `.env` и заполнить переменные `TELEGRAM_*` (токен не коммитить).
+- Для long polling: `set -a; source .env; set +a; ./gradlew :backend:app:run`.
+- Для webhook: нужен публичный HTTPS. Запустить backend, затем вручную вызвать setWebhook:
+  ```bash
+  curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+    -d "url=https://your-domain/telegram/webhook" \
+    -d "secret_token=<TELEGRAM_WEBHOOK_SECRET_TOKEN>"
+  ```
+- Проверка: в Telegram отправить `/start` и `/start <table_token>` — должно показать меню или контекст стола.
+- Для локальной проверки table_token (при поднятой БД `docker compose up -d postgres`):
+  ```sql
+  INSERT INTO venues(name, status, staff_chat_id) VALUES ('Demo Hookah', 'active_published', NULL) RETURNING id;
+  -- возьмите id из предыдущего шага
+  INSERT INTO venue_tables(venue_id, table_number) VALUES (<venue_id>, 5) RETURNING id;
+  INSERT INTO table_tokens(token, table_id) VALUES ('demo-token', <table_id>);
+  ```
