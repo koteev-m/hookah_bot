@@ -2,13 +2,18 @@ package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.telegram.StaffCallReason
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
+import com.hookah.platform.backend.telegram.db.ConsumeResult
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
+import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.BindResult
+import com.hookah.platform.backend.telegram.db.UnlinkResult
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.summarizeJsonKeysForLog
@@ -20,6 +25,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
+import java.time.Instant
+import java.util.Locale
 
 class TelegramBotRouter(
     private val config: TelegramBotConfig,
@@ -31,6 +38,8 @@ class TelegramBotRouter(
     private val dialogStateRepository: DialogStateRepository,
     private val ordersRepository: OrdersRepository,
     private val staffCallRepository: StaffCallRepository,
+    private val staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
+    private val venueRepository: VenueRepository,
     private val venueAccessRepository: VenueAccessRepository,
     private val json: Json,
     private val scope: CoroutineScope
@@ -60,9 +69,13 @@ class TelegramBotRouter(
         val chatId = message.chat.id
         val text = message.text?.trim()
         val state = dialogStateRepository.get(chatId)
+        val command = parseCommand(text)
 
         when {
-            !text.isNullOrBlank() && text.startsWith("/start") -> handleStartCommand(chatId, from, text)
+            command?.name == "/start" -> handleStartCommand(chatId, from, text ?: "")
+            command?.name == "/link" -> handleLinkCommand(message, command.argument)
+            command?.name == "/unlink" -> handleUnlinkCommand(message)
+            command?.name == "/link_test" -> handleLinkTestCommand(message)
             text == "🧾 Активный заказ" -> showActiveOrder(chatId)
             text == "✍️ Быстрый заказ" -> startQuickOrder(chatId)
             text == "🛎️ Вызов персонала" -> showStaffCallReasons(chatId)
@@ -369,8 +382,154 @@ class TelegramBotRouter(
         apiClient.sendMessage(chatId, "Сначала отсканируйте QR на столе.")
     }
 
+    private fun parseCommand(text: String?): ParsedCommand? {
+        if (text.isNullOrBlank() || !text.startsWith("/")) return null
+        val parts = text.trim().split(Regex("\\s+"))
+        if (parts.isEmpty()) return null
+        val name = parts.first().substringBefore("@").lowercase(Locale.ROOT)
+        return ParsedCommand(name = name, argument = parts.getOrNull(1))
+    }
+
+    private suspend fun handleLinkCommand(message: Message, code: String?) {
+        val context = resolveGroupCommandContext(message) ?: return
+        val chatId = context.chatId
+        val userId = context.userId
+        if (code.isNullOrBlank()) {
+            apiClient.sendMessage(chatId, "Использование: /link <код>. Код генерируется в режиме заведения.")
+            return
+        }
+        val consumeResult = staffChatLinkCodeRepository.consumeLinkCode(
+            code.trim(),
+            userId,
+            chatId,
+            message.messageId
+        ) { connection, venueId ->
+            venueAccessRepository.hasVenueAdminOrOwner(connection, userId, venueId)
+        }
+        when (consumeResult) {
+            is ConsumeResult.Success -> {
+                when (val bindResult = venueRepository.bindStaffChat(consumeResult.venueId, chatId, userId)) {
+                    is BindResult.Success -> {
+                        apiClient.sendMessage(
+                            chatId,
+                            "✅ Чат привязан к заведению ${bindResult.venueName}. Уведомления о заказах будут приходить сюда."
+                        )
+                    }
+                    is BindResult.AlreadyBoundSameChat -> {
+                        apiClient.sendMessage(
+                            chatId,
+                            "Этот чат уже привязан к заведению ${bindResult.venueName}."
+                        )
+                    }
+                    is BindResult.ChatAlreadyLinked -> {
+                        apiClient.sendMessage(
+                            chatId,
+                            "Этот чат уже привязан к другому заведению. Сначала выполните /unlink в этом чате."
+                        )
+                    }
+                    BindResult.NotFound -> {
+                        apiClient.sendMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
+                    }
+                    BindResult.DatabaseError -> {
+                        apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                    }
+                }
+            }
+            is ConsumeResult.Unauthorized -> {
+                apiClient.sendMessage(chatId, "Недостаточно прав.")
+            }
+            ConsumeResult.InvalidOrExpired -> {
+                apiClient.sendMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
+            }
+            ConsumeResult.DatabaseError -> {
+                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+            }
+        }
+    }
+
+    private suspend fun handleUnlinkCommand(message: Message) {
+        val context = resolveGroupCommandContext(message) ?: return
+        val chatId = context.chatId
+        val venue = venueRepository.findVenueByStaffChatId(chatId)
+        if (venue == null) {
+            apiClient.sendMessage(chatId, "Этот чат не привязан.")
+            return
+        }
+        val userId = context.userId
+        val hasRole = venueAccessRepository.hasVenueAdminOrOwner(userId, venue.id)
+        if (!hasRole) {
+            apiClient.sendMessage(chatId, "Недостаточно прав.")
+            return
+        }
+        when (val result = venueRepository.unlinkStaffChatByChatId(chatId, userId)) {
+            is UnlinkResult.Success -> {
+                apiClient.sendMessage(chatId, "✅ Чат отвязан.")
+            }
+            UnlinkResult.NotLinked -> {
+                apiClient.sendMessage(chatId, "Этот чат не привязан.")
+            }
+            UnlinkResult.DatabaseError -> {
+                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+            }
+        }
+    }
+
+    private suspend fun handleLinkTestCommand(message: Message) {
+        val context = resolveGroupCommandContext(message) ?: return
+        val chatId = context.chatId
+        val venue = venueRepository.findVenueByStaffChatId(chatId)
+        if (venue == null) {
+            apiClient.sendMessage(chatId, "Этот чат не привязан. Сгенерируйте код и выполните /link <код>.")
+            return
+        }
+        val userId = context.userId
+        val hasRole = venueAccessRepository.hasVenueAdminOrOwner(userId, venue.id)
+        if (!hasRole) {
+            apiClient.sendMessage(chatId, "Недостаточно прав.")
+            return
+        }
+        val ts = Instant.now().toString()
+        val text = "✅ Тестовое уведомление. Чат привязан к ${venue.name}. (ts=$ts)"
+        apiClient.sendMessage(chatId, text)
+    }
+
+    private suspend fun ensureChatAdmin(chatId: Long, userId: Long): ChatAdminCheckResult {
+        if (!config.requireStaffChatAdmin) return ChatAdminCheckResult.Allowed
+        val member = apiClient.getChatMember(chatId, userId) ?: return ChatAdminCheckResult.Failed
+        return when (member.status) {
+            "creator", "administrator" -> ChatAdminCheckResult.Allowed
+            else -> ChatAdminCheckResult.NotAllowed
+        }
+    }
+
+    private suspend fun resolveGroupCommandContext(message: Message): GroupCommandContext? {
+        val chatId = message.chat.id
+        if (!isGroupChat(message.chat.type)) {
+            apiClient.sendMessage(chatId, "Эту команду нужно отправить в групповом чате персонала.")
+            return null
+        }
+        val userId = message.fromUser?.id
+        if (userId == null) {
+            apiClient.sendMessage(chatId, "Недостаточно прав.")
+            return null
+        }
+        return when (val chatAdminCheck = ensureChatAdmin(chatId, userId)) {
+            ChatAdminCheckResult.Failed -> {
+                apiClient.sendMessage(chatId, "Не удалось проверить права в чате, попробуйте позже.")
+                null
+            }
+            ChatAdminCheckResult.NotAllowed -> {
+                apiClient.sendMessage(chatId, "Недостаточно прав.")
+                null
+            }
+            ChatAdminCheckResult.Allowed -> GroupCommandContext(chatId, userId)
+        }
+    }
+
+    private fun isGroupChat(type: String): Boolean = type == "group" || type == "supergroup"
+
     private fun parseStaffCallReason(value: String): StaffCallReason =
-        runCatching { StaffCallReason.valueOf(value.uppercase()) }
+        runCatching { StaffCallReason.valueOf(value.uppercase(Locale.ROOT)) }
             .getOrDefault(StaffCallReason.OTHER)
 
     private suspend fun safeUpsertUser(user: User) {
@@ -383,3 +542,19 @@ class TelegramBotRouter(
         logger.debugTelegramException(throwable) { "Best-effort exception for $operation" }
     }
 }
+
+private data class ParsedCommand(
+    val name: String,
+    val argument: String?
+)
+
+private sealed interface ChatAdminCheckResult {
+    data object Allowed : ChatAdminCheckResult
+    data object NotAllowed : ChatAdminCheckResult
+    data object Failed : ChatAdminCheckResult
+}
+
+private data class GroupCommandContext(
+    val chatId: Long,
+    val userId: Long
+)

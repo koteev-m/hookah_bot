@@ -11,9 +11,11 @@ import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
+import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import io.ktor.client.HttpClient
@@ -85,6 +87,18 @@ private data class VersionResponse(
     val time: String
 )
 
+@Serializable
+private data class LinkCodeResponse(
+    val code: String,
+    val expiresAt: String,
+    val ttlSeconds: Long
+)
+
+@Serializable
+private data class LinkCodeRequest(
+    val userId: Long? = null
+)
+
 fun Application.module() {
     val json = Json {
         ignoreUnknownKeys = true
@@ -110,6 +124,7 @@ fun Application.module() {
     }
 
     val dataSource = DatabaseFactory.init(dbConfig)
+    val venueRepository = VenueRepository(dataSource)
 
     if (dataSource != null) {
         logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
@@ -119,6 +134,12 @@ fun Application.module() {
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
+    val staffChatLinkCodeRepository = StaffChatLinkCodeRepository(
+        dataSource = dataSource,
+        pepper = telegramConfig.staffChatLinkSecretPepper,
+        ttlSeconds = telegramConfig.staffChatLinkTtlSeconds
+    )
+    val venueAccessRepository = VenueAccessRepository(dataSource)
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
         telegramScope = CoroutineScope(
             SupervisorJob() + Dispatchers.Default + CoroutineName("telegram-bot")
@@ -148,7 +169,9 @@ fun Application.module() {
             dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
             ordersRepository = OrdersRepository(dataSource),
             staffCallRepository = StaffCallRepository(dataSource),
-            venueAccessRepository = VenueAccessRepository(dataSource),
+            staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+            venueRepository = venueRepository,
+            venueAccessRepository = venueAccessRepository,
             json = telegramJson,
             scope = botScope
         )
@@ -286,6 +309,7 @@ fun Application.module() {
             )
         }
 
+        staffChatLinkRoutes(staffChatLinkCodeRepository, venueAccessRepository, venueRepository)
         miniAppRoutes(miniAppDevServerUrl, miniAppStaticDir, httpClient)
 
         if (telegramConfig.enabled && telegramConfig.mode == TelegramBotConfig.Mode.WEBHOOK) {
@@ -416,6 +440,57 @@ private suspend fun ApplicationCall.redirectToMiniAppRoot() {
     val query = request.queryString()
     val target = if (query.isBlank()) "/miniapp/" else "/miniapp/?$query"
     respondRedirect(url = target, permanent = false)
+}
+
+private fun Route.staffChatLinkRoutes(
+    staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
+    venueAccessRepository: VenueAccessRepository,
+    venueRepository: VenueRepository
+) {
+    route("/api") {
+        post("/venue/{venueId}/staff-chat/link-code") {
+            val venueId = call.parameters["venueId"]?.toLongOrNull()
+            if (venueId == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_venue_id"))
+                return@post
+            }
+            val requestBody = runCatching { call.receive<LinkCodeRequest>() }.getOrNull()
+            val userId = call.request.headers["X-Telegram-User-Id"]?.toLongOrNull()
+                ?: requestBody?.userId
+            if (userId == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_user"))
+                return@post
+            }
+            val hasAccess = venueAccessRepository.hasVenueAdminOrOwner(userId, venueId)
+            if (!hasAccess) {
+                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "forbidden"))
+                return@post
+            }
+            val venueExists = venueRepository.findVenueById(venueId) != null
+            if (!venueExists) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "venue_not_found"))
+                return@post
+            }
+            val created = staffChatLinkCodeRepository.createLinkCode(venueId, userId)
+            if (created == null) {
+                call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "db_unavailable"))
+                return@post
+            }
+            logger.info(
+                "Generated staff chat link code venueId={} by userId={} expiresAt={}",
+                venueId,
+                userId,
+                created.expiresAt
+            )
+            call.respond(
+                LinkCodeResponse(
+                    code = created.code,
+                    expiresAt = created.expiresAt.toString(),
+                    ttlSeconds = created.ttlSeconds
+                )
+            )
+        }
+    }
 }
 
 private fun ApplicationConfig.optionalString(path: String): String? =

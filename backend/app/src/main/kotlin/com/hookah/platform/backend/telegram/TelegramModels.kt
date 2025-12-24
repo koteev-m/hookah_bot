@@ -83,3 +83,9 @@ data class InlineKeyboardButton(
 data class MessageId(
     @SerialName("message_id") val messageId: Long
 )
+
+@Serializable
+data class ChatMember(
+    val user: User,
+    val status: String
+)
