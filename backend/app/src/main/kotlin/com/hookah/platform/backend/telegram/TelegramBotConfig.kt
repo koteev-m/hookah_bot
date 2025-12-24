@@ -1,6 +1,8 @@
 package com.hookah.platform.backend.telegram
 
 import io.ktor.server.config.ApplicationConfig
+import java.util.Locale
+import org.slf4j.LoggerFactory
 
 data class TelegramBotConfig(
     val enabled: Boolean,
@@ -10,7 +12,10 @@ data class TelegramBotConfig(
     val webhookSecretToken: String?,
     val webAppPublicUrl: String?,
     val platformOwnerId: Long?,
-    val longPollingTimeoutSeconds: Int
+    val longPollingTimeoutSeconds: Int,
+    val staffChatLinkTtlSeconds: Long,
+    val staffChatLinkSecretPepper: String,
+    val requireStaffChatAdmin: Boolean
 ) {
     enum class Mode { LONG_POLLING, WEBHOOK }
 
@@ -19,7 +24,7 @@ data class TelegramBotConfig(
             val section = config.config("telegram")
             val enabled = section.propertyOrNull("enabled")?.getString()?.toBoolean() ?: false
             val token = section.propertyOrNull("token")?.getString()?.takeIf { it.isNotBlank() }
-            val mode = when (section.propertyOrNull("mode")?.getString()?.lowercase()) {
+            val mode = when (section.propertyOrNull("mode")?.getString()?.lowercase(Locale.ROOT)) {
                 "webhook" -> Mode.WEBHOOK
                 else -> Mode.LONG_POLLING
             }
@@ -31,6 +36,20 @@ data class TelegramBotConfig(
             val platformOwnerId = section.propertyOrNull("platformOwnerId")?.getString()?.toLongOrNull()
             val longPollingTimeoutSeconds =
                 section.propertyOrNull("longPollingTimeoutSeconds")?.getString()?.toIntOrNull() ?: 25
+            val staffChatLinkTtlSeconds =
+                section.propertyOrNull("staffChatLinkTtlSeconds")?.getString()?.toLongOrNull()
+                    ?.takeIf { it in 60..3600 } ?: 900L
+            val staffChatLinkSecretPepperRaw =
+                section.propertyOrNull("staffChatLinkSecretPepper")?.getString()
+            val staffChatLinkSecretPepper = staffChatLinkSecretPepperRaw?.takeIf { it.isNotBlank() } ?: "dev-pepper"
+            val requireStaffChatAdmin =
+                section.propertyOrNull("requireStaffChatAdmin")?.getString()?.toBooleanStrictOrNull() ?: true
+
+            if (enabled && (staffChatLinkSecretPepperRaw.isNullOrBlank())) {
+                val logger = LoggerFactory.getLogger(TelegramBotConfig::class.java)
+                logger.error("telegram.staffChatLinkSecretPepper is required when telegram bot is enabled")
+                error("staff chat link pepper must be configured")
+            }
 
             return TelegramBotConfig(
                 enabled = enabled,
@@ -40,7 +59,10 @@ data class TelegramBotConfig(
                 webhookSecretToken = webhookSecretToken,
                 webAppPublicUrl = webAppPublicUrl,
                 platformOwnerId = platformOwnerId,
-                longPollingTimeoutSeconds = longPollingTimeoutSeconds
+                longPollingTimeoutSeconds = longPollingTimeoutSeconds,
+                staffChatLinkTtlSeconds = staffChatLinkTtlSeconds,
+                staffChatLinkSecretPepper = staffChatLinkSecretPepper,
+                requireStaffChatAdmin = requireStaffChatAdmin
             )
         }
     }

@@ -92,6 +92,29 @@ class TelegramApiClient(
         client.close()
     }
 
+    suspend fun getChatMember(chatId: Long, userId: Long): ChatMember? {
+        return runCatching {
+            val response: TelegramResponse<ChatMember> = client.get("$baseUrl/getChatMember") {
+                parameter("chat_id", chatId)
+                parameter("user_id", userId)
+            }.safeBody()
+            if (response.ok.not()) {
+                val safeDescription = sanitizeTelegramForLog(response.description)
+                logger.warn(
+                    "Telegram getChatMember failed: {}{}",
+                    safeDescription,
+                    response.errorCode?.let { " (code=$it)" } ?: ""
+                )
+                null
+            } else {
+                response.result
+            }
+        }.onFailure { throwable ->
+            logger.warn("Telegram getChatMember failed: {}", sanitizeTelegramForLog(throwable.message))
+            logger.debugTelegramException(throwable) { "Telegram getChatMember exception" }
+        }.getOrNull()
+    }
+
     private fun buildPayload(chatId: Long, text: String, replyMarkup: ReplyMarkup?): SendMessagePayload {
         val markup: JsonElement? = when (replyMarkup) {
             is ReplyKeyboardMarkup -> json.encodeToJsonElement(ReplyKeyboardMarkup.serializer(), replyMarkup)
