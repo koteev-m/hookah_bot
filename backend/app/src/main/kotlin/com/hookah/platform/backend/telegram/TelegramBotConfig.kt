@@ -41,15 +41,18 @@ data class TelegramBotConfig(
                     ?.takeIf { it in 60..3600 } ?: 900L
             val staffChatLinkSecretPepperRaw =
                 section.propertyOrNull("staffChatLinkSecretPepper")?.getString()
-            val staffChatLinkSecretPepper = staffChatLinkSecretPepperRaw?.takeIf { it.isNotBlank() } ?: "dev-pepper"
+            val staffChatLinkSecretPepper = when {
+                enabled && staffChatLinkSecretPepperRaw.isNullOrBlank() -> {
+                    val logger = LoggerFactory.getLogger(TelegramBotConfig::class.java)
+                    logger.error("telegram.staffChatLinkSecretPepper is required when telegram bot is enabled")
+                    error("staff chat link pepper must be configured")
+                }
+
+                !enabled && staffChatLinkSecretPepperRaw.isNullOrBlank() -> "dev-pepper"
+                else -> staffChatLinkSecretPepperRaw!!.trim()
+            }
             val requireStaffChatAdmin =
                 section.propertyOrNull("requireStaffChatAdmin")?.getString()?.toBooleanStrictOrNull() ?: true
-
-            if (enabled && (staffChatLinkSecretPepperRaw.isNullOrBlank())) {
-                val logger = LoggerFactory.getLogger(TelegramBotConfig::class.java)
-                logger.error("telegram.staffChatLinkSecretPepper is required when telegram bot is enabled")
-                error("staff chat link pepper must be configured")
-            }
 
             return TelegramBotConfig(
                 enabled = enabled,
