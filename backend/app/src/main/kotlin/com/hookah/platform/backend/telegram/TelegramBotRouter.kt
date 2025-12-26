@@ -2,17 +2,17 @@ package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.telegram.StaffCallReason
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
-import com.hookah.platform.backend.telegram.db.ConsumeResult
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.LinkAndBindResult
+import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeFormat
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
-import com.hookah.platform.backend.telegram.db.BindResult
 import com.hookah.platform.backend.telegram.db.UnlinkResult
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import com.hookah.platform.backend.telegram.debugTelegramException
@@ -398,50 +398,54 @@ class TelegramBotRouter(
             apiClient.sendMessage(chatId, "Использование: /link <код>. Код генерируется в режиме заведения.")
             return
         }
-        val consumeResult = staffChatLinkCodeRepository.consumeLinkCode(
-            code.trim(),
+        val normalizedCode = StaffChatLinkCodeFormat.normalizeCode(code)
+        if (normalizedCode == null) {
+            apiClient.sendMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
+            return
+        }
+        val consumeResult = staffChatLinkCodeRepository.linkAndBindWithCode(
+            normalizedCode,
             userId,
             chatId,
-            message.messageId
-        ) { connection, venueId ->
-            venueAccessRepository.hasVenueAdminOrOwner(connection, userId, venueId)
-        }
-        when (consumeResult) {
-            is ConsumeResult.Success -> {
-                when (val bindResult = venueRepository.bindStaffChat(consumeResult.venueId, chatId, userId)) {
-                    is BindResult.Success -> {
-                        apiClient.sendMessage(
-                            chatId,
-                            "✅ Чат привязан к заведению ${bindResult.venueName}. Уведомления о заказах будут приходить сюда."
-                        )
-                    }
-                    is BindResult.AlreadyBoundSameChat -> {
-                        apiClient.sendMessage(
-                            chatId,
-                            "Этот чат уже привязан к заведению ${bindResult.venueName}."
-                        )
-                    }
-                    is BindResult.ChatAlreadyLinked -> {
-                        apiClient.sendMessage(
-                            chatId,
-                            "Этот чат уже привязан к другому заведению. Сначала выполните /unlink в этом чате."
-                        )
-                    }
-                    BindResult.NotFound -> {
-                        apiClient.sendMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
-                    }
-                    BindResult.DatabaseError -> {
-                        apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
-                    }
-                }
+            message.messageId,
+            authorize = { connection, venueId ->
+                venueAccessRepository.hasVenueAdminOrOwner(connection, userId, venueId)
+            },
+            bind = { connection, venueId ->
+                venueRepository.bindStaffChatInTransaction(connection, venueId, chatId, userId)
             }
-            is ConsumeResult.Unauthorized -> {
+        )
+        when (consumeResult) {
+            is LinkAndBindResult.Success -> {
+                apiClient.sendMessage(
+                    chatId,
+                    "✅ Чат привязан к заведению ${consumeResult.venueName}. Уведомления о заказах будут приходить сюда."
+                )
+            }
+
+            is LinkAndBindResult.AlreadyBoundSameChat -> {
+                apiClient.sendMessage(
+                    chatId,
+                    "Этот чат уже привязан к заведению ${consumeResult.venueName}."
+                )
+            }
+
+            is LinkAndBindResult.ChatAlreadyLinked -> {
+                apiClient.sendMessage(
+                    chatId,
+                    "Этот чат уже привязан к другому заведению. Сначала выполните /unlink в этом чате."
+                )
+            }
+
+            is LinkAndBindResult.Unauthorized -> {
                 apiClient.sendMessage(chatId, "Недостаточно прав.")
             }
-            ConsumeResult.InvalidOrExpired -> {
+
+            LinkAndBindResult.InvalidOrExpired -> {
                 apiClient.sendMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
             }
-            ConsumeResult.DatabaseError -> {
+
+            LinkAndBindResult.DatabaseError -> {
                 apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
             }
         }

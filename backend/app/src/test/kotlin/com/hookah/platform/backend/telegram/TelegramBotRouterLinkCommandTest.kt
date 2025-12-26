@@ -1,11 +1,10 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
-import com.hookah.platform.backend.telegram.db.ConsumeResult
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
+import com.hookah.platform.backend.telegram.db.LinkAndBindResult
 import com.hookah.platform.backend.telegram.db.OrdersRepository
-import com.hookah.platform.backend.telegram.db.BindResult
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
@@ -110,14 +109,15 @@ class TelegramBotRouterLinkCommandTest {
     @Test
     fun `link command with bot mention is parsed`() = runBlocking {
         coEvery {
-            staffChatLinkCodeRepository.consumeLinkCode(
+            staffChatLinkCodeRepository.linkAndBindWithCode(
+                "GHJK234",
                 any(),
                 any(),
                 any(),
                 any(),
                 any()
             )
-        } returns ConsumeResult.InvalidOrExpired
+        } returns LinkAndBindResult.InvalidOrExpired
 
         val update = TelegramUpdate(
             updateId = 3,
@@ -125,7 +125,7 @@ class TelegramBotRouterLinkCommandTest {
                 messageId = 12,
                 chat = Chat(id = -700, type = "supergroup"),
                 fromUser = User(id = 300),
-                text = "/link@TestBot CODE123"
+                text = "/link@TestBot ghjk234"
             )
         )
 
@@ -134,14 +134,14 @@ class TelegramBotRouterLinkCommandTest {
         coVerify {
             apiClient.sendMessage(-700, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
         }
+        coVerify { staffChatLinkCodeRepository.linkAndBindWithCode("GHJK234", any(), any(), any(), any(), any()) }
     }
 
     @Test
     fun `link command is idempotent for same venue`() = runBlocking {
         coEvery {
-            staffChatLinkCodeRepository.consumeLinkCode(any(), any(), any(), any(), any())
-        } returns ConsumeResult.Success(venueId = 42L)
-        coEvery { venueRepository.bindStaffChat(42L, -700, 300) } returns BindResult.AlreadyBoundSameChat(42L, "Venue")
+            staffChatLinkCodeRepository.linkAndBindWithCode(any(), any(), any(), any(), any(), any())
+        } returns LinkAndBindResult.AlreadyBoundSameChat(42L, "Venue")
 
         val update = TelegramUpdate(
             updateId = 4,
@@ -155,8 +155,87 @@ class TelegramBotRouterLinkCommandTest {
 
         router.process(update)
 
+        coVerify { apiClient.sendMessage(-700, "Этот чат уже привязан к заведению Venue.") }
+    }
+
+    @Test
+    fun `link command uppercases code`() = runBlocking {
+        coEvery {
+            staffChatLinkCodeRepository.linkAndBindWithCode("GHJK234", any(), any(), any(), any(), any())
+        } returns LinkAndBindResult.Success(venueId = 1L, venueName = "Venue")
+
+        val update = TelegramUpdate(
+            updateId = 5,
+            message = Message(
+                messageId = 14,
+                chat = Chat(id = -700, type = "supergroup"),
+                fromUser = User(id = 300),
+                text = "/link ghjk234"
+            )
+        )
+
+        router.process(update)
+
         coVerify {
-            apiClient.sendMessage(-700, "Этот чат уже привязан к заведению Venue.")
+            apiClient.sendMessage(
+                -700,
+                "✅ Чат привязан к заведению Venue. Уведомления о заказах будут приходить сюда."
+            )
         }
+    }
+
+    @Test
+    fun `link command rejects overly long code`() = runBlocking {
+        val longCode = "A".repeat(80)
+        val update = TelegramUpdate(
+            updateId = 6,
+            message = Message(
+                messageId = 15,
+                chat = Chat(id = -700, type = "supergroup"),
+                fromUser = User(id = 300),
+                text = "/link $longCode"
+            )
+        )
+
+        router.process(update)
+
+        coVerify { apiClient.sendMessage(-700, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.") }
+        coVerify(exactly = 0) { staffChatLinkCodeRepository.linkAndBindWithCode(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `link command rejects code with invalid characters`() = runBlocking {
+        val update = TelegramUpdate(
+            updateId = 7,
+            message = Message(
+                messageId = 16,
+                chat = Chat(id = -701, type = "group"),
+                fromUser = User(id = 301),
+                text = "/link ABCO1"
+            )
+        )
+
+        router.process(update)
+
+        coVerify { apiClient.sendMessage(-701, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.") }
+        coVerify(exactly = 0) { staffChatLinkCodeRepository.linkAndBindWithCode(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `link command rejects unicode code`() = runBlocking {
+        val update = TelegramUpdate(
+            updateId = 8,
+            message = Message(
+                messageId = 17,
+                chat = Chat(id = -702, type = "group"),
+                fromUser = User(id = 302),
+                text = "/link ßßß"
+            )
+        )
+
+        router.process(update)
+
+        coVerify { apiClient.sendMessage(-702, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.") }
+        coVerify(exactly = 0) { staffChatLinkCodeRepository.linkAndBindWithCode(any(), any(), any(), any(), any(), any()) }
     }
 }

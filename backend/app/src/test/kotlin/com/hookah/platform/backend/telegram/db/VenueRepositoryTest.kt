@@ -6,11 +6,13 @@ import javax.sql.DataSource
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.sql.Connection
+import java.sql.SQLException
 
 class VenueRepositoryTest {
     companion object {
@@ -142,5 +144,27 @@ class VenueRepositoryTest {
         val result = repository.bindStaffChat(venueIdTwo, -500, 1001)
 
         assertTrue(result is BindResult.ChatAlreadyLinked) { "result=$result" }
+    }
+
+    @Test
+    fun `hasSqlState detects nested SQLException`() {
+        val nested = RuntimeException(SQLException("duplicate", "23505"))
+        assertTrue(nested.hasSqlState("23505"))
+        assertFalse(RuntimeException(SQLException("fk", "23503")).hasSqlState("23505"))
+    }
+
+    @Test
+    fun `hasSqlState scans nextException chain`() {
+        val sqlException = SQLException("root", "22000")
+        sqlException.setNextException(SQLException("duplicate", "23505"))
+        val wrapped = RuntimeException(sqlException)
+        assertTrue(wrapped.hasSqlState("23505"))
+    }
+
+    @Test
+    fun `hasSqlState inspects suppressed exceptions`() {
+        val parent = RuntimeException(SQLException("root", "22000"))
+        parent.addSuppressed(SQLException("duplicate", "23505"))
+        assertTrue(parent.hasSqlState("23505"))
     }
 }
