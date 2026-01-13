@@ -68,6 +68,22 @@ class SessionAuthTest {
         assertEquals(true, payload["ok"]?.jsonPrimitive?.booleanOrNull)
     }
 
+    @Test
+    fun `should return envelope for unknown api route`() = testApplication {
+        environment {
+            config = buildConfig()
+        }
+
+        application { module() }
+
+        val response = client.get("/api/unknown")
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val error = payload["error"]?.jsonObject
+        assertEquals("NOT_FOUND", error?.get("code")?.jsonPrimitive?.content)
+    }
+
     private companion object {
         const val TELEGRAM_USER_ID: Long = 1234L
     }

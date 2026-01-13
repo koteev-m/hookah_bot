@@ -55,6 +55,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerCon
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.receive
+import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
 import io.ktor.server.request.queryString
 import io.ktor.server.request.uri
@@ -80,6 +81,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
@@ -116,6 +118,21 @@ private data class LinkCodeRequest(
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean = request.path().startsWith("/api/")
+
+private suspend fun ApplicationCall.respondApiError(
+    status: HttpStatusCode,
+    code: String,
+    message: String,
+    details: JsonObject? = null
+) {
+    respond(
+        status,
+        ApiErrorEnvelope(
+            error = ApiError(code = code, message = message, details = details),
+            requestId = callId
+        )
+    )
+}
 
 fun Application.module() {
     val json = Json {
@@ -279,32 +296,46 @@ fun Application.module() {
             if (!call.isApiRequest()) {
                 throw cause
             }
-            call.respond(
-                cause.httpStatus,
-                ApiErrorEnvelope(
-                    error = ApiError(
-                        code = cause.code,
-                        message = cause.message,
-                        details = cause.details
-                    ),
-                    requestId = call.callId
-                )
+            call.respondApiError(
+                status = cause.httpStatus,
+                code = cause.code,
+                message = cause.message,
+                details = cause.details
             )
         }
         exception<Throwable> { call, cause ->
             if (!call.isApiRequest()) {
                 throw cause
             }
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                ApiErrorEnvelope(
-                    error = ApiError(
-                        code = ApiErrorCodes.INTERNAL_ERROR,
-                        message = "Internal error"
-                    ),
-                    requestId = call.callId
-                )
+            if (cause is CancellationException) {
+                throw cause
+            }
+            val safeMessage = (cause.message ?: "unknown error")
+                .replace(Regex("[\\r\\n\\t]"), " ")
+                .take(200)
+            logger.warn(
+                "Unhandled API error requestId={} method={} path={} error={} message={}",
+                call.callId,
+                call.request.httpMethod.value,
+                call.request.path(),
+                cause::class.qualifiedName ?: cause::class.simpleName,
+                safeMessage
             )
+            logger.debug("Unhandled API error", cause)
+            call.respondApiError(
+                status = HttpStatusCode.InternalServerError,
+                code = ApiErrorCodes.INTERNAL_ERROR,
+                message = "Internal error"
+            )
+        }
+        status(HttpStatusCode.NotFound) { call, _ ->
+            if (call.isApiRequest()) {
+                call.respondApiError(
+                    status = HttpStatusCode.NotFound,
+                    code = ApiErrorCodes.NOT_FOUND,
+                    message = "Not found"
+                )
+            }
         }
     }
 
@@ -324,15 +355,10 @@ fun Application.module() {
                 JWTPrincipal(credentials.payload)
             }
             challenge { _, _ ->
-                call.respond(
-                    HttpStatusCode.Unauthorized,
-                    ApiErrorEnvelope(
-                        error = ApiError(
-                            code = ApiErrorCodes.UNAUTHORIZED,
-                            message = "Unauthorized"
-                        ),
-                        requestId = call.callId
-                    )
+                call.respondApiError(
+                    status = HttpStatusCode.Unauthorized,
+                    code = ApiErrorCodes.UNAUTHORIZED,
+                    message = "Unauthorized"
                 )
             }
         }
