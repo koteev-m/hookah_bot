@@ -58,3 +58,21 @@ class ConfigException(
     message = message,
     details = details
 )
+
+class InitDataInvalidException(
+    details: JsonObject? = null
+) : ApiException(
+    code = ApiErrorCodes.INITDATA_INVALID,
+    httpStatus = HttpStatusCode.Unauthorized,
+    message = "Invalid initData",
+    details = details
+)
+
+class DatabaseUnavailableException(
+    details: JsonObject? = null
+) : ApiException(
+    code = ApiErrorCodes.DATABASE_UNAVAILABLE,
+    httpStatus = HttpStatusCode.ServiceUnavailable,
+    message = "Database unavailable",
+    details = details
+)

@@ -26,8 +26,10 @@ object DatabaseFactory {
         val dataSource = HikariDataSource(hikariConfig)
 
         try {
+            val locations = resolveFlywayLocations(dbConfig.jdbcUrl.orEmpty())
             Flyway.configure()
                 .dataSource(dataSource)
+                .locations(*locations)
                 .load()
                 .migrate()
         } catch (e: Exception) {
@@ -48,6 +50,14 @@ object DatabaseFactory {
         if (dataSource is HikariDataSource) {
             logger.info("Closing HikariDataSource")
             dataSource.close()
+        }
+    }
+
+    private fun resolveFlywayLocations(jdbcUrl: String): Array<String> {
+        return if (jdbcUrl.startsWith("jdbc:h2:", ignoreCase = true)) {
+            arrayOf("classpath:db/migration/h2")
+        } else {
+            arrayOf("classpath:db/migration")
         }
     }
 }

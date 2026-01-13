@@ -6,7 +6,9 @@ import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
+import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
+import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
@@ -154,6 +156,7 @@ fun Application.module() {
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }
     val miniAppStaticDir = appConfig.optionalString("miniapp.staticDir")?.takeIf { it.isNotBlank() }
     val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
+    val sessionTokenService = SessionTokenService(sessionTokenConfig)
 
     val httpClient = HttpClient(Java) {
         install(ContentNegotiation) {
@@ -163,6 +166,7 @@ fun Application.module() {
 
     val dataSource = DatabaseFactory.init(dbConfig)
     val venueRepository = VenueRepository(dataSource)
+    val userRepository = UserRepository(dataSource)
 
     if (dataSource != null) {
         logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
@@ -201,7 +205,7 @@ fun Application.module() {
             config = telegramConfig,
             apiClient = telegramApiClient,
             idempotencyRepository = IdempotencyRepository(dataSource),
-            userRepository = UserRepository(dataSource),
+            userRepository = userRepository,
             tableTokenRepository = TableTokenRepository(dataSource),
             chatContextRepository = ChatContextRepository(dataSource),
             dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
@@ -428,6 +432,8 @@ fun Application.module() {
                 )
             )
         }
+
+        miniAppAuthRoutes(appConfig, sessionTokenService, userRepository)
 
         authenticate("miniapp-session") {
             route("/api") {
