@@ -84,7 +84,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
@@ -136,6 +135,18 @@ private suspend fun ApplicationCall.respondApiError(
             error = ApiError(code = code, message = message, details = details),
             requestId = callId
         )
+    )
+}
+
+private suspend fun ApplicationCall.respondInvalidRequestBody() {
+    if (!isApiRequest()) {
+        respond(HttpStatusCode.BadRequest)
+        return
+    }
+    respondApiError(
+        status = HttpStatusCode.BadRequest,
+        code = ApiErrorCodes.INVALID_INPUT,
+        message = "Invalid request body"
     )
 }
 
@@ -299,35 +310,11 @@ fun Application.module() {
     }
 
     install(StatusPages) {
-        exception<ContentTransformationException> { call, cause ->
-            if (!call.isApiRequest()) {
-                throw cause
-            }
-            call.respondApiError(
-                status = HttpStatusCode.BadRequest,
-                code = ApiErrorCodes.INVALID_INPUT,
-                message = "Invalid request body"
-            )
+        exception<ContentTransformationException> { call, _ ->
+            call.respondInvalidRequestBody()
         }
-        exception<BadRequestException> { call, cause ->
-            if (!call.isApiRequest()) {
-                throw cause
-            }
-            call.respondApiError(
-                status = HttpStatusCode.BadRequest,
-                code = ApiErrorCodes.INVALID_INPUT,
-                message = "Invalid request body"
-            )
-        }
-        exception<SerializationException> { call, cause ->
-            if (!call.isApiRequest()) {
-                throw cause
-            }
-            call.respondApiError(
-                status = HttpStatusCode.BadRequest,
-                code = ApiErrorCodes.INVALID_INPUT,
-                message = "Invalid request body"
-            )
+        exception<BadRequestException> { call, _ ->
+            call.respondInvalidRequestBody()
         }
         exception<ApiException> { call, cause ->
             if (!call.isApiRequest()) {

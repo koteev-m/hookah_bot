@@ -75,14 +75,14 @@ private class TelegramAuthService(
     private val sessionTokenService: SessionTokenService,
     private val initDataConfig: InitDataValidationConfig
 ) {
-    suspend fun authenticate(initData: String): TelegramAuthResult {
-        val validator = TelegramInitDataValidator(
-            botTokenProvider = { findTelegramBotToken(appConfig) },
-            nowEpochSeconds = { Instant.now().epochSecond },
-            maxAgeSeconds = initDataConfig.maxAgeSeconds,
-            maxFutureSkewSeconds = initDataConfig.maxFutureSkewSeconds
-        )
+    private val validator = TelegramInitDataValidator(
+        botTokenProvider = { findTelegramBotToken(appConfig) },
+        nowEpochSeconds = { Instant.now().epochSecond },
+        maxAgeSeconds = initDataConfig.maxAgeSeconds,
+        maxFutureSkewSeconds = initDataConfig.maxFutureSkewSeconds
+    )
 
+    suspend fun authenticate(initData: String): TelegramAuthResult {
         val validated = try {
             validator.validate(initData)
         } catch (error: TelegramInitDataError) {
@@ -179,7 +179,7 @@ private fun resolvePositiveLong(
     val raw = fromConfig ?: fromEnv ?: return defaultValue
     val parsed = raw.toLongOrNull()
     if (parsed == null || parsed <= 0) {
-        error("$configKey must be a number")
+        error("$configKey/$envKey must be a positive number")
     }
     return parsed
 }
