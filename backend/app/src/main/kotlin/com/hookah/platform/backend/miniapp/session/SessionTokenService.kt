@@ -41,25 +41,31 @@ data class SessionTokenConfig(
         }
 
         private fun resolveJwtSecret(appConfig: ApplicationConfig, appEnv: String): String {
-            val fromEnv = System.getenv("API_SESSION_JWT_SECRET")?.takeIf { it.isNotBlank() }
             val fromConfig = appConfig.propertyOrNull("api.session.jwtSecret")
                 ?.getString()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val fromEnv = System.getenv("API_SESSION_JWT_SECRET")
+                ?.trim()
                 ?.takeIf { it.isNotBlank() }
             val defaultDevSecret = if (appEnv == "dev") "dev-jwt-secret" else null
 
-            return fromEnv
-                ?: fromConfig
+            return fromConfig
+                ?: fromEnv
                 ?: defaultDevSecret
                 ?: error("api.session.jwtSecret must be configured for env=$appEnv")
         }
 
         private fun resolveTtlSeconds(appConfig: ApplicationConfig): Long {
-            val fromEnv = System.getenv("API_SESSION_TTL_SECONDS")?.takeIf { it.isNotBlank() }
             val fromConfig = appConfig.propertyOrNull("api.session.ttlSeconds")
                 ?.getString()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val fromEnv = System.getenv("API_SESSION_TTL_SECONDS")
+                ?.trim()
                 ?.takeIf { it.isNotBlank() }
 
-            return (fromEnv ?: fromConfig)?.toLongOrNull() ?: 3600L
+            return (fromConfig ?: fromEnv)?.toLongOrNull() ?: 3600L
         }
     }
 }
