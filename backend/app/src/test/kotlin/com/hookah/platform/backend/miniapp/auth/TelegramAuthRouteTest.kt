@@ -117,6 +117,71 @@ class TelegramAuthRouteTest {
         assertEquals("CONFIG_ERROR", payload.error.code)
     }
 
+    @Test
+    fun `invalid json returns invalid input`() = testApplication {
+        environment {
+            config = MapApplicationConfig(
+                "app.env" to "test",
+                "api.session.jwtSecret" to "test-secret"
+            )
+        }
+        application { module() }
+
+        val response = client.post("/api/auth/telegram") {
+            contentType(ContentType.Application.Json)
+            setBody("{")
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
+        assertEquals("INVALID_INPUT", payload.error.code)
+    }
+
+    @Test
+    fun `missing initData returns invalid input`() = testApplication {
+        environment {
+            config = MapApplicationConfig(
+                "app.env" to "test",
+                "api.session.jwtSecret" to "test-secret"
+            )
+        }
+        application { module() }
+
+        val response = client.post("/api/auth/telegram") {
+            contentType(ContentType.Application.Json)
+            setBody("{}")
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
+        assertEquals("INVALID_INPUT", payload.error.code)
+    }
+
+    @Test
+    fun `db disabled returns database unavailable`() = testApplication {
+        environment {
+            config = MapApplicationConfig(
+                "app.env" to "test",
+                "api.session.jwtSecret" to "test-secret",
+                "telegram.token" to botToken
+            )
+        }
+        application { module() }
+
+        val now = Instant.now().epochSecond
+        val userJson = """{"id":12345,"username":"john","first_name":"John","last_name":"Doe"}"""
+        val initData = generateValidInitData(botToken, userJson, now)
+
+        val response = client.post("/api/auth/telegram") {
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(TelegramAuthRequest(initData)))
+        }
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
+        assertEquals("DATABASE_UNAVAILABLE", payload.error.code)
+    }
+
     private fun generateValidInitData(
         botToken: String,
         userJson: String,

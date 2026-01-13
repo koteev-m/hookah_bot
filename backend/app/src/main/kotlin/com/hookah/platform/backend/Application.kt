@@ -54,6 +54,8 @@ import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
+import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.receive
@@ -82,6 +84,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
@@ -296,6 +299,36 @@ fun Application.module() {
     }
 
     install(StatusPages) {
+        exception<ContentTransformationException> { call, cause ->
+            if (!call.isApiRequest()) {
+                throw cause
+            }
+            call.respondApiError(
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+                message = "Invalid request body"
+            )
+        }
+        exception<BadRequestException> { call, cause ->
+            if (!call.isApiRequest()) {
+                throw cause
+            }
+            call.respondApiError(
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+                message = "Invalid request body"
+            )
+        }
+        exception<SerializationException> { call, cause ->
+            if (!call.isApiRequest()) {
+                throw cause
+            }
+            call.respondApiError(
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+                message = "Invalid request body"
+            )
+        }
         exception<ApiException> { call, cause ->
             if (!call.isApiRequest()) {
                 throw cause
