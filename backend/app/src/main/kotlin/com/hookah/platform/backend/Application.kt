@@ -121,7 +121,10 @@ private data class LinkCodeRequest(
     val userId: Long? = null
 )
 
-private fun ApplicationCall.isApiRequest(): Boolean = request.path().startsWith("/api/")
+private fun ApplicationCall.isApiRequest(): Boolean {
+    val p = request.path()
+    return p == "/api" || p.startsWith("/api/")
+}
 
 private suspend fun ApplicationCall.respondApiError(
     status: HttpStatusCode,
