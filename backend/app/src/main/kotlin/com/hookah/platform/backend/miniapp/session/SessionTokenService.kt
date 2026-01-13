@@ -65,7 +65,9 @@ data class SessionTokenConfig(
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
 
-            return (fromConfig ?: fromEnv)?.toLongOrNull() ?: 3600L
+            val raw = fromConfig ?: fromEnv ?: return 3600L
+
+            return raw.toLongOrNull() ?: error("api.session.ttlSeconds must be a number")
         }
     }
 }
