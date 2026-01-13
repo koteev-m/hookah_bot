@@ -1,0 +1,8 @@
+CREATE TABLE users (
+    telegram_user_id BIGINT PRIMARY KEY,
+    username TEXT NULL,
+    first_name TEXT NULL,
+    last_name TEXT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
