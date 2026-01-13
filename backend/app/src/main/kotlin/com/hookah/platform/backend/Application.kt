@@ -76,6 +76,7 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.UUID
 
 private val logger = LoggerFactory.getLogger("Application")
@@ -118,9 +119,9 @@ fun Application.module() {
     }
 
     val appConfig = environment.config
-    val appEnv = System.getenv("APP_ENV")?.takeIf { it.isNotBlank() }
-        ?: appConfig.optionalString("app.env")
-        ?: "dev"
+    val appEnv = (appConfig.optionalString("app.env")
+        ?: System.getenv("APP_ENV")
+        ?: "dev").trim().lowercase(Locale.ROOT)
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }

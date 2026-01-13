@@ -8,6 +8,10 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -48,7 +52,7 @@ class SessionAuthTest {
 
         val sessionTokenService = SessionTokenService(SessionTokenConfig.from(config, appEnv))
         val issuedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS)
-        val issuedToken = sessionTokenService.issueToken(telegramUserId, now = issuedAt)
+        val issuedToken = sessionTokenService.issueToken(TELEGRAM_USER_ID, now = issuedAt)
 
         val response = client.get("/api/guest/_ping") {
             headers {
@@ -57,10 +61,11 @@ class SessionAuthTest {
         }
 
         assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals("""{"ok":true}""", response.bodyAsText())
+        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        assertEquals(true, payload["ok"]?.jsonPrimitive?.booleanOrNull)
     }
 
     private companion object {
-        const val telegramUserId: Long = 1234L
+        const val TELEGRAM_USER_ID: Long = 1234L
     }
 }
