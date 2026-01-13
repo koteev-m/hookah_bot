@@ -39,6 +39,9 @@ class SessionAuthTest {
         val response = client.get("/api/guest/_ping")
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
+        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val error = payload["error"]?.jsonObject
+        assertEquals("UNAUTHORIZED", error?.get("code")?.jsonPrimitive?.content)
     }
 
     @Test

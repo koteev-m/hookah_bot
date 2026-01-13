@@ -1,5 +1,9 @@
 package com.hookah.platform.backend
 
+import com.hookah.platform.backend.api.ApiError
+import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.api.ApiErrorEnvelope
+import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
@@ -44,10 +48,14 @@ import io.ktor.server.application.install
 import io.ktor.server.config.ApplicationConfig
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.plugins.callid.CallId
+import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
+import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.receive
+import io.ktor.server.request.path
 import io.ktor.server.request.queryString
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
@@ -106,6 +114,8 @@ private data class LinkCodeResponse(
 private data class LinkCodeRequest(
     val userId: Long? = null
 )
+
+private fun ApplicationCall.isApiRequest(): Boolean = request.path().startsWith("/api/")
 
 fun Application.module() {
     val json = Json {
@@ -264,6 +274,40 @@ fun Application.module() {
         json(json)
     }
 
+    install(StatusPages) {
+        exception<ApiException> { call, cause ->
+            if (!call.isApiRequest()) {
+                throw cause
+            }
+            call.respond(
+                cause.httpStatus,
+                ApiErrorEnvelope(
+                    error = ApiError(
+                        code = cause.code,
+                        message = cause.message,
+                        details = cause.details
+                    ),
+                    requestId = call.callId
+                )
+            )
+        }
+        exception<Throwable> { call, cause ->
+            if (!call.isApiRequest()) {
+                throw cause
+            }
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                ApiErrorEnvelope(
+                    error = ApiError(
+                        code = ApiErrorCodes.INTERNAL_ERROR,
+                        message = "Internal error"
+                    ),
+                    requestId = call.callId
+                )
+            )
+        }
+    }
+
     install(Authentication) {
         jwt("miniapp-session") {
             val algorithm = Algorithm.HMAC256(sessionTokenConfig.jwtSecret)
@@ -278,6 +322,18 @@ fun Application.module() {
                 val subject = credentials.payload.subject ?: return@validate null
                 subject.toLongOrNull() ?: return@validate null
                 JWTPrincipal(credentials.payload)
+            }
+            challenge { _, _ ->
+                call.respond(
+                    HttpStatusCode.Unauthorized,
+                    ApiErrorEnvelope(
+                        error = ApiError(
+                            code = ApiErrorCodes.UNAUTHORIZED,
+                            message = "Unauthorized"
+                        ),
+                        requestId = call.callId
+                    )
+                )
             }
         }
     }
