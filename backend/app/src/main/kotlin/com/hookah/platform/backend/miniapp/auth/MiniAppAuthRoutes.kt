@@ -21,24 +21,26 @@ import java.sql.SQLException
 import java.time.Instant
 
 private const val INIT_DATA_MAX_LENGTH = 8192
-private const val INIT_DATA_MAX_AGE_SECONDS = 300L
-private const val INIT_DATA_MAX_FUTURE_SKEW_SECONDS = 30L
+private const val DEFAULT_INIT_DATA_MAX_AGE_SECONDS = 300L
+private const val DEFAULT_INIT_DATA_MAX_FUTURE_SKEW_SECONDS = 30L
 
 fun Route.miniAppAuthRoutes(
     appConfig: ApplicationConfig,
     sessionTokenService: SessionTokenService,
     userRepository: UserRepository
 ) {
+    val initDataConfig = initDataValidationConfig(appConfig)
     val authService = TelegramAuthService(
         appConfig = appConfig,
         userRepository = userRepository,
-        sessionTokenService = sessionTokenService
+        sessionTokenService = sessionTokenService,
+        initDataConfig = initDataConfig
     )
     route("/api") {
         post("/auth/telegram") {
             val request = call.receive<TelegramAuthRequest>()
             val initData = request.initData
-            validateInitData(initData)
+            validateInitData(initData, initDataConfig)
 
             val result = authService.authenticate(initData)
 
@@ -58,11 +60,11 @@ fun Route.miniAppAuthRoutes(
     }
 }
 
-private fun validateInitData(initData: String) {
+private fun validateInitData(initData: String, config: InitDataValidationConfig) {
     if (initData.isBlank()) {
         throw InvalidInputException("initData is required")
     }
-    if (initData.length > INIT_DATA_MAX_LENGTH) {
+    if (initData.length > config.maxLength) {
         throw InvalidInputException("initData is too long")
     }
 }
@@ -70,15 +72,15 @@ private fun validateInitData(initData: String) {
 private class TelegramAuthService(
     private val appConfig: ApplicationConfig,
     private val userRepository: UserRepository,
-    private val sessionTokenService: SessionTokenService
+    private val sessionTokenService: SessionTokenService,
+    private val initDataConfig: InitDataValidationConfig
 ) {
     suspend fun authenticate(initData: String): TelegramAuthResult {
-        val botToken = resolveTelegramBotToken(appConfig)
         val validator = TelegramInitDataValidator(
-            botTokenProvider = { botToken },
+            botTokenProvider = { findTelegramBotToken(appConfig) },
             nowEpochSeconds = { Instant.now().epochSecond },
-            maxAgeSeconds = INIT_DATA_MAX_AGE_SECONDS,
-            maxFutureSkewSeconds = INIT_DATA_MAX_FUTURE_SKEW_SECONDS
+            maxAgeSeconds = initDataConfig.maxAgeSeconds,
+            maxFutureSkewSeconds = initDataConfig.maxFutureSkewSeconds
         )
 
         val validated = try {
@@ -119,7 +121,7 @@ private class TelegramAuthService(
     }
 }
 
-private fun resolveTelegramBotToken(config: ApplicationConfig): String {
+private fun findTelegramBotToken(config: ApplicationConfig): String? {
     val fromConfig = config.propertyOrNull("telegram.token")
         ?.getString()
         ?.trim()
@@ -128,12 +130,56 @@ private fun resolveTelegramBotToken(config: ApplicationConfig): String {
         ?.trim()
         ?.takeIf { it.isNotBlank() }
 
-    return fromConfig
-        ?: fromEnv
-        ?: throw ConfigException("Telegram bot token is required")
+    return fromConfig ?: fromEnv
 }
 
 private data class TelegramAuthResult(
     val token: com.hookah.platform.backend.miniapp.session.IssuedToken,
     val user: TelegramWebAppUser
 )
+
+private data class InitDataValidationConfig(
+    val maxAgeSeconds: Long,
+    val maxFutureSkewSeconds: Long,
+    val maxLength: Int
+)
+
+private fun initDataValidationConfig(appConfig: ApplicationConfig): InitDataValidationConfig {
+    return InitDataValidationConfig(
+        maxAgeSeconds = resolvePositiveLong(
+            appConfig = appConfig,
+            configKey = "telegram.miniapp.initData.maxAgeSeconds",
+            envKey = "TELEGRAM_MINIAPP_INITDATA_MAX_AGE_SECONDS",
+            defaultValue = DEFAULT_INIT_DATA_MAX_AGE_SECONDS
+        ),
+        maxFutureSkewSeconds = resolvePositiveLong(
+            appConfig = appConfig,
+            configKey = "telegram.miniapp.initData.maxFutureSkewSeconds",
+            envKey = "TELEGRAM_MINIAPP_INITDATA_MAX_FUTURE_SKEW_SECONDS",
+            defaultValue = DEFAULT_INIT_DATA_MAX_FUTURE_SKEW_SECONDS
+        ),
+        maxLength = INIT_DATA_MAX_LENGTH
+    )
+}
+
+private fun resolvePositiveLong(
+    appConfig: ApplicationConfig,
+    configKey: String,
+    envKey: String,
+    defaultValue: Long
+): Long {
+    val fromConfig = appConfig.propertyOrNull(configKey)
+        ?.getString()
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+    val fromEnv = System.getenv(envKey)
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+
+    val raw = fromConfig ?: fromEnv ?: return defaultValue
+    val parsed = raw.toLongOrNull()
+    if (parsed == null || parsed <= 0) {
+        error("$configKey must be a number")
+    }
+    return parsed
+}
