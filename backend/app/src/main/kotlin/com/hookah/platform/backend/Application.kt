@@ -139,10 +139,6 @@ private suspend fun ApplicationCall.respondApiError(
 }
 
 private suspend fun ApplicationCall.respondInvalidRequestBody() {
-    if (!isApiRequest()) {
-        respond(HttpStatusCode.BadRequest)
-        return
-    }
     respondApiError(
         status = HttpStatusCode.BadRequest,
         code = ApiErrorCodes.INVALID_INPUT,
@@ -310,10 +306,16 @@ fun Application.module() {
     }
 
     install(StatusPages) {
-        exception<ContentTransformationException> { call, _ ->
+        exception<ContentTransformationException> { call, cause ->
+            if (!call.isApiRequest()) {
+                throw cause
+            }
             call.respondInvalidRequestBody()
         }
-        exception<BadRequestException> { call, _ ->
+        exception<BadRequestException> { call, cause ->
+            if (!call.isApiRequest()) {
+                throw cause
+            }
             call.respondInvalidRequestBody()
         }
         exception<ApiException> { call, cause ->
