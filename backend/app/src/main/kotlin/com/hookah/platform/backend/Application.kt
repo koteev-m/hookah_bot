@@ -2,6 +2,7 @@ package com.hookah.platform.backend
 
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
+import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
@@ -18,6 +19,8 @@ import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.java.Java
@@ -28,6 +31,10 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationStopped
@@ -111,11 +118,14 @@ fun Application.module() {
     }
 
     val appConfig = environment.config
+    val appEnv = System.getenv("APP_ENV")?.takeIf { it.isNotBlank() }
+        ?: appConfig.optionalString("app.env")
+        ?: "dev"
     val dbConfig = DbConfig.from(appConfig)
-    val appEnv = appConfig.optionalString("app.env") ?: "dev"
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }
     val miniAppStaticDir = appConfig.optionalString("miniapp.staticDir")?.takeIf { it.isNotBlank() }
+    val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
 
     val httpClient = HttpClient(Java) {
         install(ContentNegotiation) {
@@ -253,6 +263,24 @@ fun Application.module() {
         json(json)
     }
 
+    install(Authentication) {
+        jwt("miniapp-session") {
+            val algorithm = Algorithm.HMAC256(sessionTokenConfig.jwtSecret)
+            verifier(
+                JWT
+                    .require(algorithm)
+                    .withIssuer(sessionTokenConfig.issuer)
+                    .withAudience(sessionTokenConfig.audience)
+                    .build()
+            )
+            validate { credentials ->
+                val subject = credentials.payload.subject ?: return@validate null
+                subject.toLongOrNull() ?: return@validate null
+                JWTPrincipal(credentials.payload)
+            }
+        }
+    }
+
     routing {
         get("/health") {
             call.respond(HealthResponse(status = "ok"))
@@ -307,6 +335,16 @@ fun Application.module() {
                     time = time
                 )
             )
+        }
+
+        authenticate("miniapp-session") {
+            route("/api") {
+                route("/guest") {
+                    get("/_ping") {
+                        call.respond(mapOf("ok" to true))
+                    }
+                }
+            }
         }
 
         staffChatLinkRoutes(staffChatLinkCodeRepository, venueAccessRepository, venueRepository)
