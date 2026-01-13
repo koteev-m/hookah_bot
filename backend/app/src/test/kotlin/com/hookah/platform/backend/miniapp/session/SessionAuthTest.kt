@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.session
 import com.hookah.platform.backend.module
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
+import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -82,6 +83,31 @@ class SessionAuthTest {
         val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
         val error = payload["error"]?.jsonObject
         assertEquals("NOT_FOUND", error?.get("code")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `should return envelope for method not allowed on api route`() = testApplication {
+        val config = buildConfig()
+        environment {
+            this.config = config
+        }
+
+        application { module() }
+
+        val sessionTokenService = SessionTokenService(SessionTokenConfig.from(config, appEnv))
+        val issuedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+        val issuedToken = sessionTokenService.issueToken(TELEGRAM_USER_ID, now = issuedAt)
+
+        val response = client.post("/api/guest/_ping") {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer ${issuedToken.token}")
+            }
+        }
+
+        assertEquals(HttpStatusCode.MethodNotAllowed, response.status)
+        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val error = payload["error"]?.jsonObject
+        assertEquals("INVALID_INPUT", error?.get("code")?.jsonPrimitive?.content)
     }
 
     private companion object {

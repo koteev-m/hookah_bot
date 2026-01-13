@@ -337,6 +337,15 @@ fun Application.module() {
                 )
             }
         }
+        status(HttpStatusCode.MethodNotAllowed) { call, _ ->
+            if (call.isApiRequest()) {
+                call.respondApiError(
+                    status = HttpStatusCode.MethodNotAllowed,
+                    code = ApiErrorCodes.INVALID_INPUT,
+                    message = "Method not allowed"
+                )
+            }
+        }
     }
 
     install(Authentication) {
