@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlin.test.assertEquals
+import kotlin.test.fail
 
 class SessionAuthTest {
     private val appEnv = "test"
@@ -83,6 +84,26 @@ class SessionAuthTest {
         val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
         val error = payload["error"]?.jsonObject
         assertEquals("NOT_FOUND", error?.get("code")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `should return envelope for api root`() = testApplication {
+        environment {
+            config = buildConfig()
+        }
+
+        application { module() }
+
+        val response = client.get("/api")
+
+        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val error = payload["error"]?.jsonObject
+        val expectedCode = when (response.status) {
+            HttpStatusCode.NotFound -> "NOT_FOUND"
+            HttpStatusCode.MethodNotAllowed -> "INVALID_INPUT"
+            else -> fail("Unexpected status ${response.status}")
+        }
+        assertEquals(expectedCode, error?.get("code")?.jsonPrimitive?.content)
     }
 
     @Test
