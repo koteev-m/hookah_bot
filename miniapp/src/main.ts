@@ -106,7 +106,9 @@ function safeGetItem(key: string): string | null {
   try {
     return localStorage.getItem(key)
   } catch (error) {
-    console.warn('Failed to read localStorage', error)
+    if (isDebug) {
+      console.warn('Failed to read localStorage', error)
+    }
     return null
   }
 }
@@ -115,7 +117,9 @@ function safeSetItem(key: string, value: string) {
   try {
     localStorage.setItem(key, value)
   } catch (error) {
-    console.warn('Failed to write localStorage', error)
+    if (isDebug) {
+      console.warn('Failed to write localStorage', error)
+    }
   }
 }
 
@@ -123,7 +127,9 @@ function safeRemoveItem(key: string) {
   try {
     localStorage.removeItem(key)
   } catch (error) {
-    console.warn('Failed to remove localStorage key', error)
+    if (isDebug) {
+      console.warn('Failed to remove localStorage key', error)
+    }
   }
 }
 
@@ -380,7 +386,7 @@ function renderErrorDetails(container: HTMLElement, error: ApiErrorInfo) {
     list.appendChild(item)
   }
   details.appendChild(list)
-  if (error.requestId) {
+  if (error.requestId && clipboardAvailable) {
     const actions = document.createElement('div')
     actions.className = 'error-details-actions'
     const copyButton = document.createElement('button')
