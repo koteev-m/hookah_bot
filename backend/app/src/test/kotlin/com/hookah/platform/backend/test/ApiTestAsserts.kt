@@ -3,6 +3,8 @@ package com.hookah.platform.backend.test
 import com.hookah.platform.backend.api.ApiErrorEnvelope
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlin.test.assertEquals
@@ -23,11 +25,16 @@ suspend fun assertApiErrorEnvelope(response: HttpResponse, expectedCode: String)
     assertTrue(!headerRequestId.isNullOrBlank(), "$REQUEST_ID_HEADER header must be present in API error envelope")
     assertEquals(envelope.requestId, headerRequestId)
 
-    val contentType = response.headers["Content-Type"]
-    assertTrue(!contentType.isNullOrBlank(), "Content-Type header must be present in API error envelope")
+    val contentTypeHeader = response.headers[HttpHeaders.ContentType]
     assertTrue(
-        contentType.contains("application/json", ignoreCase = true),
-        "Content-Type must include application/json in API error envelope"
+        !contentTypeHeader.isNullOrBlank(),
+        "${HttpHeaders.ContentType} header must be present in API error envelope"
+    )
+
+    val parsed = runCatching { ContentType.parse(contentTypeHeader) }.getOrNull()
+    assertTrue(
+        parsed?.match(ContentType.Application.Json) == true,
+        "Content-Type must be application/json (got: $contentTypeHeader)"
     )
 
     return envelope
