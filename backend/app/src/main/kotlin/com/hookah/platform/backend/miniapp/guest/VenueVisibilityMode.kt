@@ -10,15 +10,25 @@ enum class VenueVisibilityMode {
 }
 
 fun resolveVenueVisibilityMode(appConfig: ApplicationConfig): VenueVisibilityMode {
-    val rawValue = appConfig.propertyOrNull("api.guest.suspendedMode")
-        ?.getString()
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?: return VenueVisibilityMode.EXPLAIN_SUSPENDED
+    val configKey = "api.guest.suspendedMode"
+    val envKey = "API_GUEST_SUSPENDED_MODE"
+    val configValue = appConfig.propertyOrNull(configKey)?.getString()
+    val envValue = System.getenv(envKey)
 
-    return when (rawValue.lowercase(Locale.ROOT)) {
+    return parseVenueVisibilityMode(configValue, configKey, envKey)
+        ?: parseVenueVisibilityMode(envValue, configKey, envKey)
+        ?: VenueVisibilityMode.EXPLAIN_SUSPENDED
+}
+
+private fun parseVenueVisibilityMode(
+    rawValue: String?,
+    configKey: String,
+    envKey: String
+): VenueVisibilityMode? {
+    val normalized = rawValue?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: return null
+    return when (normalized) {
         "explain" -> VenueVisibilityMode.EXPLAIN_SUSPENDED
         "hide" -> VenueVisibilityMode.HIDE_SUSPENDED
-        else -> throw ConfigException("api.guest.suspendedMode must be 'explain' or 'hide'")
+        else -> throw ConfigException("$configKey or $envKey must be 'explain' or 'hide'")
     }
 }
