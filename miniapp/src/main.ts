@@ -78,7 +78,9 @@ type TelegramAuthResponse = {
   }
 }
 
-const guestSessionStorageKey = 'hookah_guest_session'
+const REQUEST_ID_HEADER = 'X-Request-Id'
+const guestSessionStorageKeyPrefix = 'hookah_guest_session'
+const guestSessionStorageKey = buildGuestSessionStorageKey(backendUrl)
 const sessionSafetySkewSeconds = 15
 let inMemorySession: GuestSession | null = null
 let pendingAuth: Promise<{ session?: GuestSession; error?: ApiErrorInfo }> | null = null
@@ -91,9 +93,41 @@ function isSessionValid(session: GuestSession) {
   return nowEpochSeconds() < session.expiresAtEpochSeconds - sessionSafetySkewSeconds
 }
 
-function loadStoredSession(): GuestSession | null {
-  const raw = localStorage.getItem(guestSessionStorageKey)
-  if (!raw) return null
+function buildGuestSessionStorageKey(url: string) {
+  try {
+    const parsedUrl = new URL(url)
+    return `${guestSessionStorageKeyPrefix}:${parsedUrl.host}`
+  } catch (error) {
+    return `${guestSessionStorageKeyPrefix}:${url}`
+  }
+}
+
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch (error) {
+    console.warn('Failed to read localStorage', error)
+    return null
+  }
+}
+
+function safeSetItem(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch (error) {
+    console.warn('Failed to write localStorage', error)
+  }
+}
+
+function safeRemoveItem(key: string) {
+  try {
+    localStorage.removeItem(key)
+  } catch (error) {
+    console.warn('Failed to remove localStorage key', error)
+  }
+}
+
+function parseStoredSession(raw: string): GuestSession | null {
   try {
     const parsed = JSON.parse(raw) as GuestSession
     if (!parsed.token || !parsed.expiresAtEpochSeconds) {
@@ -105,14 +139,33 @@ function loadStoredSession(): GuestSession | null {
   }
 }
 
+function loadStoredSession(): GuestSession | null {
+  const raw = safeGetItem(guestSessionStorageKey)
+  if (raw) {
+    return parseStoredSession(raw)
+  }
+
+  const legacyRaw = safeGetItem(guestSessionStorageKeyPrefix)
+  if (!legacyRaw) {
+    return null
+  }
+  const legacySession = parseStoredSession(legacyRaw)
+  if (!legacySession) {
+    return null
+  }
+  safeSetItem(guestSessionStorageKey, JSON.stringify(legacySession))
+  safeRemoveItem(guestSessionStorageKeyPrefix)
+  return legacySession
+}
+
 function persistSession(session: GuestSession) {
   inMemorySession = session
-  localStorage.setItem(guestSessionStorageKey, JSON.stringify(session))
+  safeSetItem(guestSessionStorageKey, JSON.stringify(session))
 }
 
 function clearSession() {
   inMemorySession = null
-  localStorage.removeItem(guestSessionStorageKey)
+  safeRemoveItem(guestSessionStorageKey)
 }
 
 function getTelegramContext(): TelegramContext {
@@ -182,8 +235,12 @@ async function ensureGuestSession(): Promise<{ token?: string; error?: ApiErrorI
   clearSession()
 
   if (pendingAuth) {
-    const result = await pendingAuth
-    return result.session ? { token: result.session.token } : { error: result.error }
+    try {
+      const result = await pendingAuth
+      return result.session ? { token: result.session.token } : { error: result.error }
+    } finally {
+      pendingAuth = null
+    }
   }
 
   pendingAuth = (async () => {
@@ -222,52 +279,65 @@ async function ensureGuestSession(): Promise<{ token?: string; error?: ApiErrorI
     return { session }
   })()
 
-  const result = await pendingAuth
-  pendingAuth = null
-  return result.session ? { token: result.session.token } : { error: result.error }
+  try {
+    const result = await pendingAuth
+    return result.session ? { token: result.session.token } : { error: result.error }
+  } finally {
+    pendingAuth = null
+  }
 }
 
 async function requestApi<T>(path: string, init?: RequestInit): Promise<{ data?: T; error?: ApiErrorInfo }> {
-  if (isGuestApi(path)) {
-    const { token, error } = await ensureGuestSession()
-    if (!token || error) {
-      return { error: error ?? { status: 401, code: ApiErrorCodes.UNAUTHORIZED } }
-    }
-    const headers = new Headers(init?.headers ?? {})
-    headers.set('Authorization', `Bearer ${token}`)
-    init = { ...init, headers }
-  }
-
   try {
-    const response = await fetch(`${backendUrl}${path}`, init)
-    if (response.ok) {
-      return { data: (await response.json()) as T }
+    if (isGuestApi(path)) {
+      const { token, error } = await ensureGuestSession()
+      if (!token || error) {
+        return { error: error ?? { status: 401, code: ApiErrorCodes.UNAUTHORIZED } }
+      }
+      const headers = new Headers(init?.headers ?? {})
+      headers.set('Authorization', `Bearer ${token}`)
+      init = { ...init, headers }
     }
 
-    const headerRequestId = response.headers.get('X-Request-Id')
-    let envelope: ApiErrorEnvelope | null = null
     try {
-      envelope = (await response.json()) as ApiErrorEnvelope
+      const response = await fetch(`${backendUrl}${path}`, init)
+      if (response.ok) {
+        return { data: (await response.json()) as T }
+      }
+
+      const headerRequestId = response.headers.get(REQUEST_ID_HEADER)
+      let envelope: ApiErrorEnvelope | null = null
+      try {
+        envelope = (await response.json()) as ApiErrorEnvelope
+      } catch (error) {
+        envelope = null
+      }
+      const requestId = resolveRequestId(headerRequestId, envelope?.requestId)
+      const errorInfo: ApiErrorInfo = {
+        status: response.status,
+        code: envelope?.error?.code,
+        message: envelope?.error?.message,
+        requestId
+      }
+      if (isGuestApi(path) && response.status === 401) {
+        clearSession()
+      }
+      return { error: errorInfo }
     } catch (error) {
-      envelope = null
+      return {
+        error: {
+          status: 0,
+          code: ApiErrorCodes.NETWORK_ERROR,
+          message: 'Нет соединения / ошибка сети'
+        }
+      }
     }
-    const requestId = resolveRequestId(headerRequestId, envelope?.requestId)
-    const errorInfo: ApiErrorInfo = {
-      status: response.status,
-      code: envelope?.error?.code,
-      message: envelope?.error?.message,
-      requestId
-    }
-    if (isGuestApi(path) && response.status === 401) {
-      clearSession()
-    }
-    return { error: errorInfo }
   } catch (error) {
     return {
       error: {
         status: 0,
-        code: ApiErrorCodes.NETWORK_ERROR,
-        message: 'Нет соединения / ошибка сети'
+        code: ApiErrorCodes.INTERNAL_ERROR,
+        message: 'Ошибка приложения. Попробуйте перезапустить.'
       }
     }
   }
@@ -303,16 +373,37 @@ function renderErrorDetails(container: HTMLElement, error: ApiErrorInfo) {
     item.textContent = `Сообщение: ${error.message}`
     list.appendChild(item)
   }
+  const clipboardAvailable = Boolean(navigator?.clipboard?.writeText)
+  if (!clipboardAvailable) {
+    const item = document.createElement('li')
+    item.textContent = 'Clipboard недоступен'
+    list.appendChild(item)
+  }
   details.appendChild(list)
   if (error.requestId) {
     const actions = document.createElement('div')
     actions.className = 'error-details-actions'
     const copyButton = document.createElement('button')
     copyButton.className = 'button-small'
-    copyButton.textContent = 'Скопировать requestId'
+    const copyLabelDefault = 'Скопировать requestId'
+    const copyLabelSuccess = 'Скопировано'
+    const copyResetDelayMs = 1500
+    copyButton.textContent = copyLabelDefault
+    let copyResetTimer: number | null = null
     copyButton.addEventListener('click', async () => {
+      if (!navigator?.clipboard?.writeText) {
+        return
+      }
       try {
         await navigator.clipboard.writeText(error.requestId ?? '')
+        copyButton.textContent = copyLabelSuccess
+        if (copyResetTimer) {
+          window.clearTimeout(copyResetTimer)
+        }
+        copyResetTimer = window.setTimeout(() => {
+          copyButton.textContent = copyLabelDefault
+          copyResetTimer = null
+        }, copyResetDelayMs)
       } catch (copyError) {
         console.warn('Failed to copy requestId', copyError)
       }
