@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.guest.VenueStatuses
+import java.sql.ResultSet
 import java.sql.SQLException
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
@@ -25,15 +26,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                         statement.executeQuery().use { rs ->
                             val venues = mutableListOf<VenueShort>()
                             while (rs.next()) {
-                                venues.add(
-                                    VenueShort(
-                                        id = rs.getLong("id"),
-                                        name = rs.getString("name"),
-                                        city = rs.getString("city"),
-                                        address = rs.getString("address"),
-                                        status = rs.getString("status")
-                                    )
-                                )
+                                venues.add(mapVenueShort(rs))
                             }
                             venues
                         }
@@ -60,13 +53,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                         statement.setLong(1, id)
                         statement.executeQuery().use { rs ->
                             if (rs.next()) {
-                                VenueShort(
-                                    id = rs.getLong("id"),
-                                    name = rs.getString("name"),
-                                    city = rs.getString("city"),
-                                    address = rs.getString("address"),
-                                    status = rs.getString("status")
-                                )
+                                mapVenueShort(rs)
                             } else {
                                 null
                             }
@@ -78,6 +65,14 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
             }
         }
     }
+
+    private fun mapVenueShort(rs: ResultSet): VenueShort = VenueShort(
+        id = rs.getLong("id"),
+        name = rs.getString("name"),
+        city = rs.getString("city"),
+        address = rs.getString("address"),
+        status = rs.getString("status")
+    )
 }
 
 data class VenueShort(
