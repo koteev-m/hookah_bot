@@ -15,7 +15,8 @@ const ApiErrorCodes = {
   DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
   CONFIG_ERROR: 'CONFIG_ERROR',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
-  INITDATA_INVALID: 'INITDATA_INVALID'
+  INITDATA_INVALID: 'INITDATA_INVALID',
+  NETWORK_ERROR: 'NETWORK_ERROR'
 } as const
 
 type ApiErrorCode = (typeof ApiErrorCodes)[keyof typeof ApiErrorCodes]
@@ -63,12 +64,68 @@ type VenueResponse = {
   }
 }
 
+type GuestSession = {
+  token: string
+  expiresAtEpochSeconds: number
+  telegramUserId?: number
+}
+
+type TelegramAuthResponse = {
+  token: string
+  expiresAtEpochSeconds: number
+  user: {
+    telegramUserId: number
+  }
+}
+
+const guestSessionStorageKey = 'hookah_guest_session'
+const sessionSafetySkewSeconds = 15
+let inMemorySession: GuestSession | null = null
+let pendingAuth: Promise<{ session?: GuestSession; error?: ApiErrorInfo }> | null = null
+
+function nowEpochSeconds() {
+  return Math.floor(Date.now() / 1000)
+}
+
+function isSessionValid(session: GuestSession) {
+  return nowEpochSeconds() < session.expiresAtEpochSeconds - sessionSafetySkewSeconds
+}
+
+function loadStoredSession(): GuestSession | null {
+  const raw = localStorage.getItem(guestSessionStorageKey)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as GuestSession
+    if (!parsed.token || !parsed.expiresAtEpochSeconds) {
+      return null
+    }
+    return parsed
+  } catch (error) {
+    return null
+  }
+}
+
+function persistSession(session: GuestSession) {
+  inMemorySession = session
+  localStorage.setItem(guestSessionStorageKey, JSON.stringify(session))
+}
+
+function clearSession() {
+  inMemorySession = null
+  localStorage.removeItem(guestSessionStorageKey)
+}
+
 function getTelegramContext(): TelegramContext {
   const tg = (window as any).Telegram?.WebApp
   const initData = tg?.initData || ''
   const startParam = tg?.initDataUnsafe?.start_param || tg?.initDataUnsafe?.startParam || ''
   const userId = tg?.initDataUnsafe?.user?.id
   return { initDataLength: initData.length, startParam, userId }
+}
+
+function getTelegramInitData(): string {
+  const tg = (window as any).Telegram?.WebApp
+  return tg?.initData || ''
 }
 
 function resolveRequestId(headerValue: string | null, bodyValue?: string | null): string | undefined {
@@ -107,31 +164,117 @@ function logApiError(context: string, error: ApiErrorInfo) {
   })
 }
 
-async function requestApi<T>(path: string, init?: RequestInit): Promise<{ data?: T; error?: ApiErrorInfo }> {
-  const response = await fetch(`${backendUrl}${path}`, init)
-  if (response.ok) {
-    return { data: (await response.json()) as T }
+function isGuestApi(path: string) {
+  return path.startsWith('/api/guest/')
+}
+
+async function ensureGuestSession(): Promise<{ token?: string; error?: ApiErrorInfo }> {
+  if (inMemorySession && isSessionValid(inMemorySession)) {
+    return { token: inMemorySession.token }
   }
 
-  const headerRequestId = response.headers.get('X-Request-Id')
-  let envelope: ApiErrorEnvelope | null = null
+  const storedSession = loadStoredSession()
+  if (storedSession && isSessionValid(storedSession)) {
+    inMemorySession = storedSession
+    return { token: storedSession.token }
+  }
+
+  clearSession()
+
+  if (pendingAuth) {
+    const result = await pendingAuth
+    return result.session ? { token: result.session.token } : { error: result.error }
+  }
+
+  pendingAuth = (async () => {
+    const initData = getTelegramInitData()
+    if (!initData) {
+      return {
+        error: {
+          status: 401,
+          code: ApiErrorCodes.INITDATA_INVALID,
+          message: 'Откройте мини-приложение из Telegram.'
+        }
+      }
+    }
+    const { data, error } = await requestApi<TelegramAuthResponse>('/api/auth/telegram', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ initData })
+    })
+    if (error || !data) {
+      return {
+        error: error ?? {
+          status: 401,
+          code: ApiErrorCodes.UNAUTHORIZED,
+          message: 'Не удалось авторизоваться.'
+        }
+      }
+    }
+    const session: GuestSession = {
+      token: data.token,
+      expiresAtEpochSeconds: data.expiresAtEpochSeconds,
+      telegramUserId: data.user?.telegramUserId
+    }
+    persistSession(session)
+    return { session }
+  })()
+
+  const result = await pendingAuth
+  pendingAuth = null
+  return result.session ? { token: result.session.token } : { error: result.error }
+}
+
+async function requestApi<T>(path: string, init?: RequestInit): Promise<{ data?: T; error?: ApiErrorInfo }> {
+  if (isGuestApi(path)) {
+    const { token, error } = await ensureGuestSession()
+    if (!token || error) {
+      return { error: error ?? { status: 401, code: ApiErrorCodes.UNAUTHORIZED } }
+    }
+    const headers = new Headers(init?.headers ?? {})
+    headers.set('Authorization', `Bearer ${token}`)
+    init = { ...init, headers }
+  }
+
   try {
-    envelope = (await response.json()) as ApiErrorEnvelope
+    const response = await fetch(`${backendUrl}${path}`, init)
+    if (response.ok) {
+      return { data: (await response.json()) as T }
+    }
+
+    const headerRequestId = response.headers.get('X-Request-Id')
+    let envelope: ApiErrorEnvelope | null = null
+    try {
+      envelope = (await response.json()) as ApiErrorEnvelope
+    } catch (error) {
+      envelope = null
+    }
+    const requestId = resolveRequestId(headerRequestId, envelope?.requestId)
+    const errorInfo: ApiErrorInfo = {
+      status: response.status,
+      code: envelope?.error?.code,
+      message: envelope?.error?.message,
+      requestId
+    }
+    if (isGuestApi(path) && response.status === 401) {
+      clearSession()
+    }
+    return { error: errorInfo }
   } catch (error) {
-    envelope = null
+    return {
+      error: {
+        status: 0,
+        code: ApiErrorCodes.NETWORK_ERROR,
+        message: 'Нет соединения / ошибка сети'
+      }
+    }
   }
-  const requestId = resolveRequestId(headerRequestId, envelope?.requestId)
-  const errorInfo: ApiErrorInfo = {
-    status: response.status,
-    code: envelope?.error?.code,
-    message: envelope?.error?.message,
-    requestId
-  }
-  return { error: errorInfo }
 }
 
 function renderErrorDetails(container: HTMLElement, error: ApiErrorInfo) {
-  container.innerHTML = ''
+  container.textContent = ''
   if (!isDebug) {
     return
   }
@@ -140,7 +283,7 @@ function renderErrorDetails(container: HTMLElement, error: ApiErrorInfo) {
   }
   const details = document.createElement('details')
   details.className = 'error-details'
-  details.open = true
+  details.open = false
   const summary = document.createElement('summary')
   summary.textContent = 'Подробнее'
   details.appendChild(summary)
@@ -161,6 +304,22 @@ function renderErrorDetails(container: HTMLElement, error: ApiErrorInfo) {
     list.appendChild(item)
   }
   details.appendChild(list)
+  if (error.requestId) {
+    const actions = document.createElement('div')
+    actions.className = 'error-details-actions'
+    const copyButton = document.createElement('button')
+    copyButton.className = 'button-small'
+    copyButton.textContent = 'Скопировать requestId'
+    copyButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(error.requestId ?? '')
+      } catch (copyError) {
+        console.warn('Failed to copy requestId', copyError)
+      }
+    })
+    actions.appendChild(copyButton)
+    details.appendChild(actions)
+  }
   container.appendChild(details)
 }
 
@@ -376,6 +535,7 @@ function renderCatalogScreen() {
     void loadVenue(venueId)
   })
 
+  void ensureGuestSession()
   void loadCatalog()
 }
 
@@ -393,6 +553,21 @@ function setVenueStatus(text: string) {
   }
 }
 
+type ErrorAction = {
+  label: string
+  onClick: () => void
+}
+
+function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
+  container.replaceChildren()
+  actions.forEach((action) => {
+    const button = document.createElement('button')
+    button.textContent = action.label
+    button.addEventListener('click', action.onClick)
+    container.appendChild(button)
+  })
+}
+
 function showCatalogError(error: ApiErrorInfo) {
   const container = document.querySelector<HTMLDivElement>('#catalog-error')
   const title = document.querySelector<HTMLHeadingElement>('#catalog-error-title')
@@ -402,29 +577,38 @@ function showCatalogError(error: ApiErrorInfo) {
   if (!container || !title || !message || !actions || !details) return
 
   const code = normalizeErrorCode(error)
-  let actionLabel = 'Повторить'
-  let actionHandler: (() => void) | null = () => void loadCatalog()
+  const actionsToRender: ErrorAction[] = []
 
   if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
     title.textContent = 'Каталог временно недоступен'
     message.textContent = 'Сервис перегружен или недоступен. Попробуйте ещё раз чуть позже.'
+    actionsToRender.push({ label: 'Повторить', onClick: () => void loadCatalog() })
+  } else if (code === ApiErrorCodes.NETWORK_ERROR) {
+    title.textContent = 'Нет соединения'
+    message.textContent = 'Нет соединения / ошибка сети. Проверьте подключение и повторите.'
+    actionsToRender.push({ label: 'Повторить', onClick: () => void loadCatalog() })
+  } else if (code === ApiErrorCodes.INITDATA_INVALID) {
+    title.textContent = 'Нужен запуск из Telegram'
+    message.textContent = 'Откройте мини-приложение из Telegram, чтобы продолжить.'
+    actionsToRender.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
   } else if (code === ApiErrorCodes.UNAUTHORIZED) {
     title.textContent = 'Сессия истекла'
-    message.textContent = 'Перезапустите мини-приложение, чтобы продолжить.'
-    actionLabel = 'Перезапустить'
-    actionHandler = () => window.location.reload()
+    message.textContent = 'Перезапустите мини-приложение или повторите авторизацию.'
+    actionsToRender.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
+    actionsToRender.push({
+      label: 'Повторить (переавторизоваться)',
+      onClick: () => {
+        clearSession()
+        void loadCatalog()
+      }
+    })
   } else {
     title.textContent = 'Не удалось загрузить каталог'
     message.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
+    actionsToRender.push({ label: 'Повторить', onClick: () => void loadCatalog() })
   }
 
-  actions.innerHTML = ''
-  if (actionHandler) {
-    const button = document.createElement('button')
-    button.textContent = actionLabel
-    button.addEventListener('click', actionHandler)
-    actions.appendChild(button)
-  }
+  renderErrorActions(actions, actionsToRender)
 
   renderErrorDetails(details, error)
   container.hidden = false
@@ -441,7 +625,7 @@ function hideCatalogError() {
 function renderCatalogList(venues: CatalogVenue[]) {
   const list = document.querySelector<HTMLUListElement>('#catalog-list')
   if (!list) return
-  list.innerHTML = ''
+  list.replaceChildren()
   if (!venues.length) {
     const item = document.createElement('li')
     item.textContent = 'Пока нет доступных заведений.'
@@ -452,7 +636,14 @@ function renderCatalogList(venues: CatalogVenue[]) {
     const item = document.createElement('li')
     item.className = 'catalog-item'
     const info = document.createElement('div')
-    info.innerHTML = `<strong>${venue.name}</strong><br /><span>${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}</span>`
+    const name = document.createElement('strong')
+    name.textContent = venue.name
+    const lineBreak = document.createElement('br')
+    const location = document.createElement('span')
+    location.textContent = `${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}`
+    info.appendChild(name)
+    info.appendChild(lineBreak)
+    info.appendChild(location)
     const button = document.createElement('button')
     button.textContent = 'Открыть'
     button.addEventListener('click', () => void loadVenue(venue.id))
@@ -467,7 +658,7 @@ async function loadCatalog() {
   hideCatalogError()
   const list = document.querySelector<HTMLUListElement>('#catalog-list')
   if (list) {
-    list.innerHTML = ''
+    list.replaceChildren()
   }
   const { data, error } = await requestApi<CatalogResponse>('/api/guest/catalog')
   if (error) {
@@ -489,58 +680,81 @@ function showVenueError(error: ApiErrorInfo) {
   if (!container || !title || !message || !actions || !details || !detailsContainer) return
 
   const code = normalizeErrorCode(error)
-  let actionLabel = 'Повторить'
-  let actionHandler: (() => void) | null = null
+  const actionsToRender: ErrorAction[] = []
 
   if (code === ApiErrorCodes.SERVICE_SUSPENDED) {
     title.textContent = 'Заведение временно недоступно'
     message.textContent = 'Попробуйте вернуться позже или выбрать другое заведение.'
-    actionLabel = 'Вернуться в каталог'
-    actionHandler = () => void loadCatalog()
+    actionsToRender.push({ label: 'Вернуться в каталог', onClick: () => void loadCatalog() })
   } else if (code === ApiErrorCodes.NOT_FOUND) {
     title.textContent = 'Заведение не найдено'
     message.textContent = 'Проверьте ссылку или выберите другое заведение в каталоге.'
-    actionLabel = 'Вернуться в каталог'
-    actionHandler = () => void loadCatalog()
+    actionsToRender.push({ label: 'Вернуться в каталог', onClick: () => void loadCatalog() })
   } else if (code === ApiErrorCodes.INVALID_INPUT) {
     title.textContent = 'Некорректная ссылка'
     message.textContent = 'Похоже, ID заведения указан неверно.'
-    actionLabel = 'Вернуться в каталог'
-    actionHandler = () => void loadCatalog()
+    actionsToRender.push({ label: 'Вернуться в каталог', onClick: () => void loadCatalog() })
   } else if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
     title.textContent = 'Сервис временно недоступен'
     message.textContent = 'Попробуйте повторить запрос чуть позже.'
-    actionHandler = () => {
-      const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
-      const venueId = input ? Number(input.value) : NaN
-      if (venueId && !Number.isNaN(venueId)) {
-        void loadVenue(venueId)
+    actionsToRender.push({
+      label: 'Повторить',
+      onClick: () => {
+        const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
+        const venueId = input ? Number(input.value) : NaN
+        if (venueId && !Number.isNaN(venueId)) {
+          void loadVenue(venueId)
+        }
       }
-    }
+    })
+  } else if (code === ApiErrorCodes.NETWORK_ERROR) {
+    title.textContent = 'Нет соединения'
+    message.textContent = 'Нет соединения / ошибка сети. Проверьте подключение и повторите.'
+    actionsToRender.push({
+      label: 'Повторить',
+      onClick: () => {
+        const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
+        const venueId = input ? Number(input.value) : NaN
+        if (venueId && !Number.isNaN(venueId)) {
+          void loadVenue(venueId)
+        }
+      }
+    })
+  } else if (code === ApiErrorCodes.INITDATA_INVALID) {
+    title.textContent = 'Нужен запуск из Telegram'
+    message.textContent = 'Откройте мини-приложение из Telegram, чтобы продолжить.'
+    actionsToRender.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
   } else if (code === ApiErrorCodes.UNAUTHORIZED) {
     title.textContent = 'Сессия истекла'
-    message.textContent = 'Перезапустите мини-приложение, чтобы продолжить.'
-    actionLabel = 'Перезапустить'
-    actionHandler = () => window.location.reload()
+    message.textContent = 'Перезапустите мини-приложение или повторите авторизацию.'
+    actionsToRender.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
+    actionsToRender.push({
+      label: 'Повторить (переавторизоваться)',
+      onClick: () => {
+        clearSession()
+        const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
+        const venueId = input ? Number(input.value) : NaN
+        if (venueId && !Number.isNaN(venueId)) {
+          void loadVenue(venueId)
+        }
+      }
+    })
   } else {
     title.textContent = 'Не удалось загрузить заведение'
     message.textContent = 'Попробуйте повторить запрос чуть позже.'
-    actionHandler = () => {
-      const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
-      const venueId = input ? Number(input.value) : NaN
-      if (venueId && !Number.isNaN(venueId)) {
-        void loadVenue(venueId)
+    actionsToRender.push({
+      label: 'Повторить',
+      onClick: () => {
+        const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
+        const venueId = input ? Number(input.value) : NaN
+        if (venueId && !Number.isNaN(venueId)) {
+          void loadVenue(venueId)
+        }
       }
-    }
+    })
   }
 
-  actions.innerHTML = ''
-  if (actionHandler) {
-    const button = document.createElement('button')
-    button.textContent = actionLabel
-    button.addEventListener('click', actionHandler)
-    actions.appendChild(button)
-  }
+  renderErrorActions(actions, actionsToRender)
 
   renderErrorDetails(details, error)
   container.hidden = false
@@ -558,11 +772,17 @@ function hideVenueError() {
 function renderVenueDetails(venue: VenueResponse['venue']) {
   const details = document.querySelector<HTMLDivElement>('#venue-details')
   if (!details) return
-  details.innerHTML = `
-    <h3>${venue.name}</h3>
-    <p>${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}</p>
-    <p class="status">Статус: ${venue.status}</p>
-  `
+  details.replaceChildren()
+  const title = document.createElement('h3')
+  title.textContent = venue.name
+  const location = document.createElement('p')
+  location.textContent = `${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}`
+  const status = document.createElement('p')
+  status.className = 'status'
+  status.textContent = `Статус: ${venue.status}`
+  details.appendChild(title)
+  details.appendChild(location)
+  details.appendChild(status)
   details.hidden = false
 }
 
