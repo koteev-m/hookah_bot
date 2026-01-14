@@ -43,6 +43,12 @@ button:hover {
   background-color: #4338ca;
 }
 
+.button-small {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  border-radius: 8px;
+}
+
 .status {
   font-family: monospace;
   margin-top: 0.5rem;
@@ -137,6 +143,12 @@ input[type="number"] {
   margin-top: 0.5rem;
   font-size: 0.9rem;
   color: #4b5563;
+}
+
+.error-details-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
 }
 
 .venue-details {
