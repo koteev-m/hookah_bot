@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.session
 
+import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.module
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -17,6 +18,8 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 class SessionAuthTest {
@@ -41,9 +44,7 @@ class SessionAuthTest {
         val response = client.get("/api/guest/_ping")
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
-        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-        val error = payload["error"]?.jsonObject
-        assertEquals("UNAUTHORIZED", error?.get("code")?.jsonPrimitive?.content)
+        assertApiErrorEnvelope(response.bodyAsText(), ApiErrorCodes.UNAUTHORIZED)
     }
 
     @Test
@@ -81,9 +82,7 @@ class SessionAuthTest {
         val response = client.get("/api/unknown")
 
         assertEquals(HttpStatusCode.NotFound, response.status)
-        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-        val error = payload["error"]?.jsonObject
-        assertEquals("NOT_FOUND", error?.get("code")?.jsonPrimitive?.content)
+        assertApiErrorEnvelope(response.bodyAsText(), ApiErrorCodes.NOT_FOUND)
     }
 
     @Test
@@ -96,14 +95,12 @@ class SessionAuthTest {
 
         val response = client.get("/api")
 
-        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-        val error = payload["error"]?.jsonObject
         val expectedCode = when (response.status) {
-            HttpStatusCode.NotFound -> "NOT_FOUND"
-            HttpStatusCode.MethodNotAllowed -> "INVALID_INPUT"
+            HttpStatusCode.NotFound -> ApiErrorCodes.NOT_FOUND
+            HttpStatusCode.MethodNotAllowed -> ApiErrorCodes.INVALID_INPUT
             else -> fail("Unexpected status ${response.status}")
         }
-        assertEquals(expectedCode, error?.get("code")?.jsonPrimitive?.content)
+        assertApiErrorEnvelope(response.bodyAsText(), expectedCode)
     }
 
     @Test
@@ -126,9 +123,16 @@ class SessionAuthTest {
         }
 
         assertEquals(HttpStatusCode.MethodNotAllowed, response.status)
-        val payload = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        assertApiErrorEnvelope(response.bodyAsText(), ApiErrorCodes.INVALID_INPUT)
+    }
+
+    private fun assertApiErrorEnvelope(body: String, expectedCode: String) {
+        val payload = Json.parseToJsonElement(body).jsonObject
         val error = payload["error"]?.jsonObject
-        assertEquals("INVALID_INPUT", error?.get("code")?.jsonPrimitive?.content)
+        assertNotNull(error, "error envelope missing")
+        assertEquals(expectedCode, error["code"]?.jsonPrimitive?.content)
+        val requestId = payload["requestId"]?.jsonPrimitive?.content
+        assertTrue(!requestId.isNullOrBlank(), "requestId must be present in API error envelope")
     }
 
     private companion object {
