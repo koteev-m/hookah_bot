@@ -2,11 +2,65 @@ import './style.css'
 
 const root = document.querySelector<HTMLDivElement>('#app')
 const backendUrl = import.meta.env.VITE_BACKEND_PUBLIC_URL ?? 'http://localhost:8080'
+const isDebug = Boolean(import.meta.env.DEV)
+const searchParams = new URLSearchParams(window.location.search)
+const screen = searchParams.get('screen')
+const mode = searchParams.get('mode')
+
+const ApiErrorCodes = {
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  INVALID_INPUT: 'INVALID_INPUT',
+  NOT_FOUND: 'NOT_FOUND',
+  SERVICE_SUSPENDED: 'SERVICE_SUSPENDED',
+  DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
+  CONFIG_ERROR: 'CONFIG_ERROR',
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  INITDATA_INVALID: 'INITDATA_INVALID'
+} as const
+
+type ApiErrorCode = (typeof ApiErrorCodes)[keyof typeof ApiErrorCodes]
 
 type TelegramContext = {
   initDataLength: number
   startParam: string
   userId?: number
+}
+
+type ApiErrorEnvelope = {
+  error?: {
+    code?: string
+    message?: string
+    details?: unknown
+  }
+  requestId?: string
+}
+
+type ApiErrorInfo = {
+  status: number
+  code?: string
+  message?: string
+  requestId?: string
+}
+
+type CatalogVenue = {
+  id: number
+  name: string
+  city?: string | null
+  address?: string | null
+}
+
+type CatalogResponse = {
+  venues: CatalogVenue[]
+}
+
+type VenueResponse = {
+  venue: {
+    id: number
+    name: string
+    city?: string | null
+    address?: string | null
+    status: string
+  }
 }
 
 function getTelegramContext(): TelegramContext {
@@ -15,6 +69,99 @@ function getTelegramContext(): TelegramContext {
   const startParam = tg?.initDataUnsafe?.start_param || tg?.initDataUnsafe?.startParam || ''
   const userId = tg?.initDataUnsafe?.user?.id
   return { initDataLength: initData.length, startParam, userId }
+}
+
+function resolveRequestId(headerValue: string | null, bodyValue?: string | null): string | undefined {
+  if (headerValue && bodyValue && headerValue !== bodyValue) {
+    console.warn('RequestId mismatch between header and body', { headerValue, bodyValue })
+  }
+  return headerValue ?? bodyValue ?? undefined
+}
+
+function normalizeErrorCode(error: ApiErrorInfo): ApiErrorCode | undefined {
+  if (error.code && (Object.values(ApiErrorCodes) as string[]).includes(error.code)) {
+    return error.code as ApiErrorCode
+  }
+  switch (error.status) {
+    case 400:
+      return ApiErrorCodes.INVALID_INPUT
+    case 401:
+      return ApiErrorCodes.UNAUTHORIZED
+    case 404:
+      return ApiErrorCodes.NOT_FOUND
+    case 423:
+      return ApiErrorCodes.SERVICE_SUSPENDED
+    case 503:
+      return ApiErrorCodes.DATABASE_UNAVAILABLE
+    default:
+      return undefined
+  }
+}
+
+function logApiError(context: string, error: ApiErrorInfo) {
+  console.warn(`[${context}] API error`, {
+    status: error.status,
+    code: error.code,
+    requestId: error.requestId,
+    message: error.message
+  })
+}
+
+async function requestApi<T>(path: string, init?: RequestInit): Promise<{ data?: T; error?: ApiErrorInfo }> {
+  const response = await fetch(`${backendUrl}${path}`, init)
+  if (response.ok) {
+    return { data: (await response.json()) as T }
+  }
+
+  const headerRequestId = response.headers.get('X-Request-Id')
+  let envelope: ApiErrorEnvelope | null = null
+  try {
+    envelope = (await response.json()) as ApiErrorEnvelope
+  } catch (error) {
+    envelope = null
+  }
+  const requestId = resolveRequestId(headerRequestId, envelope?.requestId)
+  const errorInfo: ApiErrorInfo = {
+    status: response.status,
+    code: envelope?.error?.code,
+    message: envelope?.error?.message,
+    requestId
+  }
+  return { error: errorInfo }
+}
+
+function renderErrorDetails(container: HTMLElement, error: ApiErrorInfo) {
+  container.innerHTML = ''
+  if (!isDebug) {
+    return
+  }
+  if (!error.requestId && !error.code && !error.message) {
+    return
+  }
+  const details = document.createElement('details')
+  details.className = 'error-details'
+  details.open = true
+  const summary = document.createElement('summary')
+  summary.textContent = 'Подробнее'
+  details.appendChild(summary)
+  const list = document.createElement('ul')
+  if (error.requestId) {
+    const item = document.createElement('li')
+    item.textContent = `Request ID: ${error.requestId}`
+    list.appendChild(item)
+  }
+  if (error.code) {
+    const item = document.createElement('li')
+    item.textContent = `Код: ${error.code}`
+    list.appendChild(item)
+  }
+  if (error.message) {
+    const item = document.createElement('li')
+    item.textContent = `Сообщение: ${error.message}`
+    list.appendChild(item)
+  }
+  details.appendChild(list)
+  container.appendChild(details)
 }
 
 async function pingBackend() {
@@ -120,7 +267,7 @@ function setupCopyButton() {
   })
 }
 
-function render() {
+function renderVenueMode() {
   if (!root) return
   const { initDataLength, startParam, userId } = getTelegramContext()
   const defaultVenueId = Number(startParam)
@@ -163,6 +310,281 @@ function render() {
   setupCopyButton()
 }
 
+function renderCatalogScreen() {
+  if (!root) return
+  const { initDataLength, startParam, userId } = getTelegramContext()
+  const defaultVenueId = Number(startParam)
+  root.innerHTML = `
+    <main class="container">
+      <header>
+        <h1>Hookah Mini App</h1>
+        <p>Каталог кальянных</p>
+      </header>
+      <section class="info">
+        <p><strong>initData length:</strong> ${initDataLength}</p>
+        <p><strong>tgWebAppStartParam:</strong> ${startParam || '—'}</p>
+        <p><strong>Telegram user id:</strong> ${userId ?? '—'}</p>
+      </section>
+      <section class="card">
+        <div class="card-header">
+          <h2>Каталог</h2>
+          <button id="catalog-retry-btn">Обновить</button>
+        </div>
+        <p id="catalog-status" class="status">Загрузка каталога...</p>
+        <div id="catalog-error" class="error-card" hidden>
+          <h3 id="catalog-error-title"></h3>
+          <p id="catalog-error-message"></p>
+          <div class="error-actions" id="catalog-error-actions"></div>
+          <div id="catalog-error-details"></div>
+        </div>
+        <ul id="catalog-list" class="catalog-list"></ul>
+      </section>
+      <section class="card">
+        <div class="card-header">
+          <h2>Заведение по ID</h2>
+        </div>
+        <label for="guest-venue-id">ID заведения</label>
+        <input id="guest-venue-id" type="number" value="${Number.isFinite(defaultVenueId) ? defaultVenueId : ''}" placeholder="Введите ID" />
+        <div class="button-row">
+          <button id="venue-load-btn">Открыть заведение</button>
+        </div>
+        <p id="venue-status" class="status">Введите ID и загрузите карточку.</p>
+        <div id="venue-error" class="error-card" hidden>
+          <h3 id="venue-error-title"></h3>
+          <p id="venue-error-message"></p>
+          <div class="error-actions" id="venue-error-actions"></div>
+          <div id="venue-error-details"></div>
+        </div>
+        <div id="venue-details" class="venue-details" hidden></div>
+      </section>
+    </main>
+  `
+
+  document.querySelector<HTMLButtonElement>('#catalog-retry-btn')?.addEventListener('click', () => void loadCatalog())
+  document.querySelector<HTMLButtonElement>('#venue-load-btn')?.addEventListener('click', () => {
+    const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
+    if (!input) return
+    const venueId = Number(input.value)
+    if (!venueId || Number.isNaN(venueId)) {
+      showVenueError({
+        status: 400,
+        code: ApiErrorCodes.INVALID_INPUT,
+        message: 'Некорректный ID'
+      })
+      return
+    }
+    void loadVenue(venueId)
+  })
+
+  void loadCatalog()
+}
+
+function setCatalogStatus(text: string) {
+  const status = document.querySelector<HTMLParagraphElement>('#catalog-status')
+  if (status) {
+    status.textContent = text
+  }
+}
+
+function setVenueStatus(text: string) {
+  const status = document.querySelector<HTMLParagraphElement>('#venue-status')
+  if (status) {
+    status.textContent = text
+  }
+}
+
+function showCatalogError(error: ApiErrorInfo) {
+  const container = document.querySelector<HTMLDivElement>('#catalog-error')
+  const title = document.querySelector<HTMLHeadingElement>('#catalog-error-title')
+  const message = document.querySelector<HTMLParagraphElement>('#catalog-error-message')
+  const actions = document.querySelector<HTMLDivElement>('#catalog-error-actions')
+  const details = document.querySelector<HTMLDivElement>('#catalog-error-details')
+  if (!container || !title || !message || !actions || !details) return
+
+  const code = normalizeErrorCode(error)
+  let actionLabel = 'Повторить'
+  let actionHandler: (() => void) | null = () => void loadCatalog()
+
+  if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
+    title.textContent = 'Каталог временно недоступен'
+    message.textContent = 'Сервис перегружен или недоступен. Попробуйте ещё раз чуть позже.'
+  } else if (code === ApiErrorCodes.UNAUTHORIZED) {
+    title.textContent = 'Сессия истекла'
+    message.textContent = 'Перезапустите мини-приложение, чтобы продолжить.'
+    actionLabel = 'Перезапустить'
+    actionHandler = () => window.location.reload()
+  } else {
+    title.textContent = 'Не удалось загрузить каталог'
+    message.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
+  }
+
+  actions.innerHTML = ''
+  if (actionHandler) {
+    const button = document.createElement('button')
+    button.textContent = actionLabel
+    button.addEventListener('click', actionHandler)
+    actions.appendChild(button)
+  }
+
+  renderErrorDetails(details, error)
+  container.hidden = false
+  logApiError('catalog', error)
+}
+
+function hideCatalogError() {
+  const container = document.querySelector<HTMLDivElement>('#catalog-error')
+  if (container) {
+    container.hidden = true
+  }
+}
+
+function renderCatalogList(venues: CatalogVenue[]) {
+  const list = document.querySelector<HTMLUListElement>('#catalog-list')
+  if (!list) return
+  list.innerHTML = ''
+  if (!venues.length) {
+    const item = document.createElement('li')
+    item.textContent = 'Пока нет доступных заведений.'
+    list.appendChild(item)
+    return
+  }
+  venues.forEach((venue) => {
+    const item = document.createElement('li')
+    item.className = 'catalog-item'
+    const info = document.createElement('div')
+    info.innerHTML = `<strong>${venue.name}</strong><br /><span>${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}</span>`
+    const button = document.createElement('button')
+    button.textContent = 'Открыть'
+    button.addEventListener('click', () => void loadVenue(venue.id))
+    item.appendChild(info)
+    item.appendChild(button)
+    list.appendChild(item)
+  })
+}
+
+async function loadCatalog() {
+  setCatalogStatus('Загрузка каталога...')
+  hideCatalogError()
+  const list = document.querySelector<HTMLUListElement>('#catalog-list')
+  if (list) {
+    list.innerHTML = ''
+  }
+  const { data, error } = await requestApi<CatalogResponse>('/api/guest/catalog')
+  if (error) {
+    showCatalogError(error)
+    setCatalogStatus('')
+    return
+  }
+  setCatalogStatus('')
+  renderCatalogList(data?.venues ?? [])
+}
+
+function showVenueError(error: ApiErrorInfo) {
+  const container = document.querySelector<HTMLDivElement>('#venue-error')
+  const title = document.querySelector<HTMLHeadingElement>('#venue-error-title')
+  const message = document.querySelector<HTMLParagraphElement>('#venue-error-message')
+  const actions = document.querySelector<HTMLDivElement>('#venue-error-actions')
+  const details = document.querySelector<HTMLDivElement>('#venue-error-details')
+  const detailsContainer = document.querySelector<HTMLDivElement>('#venue-details')
+  if (!container || !title || !message || !actions || !details || !detailsContainer) return
+
+  const code = normalizeErrorCode(error)
+  let actionLabel = 'Повторить'
+  let actionHandler: (() => void) | null = null
+
+  if (code === ApiErrorCodes.SERVICE_SUSPENDED) {
+    title.textContent = 'Заведение временно недоступно'
+    message.textContent = 'Попробуйте вернуться позже или выбрать другое заведение.'
+    actionLabel = 'Вернуться в каталог'
+    actionHandler = () => void loadCatalog()
+  } else if (code === ApiErrorCodes.NOT_FOUND) {
+    title.textContent = 'Заведение не найдено'
+    message.textContent = 'Проверьте ссылку или выберите другое заведение в каталоге.'
+    actionLabel = 'Вернуться в каталог'
+    actionHandler = () => void loadCatalog()
+  } else if (code === ApiErrorCodes.INVALID_INPUT) {
+    title.textContent = 'Некорректная ссылка'
+    message.textContent = 'Похоже, ID заведения указан неверно.'
+    actionLabel = 'Вернуться в каталог'
+    actionHandler = () => void loadCatalog()
+  } else if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
+    title.textContent = 'Сервис временно недоступен'
+    message.textContent = 'Попробуйте повторить запрос чуть позже.'
+    actionHandler = () => {
+      const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
+      const venueId = input ? Number(input.value) : NaN
+      if (venueId && !Number.isNaN(venueId)) {
+        void loadVenue(venueId)
+      }
+    }
+  } else if (code === ApiErrorCodes.UNAUTHORIZED) {
+    title.textContent = 'Сессия истекла'
+    message.textContent = 'Перезапустите мини-приложение, чтобы продолжить.'
+    actionLabel = 'Перезапустить'
+    actionHandler = () => window.location.reload()
+  } else {
+    title.textContent = 'Не удалось загрузить заведение'
+    message.textContent = 'Попробуйте повторить запрос чуть позже.'
+    actionHandler = () => {
+      const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
+      const venueId = input ? Number(input.value) : NaN
+      if (venueId && !Number.isNaN(venueId)) {
+        void loadVenue(venueId)
+      }
+    }
+  }
+
+  actions.innerHTML = ''
+  if (actionHandler) {
+    const button = document.createElement('button')
+    button.textContent = actionLabel
+    button.addEventListener('click', actionHandler)
+    actions.appendChild(button)
+  }
+
+  renderErrorDetails(details, error)
+  container.hidden = false
+  detailsContainer.hidden = true
+  logApiError('venue', error)
+}
+
+function hideVenueError() {
+  const container = document.querySelector<HTMLDivElement>('#venue-error')
+  if (container) {
+    container.hidden = true
+  }
+}
+
+function renderVenueDetails(venue: VenueResponse['venue']) {
+  const details = document.querySelector<HTMLDivElement>('#venue-details')
+  if (!details) return
+  details.innerHTML = `
+    <h3>${venue.name}</h3>
+    <p>${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}</p>
+    <p class="status">Статус: ${venue.status}</p>
+  `
+  details.hidden = false
+}
+
+async function loadVenue(venueId: number) {
+  setVenueStatus('Загрузка заведения...')
+  hideVenueError()
+  const details = document.querySelector<HTMLDivElement>('#venue-details')
+  if (details) {
+    details.hidden = true
+  }
+  const { data, error } = await requestApi<VenueResponse>(`/api/guest/venue/${venueId}`)
+  if (error) {
+    showVenueError(error)
+    setVenueStatus('')
+    return
+  }
+  setVenueStatus('')
+  if (data) {
+    renderVenueDetails(data.venue)
+  }
+}
+
 function startClock() {
   const nowElement = document.querySelector<HTMLSpanElement>('#now')
   if (!nowElement) return
@@ -171,6 +593,18 @@ function startClock() {
   }
   update()
   setInterval(update, 1000)
+}
+
+function render() {
+  if (screen === 'catalog') {
+    renderCatalogScreen()
+    return
+  }
+  if (mode === 'venue') {
+    renderVenueMode()
+    return
+  }
+  renderVenueMode()
 }
 
 render()

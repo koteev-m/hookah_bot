@@ -15,20 +15,19 @@ fun resolveVenueVisibilityMode(appConfig: ApplicationConfig): VenueVisibilityMod
     val configValue = appConfig.propertyOrNull(configKey)?.getString()
     val envValue = System.getenv(envKey)
 
-    return parseVenueVisibilityMode(configValue, configKey, envKey)
-        ?: parseVenueVisibilityMode(envValue, configKey, envKey)
+    return parseVenueVisibilityMode(configValue, configKey)
+        ?: parseVenueVisibilityMode(envValue, envKey)
         ?: VenueVisibilityMode.EXPLAIN_SUSPENDED
 }
 
 private fun parseVenueVisibilityMode(
     rawValue: String?,
-    configKey: String,
-    envKey: String
+    sourceKey: String
 ): VenueVisibilityMode? {
     val normalized = rawValue?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: return null
     return when (normalized) {
         "explain" -> VenueVisibilityMode.EXPLAIN_SUSPENDED
         "hide" -> VenueVisibilityMode.HIDE_SUSPENDED
-        else -> throw ConfigException("$configKey or $envKey must be 'explain' or 'hide'")
+        else -> throw ConfigException("Invalid value '$normalized' for $sourceKey (expected: explain|hide)")
     }
 }

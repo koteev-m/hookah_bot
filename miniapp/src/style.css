@@ -72,3 +72,76 @@ input[type="number"] {
   border-radius: 10px;
   background: #eef2ff;
 }
+
+.card {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid #dfe3eb;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.button-row {
+  margin: 0.5rem 0 1rem;
+}
+
+.catalog-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.catalog-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.catalog-item span {
+  color: #52617d;
+}
+
+.error-card {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #fca5a5;
+  background: #fff5f5;
+}
+
+.error-card h3 {
+  margin-top: 0;
+}
+
+.error-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.error-details {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: #4b5563;
+}
+
+.venue-details {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  background: #eef2ff;
+}
