@@ -85,7 +85,7 @@ class GuestVenueRoutesTest {
 
         assertEquals(HttpStatusCode.OK, publishedResponse.status)
         val publishedPayload = json.decodeFromString(VenueResponse.serializer(), publishedResponse.bodyAsText())
-        assertEquals("active_published", publishedPayload.venue.status)
+        assertEquals(VenueStatuses.ACTIVE_PUBLISHED, publishedPayload.venue.status)
 
         val hiddenResponse = client.get("/api/guest/venue/${venues.hiddenId}") {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
@@ -93,7 +93,7 @@ class GuestVenueRoutesTest {
 
         assertEquals(HttpStatusCode.OK, hiddenResponse.status)
         val hiddenPayload = json.decodeFromString(VenueResponse.serializer(), hiddenResponse.bodyAsText())
-        assertEquals("active_hidden", hiddenPayload.venue.status)
+        assertEquals(VenueStatuses.ACTIVE_HIDDEN, hiddenPayload.venue.status)
 
         val suspendedResponse = client.get("/api/guest/venue/${venues.suspendedId}") {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
@@ -124,6 +124,66 @@ class GuestVenueRoutesTest {
         assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
     }
 
+    @Test
+    fun `venue by id without auth returns unauthorized`() = testApplication {
+        environment {
+            config = MapApplicationConfig(
+                "app.env" to appEnv,
+                "api.session.jwtSecret" to "test-secret",
+                "db.jdbcUrl" to ""
+            )
+        }
+
+        application { module() }
+
+        val response = client.get("/api/guest/venue/1")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.UNAUTHORIZED)
+    }
+
+    @Test
+    fun `venue by id with invalid id returns invalid input`() = testApplication {
+        val config = MapApplicationConfig(
+            "app.env" to appEnv,
+            "api.session.jwtSecret" to "test-secret",
+            "db.jdbcUrl" to ""
+        )
+
+        environment { this.config = config }
+        application { module() }
+
+        val token = issueToken(config)
+
+        val response = client.get("/api/guest/venue/not-a-number") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+    }
+
+    @Test
+    fun `catalog with db disabled returns database unavailable`() = testApplication {
+        val config = MapApplicationConfig(
+            "app.env" to appEnv,
+            "api.session.jwtSecret" to "test-secret",
+            "db.jdbcUrl" to ""
+        )
+
+        environment { this.config = config }
+        application { module() }
+
+        val token = issueToken(config)
+
+        val response = client.get("/api/guest/catalog") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+    }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -150,9 +210,9 @@ class GuestVenueRoutesTest {
 
     private fun seedVenues(jdbcUrl: String): SeededVenues {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            val publishedId = insertVenue(connection, "Published", "City", "Address", "active_published")
-            val hiddenId = insertVenue(connection, "Hidden", "City", "Address", "active_hidden")
-            val suspendedId = insertVenue(connection, "Suspended", "City", "Address", "suspended_by_platform")
+            val publishedId = insertVenue(connection, "Published", "City", "Address", VenueStatuses.ACTIVE_PUBLISHED)
+            val hiddenId = insertVenue(connection, "Hidden", "City", "Address", VenueStatuses.ACTIVE_HIDDEN)
+            val suspendedId = insertVenue(connection, "Suspended", "City", "Address", VenueStatuses.SUSPENDED_BY_PLATFORM)
             return SeededVenues(publishedId, hiddenId, suspendedId)
         }
     }

@@ -6,9 +6,9 @@ import com.hookah.platform.backend.api.ServiceSuspendedException
 class GuestVenuePolicy(private val mode: VenueVisibilityMode) {
     fun ensureVenueReadable(status: String) {
         when (status) {
-            "active_published",
-            "active_hidden" -> Unit
-            "suspended_by_platform" -> when (mode) {
+            VenueStatuses.ACTIVE_PUBLISHED,
+            VenueStatuses.ACTIVE_HIDDEN -> Unit
+            VenueStatuses.SUSPENDED_BY_PLATFORM -> when (mode) {
                 VenueVisibilityMode.EXPLAIN_SUSPENDED -> throw ServiceSuspendedException()
                 VenueVisibilityMode.HIDE_SUSPENDED -> throw NotFoundException()
             }

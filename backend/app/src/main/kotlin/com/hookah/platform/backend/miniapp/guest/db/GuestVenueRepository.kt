@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.guest.VenueStatuses
 import java.sql.SQLException
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                             ORDER BY id ASC
                         """.trimIndent()
                     ).use { statement ->
-                        statement.setString(1, "active_published")
+                        statement.setString(1, VenueStatuses.ACTIVE_PUBLISHED)
                         statement.executeQuery().use { rs ->
                             val venues = mutableListOf<VenueShort>()
                             while (rs.next()) {
