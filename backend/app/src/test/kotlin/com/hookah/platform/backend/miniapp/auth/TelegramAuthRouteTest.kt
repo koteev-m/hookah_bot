@@ -1,10 +1,10 @@
 package com.hookah.platform.backend.miniapp.auth
 
 import com.hookah.platform.backend.api.ApiErrorCodes
-import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.miniapp.api.TelegramAuthRequest
 import com.hookah.platform.backend.miniapp.api.TelegramAuthResponse
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -17,11 +17,11 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class TelegramAuthRouteTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -87,8 +87,7 @@ class TelegramAuthRouteTest {
         }
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
-        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertApiErrorEnvelope(payload, ApiErrorCodes.INITDATA_INVALID)
+        assertApiErrorEnvelope(response, ApiErrorCodes.INITDATA_INVALID)
     }
 
     @Test
@@ -114,8 +113,7 @@ class TelegramAuthRouteTest {
         }
 
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
-        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertApiErrorEnvelope(payload, ApiErrorCodes.CONFIG_ERROR)
+        assertApiErrorEnvelope(response, ApiErrorCodes.CONFIG_ERROR)
     }
 
     @Test
@@ -134,8 +132,7 @@ class TelegramAuthRouteTest {
         }
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
-        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertApiErrorEnvelope(payload, ApiErrorCodes.INVALID_INPUT)
+        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
     }
 
     @Test
@@ -154,8 +151,7 @@ class TelegramAuthRouteTest {
         }
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
-        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertApiErrorEnvelope(payload, ApiErrorCodes.INVALID_INPUT)
+        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
     }
 
     @Test
@@ -179,8 +175,7 @@ class TelegramAuthRouteTest {
         }
 
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
-        val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertApiErrorEnvelope(payload, ApiErrorCodes.DATABASE_UNAVAILABLE)
+        assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
     }
 
     private fun generateValidInitData(
@@ -205,8 +200,4 @@ class TelegramAuthRouteTest {
         }
     }
 
-    private fun assertApiErrorEnvelope(payload: ApiErrorEnvelope, expectedCode: String) {
-        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
-        assertEquals(expectedCode, payload.error.code)
-    }
 }

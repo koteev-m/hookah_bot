@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.session
 
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -18,7 +19,6 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -44,7 +44,7 @@ class SessionAuthTest {
         val response = client.get("/api/guest/_ping")
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
-        assertApiErrorEnvelope(response.bodyAsText(), ApiErrorCodes.UNAUTHORIZED)
+        assertApiErrorEnvelope(response, ApiErrorCodes.UNAUTHORIZED)
     }
 
     @Test
@@ -82,7 +82,7 @@ class SessionAuthTest {
         val response = client.get("/api/unknown")
 
         assertEquals(HttpStatusCode.NotFound, response.status)
-        assertApiErrorEnvelope(response.bodyAsText(), ApiErrorCodes.NOT_FOUND)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
     }
 
     @Test
@@ -100,7 +100,7 @@ class SessionAuthTest {
             HttpStatusCode.MethodNotAllowed -> ApiErrorCodes.INVALID_INPUT
             else -> fail("Unexpected status ${response.status}")
         }
-        assertApiErrorEnvelope(response.bodyAsText(), expectedCode)
+        assertApiErrorEnvelope(response, expectedCode)
     }
 
     @Test
@@ -123,16 +123,7 @@ class SessionAuthTest {
         }
 
         assertEquals(HttpStatusCode.MethodNotAllowed, response.status)
-        assertApiErrorEnvelope(response.bodyAsText(), ApiErrorCodes.INVALID_INPUT)
-    }
-
-    private fun assertApiErrorEnvelope(body: String, expectedCode: String) {
-        val payload = Json.parseToJsonElement(body).jsonObject
-        val error = payload["error"]?.jsonObject
-        assertNotNull(error, "error envelope missing")
-        assertEquals(expectedCode, error["code"]?.jsonPrimitive?.content)
-        val requestId = payload["requestId"]?.jsonPrimitive?.content
-        assertTrue(!requestId.isNullOrBlank(), "requestId must be present in API error envelope")
+        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
     }
 
     private companion object {
