@@ -88,8 +88,7 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
-        assertEquals(ApiErrorCodes.INITDATA_INVALID, payload.error.code)
+        assertApiErrorEnvelope(payload, ApiErrorCodes.INITDATA_INVALID)
     }
 
     @Test
@@ -116,8 +115,7 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
-        assertEquals(ApiErrorCodes.CONFIG_ERROR, payload.error.code)
+        assertApiErrorEnvelope(payload, ApiErrorCodes.CONFIG_ERROR)
     }
 
     @Test
@@ -137,8 +135,7 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
-        assertEquals("INVALID_INPUT", payload.error.code)
+        assertApiErrorEnvelope(payload, ApiErrorCodes.INVALID_INPUT)
     }
 
     @Test
@@ -158,8 +155,7 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
-        assertEquals("INVALID_INPUT", payload.error.code)
+        assertApiErrorEnvelope(payload, ApiErrorCodes.INVALID_INPUT)
     }
 
     @Test
@@ -184,8 +180,7 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
-        assertEquals(ApiErrorCodes.DATABASE_UNAVAILABLE, payload.error.code)
+        assertApiErrorEnvelope(payload, ApiErrorCodes.DATABASE_UNAVAILABLE)
     }
 
     private fun generateValidInitData(
@@ -208,5 +203,10 @@ class TelegramAuthRouteTest {
         return finalParams.entries.joinToString("&") { (key, value) ->
             "${URLEncoder.encode(key, StandardCharsets.UTF_8)}=${URLEncoder.encode(value, StandardCharsets.UTF_8)}"
         }
+    }
+
+    private fun assertApiErrorEnvelope(payload: ApiErrorEnvelope, expectedCode: String) {
+        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
+        assertEquals(expectedCode, payload.error.code)
     }
 }
