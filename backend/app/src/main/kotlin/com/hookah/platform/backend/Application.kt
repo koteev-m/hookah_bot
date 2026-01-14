@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.ApiError
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.api.ApiException
+import com.hookah.platform.backend.api.ApiHeaders
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
@@ -294,8 +295,8 @@ fun Application.module() {
     }
 
     install(CallId) {
-        header("X-Request-Id")
-        replyToHeader("X-Request-Id")
+        header(ApiHeaders.REQUEST_ID)
+        replyToHeader(ApiHeaders.REQUEST_ID)
         generate { UUID.randomUUID().toString() }
         verify { it.isNotBlank() }
     }
