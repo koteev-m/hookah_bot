@@ -8,6 +8,10 @@ import com.hookah.platform.backend.api.ApiHeaders
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
+import com.hookah.platform.backend.miniapp.guest.GuestVenuePolicy
+import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
+import com.hookah.platform.backend.miniapp.guest.resolveVenueVisibilityMode
+import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.telegram.TelegramApiClient
@@ -181,6 +185,8 @@ fun Application.module() {
     val dataSource = DatabaseFactory.init(dbConfig)
     val venueRepository = VenueRepository(dataSource)
     val userRepository = UserRepository(dataSource)
+    val guestVenueRepository = GuestVenueRepository(dataSource)
+    val guestVenuePolicy = GuestVenuePolicy(resolveVenueVisibilityMode(appConfig))
 
     if (dataSource != null) {
         logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
@@ -464,6 +470,10 @@ fun Application.module() {
         authenticate("miniapp-session") {
             route("/api") {
                 route("/guest") {
+                    guestVenueRoutes(
+                        guestVenueRepository = guestVenueRepository,
+                        guestVenuePolicy = guestVenuePolicy
+                    )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))
                     }
