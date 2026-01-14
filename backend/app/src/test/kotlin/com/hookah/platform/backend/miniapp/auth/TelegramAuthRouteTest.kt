@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.auth
 
+import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.miniapp.api.TelegramAuthRequest
 import com.hookah.platform.backend.miniapp.api.TelegramAuthResponse
@@ -87,7 +88,8 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertEquals("INITDATA_INVALID", payload.error.code)
+        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
+        assertEquals(ApiErrorCodes.INITDATA_INVALID, payload.error.code)
     }
 
     @Test
@@ -114,7 +116,8 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertEquals("CONFIG_ERROR", payload.error.code)
+        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
+        assertEquals(ApiErrorCodes.CONFIG_ERROR, payload.error.code)
     }
 
     @Test
@@ -134,6 +137,7 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
+        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
         assertEquals("INVALID_INPUT", payload.error.code)
     }
 
@@ -154,6 +158,7 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
+        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
         assertEquals("INVALID_INPUT", payload.error.code)
     }
 
@@ -179,7 +184,8 @@ class TelegramAuthRouteTest {
 
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
         val payload = json.decodeFromString<ApiErrorEnvelope>(response.bodyAsText())
-        assertEquals("DATABASE_UNAVAILABLE", payload.error.code)
+        assertTrue(!payload.requestId.isNullOrBlank(), "requestId must be present in API error envelope")
+        assertEquals(ApiErrorCodes.DATABASE_UNAVAILABLE, payload.error.code)
     }
 
     private fun generateValidInitData(
