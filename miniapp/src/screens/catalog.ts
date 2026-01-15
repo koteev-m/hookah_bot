@@ -6,6 +6,7 @@ import { clearSession, ensureGuestSession } from '../shared/session/guestSession
 import { getTelegramContext } from '../shared/telegram'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { append, el, on } from '../shared/ui/dom'
+import { parsePositiveInt } from '../shared/parse'
 
 type CatalogVenue = {
   id: number
@@ -65,18 +66,6 @@ type CatalogRefs = {
   startParam: HTMLSpanElement
   catalogRetryButton: HTMLButtonElement
   venueLoadButton: HTMLButtonElement
-}
-
-function parsePositiveInt(value: string): number | null {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return null
-  }
-  const parsed = Number(trimmed)
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
-    return null
-  }
-  return parsed
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -274,7 +263,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     venueNotFoundObserved: false
   }
   const { initDataLength, startParam, userId } = getTelegramContext()
-  const defaultVenueId = parsePositiveInt(startParam ?? '')
+  const defaultVenueId = parsePositiveInt(startParam)
   const refs = buildCatalogDom(root, initDataLength, startParam ?? '', userId ?? null)
   refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
@@ -384,11 +373,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
         onClick: () => {
           const venueId = parsePositiveInt(refs.venueInput.value)
           if (!venueId) {
-            showVenueError({
-              status: 400,
-              code: ApiErrorCodes.INVALID_INPUT,
-              message: 'Некорректный ID'
-            })
+            showInvalidVenueId()
             return
           }
           void loadVenue(venueId)
@@ -402,11 +387,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
         onClick: () => {
           const venueId = parsePositiveInt(refs.venueInput.value)
           if (!venueId) {
-            showVenueError({
-              status: 400,
-              code: ApiErrorCodes.INVALID_INPUT,
-              message: 'Некорректный ID'
-            })
+            showInvalidVenueId()
             return
           }
           void loadVenue(venueId)
@@ -426,11 +407,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
           clearSession(state.backendUrl, state.isDebug)
           const venueId = parsePositiveInt(refs.venueInput.value)
           if (!venueId) {
-            showVenueError({
-              status: 400,
-              code: ApiErrorCodes.INVALID_INPUT,
-              message: 'Некорректный ID'
-            })
+            showInvalidVenueId()
             return
           }
           void loadVenue(venueId)
@@ -444,11 +421,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
         onClick: () => {
           const venueId = parsePositiveInt(refs.venueInput.value)
           if (!venueId) {
-            showVenueError({
-              status: 400,
-              code: ApiErrorCodes.INVALID_INPUT,
-              message: 'Некорректный ID'
-            })
+            showInvalidVenueId()
             return
           }
           void loadVenue(venueId)
@@ -465,6 +438,16 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     refs.venueError.hidden = false
     refs.venueDetails.hidden = true
     logApiError('venue', error, state.isDebug)
+  }
+
+  const showInvalidVenueId = () => {
+    showVenueError({
+      status: 400,
+      code: ApiErrorCodes.INVALID_INPUT,
+      message: 'Некорректный ID'
+    })
+    refs.venueInput.focus()
+    refs.venueInput.select()
   }
 
   const renderVenueDetails = (venue: VenueResponse['venue']) => {
@@ -560,11 +543,19 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     on(refs.venueLoadButton, 'click', () => {
       const venueId = parsePositiveInt(refs.venueInput.value)
       if (!venueId) {
-        showVenueError({
-          status: 400,
-          code: ApiErrorCodes.INVALID_INPUT,
-          message: 'Некорректный ID'
-        })
+        showInvalidVenueId()
+        return
+      }
+      void loadVenue(venueId)
+    }),
+    on(refs.venueInput, 'keydown', (event) => {
+      if (event.key !== 'Enter') {
+        return
+      }
+      event.preventDefault()
+      const venueId = parsePositiveInt(refs.venueInput.value)
+      if (!venueId) {
+        showInvalidVenueId()
         return
       }
       void loadVenue(venueId)
