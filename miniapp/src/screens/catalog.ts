@@ -67,6 +67,18 @@ type CatalogRefs = {
   venueLoadButton: HTMLButtonElement
 }
 
+function parsePositiveInt(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+  const parsed = Number(trimmed)
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+    return null
+  }
+  return parsed
+}
+
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, ensureGuestSession, clearSession }
 }
@@ -134,7 +146,10 @@ function renderCatalogList(
     info.appendChild(location)
     const button = document.createElement('button')
     button.textContent = 'Открыть'
-    button.addEventListener('click', () => void onOpenVenue(venue.id))
+    button.addEventListener('click', () => {
+      refs.venueInput.value = String(venue.id)
+      void onOpenVenue(venue.id)
+    })
     item.appendChild(info)
     item.appendChild(button)
     refs.catalogList.appendChild(item)
@@ -204,6 +219,8 @@ function buildCatalogDom(
   venueLabel.textContent = 'ID заведения'
   const venueInput = el('input', { id: 'guest-venue-id' }) as HTMLInputElement
   venueInput.type = 'number'
+  venueInput.min = '1'
+  venueInput.step = '1'
   venueInput.placeholder = 'Введите ID'
   const venueButtonRow = el('div', { className: 'button-row' })
   const venueLoadButton = el('button', { id: 'venue-load-btn', text: 'Открыть заведение' })
@@ -257,9 +274,9 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     venueNotFoundObserved: false
   }
   const { initDataLength, startParam, userId } = getTelegramContext()
-  const defaultVenueId = Number(startParam)
+  const defaultVenueId = parsePositiveInt(startParam ?? '')
   const refs = buildCatalogDom(root, initDataLength, startParam ?? '', userId ?? null)
-  refs.venueInput.value = Number.isFinite(defaultVenueId) ? String(defaultVenueId) : ''
+  refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
   let catalogAbort: AbortController | null = null
   let venueAbort: AbortController | null = null

@@ -26,6 +26,18 @@ type VenueRefs = {
   generateButton: HTMLButtonElement
 }
 
+function parsePositiveInt(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+  const parsed = Number(trimmed)
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+    return null
+  }
+  return parsed
+}
+
 function buildVenueDom(
   root: HTMLDivElement,
   initDataLength: number,
@@ -79,6 +91,8 @@ function buildVenueDom(
   venueLabel.textContent = 'ID заведения'
   const venueInput = el('input', { id: 'venue-id' }) as HTMLInputElement
   venueInput.type = 'number'
+  venueInput.min = '1'
+  venueInput.step = '1'
   venueInput.placeholder = 'Введите ID'
   const linkStatus = el('p', { id: 'link-status', className: 'status', text: 'Сгенерируйте код, чтобы связать чат.' })
   const linkResult = el('div', { id: 'link-result', className: 'link-result' })
@@ -121,9 +135,9 @@ export function renderVenueMode(options: VenueScreenOptions) {
   const { root, backendUrl } = options
   if (!root) return () => undefined
   const { initDataLength, startParam, userId } = getTelegramContext()
-  const defaultVenueId = Number(startParam)
+  const defaultVenueId = parsePositiveInt(startParam ?? '')
   const refs = buildVenueDom(root, initDataLength, startParam ?? '', userId ?? null, backendUrl)
-  refs.venueInput.value = Number.isFinite(defaultVenueId) ? String(defaultVenueId) : ''
+  refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
   let disposed = false
   let countdownInterval: number | null = null
@@ -219,8 +233,10 @@ export function renderVenueMode(options: VenueScreenOptions) {
         if (!code) return
         try {
           await navigator.clipboard.writeText(`/link ${code}`)
+          if (disposed) return
           refs.linkStatus.textContent = 'Скопировано: /link <код>'
         } catch (error) {
+          if (disposed) return
           refs.linkStatus.textContent = 'Не удалось скопировать. Скопируйте вручную.'
         }
       })
