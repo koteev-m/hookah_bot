@@ -1,3 +1,4 @@
+import { isAbortError, REQUEST_ABORTED_CODE } from './abort'
 import { isGuestApi, resolveRequestId } from './errorMapping'
 import {
   ApiErrorCodes,
@@ -56,6 +57,17 @@ export async function requestApi<T>(
       }
       return { ok: false, error: errorInfo }
     } catch (error) {
+      if (isAbortError(error)) {
+        // Use a dedicated code so screens can ignore aborted requests without UI noise.
+        return {
+          ok: false,
+          error: {
+            status: 0,
+            code: REQUEST_ABORTED_CODE,
+            message: ''
+          }
+        }
+      }
       return {
         ok: false,
         error: {

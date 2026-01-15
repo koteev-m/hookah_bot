@@ -8,17 +8,19 @@ const isDebug = Boolean(import.meta.env.DEV)
 const searchParams = new URLSearchParams(window.location.search)
 const screen = searchParams.get('screen')
 const mode = searchParams.get('mode')
+let dispose: (() => void) | null = null
 
 function render() {
+  dispose?.()
   if (screen === 'catalog') {
-    renderCatalogScreen({ root, backendUrl, isDebug })
+    dispose = renderCatalogScreen({ root, backendUrl, isDebug })
     return
   }
   if (mode === 'venue') {
-    renderVenueMode({ root, backendUrl })
+    dispose = renderVenueMode({ root, backendUrl })
     return
   }
-  renderVenueMode({ root, backendUrl })
+  dispose = renderVenueMode({ root, backendUrl })
 }
 
 render()
