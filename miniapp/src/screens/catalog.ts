@@ -382,10 +382,16 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
       actions.push({
         label: 'Повторить',
         onClick: () => {
-          const venueId = Number(refs.venueInput.value)
-          if (venueId && !Number.isNaN(venueId)) {
-            void loadVenue(venueId)
+          const venueId = parsePositiveInt(refs.venueInput.value)
+          if (!venueId) {
+            showVenueError({
+              status: 400,
+              code: ApiErrorCodes.INVALID_INPUT,
+              message: 'Некорректный ID'
+            })
+            return
           }
+          void loadVenue(venueId)
         }
       })
     } else if (code === ApiErrorCodes.NETWORK_ERROR) {
@@ -394,10 +400,16 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
       actions.push({
         label: 'Повторить',
         onClick: () => {
-          const venueId = Number(refs.venueInput.value)
-          if (venueId && !Number.isNaN(venueId)) {
-            void loadVenue(venueId)
+          const venueId = parsePositiveInt(refs.venueInput.value)
+          if (!venueId) {
+            showVenueError({
+              status: 400,
+              code: ApiErrorCodes.INVALID_INPUT,
+              message: 'Некорректный ID'
+            })
+            return
           }
+          void loadVenue(venueId)
         }
       })
     } else if (code === ApiErrorCodes.INITDATA_INVALID) {
@@ -412,10 +424,16 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
         label: 'Повторить (переавторизоваться)',
         onClick: () => {
           clearSession(state.backendUrl, state.isDebug)
-          const venueId = Number(refs.venueInput.value)
-          if (venueId && !Number.isNaN(venueId)) {
-            void loadVenue(venueId)
+          const venueId = parsePositiveInt(refs.venueInput.value)
+          if (!venueId) {
+            showVenueError({
+              status: 400,
+              code: ApiErrorCodes.INVALID_INPUT,
+              message: 'Некорректный ID'
+            })
+            return
           }
+          void loadVenue(venueId)
         }
       })
     } else {
@@ -424,10 +442,16 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
       actions.push({
         label: 'Повторить',
         onClick: () => {
-          const venueId = Number(refs.venueInput.value)
-          if (venueId && !Number.isNaN(venueId)) {
-            void loadVenue(venueId)
+          const venueId = parsePositiveInt(refs.venueInput.value)
+          if (!venueId) {
+            showVenueError({
+              status: 400,
+              code: ApiErrorCodes.INVALID_INPUT,
+              message: 'Некорректный ID'
+            })
+            return
           }
+          void loadVenue(venueId)
         }
       })
     }
@@ -534,8 +558,8 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   disposables.push(
     on(refs.catalogRetryButton, 'click', () => void loadCatalog()),
     on(refs.venueLoadButton, 'click', () => {
-      const venueId = Number(refs.venueInput.value)
-      if (!venueId || Number.isNaN(venueId)) {
+      const venueId = parsePositiveInt(refs.venueInput.value)
+      if (!venueId) {
         showVenueError({
           status: 400,
           code: ApiErrorCodes.INVALID_INPUT,
