@@ -142,6 +142,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
   let disposed = false
   let countdownInterval: number | null = null
   let clockInterval: number | null = null
+  let generating = false
   const disposables: Array<() => void> = []
 
   const startCountdown = (expiresAt: string) => {
@@ -185,9 +186,12 @@ export function renderVenueMode(options: VenueScreenOptions) {
   }
 
   const generateLinkCode = async () => {
-    const venueId = Number(refs.venueInput.value)
+    if (generating) {
+      return
+    }
+    const venueId = parsePositiveInt(refs.venueInput.value)
     const ctx = getTelegramContext()
-    if (!venueId || Number.isNaN(venueId)) {
+    if (!venueId) {
       refs.linkStatus.textContent = 'Укажите корректный ID заведения.'
       refs.linkResult.hidden = true
       return
@@ -198,6 +202,9 @@ export function renderVenueMode(options: VenueScreenOptions) {
       refs.linkResult.hidden = true
       return
     }
+    generating = true
+    refs.generateButton.disabled = true
+    refs.venueInput.disabled = true
     refs.linkStatus.textContent = 'Генерация кода...'
     refs.linkResult.hidden = true
     try {
@@ -223,6 +230,11 @@ export function renderVenueMode(options: VenueScreenOptions) {
       if (disposed) return // Skip UI updates after screen dispose.
       refs.linkStatus.textContent = `Не удалось сгенерировать код: ${(error as Error).message}`
       refs.linkResult.hidden = true
+    } finally {
+      if (disposed) return
+      generating = false
+      refs.generateButton.disabled = false
+      refs.venueInput.disabled = false
     }
   }
 
