@@ -98,13 +98,18 @@ function getVisibilityNotes(state: CatalogRuntimeState) {
   if (!state.isDebug || !state.visibilitySuspendedObserved) {
     return []
   }
-  return ['Visibility mode: explain (423 observed)']
+  return [
+    'Visibility mode: explain — для suspended_by_platform возвращается 423 SERVICE_SUSPENDED.',
+    'При api.guest.suspendedMode=hide suspended_by_platform маскируется под 404.'
+  ]
 }
 
 function getVenueVisibilityNotes(state: CatalogRuntimeState) {
   const notes = getVisibilityNotes(state)
   if (state.isDebug && state.venueNotFoundObserved) {
-    notes.push('404 может означать hide mode или реальный NOT_FOUND')
+    notes.push(
+      'Статус 404 в hide-режиме (api.guest.suspendedMode=hide) может означать скрытие suspended_by_platform.'
+    )
   }
   return notes
 }
@@ -359,7 +364,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
         onClick: () => void loadCatalog()
       })
     } else if (code === ApiErrorCodes.NOT_FOUND) {
-      refs.venueErrorTitle.textContent = 'Заведение не найдено'
+      refs.venueErrorTitle.textContent = 'Заведение недоступно'
       refs.venueErrorMessage.textContent = 'Проверьте ссылку или выберите другое заведение в каталоге.'
       actions.push({
         label: 'Вернуться в каталог',
