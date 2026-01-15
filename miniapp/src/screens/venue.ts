@@ -1,4 +1,5 @@
 import { getTelegramContext } from '../shared/telegram'
+import { append, el, on } from '../shared/ui/dom'
 
 type LinkCodePayload = {
   code: string
@@ -11,167 +12,237 @@ type VenueScreenOptions = {
   backendUrl: string
 }
 
-let countdownTimer: number | null = null
-
-function startCountdown(expiresAt: string) {
-  const countdownElement = document.querySelector<HTMLSpanElement>('#link-countdown')
-  if (!countdownElement) return
-  if (countdownTimer) {
-    window.clearInterval(countdownTimer)
-  }
-  const target = new Date(expiresAt).getTime()
-  const update = () => {
-    const diff = Math.max(0, target - Date.now())
-    const seconds = Math.floor(diff / 1000)
-    const minutes = Math.floor(seconds / 60)
-    const remainSeconds = seconds % 60
-    countdownElement.textContent = `${minutes}м ${remainSeconds}с`
-  }
-  update()
-  countdownTimer = window.setInterval(update, 1000)
+type VenueRefs = {
+  startParam: HTMLSpanElement
+  now: HTMLSpanElement
+  pingButton: HTMLButtonElement
+  backendStatus: HTMLParagraphElement
+  venueInput: HTMLInputElement
+  linkStatus: HTMLParagraphElement
+  linkResult: HTMLDivElement
+  linkCode: HTMLSpanElement
+  linkCountdown: HTMLSpanElement
+  copyButton: HTMLButtonElement
+  generateButton: HTMLButtonElement
 }
 
-async function pingBackend(backendUrl: string) {
-  const statusElement = document.querySelector<HTMLParagraphElement>('#backend-status')
-  if (!statusElement) return
-  statusElement.textContent = 'Pinging backend...'
-  try {
-    const response = await fetch(`${backendUrl}/health`)
-    if (!response.ok) {
-      throw new Error(`Unexpected status ${response.status}`)
-    }
-    const data = await response.json()
-    statusElement.textContent = `Backend OK: ${JSON.stringify(data)}`
-  } catch (error) {
-    statusElement.textContent = `Backend error: ${(error as Error).message}`
-  }
-}
+function buildVenueDom(
+  root: HTMLDivElement,
+  initDataLength: number,
+  startParam: string,
+  userId: number | null,
+  backendUrl: string
+): VenueRefs {
+  const main = el('main', { className: 'container' })
+  const header = el('header')
+  append(
+    header,
+    el('h1', { text: 'Hookah Mini App' }),
+    el('p', { text: 'Режим заведения: привязка чата персонала.' })
+  )
 
-async function generateLinkCode(backendUrl: string) {
-  const venueInput = document.querySelector<HTMLInputElement>('#venue-id')
-  const status = document.querySelector<HTMLParagraphElement>('#link-status')
-  const codeElement = document.querySelector<HTMLSpanElement>('#link-code')
-  const container = document.querySelector<HTMLDivElement>('#link-result')
-  if (!venueInput || !status || !codeElement || !container) return
-  const venueId = Number(venueInput.value)
-  const ctx = getTelegramContext()
-  if (!venueId || Number.isNaN(venueId)) {
-    status.textContent = 'Укажите корректный ID заведения.'
-    container.hidden = true
-    return
-  }
-  if (!ctx.userId) {
-    status.textContent = 'Не удалось определить Telegram ID. Откройте мини-приложение из Telegram.'
-    container.hidden = true
-    return
-  }
-  status.textContent = 'Генерация кода...'
-  container.hidden = true
-  try {
-    const response = await fetch(`${backendUrl}/api/venue/${venueId}/staff-chat/link-code`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Telegram-User-Id': ctx.userId.toString()
-      },
-      body: JSON.stringify({ userId: ctx.userId })
-    })
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`Ошибка ${response.status}: ${errorText || 'неизвестно'}`)
-    }
-    const payload = (await response.json()) as LinkCodePayload
-    codeElement.textContent = payload.code
-    status.textContent = 'Код сгенерирован. Отправьте /link <код> в чате персонала.'
-    container.hidden = false
-    startCountdown(payload.expiresAt)
-  } catch (error) {
-    status.textContent = `Не удалось сгенерировать код: ${(error as Error).message}`
-    container.hidden = true
-  }
-}
+  const info = el('section', { className: 'info' })
+  const initDataLine = el('p')
+  append(
+    initDataLine,
+    el('strong', { text: 'initData length:' }),
+    document.createTextNode(` ${initDataLength}`)
+  )
+  const startParamLine = el('p')
+  const startParamSpan = el('span', { id: 'venue-start-param' })
+  append(
+    startParamLine,
+    el('strong', { text: 'tgWebAppStartParam:' }),
+    document.createTextNode(' '),
+    startParamSpan
+  )
+  const userIdLine = el('p')
+  append(
+    userIdLine,
+    el('strong', { text: 'Telegram user id:' }),
+    document.createTextNode(` ${userId ?? '—'}`)
+  )
+  const nowLine = el('p')
+  const nowSpan = el('span', { id: 'now' })
+  append(nowLine, el('strong', { text: 'Текущее время:' }), document.createTextNode(' '), nowSpan)
+  append(info, initDataLine, startParamLine, userIdLine, nowLine)
 
-function setupCopyButton() {
-  const copyButton = document.querySelector<HTMLButtonElement>('#copy-link-btn')
-  const codeElement = document.querySelector<HTMLSpanElement>('#link-code')
-  const status = document.querySelector<HTMLParagraphElement>('#link-status')
-  if (!copyButton || !codeElement || !status) return
-  copyButton.addEventListener('click', async () => {
-    const code = codeElement.textContent?.trim()
-    if (!code) return
-    try {
-      await navigator.clipboard.writeText(`/link ${code}`)
-      status.textContent = 'Скопировано: /link <код>'
-    } catch (error) {
-      status.textContent = 'Не удалось скопировать. Скопируйте вручную.'
-    }
-  })
-}
+  const pingSection = el('section')
+  const pingButton = el('button', { id: 'ping-btn', text: 'Ping backend /health' })
+  const backendStatus = el('p', { id: 'backend-status', className: 'status', text: 'Idle' })
+  append(pingSection, pingButton, backendStatus)
 
-function startClock() {
-  const nowElement = document.querySelector<HTMLSpanElement>('#now')
-  if (!nowElement) return
-  const update = () => {
-    nowElement.textContent = new Date().toLocaleString()
+  const linkSection = el('section', { className: 'link-card' })
+  const linkTitle = el('h2', { text: 'Привязать чат персонала' })
+  const venueLabel = el('label')
+  venueLabel.htmlFor = 'venue-id'
+  venueLabel.textContent = 'ID заведения'
+  const venueInput = el('input', { id: 'venue-id' }) as HTMLInputElement
+  venueInput.type = 'number'
+  venueInput.placeholder = 'Введите ID'
+  const linkStatus = el('p', { id: 'link-status', className: 'status', text: 'Сгенерируйте код, чтобы связать чат.' })
+  const linkResult = el('div', { id: 'link-result', className: 'link-result' })
+  linkResult.hidden = true
+  const linkCode = el('strong', { id: 'link-code' })
+  const linkCountdown = el('span', { id: 'link-countdown' })
+  const linkCodeLine = el('p')
+  append(linkCodeLine, document.createTextNode('Код: '), linkCode)
+  const linkCountdownLine = el('p')
+  append(linkCountdownLine, document.createTextNode('Истекает через: '), linkCountdown)
+  const copyButton = el('button', { id: 'copy-link-btn', text: 'Скопировать /link <код>' })
+  append(linkResult, linkCodeLine, linkCountdownLine, copyButton)
+  const generateButton = el('button', { id: 'generate-link-btn', text: 'Сгенерировать новый код' })
+  append(linkSection, linkTitle, venueLabel, venueInput, linkStatus, linkResult, generateButton)
+
+  const backendInfo = el('section')
+  append(backendInfo, el('p', { text: `Backend URL: ${backendUrl}` }))
+
+  append(main, header, info, pingSection, linkSection, backendInfo)
+  root.replaceChildren(main)
+
+  startParamSpan.textContent = startParam || '—'
+
+  return {
+    startParam: startParamSpan,
+    now: nowSpan,
+    pingButton,
+    backendStatus,
+    venueInput,
+    linkStatus,
+    linkResult,
+    linkCode,
+    linkCountdown,
+    copyButton,
+    generateButton
   }
-  update()
-  setInterval(update, 1000)
 }
 
 export function renderVenueMode(options: VenueScreenOptions) {
   const { root, backendUrl } = options
-  if (!root) return
+  if (!root) return () => undefined
   const { initDataLength, startParam, userId } = getTelegramContext()
   const defaultVenueId = Number(startParam)
-  root.innerHTML = `
-    <main class="container">
-      <header>
-        <h1>Hookah Mini App</h1>
-        <p>Режим заведения: привязка чата персонала.</p>
-      </header>
-      <section class="info">
-        <p><strong>initData length:</strong> ${initDataLength}</p>
-        <p><strong>tgWebAppStartParam:</strong> <span id="venue-start-param"></span></p>
-        <p><strong>Telegram user id:</strong> ${userId ?? '—'}</p>
-        <p><strong>Текущее время:</strong> <span id="now"></span></p>
-      </section>
-      <section>
-        <button id="ping-btn">Ping backend /health</button>
-        <p id="backend-status" class="status">Idle</p>
-      </section>
-      <section class="link-card">
-        <h2>Привязать чат персонала</h2>
-        <label for="venue-id">ID заведения</label>
-        <input id="venue-id" type="number" placeholder="Введите ID" />
-        <p id="link-status" class="status">Сгенерируйте код, чтобы связать чат.</p>
-        <div id="link-result" class="link-result" hidden>
-          <p>Код: <strong id="link-code"></strong></p>
-          <p>Истекает через: <span id="link-countdown"></span></p>
-          <button id="copy-link-btn">Скопировать /link &lt;код&gt;</button>
-        </div>
-        <button id="generate-link-btn">Сгенерировать новый код</button>
-      </section>
-      <section>
-        <p>Backend URL: ${backendUrl}</p>
-      </section>
-    </main>
-  `
+  const refs = buildVenueDom(root, initDataLength, startParam ?? '', userId ?? null, backendUrl)
+  refs.venueInput.value = Number.isFinite(defaultVenueId) ? String(defaultVenueId) : ''
 
-  const startParamElement = document.querySelector<HTMLSpanElement>('#venue-start-param')
-  if (startParamElement) {
-    startParamElement.textContent = startParam || '—'
-  }
-  const venueInput = document.querySelector<HTMLInputElement>('#venue-id')
-  if (venueInput) {
-    venueInput.value = Number.isFinite(defaultVenueId) ? String(defaultVenueId) : ''
+  let disposed = false
+  let countdownInterval: number | null = null
+  let clockInterval: number | null = null
+  const disposables: Array<() => void> = []
+
+  const startCountdown = (expiresAt: string) => {
+    if (countdownInterval) {
+      window.clearInterval(countdownInterval)
+    }
+    const target = new Date(expiresAt).getTime()
+    const update = () => {
+      const diff = Math.max(0, target - Date.now())
+      const seconds = Math.floor(diff / 1000)
+      const minutes = Math.floor(seconds / 60)
+      const remainSeconds = seconds % 60
+      refs.linkCountdown.textContent = `${minutes}м ${remainSeconds}с`
+    }
+    update()
+    countdownInterval = window.setInterval(update, 1000)
   }
 
-  document
-    .querySelector<HTMLButtonElement>('#ping-btn')
-    ?.addEventListener('click', () => void pingBackend(backendUrl))
-  document
-    .querySelector<HTMLButtonElement>('#generate-link-btn')
-    ?.addEventListener('click', () => void generateLinkCode(backendUrl))
+  const startClock = () => {
+    const update = () => {
+      refs.now.textContent = new Date().toLocaleString()
+    }
+    update()
+    clockInterval = window.setInterval(update, 1000)
+  }
+
+  const pingBackend = async () => {
+    refs.backendStatus.textContent = 'Pinging backend...'
+    try {
+      const response = await fetch(`${backendUrl}/health`)
+      if (!response.ok) {
+        throw new Error(`Unexpected status ${response.status}`)
+      }
+      const data = await response.json()
+      if (disposed) return // Skip UI updates after screen dispose.
+      refs.backendStatus.textContent = `Backend OK: ${JSON.stringify(data)}`
+    } catch (error) {
+      if (disposed) return // Skip UI updates after screen dispose.
+      refs.backendStatus.textContent = `Backend error: ${(error as Error).message}`
+    }
+  }
+
+  const generateLinkCode = async () => {
+    const venueId = Number(refs.venueInput.value)
+    const ctx = getTelegramContext()
+    if (!venueId || Number.isNaN(venueId)) {
+      refs.linkStatus.textContent = 'Укажите корректный ID заведения.'
+      refs.linkResult.hidden = true
+      return
+    }
+    if (!ctx.userId) {
+      refs.linkStatus.textContent =
+        'Не удалось определить Telegram ID. Откройте мини-приложение из Telegram.'
+      refs.linkResult.hidden = true
+      return
+    }
+    refs.linkStatus.textContent = 'Генерация кода...'
+    refs.linkResult.hidden = true
+    try {
+      const response = await fetch(`${backendUrl}/api/venue/${venueId}/staff-chat/link-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Telegram-User-Id': ctx.userId.toString()
+        },
+        body: JSON.stringify({ userId: ctx.userId })
+      })
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Ошибка ${response.status}: ${errorText || 'неизвестно'}`)
+      }
+      const payload = (await response.json()) as LinkCodePayload
+      if (disposed) return // Skip UI updates after screen dispose.
+      refs.linkCode.textContent = payload.code
+      refs.linkStatus.textContent = 'Код сгенерирован. Отправьте /link <код> в чате персонала.'
+      refs.linkResult.hidden = false
+      startCountdown(payload.expiresAt)
+    } catch (error) {
+      if (disposed) return // Skip UI updates after screen dispose.
+      refs.linkStatus.textContent = `Не удалось сгенерировать код: ${(error as Error).message}`
+      refs.linkResult.hidden = true
+    }
+  }
+
+  const setupCopyButton = () => {
+    disposables.push(
+      on(refs.copyButton, 'click', async () => {
+        const code = refs.linkCode.textContent?.trim()
+        if (!code) return
+        try {
+          await navigator.clipboard.writeText(`/link ${code}`)
+          refs.linkStatus.textContent = 'Скопировано: /link <код>'
+        } catch (error) {
+          refs.linkStatus.textContent = 'Не удалось скопировать. Скопируйте вручную.'
+        }
+      })
+    )
+  }
+
+  disposables.push(
+    on(refs.pingButton, 'click', () => void pingBackend()),
+    on(refs.generateButton, 'click', () => void generateLinkCode())
+  )
+
   setupCopyButton()
   startClock()
+
+  return () => {
+    disposed = true
+    if (clockInterval) {
+      window.clearInterval(clockInterval)
+    }
+    if (countdownInterval) {
+      window.clearInterval(countdownInterval)
+    }
+    disposables.forEach((dispose) => dispose())
+  }
 }
