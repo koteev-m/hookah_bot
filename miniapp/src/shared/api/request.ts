@@ -44,7 +44,7 @@ export async function requestApi<T>(
       } catch (error) {
         envelope = null
       }
-      const requestId = resolveRequestId(headerRequestId, envelope?.requestId)
+      const requestId = resolveRequestId(headerRequestId, envelope?.requestId, deps.isDebug)
       const errorInfo: ApiErrorInfo = {
         status: response.status,
         code: envelope?.error?.code,
