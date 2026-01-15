@@ -5,11 +5,18 @@ export type ErrorDetailsOptions = {
   extraNotes?: string[]
 }
 
+const copyResetTimers = new WeakMap<HTMLElement, number>()
+
 export function renderErrorDetails(
   container: HTMLElement,
   error: ApiErrorInfo,
   options: ErrorDetailsOptions
 ) {
+  const existingTimer = copyResetTimers.get(container)
+  if (existingTimer) {
+    window.clearTimeout(existingTimer)
+    copyResetTimers.delete(container)
+  }
   container.textContent = ''
   if (!options.isDebug) {
     return
@@ -47,7 +54,7 @@ export function renderErrorDetails(
     })
   }
   const clipboardAvailable = Boolean(navigator?.clipboard?.writeText)
-  if (!clipboardAvailable) {
+  if (error.requestId && !clipboardAvailable) {
     const item = document.createElement('li')
     item.textContent = 'Clipboard недоступен'
     list.appendChild(item)
@@ -62,7 +69,6 @@ export function renderErrorDetails(
     const copyLabelSuccess = 'Скопировано'
     const copyResetDelayMs = 1500
     copyButton.textContent = copyLabelDefault
-    let copyResetTimer: number | null = null
     copyButton.addEventListener('click', async () => {
       if (!navigator?.clipboard?.writeText) {
         return
@@ -70,13 +76,15 @@ export function renderErrorDetails(
       try {
         await navigator.clipboard.writeText(error.requestId ?? '')
         copyButton.textContent = copyLabelSuccess
-        if (copyResetTimer) {
-          window.clearTimeout(copyResetTimer)
+        const pendingTimer = copyResetTimers.get(container)
+        if (pendingTimer) {
+          window.clearTimeout(pendingTimer)
         }
-        copyResetTimer = window.setTimeout(() => {
+        const resetTimer = window.setTimeout(() => {
           copyButton.textContent = copyLabelDefault
-          copyResetTimer = null
+          copyResetTimers.delete(container)
         }, copyResetDelayMs)
+        copyResetTimers.set(container, resetTimer)
       } catch (copyError) {
         console.warn('Failed to copy requestId', copyError)
       }

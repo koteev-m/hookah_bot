@@ -91,7 +91,16 @@ function loadStoredSession(backendUrl: string, isDebug: boolean): GuestSession |
   const storageKey = buildGuestSessionStorageKey(backendUrl)
   const raw = safeGetItem(storageKey, isDebug)
   if (raw) {
-    return parseStoredSession(raw)
+    const parsed = parseStoredSession(raw)
+    if (!parsed) {
+      safeRemoveItem(storageKey, isDebug)
+      return null
+    }
+    if (!isSessionValid(parsed)) {
+      safeRemoveItem(storageKey, isDebug)
+      return null
+    }
+    return parsed
   }
 
   const legacyRaw = safeGetItem(guestSessionStorageKeyPrefix, isDebug)
@@ -100,6 +109,11 @@ function loadStoredSession(backendUrl: string, isDebug: boolean): GuestSession |
   }
   const legacySession = parseStoredSession(legacyRaw)
   if (!legacySession) {
+    safeRemoveItem(guestSessionStorageKeyPrefix, isDebug)
+    return null
+  }
+  if (!isSessionValid(legacySession)) {
+    safeRemoveItem(guestSessionStorageKeyPrefix, isDebug)
     return null
   }
   safeSetItem(storageKey, JSON.stringify(legacySession), isDebug)
@@ -149,7 +163,7 @@ async function authorizeGuest(backendUrl: string, isDebug: boolean): Promise<Api
       } catch (error) {
         envelope = null
       }
-      const requestId = resolveRequestId(headerRequestId, envelope?.requestId)
+      const requestId = resolveRequestId(headerRequestId, envelope?.requestId, isDebug)
       const errorInfo: ApiErrorInfo = {
         status: response.status,
         code: envelope?.error?.code,

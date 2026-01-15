@@ -2,9 +2,10 @@ import { ApiErrorCodes, type ApiErrorCode, type ApiErrorInfo } from './types'
 
 export function resolveRequestId(
   headerValue: string | null,
-  bodyValue?: string | null
+  bodyValue: string | null | undefined,
+  isDebug: boolean
 ): string | undefined {
-  if (headerValue && bodyValue && headerValue !== bodyValue) {
+  if (isDebug && headerValue && bodyValue && headerValue !== bodyValue) {
     console.warn('RequestId mismatch between header and body', { headerValue, bodyValue })
   }
   return headerValue ?? bodyValue ?? undefined

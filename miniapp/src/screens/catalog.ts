@@ -37,14 +37,21 @@ type ErrorAction = {
   onClick: () => void
 }
 
-let visibilitySuspendedObserved = false
-let venueNotFoundObserved = false
+type CatalogRuntimeState = {
+  backendUrl: string
+  isDebug: boolean
+  visibilitySuspendedObserved: boolean
+  venueNotFoundObserved: boolean
+}
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, ensureGuestSession, clearSession }
 }
 
-function logApiError(context: string, error: ApiErrorInfo) {
+function logApiError(context: string, error: ApiErrorInfo, isDebug: boolean) {
+  if (!isDebug) {
+    return
+  }
   console.warn(`[${context}] API error`, {
     status: error.status,
     code: error.code,
@@ -77,22 +84,22 @@ function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
   })
 }
 
-function getVisibilityNotes(isDebug: boolean) {
-  if (!isDebug || !visibilitySuspendedObserved) {
+function getVisibilityNotes(state: CatalogRuntimeState) {
+  if (!state.isDebug || !state.visibilitySuspendedObserved) {
     return []
   }
   return ['Visibility mode: explain (423 observed)']
 }
 
-function getVenueVisibilityNotes(isDebug: boolean) {
-  const notes = getVisibilityNotes(isDebug)
-  if (isDebug && venueNotFoundObserved) {
+function getVenueVisibilityNotes(state: CatalogRuntimeState) {
+  const notes = getVisibilityNotes(state)
+  if (state.isDebug && state.venueNotFoundObserved) {
     notes.push('404 может означать hide mode или реальный NOT_FOUND')
   }
   return notes
 }
 
-function showCatalogError(error: ApiErrorInfo, isDebug: boolean, backendUrl: string) {
+function showCatalogError(error: ApiErrorInfo, state: CatalogRuntimeState) {
   const container = document.querySelector<HTMLDivElement>('#catalog-error')
   const title = document.querySelector<HTMLHeadingElement>('#catalog-error-title')
   const message = document.querySelector<HTMLParagraphElement>('#catalog-error-message')
@@ -108,14 +115,14 @@ function showCatalogError(error: ApiErrorInfo, isDebug: boolean, backendUrl: str
     message.textContent = 'Сервис перегружен или недоступен. Попробуйте ещё раз чуть позже.'
     actionsToRender.push({
       label: 'Повторить',
-      onClick: () => void loadCatalog(backendUrl, isDebug)
+      onClick: () => void loadCatalog(state)
     })
   } else if (code === ApiErrorCodes.NETWORK_ERROR) {
     title.textContent = 'Нет соединения'
     message.textContent = 'Нет соединения / ошибка сети. Проверьте подключение и повторите.'
     actionsToRender.push({
       label: 'Повторить',
-      onClick: () => void loadCatalog(backendUrl, isDebug)
+      onClick: () => void loadCatalog(state)
     })
   } else if (code === ApiErrorCodes.INITDATA_INVALID) {
     title.textContent = 'Нужен запуск из Telegram'
@@ -128,8 +135,8 @@ function showCatalogError(error: ApiErrorInfo, isDebug: boolean, backendUrl: str
     actionsToRender.push({
       label: 'Повторить (переавторизоваться)',
       onClick: () => {
-        clearSession(backendUrl, isDebug)
-        void loadCatalog(backendUrl, isDebug)
+        clearSession(state.backendUrl, state.isDebug)
+        void loadCatalog(state)
       }
     })
   } else {
@@ -137,15 +144,18 @@ function showCatalogError(error: ApiErrorInfo, isDebug: boolean, backendUrl: str
     message.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
     actionsToRender.push({
       label: 'Повторить',
-      onClick: () => void loadCatalog(backendUrl, isDebug)
+      onClick: () => void loadCatalog(state)
     })
   }
 
   renderErrorActions(actions, actionsToRender)
 
-  renderErrorDetails(details, error, { isDebug, extraNotes: getVisibilityNotes(isDebug) })
+  renderErrorDetails(details, error, {
+    isDebug: state.isDebug,
+    extraNotes: getVisibilityNotes(state)
+  })
   container.hidden = false
-  logApiError('catalog', error)
+  logApiError('catalog', error, state.isDebug)
 }
 
 function hideCatalogError() {
@@ -155,7 +165,7 @@ function hideCatalogError() {
   }
 }
 
-function renderCatalogList(venues: CatalogVenue[]) {
+function renderCatalogList(venues: CatalogVenue[], onOpenVenue: (venueId: number) => void) {
   const list = document.querySelector<HTMLUListElement>('#catalog-list')
   if (!list) return
   list.replaceChildren()
@@ -179,14 +189,14 @@ function renderCatalogList(venues: CatalogVenue[]) {
     info.appendChild(location)
     const button = document.createElement('button')
     button.textContent = 'Открыть'
-    button.addEventListener('click', () => void loadVenue(venue.id))
+    button.addEventListener('click', () => void onOpenVenue(venue.id))
     item.appendChild(info)
     item.appendChild(button)
     list.appendChild(item)
   })
 }
 
-async function loadCatalog(backendUrl: string, isDebug: boolean) {
+async function loadCatalog(state: CatalogRuntimeState) {
   setCatalogStatus('Загрузка каталога...')
   hideCatalogError()
   const list = document.querySelector<HTMLUListElement>('#catalog-list')
@@ -194,24 +204,24 @@ async function loadCatalog(backendUrl: string, isDebug: boolean) {
     list.replaceChildren()
   }
   const result = await requestApi<CatalogResponse>(
-    backendUrl,
+    state.backendUrl,
     '/api/guest/catalog',
     undefined,
-    buildApiDeps(isDebug)
+    buildApiDeps(state.isDebug)
   )
   if (!result.ok) {
     if (result.error.status === 423) {
-      visibilitySuspendedObserved = true
+      state.visibilitySuspendedObserved = true
     }
-    showCatalogError(result.error, isDebug, backendUrl)
+    showCatalogError(result.error, state)
     setCatalogStatus('')
     return
   }
   setCatalogStatus('')
-  renderCatalogList(result.data.venues ?? [])
+  renderCatalogList(result.data.venues ?? [], (venueId) => loadVenue(state, venueId))
 }
 
-function showVenueError(error: ApiErrorInfo, isDebug: boolean, backendUrl: string) {
+function showVenueError(error: ApiErrorInfo, state: CatalogRuntimeState) {
   const container = document.querySelector<HTMLDivElement>('#venue-error')
   const title = document.querySelector<HTMLHeadingElement>('#venue-error-title')
   const message = document.querySelector<HTMLParagraphElement>('#venue-error-message')
@@ -228,21 +238,21 @@ function showVenueError(error: ApiErrorInfo, isDebug: boolean, backendUrl: strin
     message.textContent = 'Попробуйте вернуться позже или выбрать другое заведение.'
     actionsToRender.push({
       label: 'Вернуться в каталог',
-      onClick: () => void loadCatalog(backendUrl, isDebug)
+      onClick: () => void loadCatalog(state)
     })
   } else if (code === ApiErrorCodes.NOT_FOUND) {
     title.textContent = 'Заведение не найдено'
     message.textContent = 'Проверьте ссылку или выберите другое заведение в каталоге.'
     actionsToRender.push({
       label: 'Вернуться в каталог',
-      onClick: () => void loadCatalog(backendUrl, isDebug)
+      onClick: () => void loadCatalog(state)
     })
   } else if (code === ApiErrorCodes.INVALID_INPUT) {
     title.textContent = 'Некорректная ссылка'
     message.textContent = 'Похоже, ID заведения указан неверно.'
     actionsToRender.push({
       label: 'Вернуться в каталог',
-      onClick: () => void loadCatalog(backendUrl, isDebug)
+      onClick: () => void loadCatalog(state)
     })
   } else if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
     title.textContent = 'Сервис временно недоступен'
@@ -253,7 +263,7 @@ function showVenueError(error: ApiErrorInfo, isDebug: boolean, backendUrl: strin
         const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
         const venueId = input ? Number(input.value) : NaN
         if (venueId && !Number.isNaN(venueId)) {
-          void loadVenue(venueId)
+          void loadVenue(state, venueId)
         }
       }
     })
@@ -266,7 +276,7 @@ function showVenueError(error: ApiErrorInfo, isDebug: boolean, backendUrl: strin
         const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
         const venueId = input ? Number(input.value) : NaN
         if (venueId && !Number.isNaN(venueId)) {
-          void loadVenue(venueId)
+          void loadVenue(state, venueId)
         }
       }
     })
@@ -281,11 +291,11 @@ function showVenueError(error: ApiErrorInfo, isDebug: boolean, backendUrl: strin
     actionsToRender.push({
       label: 'Повторить (переавторизоваться)',
       onClick: () => {
-        clearSession(backendUrl, isDebug)
+        clearSession(state.backendUrl, state.isDebug)
         const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
         const venueId = input ? Number(input.value) : NaN
         if (venueId && !Number.isNaN(venueId)) {
-          void loadVenue(venueId)
+          void loadVenue(state, venueId)
         }
       }
     })
@@ -298,7 +308,7 @@ function showVenueError(error: ApiErrorInfo, isDebug: boolean, backendUrl: strin
         const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
         const venueId = input ? Number(input.value) : NaN
         if (venueId && !Number.isNaN(venueId)) {
-          void loadVenue(venueId)
+          void loadVenue(state, venueId)
         }
       }
     })
@@ -306,10 +316,13 @@ function showVenueError(error: ApiErrorInfo, isDebug: boolean, backendUrl: strin
 
   renderErrorActions(actions, actionsToRender)
 
-  renderErrorDetails(details, error, { isDebug, extraNotes: getVenueVisibilityNotes(isDebug) })
+  renderErrorDetails(details, error, {
+    isDebug: state.isDebug,
+    extraNotes: getVenueVisibilityNotes(state)
+  })
   container.hidden = false
   detailsContainer.hidden = true
-  logApiError('venue', error)
+  logApiError('venue', error, state.isDebug)
 }
 
 function hideVenueError() {
@@ -336,8 +349,7 @@ function renderVenueDetails(venue: VenueResponse['venue']) {
   details.hidden = false
 }
 
-async function loadVenue(venueId: number) {
-  const { backendUrl, isDebug } = catalogRuntime
+async function loadVenue(state: CatalogRuntimeState, venueId: number) {
   setVenueStatus('Загрузка заведения...')
   hideVenueError()
   const details = document.querySelector<HTMLDivElement>('#venue-details')
@@ -345,19 +357,19 @@ async function loadVenue(venueId: number) {
     details.hidden = true
   }
   const result = await requestApi<VenueResponse>(
-    backendUrl,
+    state.backendUrl,
     `/api/guest/venue/${venueId}`,
     undefined,
-    buildApiDeps(isDebug)
+    buildApiDeps(state.isDebug)
   )
   if (!result.ok) {
     if (result.error.status === 423) {
-      visibilitySuspendedObserved = true
+      state.visibilitySuspendedObserved = true
     }
     if (result.error.status === 404) {
-      venueNotFoundObserved = true
+      state.venueNotFoundObserved = true
     }
-    showVenueError(result.error, isDebug, backendUrl)
+    showVenueError(result.error, state)
     setVenueStatus('')
     return
   }
@@ -365,18 +377,17 @@ async function loadVenue(venueId: number) {
   renderVenueDetails(result.data.venue)
 }
 
-const catalogRuntime: { backendUrl: string; isDebug: boolean } = {
-  backendUrl: '',
-  isDebug: false
-}
-
 export function renderCatalogScreen(options: CatalogScreenOptions) {
   const { root, backendUrl, isDebug } = options
   if (!root) return
+  const state: CatalogRuntimeState = {
+    backendUrl,
+    isDebug,
+    visibilitySuspendedObserved: false,
+    venueNotFoundObserved: false
+  }
   const { initDataLength, startParam, userId } = getTelegramContext()
   const defaultVenueId = Number(startParam)
-  catalogRuntime.backendUrl = backendUrl
-  catalogRuntime.isDebug = isDebug
   root.innerHTML = `
     <main class="container">
       <header>
@@ -385,7 +396,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
       </header>
       <section class="info">
         <p><strong>initData length:</strong> ${initDataLength}</p>
-        <p><strong>tgWebAppStartParam:</strong> ${startParam || '—'}</p>
+        <p><strong>tgWebAppStartParam:</strong> <span id="catalog-start-param"></span></p>
         <p><strong>Telegram user id:</strong> ${userId ?? '—'}</p>
       </section>
       <section class="card">
@@ -407,9 +418,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
           <h2>Заведение по ID</h2>
         </div>
         <label for="guest-venue-id">ID заведения</label>
-        <input id="guest-venue-id" type="number" value="${
-          Number.isFinite(defaultVenueId) ? defaultVenueId : ''
-        }" placeholder="Введите ID" />
+        <input id="guest-venue-id" type="number" placeholder="Введите ID" />
         <div class="button-row">
           <button id="venue-load-btn">Открыть заведение</button>
         </div>
@@ -425,9 +434,18 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     </main>
   `
 
+  const startParamElement = document.querySelector<HTMLSpanElement>('#catalog-start-param')
+  if (startParamElement) {
+    startParamElement.textContent = startParam || '—'
+  }
+  const venueInput = document.querySelector<HTMLInputElement>('#guest-venue-id')
+  if (venueInput) {
+    venueInput.value = Number.isFinite(defaultVenueId) ? String(defaultVenueId) : ''
+  }
+
   document
     .querySelector<HTMLButtonElement>('#catalog-retry-btn')
-    ?.addEventListener('click', () => void loadCatalog(backendUrl, isDebug))
+    ?.addEventListener('click', () => void loadCatalog(state))
   document.querySelector<HTMLButtonElement>('#venue-load-btn')?.addEventListener('click', () => {
     const input = document.querySelector<HTMLInputElement>('#guest-venue-id')
     if (!input) return
@@ -439,14 +457,13 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
           code: ApiErrorCodes.INVALID_INPUT,
           message: 'Некорректный ID'
         },
-        isDebug,
-        backendUrl
+        state
       )
       return
     }
-    void loadVenue(venueId)
+    void loadVenue(state, venueId)
   })
 
   void ensureGuestSession(backendUrl, isDebug)
-  void loadCatalog(backendUrl, isDebug)
+  void loadCatalog(state)
 }

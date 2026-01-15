@@ -131,7 +131,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
       </header>
       <section class="info">
         <p><strong>initData length:</strong> ${initDataLength}</p>
-        <p><strong>tgWebAppStartParam:</strong> ${startParam || '—'}</p>
+        <p><strong>tgWebAppStartParam:</strong> <span id="venue-start-param"></span></p>
         <p><strong>Telegram user id:</strong> ${userId ?? '—'}</p>
         <p><strong>Текущее время:</strong> <span id="now"></span></p>
       </section>
@@ -142,9 +142,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
       <section class="link-card">
         <h2>Привязать чат персонала</h2>
         <label for="venue-id">ID заведения</label>
-        <input id="venue-id" type="number" value="${
-          Number.isFinite(defaultVenueId) ? defaultVenueId : ''
-        }" placeholder="Введите ID" />
+        <input id="venue-id" type="number" placeholder="Введите ID" />
         <p id="link-status" class="status">Сгенерируйте код, чтобы связать чат.</p>
         <div id="link-result" class="link-result" hidden>
           <p>Код: <strong id="link-code"></strong></p>
@@ -158,6 +156,15 @@ export function renderVenueMode(options: VenueScreenOptions) {
       </section>
     </main>
   `
+
+  const startParamElement = document.querySelector<HTMLSpanElement>('#venue-start-param')
+  if (startParamElement) {
+    startParamElement.textContent = startParam || '—'
+  }
+  const venueInput = document.querySelector<HTMLInputElement>('#venue-id')
+  if (venueInput) {
+    venueInput.value = Number.isFinite(defaultVenueId) ? String(defaultVenueId) : ''
+  }
 
   document
     .querySelector<HTMLButtonElement>('#ping-btn')
