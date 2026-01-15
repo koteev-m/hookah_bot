@@ -134,10 +134,23 @@ export function renderVenueMode(options: VenueScreenOptions) {
   let generating = false
   const disposables: Array<() => void> = []
 
-  const startCountdown = (expiresAt: string) => {
+  const stopCountdown = () => {
     if (countdownInterval) {
       window.clearInterval(countdownInterval)
+      countdownInterval = null
     }
+  }
+
+  const resetLinkUiForVenueChange = () => {
+    stopCountdown()
+    refs.linkResult.hidden = true
+    refs.linkCode.textContent = ''
+    refs.linkCountdown.textContent = ''
+    refs.linkStatus.textContent = 'Сгенерируйте код, чтобы связать чат.'
+  }
+
+  const startCountdown = (expiresAt: string) => {
+    stopCountdown()
     const target = new Date(expiresAt).getTime()
     const update = () => {
       const diff = Math.max(0, target - Date.now())
@@ -193,11 +206,11 @@ export function renderVenueMode(options: VenueScreenOptions) {
       refs.linkResult.hidden = true
       return
     }
+    resetLinkUiForVenueChange()
     generating = true
     refs.generateButton.disabled = true
     refs.venueInput.disabled = true
     refs.linkStatus.textContent = 'Генерация кода...'
-    refs.linkResult.hidden = true
     try {
       const response = await fetch(`${backendUrl}/api/venue/${venueId}/staff-chat/link-code`, {
         method: 'POST',
@@ -249,6 +262,12 @@ export function renderVenueMode(options: VenueScreenOptions) {
   disposables.push(
     on(refs.pingButton, 'click', () => void pingBackend()),
     on(refs.generateButton, 'click', () => void generateLinkCode()),
+    on(refs.venueInput, 'input', () => {
+      if (disposed || generating) {
+        return
+      }
+      resetLinkUiForVenueChange()
+    }),
     on(refs.venueInput, 'keydown', (event) => {
       if (event.key !== 'Enter') {
         return
