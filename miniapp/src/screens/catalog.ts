@@ -288,6 +288,13 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     refs.venueError.hidden = true
   }
 
+  const resetVenueUiForInputChange = () => {
+    hideVenueError()
+    refs.venueDetails.hidden = true
+    refs.venueDetails.replaceChildren()
+    setVenueStatus('Введите ID и загрузите карточку.')
+  }
+
   const showCatalogError = (error: ApiErrorInfo) => {
     const code = normalizeErrorCode(error)
     const actions: ErrorAction[] = []
@@ -547,6 +554,16 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
         return
       }
       void loadVenue(venueId)
+    }),
+    on(refs.venueInput, 'input', () => {
+      if (disposed) {
+        return
+      }
+      if (venueAbort) {
+        venueAbort.abort()
+        venueAbort = null
+      }
+      resetVenueUiForInputChange()
     }),
     on(refs.venueInput, 'keydown', (event) => {
       if (event.key !== 'Enter') {
