@@ -104,6 +104,28 @@ class GuestVenueRoutesTest {
     }
 
     @Test
+    fun `venue by id with unknown id returns not found`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-unknown")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venues = seedVenues(jdbcUrl)
+        val token = issueToken(config)
+        val missingId = maxOf(venues.publishedId, venues.hiddenId, venues.suspendedId) + 100
+
+        val response = client.get("/api/guest/venue/$missingId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
+    }
+
+    @Test
     fun `venue by id hides suspended when configured`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-hide")
         val config = buildConfig(jdbcUrl, suspendedMode = "hide")
