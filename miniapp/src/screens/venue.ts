@@ -1,5 +1,6 @@
 import { getTelegramContext } from '../shared/telegram'
 import { append, el, on } from '../shared/ui/dom'
+import { parsePositiveInt } from '../shared/parse'
 
 type LinkCodePayload = {
   code: string
@@ -24,18 +25,6 @@ type VenueRefs = {
   linkCountdown: HTMLSpanElement
   copyButton: HTMLButtonElement
   generateButton: HTMLButtonElement
-}
-
-function parsePositiveInt(value: string): number | null {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return null
-  }
-  const parsed = Number(trimmed)
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
-    return null
-  }
-  return parsed
 }
 
 function buildVenueDom(
@@ -135,7 +124,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
   const { root, backendUrl } = options
   if (!root) return () => undefined
   const { initDataLength, startParam, userId } = getTelegramContext()
-  const defaultVenueId = parsePositiveInt(startParam ?? '')
+  const defaultVenueId = parsePositiveInt(startParam)
   const refs = buildVenueDom(root, initDataLength, startParam ?? '', userId ?? null, backendUrl)
   refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
@@ -194,6 +183,8 @@ export function renderVenueMode(options: VenueScreenOptions) {
     if (!venueId) {
       refs.linkStatus.textContent = 'Укажите корректный ID заведения.'
       refs.linkResult.hidden = true
+      refs.venueInput.focus()
+      refs.venueInput.select()
       return
     }
     if (!ctx.userId) {
@@ -257,7 +248,14 @@ export function renderVenueMode(options: VenueScreenOptions) {
 
   disposables.push(
     on(refs.pingButton, 'click', () => void pingBackend()),
-    on(refs.generateButton, 'click', () => void generateLinkCode())
+    on(refs.generateButton, 'click', () => void generateLinkCode()),
+    on(refs.venueInput, 'keydown', (event) => {
+      if (event.key !== 'Enter') {
+        return
+      }
+      event.preventDefault()
+      void generateLinkCode()
+    })
   )
 
   setupCopyButton()
