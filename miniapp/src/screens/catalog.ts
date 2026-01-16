@@ -95,12 +95,13 @@ function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
 }
 
 function getVisibilityNotes(state: CatalogRuntimeState) {
-  if (!state.isDebug || !state.visibilitySuspendedObserved) {
+  if (!state.isDebug || (!state.visibilitySuspendedObserved && !state.venueNotFoundObserved)) {
     return []
   }
   return [
-    'Visibility mode: explain — для suspended_by_platform возвращается 423 SERVICE_SUSPENDED.',
-    'При api.guest.suspendedMode=hide suspended_by_platform маскируется под 404.'
+    'Режим видимости задаётся ключами api.guest.suspendedMode или API_GUEST_SUSPENDED_MODE (explain|hide).',
+    'В режиме explain suspended_by_platform возвращает 423 SERVICE_SUSPENDED.',
+    'В режиме hide suspended_by_platform маскируется под 404 NOT_FOUND.'
   ]
 }
 
@@ -108,7 +109,7 @@ function getVenueVisibilityNotes(state: CatalogRuntimeState) {
   const notes = getVisibilityNotes(state)
   if (state.isDebug && state.venueNotFoundObserved) {
     notes.push(
-      'Статус 404 в hide-режиме (api.guest.suspendedMode=hide) может означать скрытие suspended_by_platform.'
+      'Для hide-режима (api.guest.suspendedMode/API_GUEST_SUSPENDED_MODE=hide) статус 404 может означать скрытие suspended_by_platform.'
     )
   }
   return notes
@@ -497,6 +498,9 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
       // Screen was disposed while awaiting, skip UI updates.
       return
     }
+    if (catalogAbort !== controller) {
+      return
+    }
     if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) {
       return
     }
@@ -530,6 +534,9 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     )
     if (disposed) {
       // Screen was disposed while awaiting, skip UI updates.
+      return
+    }
+    if (venueAbort !== controller) {
       return
     }
     if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) {
