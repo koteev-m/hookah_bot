@@ -11,6 +11,7 @@ import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.guest.GuestVenuePolicy
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
 import com.hookah.platform.backend.miniapp.guest.resolveVenueVisibilityMode
+import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
@@ -186,6 +187,7 @@ fun Application.module() {
     val venueRepository = VenueRepository(dataSource)
     val userRepository = UserRepository(dataSource)
     val guestVenueRepository = GuestVenueRepository(dataSource)
+    val guestMenuRepository = GuestMenuRepository(dataSource)
     val guestVenuePolicy = GuestVenuePolicy(resolveVenueVisibilityMode(appConfig))
 
     if (dataSource != null) {
@@ -472,6 +474,7 @@ fun Application.module() {
                 route("/guest") {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
+                        guestMenuRepository = guestMenuRepository,
                         guestVenuePolicy = guestVenuePolicy
                     )
                     get("/_ping") {
