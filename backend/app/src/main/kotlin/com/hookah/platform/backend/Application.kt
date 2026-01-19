@@ -9,12 +9,15 @@ import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.guest.GuestVenuePolicy
+import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
 import com.hookah.platform.backend.miniapp.guest.resolveVenueVisibilityMode
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
@@ -127,6 +130,10 @@ private data class LinkCodeRequest(
     val userId: Long? = null
 )
 
+data class ModuleOverrides(
+    val tableTokenResolver: (suspend (String) -> TableContext?)? = null
+)
+
 private fun ApplicationCall.isApiRequest(): Boolean {
     val p = request.path()
     return p == "/api" || p.startsWith("/api/")
@@ -156,6 +163,10 @@ private suspend fun ApplicationCall.respondInvalidRequestBody() {
 }
 
 fun Application.module() {
+    module(ModuleOverrides())
+}
+
+fun Application.module(overrides: ModuleOverrides) {
     val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = false
@@ -189,6 +200,9 @@ fun Application.module() {
     val guestVenueRepository = GuestVenueRepository(dataSource)
     val guestMenuRepository = GuestMenuRepository(dataSource)
     val guestVenuePolicy = GuestVenuePolicy(resolveVenueVisibilityMode(appConfig))
+    val subscriptionRepository = SubscriptionRepository(dataSource)
+    val tableTokenRepository = TableTokenRepository(dataSource)
+    val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
     if (dataSource != null) {
         logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
@@ -228,7 +242,7 @@ fun Application.module() {
             apiClient = telegramApiClient,
             idempotencyRepository = IdempotencyRepository(dataSource),
             userRepository = userRepository,
-            tableTokenRepository = TableTokenRepository(dataSource),
+            tableTokenRepository = tableTokenRepository,
             chatContextRepository = ChatContextRepository(dataSource),
             dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
             ordersRepository = OrdersRepository(dataSource),
@@ -476,6 +490,11 @@ fun Application.module() {
                         guestVenueRepository = guestVenueRepository,
                         guestMenuRepository = guestMenuRepository,
                         guestVenuePolicy = guestVenuePolicy
+                    )
+                    guestTableResolveRoutes(
+                        tableTokenResolver = tableTokenResolver,
+                        guestVenueRepository = guestVenueRepository,
+                        subscriptionRepository = subscriptionRepository
                     )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))
