@@ -89,8 +89,13 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
     private fun PreparedStatement.setNullTimestampWithTimezoneSafe(index: Int) {
         try {
             setNull(index, Types.TIMESTAMP_WITH_TIMEZONE)
-        } catch (e: SQLException) {
-            setNull(index, Types.TIMESTAMP)
+        } catch (first: SQLException) {
+            try {
+                setNull(index, Types.TIMESTAMP)
+            } catch (second: SQLException) {
+                first.addSuppressed(second)
+                throw first
+            }
         }
     }
 }
