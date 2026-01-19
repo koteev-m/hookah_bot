@@ -72,9 +72,9 @@ class GuestVenueMenuRoutesTest {
 
         val firstCategoryItems = payload.categories[0].items
         assertEquals(2, firstCategoryItems.size)
-        assertEquals(menu.firstCategoryItemIds[0], firstCategoryItems[0].id)
-        assertEquals(menu.firstCategoryItemIds[1], firstCategoryItems[1].id)
-        assertFalse(firstCategoryItems[1].isAvailable)
+        assertEquals(menu.firstCategoryItemIds[1], firstCategoryItems[0].id)
+        assertEquals(menu.firstCategoryItemIds[0], firstCategoryItems[1].id)
+        assertFalse(firstCategoryItems[0].isAvailable)
 
         val secondCategoryItems = payload.categories[1].items
         assertEquals(1, secondCategoryItems.size)
@@ -191,7 +191,8 @@ class GuestVenueMenuRoutesTest {
                 "Item One",
                 1200,
                 "RUB",
-                true
+                true,
+                2
             )
             val secondItemId = insertMenuItem(
                 connection,
@@ -200,7 +201,8 @@ class GuestVenueMenuRoutesTest {
                 "Item Two",
                 900,
                 "USD",
-                false
+                false,
+                1
             )
             val thirdItemId = insertMenuItem(
                 connection,
@@ -209,7 +211,8 @@ class GuestVenueMenuRoutesTest {
                 "Item Three",
                 1500,
                 "EUR",
-                true
+                true,
+                0
             )
             return SeededMenu(
                 firstCategoryId = firstCategoryId,
@@ -281,12 +284,13 @@ class GuestVenueMenuRoutesTest {
         name: String,
         priceMinor: Long,
         currency: String,
-        isAvailable: Boolean
+        isAvailable: Boolean,
+        sortOrder: Int
     ): Long {
         connection.prepareStatement(
             """
-                INSERT INTO menu_items (venue_id, category_id, name, price_minor, currency, is_available)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO menu_items (venue_id, category_id, name, price_minor, currency, is_available, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS
         ).use { statement ->
@@ -296,6 +300,7 @@ class GuestVenueMenuRoutesTest {
             statement.setLong(4, priceMinor)
             statement.setString(5, currency)
             statement.setBoolean(6, isAvailable)
+            statement.setInt(7, sortOrder)
             statement.executeUpdate()
             statement.generatedKeys.use { rs ->
                 if (rs.next()) {

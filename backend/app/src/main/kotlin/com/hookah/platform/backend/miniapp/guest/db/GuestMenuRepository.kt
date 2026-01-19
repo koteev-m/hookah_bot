@@ -33,7 +33,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
 
                     val itemsByCategory = connection.prepareStatement(
                         """
-                            SELECT id, category_id, name, price_minor, currency, is_available, 0 AS sort_order
+                            SELECT id, category_id, name, price_minor, currency, is_available, sort_order
                             FROM menu_items
                             WHERE venue_id = ?
                             ORDER BY sort_order, id
