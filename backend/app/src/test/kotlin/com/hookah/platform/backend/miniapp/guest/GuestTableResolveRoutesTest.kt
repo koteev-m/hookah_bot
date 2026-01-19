@@ -219,6 +219,39 @@ class GuestTableResolveRoutesTest {
         assertNull(payload.unavailableReason)
     }
 
+    @Test
+    fun `known token for past due subscription returns unavailable`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-table-past-due")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val tokenValue = "past-due-token"
+        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val tableId = seedTable(jdbcUrl, venueId, 12)
+        seedTableToken(jdbcUrl, tableId, tokenValue)
+        seedSubscription(jdbcUrl, venueId, "PAST_DUE")
+
+        val token = issueToken(config)
+
+        val response = client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
+        assertEquals(venueId, payload.venueId)
+        assertEquals(tableId, payload.tableId)
+        assertEquals("12", payload.tableNumber)
+        assertEquals(VenueStatuses.ACTIVE_PUBLISHED, payload.venueStatus)
+        assertEquals("past_due", payload.subscriptionStatus)
+        assertEquals(false, payload.available)
+        assertEquals("SUBSCRIPTION_BLOCKED", payload.unavailableReason)
+    }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
