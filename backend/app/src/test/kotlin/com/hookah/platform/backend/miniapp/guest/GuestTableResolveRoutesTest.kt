@@ -32,6 +32,23 @@ class GuestTableResolveRoutesTest {
     private val appEnv = "test"
 
     @Test
+    fun `missing authorization returns unauthorized`() = testApplication {
+        val config = MapApplicationConfig(
+            "app.env" to appEnv,
+            "api.session.jwtSecret" to "test-secret",
+            "db.jdbcUrl" to ""
+        )
+
+        environment { this.config = config }
+        application { module() }
+
+        val response = client.get("/api/guest/table/resolve?tableToken=any-token")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.UNAUTHORIZED)
+    }
+
+    @Test
     fun `invalid token format returns invalid input without resolve`() = testApplication {
         var resolveCalls = 0
         val config = MapApplicationConfig(
