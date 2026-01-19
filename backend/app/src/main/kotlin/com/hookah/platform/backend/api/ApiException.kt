@@ -49,6 +49,16 @@ class ServiceSuspendedException(
     details = details
 )
 
+class SubscriptionBlockedException(
+    message: String = "Subscription blocked",
+    details: JsonObject? = null
+) : ApiException(
+    code = ApiErrorCodes.SUBSCRIPTION_BLOCKED,
+    httpStatus = HttpStatusCode.Locked,
+    message = message,
+    details = details
+)
+
 class ConfigException(
     message: String = "Service unavailable",
     details: JsonObject? = null
