@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import java.sql.Connection
+import java.util.UUID
 
 class SubscriptionRepositoryTest {
     companion object {
@@ -19,10 +20,11 @@ class SubscriptionRepositoryTest {
         @BeforeAll
         @JvmStatic
         fun setup() {
+            val dbName = "subscription_repo_${UUID.randomUUID()}"
             dataSource = HikariDataSource(
                 HikariConfig().apply {
                     driverClassName = "org.h2.Driver"
-                    jdbcUrl = "jdbc:h2:mem:subscription_repo;MODE=PostgreSQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1"
+                    jdbcUrl = "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
                     maximumPoolSize = 3
                 }
             )

@@ -61,14 +61,20 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
         connection.prepareStatement(
             """
                 INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                SELECT ?, ?, ?, ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM venue_subscriptions
+                    WHERE venue_id = ?
+                )
             """.trimIndent()
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setString(2, SubscriptionStatus.TRIAL.name)
             statement.setTimestamp(3, Timestamp.from(trialEnd))
-            statement.setNull(4, Types.TIMESTAMP)
+            statement.setNull(4, Types.TIMESTAMP_WITH_TIMEZONE)
             statement.setTimestamp(5, Timestamp.from(now))
+            statement.setLong(6, venueId)
             try {
                 statement.executeUpdate()
             } catch (e: SQLException) {

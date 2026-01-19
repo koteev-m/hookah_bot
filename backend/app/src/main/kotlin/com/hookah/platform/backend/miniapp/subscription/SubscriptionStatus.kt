@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.subscription
 
 import com.hookah.platform.backend.miniapp.guest.VenueStatuses
+import java.util.Locale
 
 enum class SubscriptionStatus(val wire: String) {
     TRIAL("trial"),
@@ -11,7 +12,7 @@ enum class SubscriptionStatus(val wire: String) {
 
     companion object {
         fun fromDb(value: String?): SubscriptionStatus {
-            return when (value?.lowercase()) {
+            return when (value?.lowercase(Locale.ROOT)) {
                 "trial" -> TRIAL
                 "active" -> ACTIVE
                 "past_due" -> PAST_DUE
