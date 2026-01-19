@@ -73,6 +73,69 @@ class GuestTableResolveRoutesTest {
     }
 
     @Test
+    fun `missing table token returns invalid input without resolve`() = testApplication {
+        var resolveCalls = 0
+        val config = MapApplicationConfig(
+            "app.env" to appEnv,
+            "api.session.jwtSecret" to "test-secret",
+            "db.jdbcUrl" to ""
+        )
+
+        environment { this.config = config }
+        application {
+            module(
+                ModuleOverrides(
+                    tableTokenResolver = {
+                        resolveCalls += 1
+                        fail("tableTokenResolver must not be called for missing tokens")
+                    }
+                )
+            )
+        }
+
+        val token = issueToken(config)
+        val response = client.get("/api/guest/table/resolve") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+        assertEquals(0, resolveCalls)
+    }
+
+    @Test
+    fun `blank table token returns invalid input without resolve`() = testApplication {
+        var resolveCalls = 0
+        val config = MapApplicationConfig(
+            "app.env" to appEnv,
+            "api.session.jwtSecret" to "test-secret",
+            "db.jdbcUrl" to ""
+        )
+
+        environment { this.config = config }
+        application {
+            module(
+                ModuleOverrides(
+                    tableTokenResolver = {
+                        resolveCalls += 1
+                        fail("tableTokenResolver must not be called for blank tokens")
+                    }
+                )
+            )
+        }
+
+        val token = issueToken(config)
+        val encoded = "   ".encodeURLParameter()
+        val response = client.get("/api/guest/table/resolve?tableToken=$encoded") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+        assertEquals(0, resolveCalls)
+    }
+
+    @Test
     fun `unknown token returns not found`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-table-unknown")
         val config = buildConfig(jdbcUrl)

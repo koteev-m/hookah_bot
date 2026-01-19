@@ -130,7 +130,7 @@ private data class LinkCodeRequest(
     val userId: Long? = null
 )
 
-data class ModuleOverrides(
+internal data class ModuleOverrides(
     val tableTokenResolver: (suspend (String) -> TableContext?)? = null
 )
 
@@ -166,7 +166,7 @@ fun Application.module() {
     module(ModuleOverrides())
 }
 
-fun Application.module(overrides: ModuleOverrides) {
+internal fun Application.module(overrides: ModuleOverrides) {
     val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = false
