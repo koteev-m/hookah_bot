@@ -1,6 +1,5 @@
 package com.hookah.platform.backend.miniapp.guest
 
-import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
@@ -11,8 +10,6 @@ import io.ktor.server.application.call
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
-
-private const val TABLE_TOKEN_MAX_LENGTH = 128
 
 fun Route.guestTableResolveRoutes(
     tableTokenResolver: suspend (String) -> TableContext?,
@@ -40,18 +37,4 @@ fun Route.guestTableResolveRoutes(
             )
         )
     }
-}
-
-private fun validateTableToken(rawToken: String?): String {
-    val trimmed = rawToken?.trim() ?: throw InvalidInputException("tableToken is required")
-    if (trimmed.isEmpty()) {
-        throw InvalidInputException("tableToken is required")
-    }
-    if (trimmed.length > TABLE_TOKEN_MAX_LENGTH) {
-        throw InvalidInputException("tableToken length must be <= $TABLE_TOKEN_MAX_LENGTH")
-    }
-    if (trimmed.any { it.code !in 0x21..0x7E }) {
-        throw InvalidInputException("tableToken contains invalid characters")
-    }
-    return trimmed
 }
