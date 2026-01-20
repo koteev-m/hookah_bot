@@ -132,22 +132,31 @@ class OrdersRepository(private val dataSource: DataSource?) {
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
-                    val existing = connection.prepareStatement(
-                        "SELECT id FROM orders WHERE table_id = ? AND status = 'ACTIVE' FOR UPDATE"
-                    ).use { statement ->
-                        statement.setLong(1, tableId)
-                        statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
+                    val existing = findActiveOrderForUpdate(connection, tableId)
+                    if (existing != null) {
+                        connection.commit()
+                        return@use existing
                     }
-                    val orderId = existing ?: connection.prepareStatement(
-                        """
-                            INSERT INTO orders (venue_id, table_id, status)
-                            VALUES (?, ?, 'ACTIVE')
-                            RETURNING id
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, tableId)
-                        statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
+                    val orderId = try {
+                        connection.prepareStatement(
+                            """
+                                INSERT INTO orders (venue_id, table_id, status)
+                                VALUES (?, ?, 'ACTIVE')
+                                RETURNING id
+                            """.trimIndent()
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, tableId)
+                            statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
+                        }
+                    } catch (e: SQLException) {
+                        if (e.sqlState == "23505") {
+                            connection.rollback()
+                            val activeId = findActiveOrderForUpdate(connection, tableId)
+                            connection.commit()
+                            return@use activeId
+                        }
+                        throw e
                     }
                     connection.commit()
                     orderId
