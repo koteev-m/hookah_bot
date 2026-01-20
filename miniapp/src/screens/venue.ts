@@ -126,7 +126,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
   const telegramContext = getTelegramContext()
   const initDataLength = telegramContext.initData?.length ?? 0
   const startParam = telegramContext.startParam ?? ''
-  const userId = telegramContext.webApp?.initDataUnsafe?.user?.id ?? null
+  const userId = telegramContext.telegramUserId
   const defaultVenueId = parsePositiveInt(startParam)
   const refs = buildVenueDom(root, initDataLength, startParam, userId, backendUrl)
   refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
@@ -196,7 +196,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
     }
     const venueId = parsePositiveInt(refs.venueInput.value)
     const ctx = getTelegramContext()
-    const telegramUserId = ctx.webApp?.initDataUnsafe?.user?.id
+    const telegramUserId = ctx.telegramUserId
     if (!venueId) {
       refs.linkStatus.textContent = 'Укажите корректный ID заведения.'
       refs.linkResult.hidden = true

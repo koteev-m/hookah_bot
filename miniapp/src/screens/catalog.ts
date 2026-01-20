@@ -271,7 +271,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   const telegramContext = getTelegramContext()
   const initDataLength = telegramContext.initData?.length ?? 0
   const startParam = telegramContext.startParam ?? ''
-  const userId = telegramContext.webApp?.initDataUnsafe?.user?.id ?? null
+  const userId = telegramContext.telegramUserId
   const defaultVenueId = parsePositiveInt(startParam)
   const refs = buildCatalogDom(root, initDataLength, startParam, userId)
   refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''

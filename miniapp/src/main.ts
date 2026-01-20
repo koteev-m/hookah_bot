@@ -12,8 +12,16 @@ const mode = searchParams.get('mode')
 let dispose: (() => void) | null = null
 
 const telegramContext = getTelegramContext()
-telegramContext.webApp?.ready?.()
-telegramContext.webApp?.expand?.()
+try {
+  telegramContext.webApp?.ready?.()
+} catch {
+  // ignore WebApp readiness errors
+}
+try {
+  telegramContext.webApp?.expand?.()
+} catch {
+  // ignore WebApp expand errors
+}
 
 function render() {
   dispose?.()
