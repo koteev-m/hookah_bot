@@ -38,10 +38,9 @@ fun Route.guestStaffCallRoutes(
         val created = staffCallRepository.createGuestStaffCall(
             venueId = table.venueId,
             tableId = table.tableId,
-            tableNumber = table.tableNumber,
             reason = reason,
             comment = comment
-        ) ?: throw NotFoundException()
+        )
 
         call.respond(
             StaffCallResponse(
