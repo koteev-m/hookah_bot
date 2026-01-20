@@ -16,7 +16,7 @@ BEGIN
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relname = 'order_batches'
-      AND c.relkind = 'r'
+      AND c.relkind IN ('r', 'p')
       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
     ORDER BY n.nspname
     LIMIT 1;
@@ -61,7 +61,10 @@ BEGIN
         FROM pg_constraint c
         WHERE c.contype = 'c'
           AND c.conrelid = table_oid
-          AND c.conkey @> ARRAY[source_attnum]::smallint[]
+          AND (
+              (c.conkey IS NOT NULL AND c.conkey @> ARRAY[source_attnum]::smallint[])
+              OR (c.conkey IS NULL AND pg_get_constraintdef(c.oid) ~* '(^|[^a-zA-Z0-9_])source([^a-zA-Z0-9_]|$)')
+          )
     LOOP
         IF constraint_record.condef ILIKE '%MINIAPP%' THEN
             RAISE NOTICE 'order_batches.source constraint % already allows MINIAPP', constraint_record.conname;
