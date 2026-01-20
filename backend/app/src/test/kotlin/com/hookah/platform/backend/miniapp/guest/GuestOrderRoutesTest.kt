@@ -118,6 +118,41 @@ class GuestOrderRoutesTest {
     }
 
     @Test
+    fun `add-batch stores miniapp source`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-order-source")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val tableId = seedTable(jdbcUrl, venueId, 7)
+        seedTableToken(jdbcUrl, tableId, "source-token")
+        seedSubscription(jdbcUrl, venueId, "ACTIVE")
+        val categoryId = seedMenuCategory(jdbcUrl, venueId)
+        val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Latte")
+
+        val token = issueToken(config)
+        val request = AddBatchRequest(
+            tableToken = "source-token",
+            items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+            comment = "Source check"
+        )
+        val response = client.post("/api/guest/order/add-batch") {
+            contentType(ContentType.Application.Json)
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val payload = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText())
+        val source = fetchOrderBatchSource(jdbcUrl, payload.batchId)
+        assertEquals("MINIAPP", source)
+    }
+
+    @Test
     fun `add-batch accepts missing comment`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-order-missing-comment")
         val config = buildConfig(jdbcUrl)
@@ -371,6 +406,26 @@ class GuestOrderRoutesTest {
             }
         }
         error("Failed to insert item")
+    }
+
+    private fun fetchOrderBatchSource(jdbcUrl: String, batchId: Long): String? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                    SELECT source
+                    FROM order_batches
+                    WHERE id = ?
+                """.trimIndent()
+            ).use { statement ->
+                statement.setLong(1, batchId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getString("source")
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private companion object {
