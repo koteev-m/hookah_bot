@@ -268,9 +268,12 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     visibilitySuspendedObserved: false,
     venueNotFoundObserved: false
   }
-  const { initDataLength, startParam, userId } = getTelegramContext()
+  const telegramContext = getTelegramContext()
+  const initDataLength = telegramContext.initData?.length ?? 0
+  const startParam = telegramContext.startParam ?? ''
+  const userId = telegramContext.webApp?.initDataUnsafe?.user?.id ?? null
   const defaultVenueId = parsePositiveInt(startParam)
-  const refs = buildCatalogDom(root, initDataLength, startParam ?? '', userId ?? null)
+  const refs = buildCatalogDom(root, initDataLength, startParam, userId)
   refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
   let catalogAbort: AbortController | null = null
