@@ -10,6 +10,7 @@ import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.guest.GuestVenuePolicy
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
+import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
 import com.hookah.platform.backend.miniapp.guest.resolveVenueVisibilityMode
@@ -203,6 +204,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val guestVenuePolicy = GuestVenuePolicy(resolveVenueVisibilityMode(appConfig))
     val subscriptionRepository = SubscriptionRepository(dataSource)
     val ordersRepository = OrdersRepository(dataSource)
+    val staffCallRepository = StaffCallRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
@@ -248,7 +250,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
             chatContextRepository = ChatContextRepository(dataSource),
             dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
             ordersRepository = ordersRepository,
-            staffCallRepository = StaffCallRepository(dataSource),
+            staffCallRepository = staffCallRepository,
             staffChatLinkCodeRepository = staffChatLinkCodeRepository,
             venueRepository = venueRepository,
             venueAccessRepository = venueAccessRepository,
@@ -504,6 +506,12 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         guestMenuRepository = guestMenuRepository,
                         subscriptionRepository = subscriptionRepository,
                         ordersRepository = ordersRepository
+                    )
+                    guestStaffCallRoutes(
+                        tableTokenResolver = tableTokenResolver,
+                        guestVenueRepository = guestVenueRepository,
+                        subscriptionRepository = subscriptionRepository,
+                        staffCallRepository = staffCallRepository
                     )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))

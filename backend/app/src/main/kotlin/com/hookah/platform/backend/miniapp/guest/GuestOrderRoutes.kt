@@ -2,8 +2,6 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
-import com.hookah.platform.backend.api.ServiceSuspendedException
-import com.hookah.platform.backend.api.SubscriptionBlockedException
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderDto
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
@@ -13,7 +11,6 @@ import com.hookah.platform.backend.miniapp.guest.api.OrderBatchDto
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
-import com.hookah.platform.backend.miniapp.subscription.VenueAvailabilityResolver
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
@@ -42,7 +39,7 @@ fun Route.guestOrderRoutes(
         val rawToken = call.request.queryParameters["tableToken"]
         val token = validateTableToken(rawToken)
         val table = tableTokenResolver(token) ?: throw NotFoundException()
-        ensureOrderAvailability(table, guestVenueRepository, subscriptionRepository)
+        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
 
         val activeOrder = ordersRepository.findActiveOrderDetails(table.tableId)
         call.respond(
@@ -58,7 +55,7 @@ fun Route.guestOrderRoutes(
         val normalizedItems = normalizeItems(request.items)
         val comment = normalizeComment(request.comment)
         val table = tableTokenResolver(token) ?: throw NotFoundException()
-        ensureOrderAvailability(table, guestVenueRepository, subscriptionRepository)
+        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
 
         val itemIds = normalizedItems.map { it.itemId }.toSet()
         val availableItems = guestMenuRepository.findAvailableItemIds(
@@ -122,25 +119,6 @@ private fun normalizeComment(comment: String?): String? {
         throw InvalidInputException("comment length must be <= $COMMENT_MAX_LENGTH")
     }
     return trimmed
-}
-
-private suspend fun ensureOrderAvailability(
-    table: TableContext,
-    guestVenueRepository: GuestVenueRepository,
-    subscriptionRepository: SubscriptionRepository
-) {
-    val venue = guestVenueRepository.findVenueByIdForGuest(table.venueId) ?: throw NotFoundException()
-    val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(table.venueId)
-    val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
-    if (availability.available) {
-        return
-    }
-    when (availability.reason) {
-        "SERVICE_SUSPENDED" -> throw ServiceSuspendedException()
-        "SUBSCRIPTION_BLOCKED" -> throw SubscriptionBlockedException()
-        "VENUE_NOT_AVAILABLE" -> throw NotFoundException()
-        else -> throw NotFoundException()
-    }
 }
 
 private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
