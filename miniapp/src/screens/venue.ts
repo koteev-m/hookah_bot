@@ -123,9 +123,12 @@ function buildVenueDom(
 export function renderVenueMode(options: VenueScreenOptions) {
   const { root, backendUrl } = options
   if (!root) return () => undefined
-  const { initDataLength, startParam, userId } = getTelegramContext()
+  const telegramContext = getTelegramContext()
+  const initDataLength = telegramContext.initData?.length ?? 0
+  const startParam = telegramContext.startParam ?? ''
+  const userId = telegramContext.webApp?.initDataUnsafe?.user?.id ?? null
   const defaultVenueId = parsePositiveInt(startParam)
-  const refs = buildVenueDom(root, initDataLength, startParam ?? '', userId ?? null, backendUrl)
+  const refs = buildVenueDom(root, initDataLength, startParam, userId, backendUrl)
   refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
   let disposed = false
@@ -193,6 +196,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
     }
     const venueId = parsePositiveInt(refs.venueInput.value)
     const ctx = getTelegramContext()
+    const telegramUserId = ctx.webApp?.initDataUnsafe?.user?.id
     if (!venueId) {
       refs.linkStatus.textContent = 'Укажите корректный ID заведения.'
       refs.linkResult.hidden = true
@@ -200,7 +204,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
       refs.venueInput.select()
       return
     }
-    if (!ctx.userId) {
+    if (!telegramUserId) {
       refs.linkStatus.textContent =
         'Не удалось определить Telegram ID. Откройте мини-приложение из Telegram.'
       refs.linkResult.hidden = true
@@ -216,9 +220,9 @@ export function renderVenueMode(options: VenueScreenOptions) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Telegram-User-Id': ctx.userId.toString()
+          'X-Telegram-User-Id': telegramUserId.toString()
         },
-        body: JSON.stringify({ userId: ctx.userId })
+        body: JSON.stringify({ userId: telegramUserId })
       })
       if (!response.ok) {
         const errorText = await response.text()
