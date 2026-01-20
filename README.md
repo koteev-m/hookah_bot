@@ -17,6 +17,69 @@
 - `GET /version` → сведения о версии/окружении
 - `GET /db/health` → проверка соединения с Postgres (возвращает `disabled`, если БД не настроена)
 
+## Mini App API
+
+### Auth: `POST /api/auth/telegram`
+`initData` — это строка, которую Telegram Mini App передаёт клиентскому приложению. Её нельзя «пересобирать» или менять — отправляйте на сервер ровно как есть. На сервере подпись `initData` проверяется с использованием `TELEGRAM_BOT_TOKEN` (даже если бот/поллинг не используются), плюс применяются ограничения по времени: `TELEGRAM_MINIAPP_INITDATA_MAX_AGE_SECONDS` и `TELEGRAM_MINIAPP_INITDATA_MAX_FUTURE_SKEW_SECONDS`.
+
+Пример запроса:
+```json
+{
+  "initData": "<telegram-initData-from-miniapp>"
+}
+```
+
+Пример ответа:
+```json
+{
+  "token": "<session-token>",
+  "expiresAtEpochSeconds": 1712345678,
+  "user": {
+    "telegramUserId": 123456789,
+    "username": "hookah_user",
+    "firstName": "Alex",
+    "lastName": "Ivanov"
+  }
+}
+```
+
+### Использование Bearer token для `/api/guest/*`
+Все гостевые эндпойнты защищены `Authorization: Bearer <token>`, где `<token>` — результат `POST /api/auth/telegram`.
+
+Основные маршруты:
+- `GET /api/guest/table/resolve?tableToken=...`
+- `GET /api/guest/order/active?tableToken=...`
+- `POST /api/guest/order/add-batch`
+- `POST /api/guest/staff-call`
+- `GET /api/guest/catalog`
+- `GET /api/guest/venue/{id}`
+- `GET /api/guest/venue/{id}/menu`
+- `GET /api/guest/_ping`
+
+### Ошибки и envelope
+Ответы об ошибках возвращаются в формате `ApiErrorEnvelope`:
+```json
+{
+  "error": {
+    "code": "INVALID_INPUT",
+    "message": "Invalid input"
+  },
+  "requestId": "..."
+}
+```
+
+Ожидаемые коды ошибок и статусы:
+- `UNAUTHORIZED` (401) — отсутствует или невалидный Bearer token.
+- `INITDATA_INVALID` (401) — `initData` не прошла проверку подписи/срока.
+- `INVALID_INPUT` (400) — некорректные параметры (например, `tableToken`, `reason`, `comment`).
+- `NOT_FOUND` (404) — неизвестный `tableToken` и т.п.
+- `SERVICE_SUSPENDED` (423) — venue suspended.
+- `SUBSCRIPTION_BLOCKED` (423) — подписка past_due/suspended.
+- `DATABASE_UNAVAILABLE` (503) — база данных недоступна.
+
+### Security note
+**Не логируйте и не шарьте `initData` и session token**, не кладите их в багрепорты или тикеты. Все примеры в README содержат только placeholder-значения.
+
 ## Database (Postgres + Flyway)
 - Скопировать переменные окружения: `cp .env.example .env`
 - Для локальной разработки PostgreSQL: `docker compose up -d postgres`
