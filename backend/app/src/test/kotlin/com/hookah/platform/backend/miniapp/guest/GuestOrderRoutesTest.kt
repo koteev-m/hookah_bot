@@ -118,6 +118,44 @@ class GuestOrderRoutesTest {
     }
 
     @Test
+    fun `add-batch accepts missing comment`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-order-missing-comment")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val tableId = seedTable(jdbcUrl, venueId, 5)
+        seedTableToken(jdbcUrl, tableId, "missing-comment-token")
+        seedSubscription(jdbcUrl, venueId, "ACTIVE")
+        val categoryId = seedMenuCategory(jdbcUrl, venueId)
+        val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Matcha")
+
+        val token = issueToken(config)
+        val requestBody = """
+            {
+              "tableToken": "missing-comment-token",
+              "items": [
+                {
+                  "itemId": $itemId,
+                  "qty": 1
+                }
+              ]
+            }
+        """.trimIndent()
+        val response = client.post("/api/guest/order/add-batch") {
+            contentType(ContentType.Application.Json)
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            setBody(requestBody)
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+    }
+
+    @Test
     fun `blocked subscription rejects add-batch`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-order-blocked")
         val config = buildConfig(jdbcUrl)

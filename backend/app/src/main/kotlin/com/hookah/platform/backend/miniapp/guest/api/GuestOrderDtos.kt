@@ -34,7 +34,7 @@ data class OrderBatchItemDto(
 data class AddBatchRequest(
     val tableToken: String,
     val items: List<AddBatchItemDto>,
-    val comment: String?
+    val comment: String? = null
 )
 
 @Serializable
