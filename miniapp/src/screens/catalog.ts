@@ -2,7 +2,7 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { requestApi } from '../shared/api/request'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import { clearSession, ensureGuestSession } from '../shared/session/guestSession'
+import { clearSession, getAccessToken } from '../shared/api/auth'
 import { getTelegramContext } from '../shared/telegram'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { append, el, on } from '../shared/ui/dom'
@@ -69,7 +69,7 @@ type CatalogRefs = {
 }
 
 function buildApiDeps(isDebug: boolean) {
-  return { isDebug, ensureGuestSession, clearSession }
+  return { isDebug, getAccessToken, clearSession }
 }
 
 function logApiError(context: string, error: ApiErrorInfo, isDebug: boolean) {
@@ -329,14 +329,14 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     } else if (code === ApiErrorCodes.UNAUTHORIZED) {
       refs.catalogErrorTitle.textContent = 'Сессия истекла'
       refs.catalogErrorMessage.textContent = 'Перезапустите мини-приложение или повторите авторизацию.'
-      actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
-      actions.push({
-        label: 'Повторить (переавторизоваться)',
-        onClick: () => {
-          clearSession(state.backendUrl, state.isDebug)
-          void loadCatalog()
-        }
-      })
+          actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
+          actions.push({
+            label: 'Повторить (переавторизоваться)',
+            onClick: () => {
+              clearSession()
+              void loadCatalog()
+            }
+          })
     } else {
       refs.catalogErrorTitle.textContent = 'Не удалось загрузить каталог'
       refs.catalogErrorMessage.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
@@ -420,7 +420,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
       actions.push({
         label: 'Повторить (переавторизоваться)',
         onClick: () => {
-          clearSession(state.backendUrl, state.isDebug)
+          clearSession()
           const venueId = parsePositiveInt(refs.venueInput.value)
           if (!venueId) {
             showInvalidVenueId()
@@ -594,7 +594,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     })
   )
 
-  void ensureGuestSession(state.backendUrl, state.isDebug)
+  void getAccessToken()
   void loadCatalog()
 
   return () => {

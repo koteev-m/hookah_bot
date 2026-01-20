@@ -1,10 +1,12 @@
 import './style.css'
 import { renderCatalogScreen } from './screens/catalog'
 import { renderVenueMode } from './screens/venue'
+import { getBackendBaseUrl } from './shared/api/backend'
+import { mountAuthGate } from './shared/authGate'
 import { getTelegramContext } from './shared/telegram'
 
 const root = document.querySelector<HTMLDivElement>('#app')
-const backendUrl = import.meta.env.VITE_BACKEND_PUBLIC_URL ?? 'http://localhost:8080'
+const backendUrl = getBackendBaseUrl()
 const isDebug = Boolean(import.meta.env.DEV)
 const searchParams = new URLSearchParams(window.location.search)
 const screen = searchParams.get('screen')
@@ -36,4 +38,7 @@ function render() {
   dispose = renderVenueMode({ root, backendUrl })
 }
 
-render()
+dispose = mountAuthGate({
+  root,
+  onReady: render
+})
