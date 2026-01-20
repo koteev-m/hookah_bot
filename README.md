@@ -43,17 +43,23 @@
 }
 ```
 
+#### Session token TTL
+TTL session token задаётся переменной `API_SESSION_TTL_SECONDS`. Значение `expiresAtEpochSeconds` в ответе `POST /api/auth/telegram` соответствует времени истечения токена в epoch seconds. После истечения TTL нужно снова получить токен через `POST /api/auth/telegram`.
+
+#### Suspended mode (API_GUEST_SUSPENDED_MODE)
+Режим `explain` возвращает 423 (`SERVICE_SUSPENDED` / `SUBSCRIPTION_BLOCKED`) для недоступных заведений. Режим `hide` скрывает причины недоступности: для некоторых гостевых запросов ответ будет как `NOT_FOUND` (404) вместо 423 (например, `GET /api/guest/venue/{id}` и `GET /api/guest/venue/{id}/menu` для suspended заведений).
+
 ### Использование Bearer token для `/api/guest/*`
 Все гостевые эндпойнты защищены `Authorization: Bearer <token>`, где `<token>` — результат `POST /api/auth/telegram`.
 
 Основные маршруты:
+- `GET /api/guest/catalog`
+- `GET /api/guest/venue/{id}`
+- `GET /api/guest/venue/{id}/menu`
 - `GET /api/guest/table/resolve?tableToken=...`
 - `GET /api/guest/order/active?tableToken=...`
 - `POST /api/guest/order/add-batch`
 - `POST /api/guest/staff-call`
-- `GET /api/guest/catalog`
-- `GET /api/guest/venue/{id}`
-- `GET /api/guest/venue/{id}/menu`
 - `GET /api/guest/_ping`
 
 ### Ошибки и envelope
