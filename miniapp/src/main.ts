@@ -38,8 +38,8 @@ function render() {
   dispose = renderVenueMode({ root, backendUrl })
 }
 
-if (mode === 'venue') {
-  dispose = renderVenueMode({ root, backendUrl })
+if (mode === 'venue' && screen !== 'catalog') {
+  render()
 } else {
   dispose = mountAuthGate({
     root,
