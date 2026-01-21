@@ -7,11 +7,11 @@ import {
   type ApiErrorInfo,
   type ApiResult
 } from './types'
-import { type clearSession, type ensureGuestSession } from '../session/guestSession'
+import { type clearSession, type getAccessToken } from './auth'
 
 export type RequestDependencies = {
   isDebug: boolean
-  ensureGuestSession: typeof ensureGuestSession
+  getAccessToken: typeof getAccessToken
   clearSession: typeof clearSession
 }
 
@@ -23,7 +23,7 @@ export async function requestApi<T>(
 ): Promise<ApiResult<T>> {
   try {
     if (isGuestApi(path)) {
-      const sessionResult = await deps.ensureGuestSession(backendUrl, deps.isDebug)
+      const sessionResult = await deps.getAccessToken()
       if (!sessionResult.ok) {
         return { ok: false, error: sessionResult.error }
       }
@@ -53,7 +53,7 @@ export async function requestApi<T>(
         requestId
       }
       if (isGuestApi(path) && response.status === 401) {
-        deps.clearSession(backendUrl, deps.isDebug)
+        deps.clearSession()
       }
       return { ok: false, error: errorInfo }
     } catch (error) {
