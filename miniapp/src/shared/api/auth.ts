@@ -22,7 +22,9 @@ type TelegramAuthResponse = {
   }
 }
 
-const storageKey = 'hookah_session_token'
+const baseStorageKey = 'hookah_session_token'
+const isDebug = import.meta.env.DEV
+const storageKey = resolveStorageKey()
 const sessionSafetySkewSeconds = 20
 let inMemorySession: SessionToken | null = null
 let pendingAuth: Promise<ApiResult<{ token: string }>> | null = null
@@ -133,7 +135,7 @@ export async function authenticate(initData: string): Promise<SessionToken> {
       } catch (error) {
         envelope = null
       }
-      const requestId = resolveRequestId(headerRequestId, envelope?.requestId, false)
+      const requestId = resolveRequestId(headerRequestId, envelope?.requestId, isDebug)
       const errorInfo: ApiErrorInfo = {
         status: response.status,
         code: envelope?.error?.code,
@@ -226,5 +228,17 @@ export async function getAccessToken(): Promise<ApiResult<{ token: string }>> {
     return await pendingAuth
   } finally {
     pendingAuth = null
+  }
+}
+function resolveStorageKey(): string {
+  try {
+    const backendUrl = getBackendBaseUrl()
+    const parsed = new URL(backendUrl)
+    if (!parsed.host) {
+      return baseStorageKey
+    }
+    return `${baseStorageKey}:${parsed.host}`
+  } catch (error) {
+    return baseStorageKey
   }
 }
