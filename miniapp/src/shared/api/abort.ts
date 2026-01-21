@@ -1,4 +1,6 @@
-export const REQUEST_ABORTED_CODE = 'REQUEST_ABORTED'
+import { ApiErrorCodes } from './types'
+
+export const REQUEST_ABORTED_CODE = ApiErrorCodes.REQUEST_ABORTED
 
 export function isAbortError(error: unknown): boolean {
   return (
