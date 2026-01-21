@@ -38,7 +38,11 @@ function render() {
   dispose = renderVenueMode({ root, backendUrl })
 }
 
-dispose = mountAuthGate({
-  root,
-  onReady: render
-})
+if (mode === 'venue') {
+  dispose = renderVenueMode({ root, backendUrl })
+} else {
+  dispose = mountAuthGate({
+    root,
+    onReady: render
+  })
+}
