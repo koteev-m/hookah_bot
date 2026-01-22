@@ -1,3 +1,4 @@
+// Nullable fields with default nulls in backend responses may be omitted from JSON.
 export type CatalogResponse = {
   venues: CatalogVenueDto[]
 }
