@@ -11,7 +11,7 @@ import type {
   VenueResponse
 } from './guestDtos'
 import { ApiErrorCodes, type ApiResult } from './types'
-import { normalizeTableToken } from '../tableToken'
+import { normalizeTableToken } from '../validation/tableToken'
 
 function invalidTableTokenResult<T>(): ApiResult<T> {
   return {
