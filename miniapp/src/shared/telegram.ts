@@ -1,4 +1,4 @@
-import { normalizeTableToken } from './tableToken'
+import { normalizeTableToken } from './validation/tableToken'
 
 type TelegramInitDataUnsafe = {
   start_param?: string
