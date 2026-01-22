@@ -5,8 +5,8 @@ export type CatalogResponse = {
 export type CatalogVenueDto = {
   id: number
   name: string
-  city: string | null
-  address: string | null
+  city?: string | null
+  address?: string | null
 }
 
 export type VenueResponse = {
@@ -16,8 +16,8 @@ export type VenueResponse = {
 export type VenueDto = {
   id: number
   name: string
-  city: string | null
-  address: string | null
+  city?: string | null
+  address?: string | null
   status: string
 }
 
