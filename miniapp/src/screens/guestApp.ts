@@ -124,6 +124,10 @@ function buildCatalogPage(): PageResult {
   addButton.addEventListener('click', () => {
     const result = addToCart(101)
     if (!result.ok) {
+      if (result.reason === 'invalid') {
+        updateMessage('Некорректная позиция.')
+        return
+      }
       updateMessage('Достигнут лимит по количеству позиций в корзине.')
       return
     }
