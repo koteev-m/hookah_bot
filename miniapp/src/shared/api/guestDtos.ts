@@ -1,4 +1,4 @@
-// Nullable fields with default nulls in backend responses may be omitted from JSON.
+// Nullable fields are omitted only when backend Json settings disable explicitNulls or encodeDefaults for default values.
 export type CatalogResponse = {
   venues: CatalogVenueDto[]
 }
