@@ -1,3 +1,5 @@
+import { normalizeTableToken } from './tableToken'
+
 type TelegramInitDataUnsafe = {
   start_param?: string
   startParam?: string
@@ -62,8 +64,9 @@ export function getTelegramContext(): TelegramContext {
   const webApp = getWebApp()
   const params = getSearchParams()
   const initData = webApp?.initData ? webApp.initData : null
+  const tableToken = normalizeTableToken(getQueryParam(params, 'tableToken'))
   const startParam = normalizeNonEmpty(
-    getQueryParam(params, 'tableToken') ??
+    tableToken ??
       getQueryParam(params, 'tgWebAppStartParam') ??
       getQueryParam(params, 'startapp') ??
       getQueryParam(params, 'start_param') ??

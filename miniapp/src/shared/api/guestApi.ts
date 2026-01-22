@@ -10,7 +10,8 @@ import type {
   TableResolveResponse,
   VenueResponse
 } from './guestDtos'
-import type { ApiResult } from './types'
+import { ApiErrorCodes, type ApiResult } from './types'
+import { normalizeTableToken } from '../tableToken'
 
 export async function guestGetCatalog(
   backendUrl: string,
@@ -44,7 +45,18 @@ export async function guestResolveTable(
   deps: RequestDependencies,
   signal?: AbortSignal
 ): Promise<ApiResult<TableResolveResponse>> {
-  const encodedToken = encodeURIComponent(tableToken)
+  const normalizedToken = normalizeTableToken(tableToken)
+  if (!normalizedToken) {
+    return {
+      ok: false,
+      error: {
+        status: 400,
+        code: ApiErrorCodes.INVALID_INPUT,
+        message: 'Некорректный токен стола'
+      }
+    }
+  }
+  const encodedToken = encodeURIComponent(normalizedToken)
   return requestApi<TableResolveResponse>(
     backendUrl,
     `/api/guest/table/resolve?tableToken=${encodedToken}`,
@@ -59,7 +71,18 @@ export async function guestGetActiveOrder(
   deps: RequestDependencies,
   signal?: AbortSignal
 ): Promise<ApiResult<ActiveOrderResponse>> {
-  const encodedToken = encodeURIComponent(tableToken)
+  const normalizedToken = normalizeTableToken(tableToken)
+  if (!normalizedToken) {
+    return {
+      ok: false,
+      error: {
+        status: 400,
+        code: ApiErrorCodes.INVALID_INPUT,
+        message: 'Некорректный токен стола'
+      }
+    }
+  }
+  const encodedToken = encodeURIComponent(normalizedToken)
   return requestApi<ActiveOrderResponse>(
     backendUrl,
     `/api/guest/order/active?tableToken=${encodedToken}`,

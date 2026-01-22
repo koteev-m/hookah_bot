@@ -1,3 +1,4 @@
+import { REQUEST_ABORTED_CODE } from '../api/abort'
 import type { ApiErrorInfo } from '../api/types'
 
 export type ErrorDetailsOptions = {
@@ -19,6 +20,9 @@ export function renderErrorDetails(
   }
   container.textContent = ''
   if (!options.isDebug) {
+    return
+  }
+  if (error.code === REQUEST_ABORTED_CODE) {
     return
   }
   if (!error.requestId && !error.code && !error.message && !(options.extraNotes?.length ?? 0)) {
