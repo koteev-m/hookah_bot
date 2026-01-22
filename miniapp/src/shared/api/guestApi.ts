@@ -13,6 +13,17 @@ import type {
 import { ApiErrorCodes, type ApiResult } from './types'
 import { normalizeTableToken } from '../tableToken'
 
+function invalidTableTokenResult<T>(): ApiResult<T> {
+  return {
+    ok: false,
+    error: {
+      status: 400,
+      code: ApiErrorCodes.INVALID_INPUT,
+      message: 'Некорректный токен стола'
+    }
+  }
+}
+
 export async function guestGetCatalog(
   backendUrl: string,
   deps: RequestDependencies,
@@ -47,14 +58,7 @@ export async function guestResolveTable(
 ): Promise<ApiResult<TableResolveResponse>> {
   const normalizedToken = normalizeTableToken(tableToken)
   if (!normalizedToken) {
-    return {
-      ok: false,
-      error: {
-        status: 400,
-        code: ApiErrorCodes.INVALID_INPUT,
-        message: 'Некорректный токен стола'
-      }
-    }
+    return invalidTableTokenResult()
   }
   const encodedToken = encodeURIComponent(normalizedToken)
   return requestApi<TableResolveResponse>(
@@ -73,14 +77,7 @@ export async function guestGetActiveOrder(
 ): Promise<ApiResult<ActiveOrderResponse>> {
   const normalizedToken = normalizeTableToken(tableToken)
   if (!normalizedToken) {
-    return {
-      ok: false,
-      error: {
-        status: 400,
-        code: ApiErrorCodes.INVALID_INPUT,
-        message: 'Некорректный токен стола'
-      }
-    }
+    return invalidTableTokenResult()
   }
   const encodedToken = encodeURIComponent(normalizedToken)
   return requestApi<ActiveOrderResponse>(
@@ -97,13 +94,18 @@ export async function guestAddBatch(
   deps: RequestDependencies,
   signal?: AbortSignal
 ): Promise<ApiResult<AddBatchResponse>> {
+  const normalizedToken = normalizeTableToken(payload.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  const requestPayload: AddBatchRequest = { ...payload, tableToken: normalizedToken }
   return requestApi<AddBatchResponse>(
     backendUrl,
     '/api/guest/order/add-batch',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestPayload),
       signal
     },
     deps
@@ -116,13 +118,18 @@ export async function guestStaffCall(
   deps: RequestDependencies,
   signal?: AbortSignal
 ): Promise<ApiResult<StaffCallResponse>> {
+  const normalizedToken = normalizeTableToken(payload.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  const requestPayload: StaffCallRequest = { ...payload, tableToken: normalizedToken }
   return requestApi<StaffCallResponse>(
     backendUrl,
     '/api/guest/staff-call',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestPayload),
       signal
     },
     deps

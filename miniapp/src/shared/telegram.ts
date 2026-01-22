@@ -18,6 +18,7 @@ export type TelegramWebAppLike = {
 export type TelegramContext = {
   isTelegram: boolean
   initData: string | null
+  tableToken: string | null
   startParam: string | null
   botUsername: string | null
   telegramUserId: number | null
@@ -64,21 +65,32 @@ export function getTelegramContext(): TelegramContext {
   const webApp = getWebApp()
   const params = getSearchParams()
   const initData = webApp?.initData ? webApp.initData : null
-  const tableToken = normalizeTableToken(getQueryParam(params, 'tableToken'))
-  const startParam = normalizeNonEmpty(
+  const startParamCandidates = [
+    getQueryParam(params, 'tgWebAppStartParam'),
+    getQueryParam(params, 'startapp'),
+    getQueryParam(params, 'start_param'),
+    webApp?.initDataUnsafe?.start_param,
+    webApp?.initDataUnsafe?.startParam
+  ]
+  const tableTokenCandidates = [getQueryParam(params, 'tableToken'), ...startParamCandidates]
+  let tableToken: string | null = null
+  for (const candidate of tableTokenCandidates) {
+    const normalized = normalizeTableToken(candidate)
+    if (normalized) {
+      tableToken = normalized
+      break
+    }
+  }
+  const startParam =
     tableToken ??
-      getQueryParam(params, 'tgWebAppStartParam') ??
-      getQueryParam(params, 'startapp') ??
-      getQueryParam(params, 'start_param') ??
-      webApp?.initDataUnsafe?.start_param ??
-      webApp?.initDataUnsafe?.startParam
-  )
+    normalizeNonEmpty(startParamCandidates.find((candidate) => normalizeNonEmpty(candidate)))
   const botUsername = normalizeNonEmpty(getQueryParam(params, 'tgWebAppBotUsername'))
   const rawUserId = webApp?.initDataUnsafe?.user?.id
   const telegramUserId = typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : null
   return {
     isTelegram: Boolean(webApp),
     initData,
+    tableToken,
     startParam,
     botUsername,
     telegramUserId,
