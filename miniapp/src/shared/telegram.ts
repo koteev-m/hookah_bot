@@ -1,4 +1,4 @@
-import { normalizeTableToken } from './validation/tableToken'
+import { validateTableToken } from './validation/tableToken'
 
 type TelegramInitDataUnsafe = {
   start_param?: string
@@ -19,6 +19,7 @@ export type TelegramContext = {
   isTelegram: boolean
   initData: string | null
   tableToken: string | null
+  tableTokenStatus: 'missing' | 'invalid' | 'valid'
   startParam: string | null
   botUsername: string | null
   telegramUserId: number | null
@@ -66,24 +67,29 @@ export function getTelegramContext(): TelegramContext {
   const params = getSearchParams()
   const initData = webApp?.initData ? webApp.initData : null
   const startParamCandidates = [
+    getQueryParam(params, 'tableToken'),
     getQueryParam(params, 'tgWebAppStartParam'),
     getQueryParam(params, 'startapp'),
     getQueryParam(params, 'start_param'),
     webApp?.initDataUnsafe?.start_param,
     webApp?.initDataUnsafe?.startParam
   ]
-  const tableTokenCandidates = [getQueryParam(params, 'tableToken'), ...startParamCandidates]
+  const startParam = normalizeNonEmpty(
+    startParamCandidates.find((candidate) => normalizeNonEmpty(candidate))
+  )
   let tableToken: string | null = null
-  for (const candidate of tableTokenCandidates) {
-    const normalized = normalizeTableToken(candidate)
-    if (normalized) {
-      tableToken = normalized
-      break
+  let tableTokenStatus: TelegramContext['tableTokenStatus'] = 'missing'
+  if (!startParam) {
+    tableTokenStatus = 'missing'
+  } else {
+    const validation = validateTableToken(startParam)
+    if (!validation.ok) {
+      tableTokenStatus = 'invalid'
+    } else {
+      tableTokenStatus = 'valid'
+      tableToken = validation.value
     }
   }
-  const startParam =
-    tableToken ??
-    normalizeNonEmpty(startParamCandidates.find((candidate) => normalizeNonEmpty(candidate)))
   const botUsername = normalizeNonEmpty(getQueryParam(params, 'tgWebAppBotUsername'))
   const rawUserId = webApp?.initDataUnsafe?.user?.id
   const telegramUserId = typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : null
@@ -91,6 +97,7 @@ export function getTelegramContext(): TelegramContext {
     isTelegram: Boolean(webApp),
     initData,
     tableToken,
+    tableTokenStatus,
     startParam,
     botUsername,
     telegramUserId,

@@ -3,9 +3,8 @@ import { REQUEST_ABORTED_CODE } from '../api/abort'
 import { clearSession, getAccessToken } from '../api/auth'
 import { guestResolveTable } from '../api/guestApi'
 import type { TableResolveResponse } from '../api/guestDtos'
-import type { ApiErrorInfo } from '../api/types'
+import { ApiErrorCodes, type ApiErrorInfo } from '../api/types'
 import { getTelegramContext } from '../telegram'
-import { validateTableToken } from '../validation/tableToken'
 
 export type TableContextStatus =
   | 'missing'
@@ -17,6 +16,7 @@ export type TableContextStatus =
 
 export type TableContextSnapshot = {
   status: TableContextStatus
+  tableToken: string | null
   tableId: number | null
   tableNumber: string | null
   venueId: number | null
@@ -34,51 +34,26 @@ export type TableStatusPresentation = {
   severity: 'ok' | 'warn' | 'error'
 }
 
-type TableTokenResolution =
-  | { status: 'missing' }
-  | { status: 'invalid' }
-  | { status: 'valid'; token: string }
-
 const isDebug = import.meta.env.DEV
 const listeners = new Set<(snapshot: TableContextSnapshot) => void>()
 let currentSnapshot = buildEmptySnapshot('missing')
 let activeController: AbortController | null = null
 let inFlight: Promise<void> | null = null
 let requestCounter = 0
+let initialized = false
 
 function buildApiDeps() {
   return { isDebug, getAccessToken, clearSession }
 }
 
-function normalizeNonEmpty(value: string | null | undefined): string | null {
-  if (value === null || value === undefined) {
-    return null
+function resolveTokenStatus(status: ReturnType<typeof getTelegramContext>['tableTokenStatus']): TableContextStatus {
+  if (status === 'invalid') {
+    return 'invalid'
   }
-  const trimmed = value.trim()
-  return trimmed ? trimmed : null
-}
-
-function getQueryParam(key: string): string | null {
-  if (typeof window === 'undefined') {
-    return null
+  if (status === 'missing') {
+    return 'missing'
   }
-  const params = new URLSearchParams(window.location.search)
-  const value = params.get(key)
-  return value ? value : null
-}
-
-function resolveTableToken(): TableTokenResolution {
-  const startParam = normalizeNonEmpty(getTelegramContext().startParam)
-  const queryToken = normalizeNonEmpty(getQueryParam('tableToken'))
-  const candidate = startParam ?? queryToken
-  if (!candidate) {
-    return { status: 'missing' }
-  }
-  const validation = validateTableToken(candidate)
-  if (!validation.ok) {
-    return { status: 'invalid' }
-  }
-  return { status: 'valid', token: validation.value }
+  return 'missing'
 }
 
 function resolveBlockReasonText(reason: string | null): string {
@@ -92,9 +67,13 @@ function resolveBlockReasonText(reason: string | null): string {
   }
 }
 
-function buildEmptySnapshot(status: TableContextStatus): TableContextSnapshot {
+function buildEmptySnapshot(
+  status: TableContextStatus,
+  tableToken: string | null = null
+): TableContextSnapshot {
   return {
     status,
+    tableToken,
     tableId: null,
     tableNumber: null,
     venueId: null,
@@ -107,10 +86,14 @@ function buildEmptySnapshot(status: TableContextStatus): TableContextSnapshot {
   }
 }
 
-function buildResolvedSnapshot(payload: TableResolveResponse): TableContextSnapshot {
+function buildResolvedSnapshot(
+  payload: TableResolveResponse,
+  tableToken: string
+): TableContextSnapshot {
   const blockReasonText = payload.available ? null : resolveBlockReasonText(payload.unavailableReason)
   return {
     status: 'resolved',
+    tableToken,
     tableId: payload.tableId,
     tableNumber: payload.tableNumber,
     venueId: payload.venueId,
@@ -141,23 +124,23 @@ export function subscribe(listener: (snapshot: TableContextSnapshot) => void): (
 }
 
 export async function refresh(): Promise<void> {
-  const tokenState = resolveTableToken()
-  if (tokenState.status !== 'valid') {
+  const { tableTokenStatus, tableToken } = getTelegramContext()
+  if (tableTokenStatus !== 'valid' || !tableToken) {
     if (activeController) {
       activeController.abort()
       activeController = null
     }
-    updateSnapshot(buildEmptySnapshot(tokenState.status))
+    updateSnapshot(buildEmptySnapshot(resolveTokenStatus(tableTokenStatus)))
     return
   }
 
-  const nextToken = tokenState.token
+  const nextToken = tableToken
   if (activeController) {
     activeController.abort()
   }
   const controller = new AbortController()
   activeController = controller
-  updateSnapshot(buildEmptySnapshot('resolving'))
+  updateSnapshot(buildEmptySnapshot('resolving', nextToken))
   const requestId = (requestCounter += 1)
 
   const backendUrl = getBackendBaseUrl()
@@ -180,7 +163,7 @@ export async function refresh(): Promise<void> {
       return
     }
 
-    updateSnapshot(buildResolvedSnapshot(result.data))
+    updateSnapshot(buildResolvedSnapshot(result.data, nextToken))
   })
 
   await inFlight
@@ -212,6 +195,12 @@ export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPr
     case 'resolving':
       return { title: 'Загрузка стола…', severity: 'warn' }
     case 'error':
+      if (snapshot.error?.code === ApiErrorCodes.INITDATA_INVALID) {
+        return { title: 'Откройте Mini App внутри Telegram', severity: 'error' }
+      }
+      if (snapshot.error?.code === ApiErrorCodes.UNAUTHORIZED) {
+        return { title: 'Сессия устарела — откройте заново в Telegram', severity: 'error' }
+      }
       return { title: 'Не удалось загрузить стол. Попробуйте позже.', severity: 'error' }
     case 'resolved': {
       if (snapshot.available) {
@@ -224,10 +213,16 @@ export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPr
   }
 }
 
-const initialTokenState = resolveTableToken()
-if (initialTokenState.status === 'valid') {
-  updateSnapshot(buildEmptySnapshot('resolving'))
-  void refresh()
-} else {
-  updateSnapshot(buildEmptySnapshot(initialTokenState.status))
+export function initTableContext(): void {
+  if (initialized) {
+    return
+  }
+  initialized = true
+  const { tableTokenStatus, tableToken } = getTelegramContext()
+  if (tableTokenStatus === 'valid' && tableToken) {
+    updateSnapshot(buildEmptySnapshot('resolving', tableToken))
+    void refresh()
+    return
+  }
+  updateSnapshot(buildEmptySnapshot(resolveTokenStatus(tableTokenStatus)))
 }

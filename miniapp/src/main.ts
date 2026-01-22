@@ -3,6 +3,7 @@ import { renderCatalogScreen } from './screens/catalog'
 import { renderVenueMode } from './screens/venue'
 import { getBackendBaseUrl } from './shared/api/backend'
 import { mountAuthGate } from './shared/authGate'
+import { initTableContext } from './shared/state/tableContext'
 import { getTelegramContext } from './shared/telegram'
 
 const root = document.querySelector<HTMLDivElement>('#app')
@@ -43,6 +44,9 @@ if (mode === 'venue' && screen !== 'catalog') {
 } else {
   dispose = mountAuthGate({
     root,
-    onReady: render
+    onReady: () => {
+      initTableContext()
+      render()
+    }
   })
 }
