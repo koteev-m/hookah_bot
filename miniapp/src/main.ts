@@ -1,16 +1,13 @@
 import './style.css'
-import { renderCatalogScreen } from './screens/catalog'
+import { mountGuestApp } from './screens/guestApp'
 import { renderVenueMode } from './screens/venue'
 import { getBackendBaseUrl } from './shared/api/backend'
 import { mountAuthGate } from './shared/authGate'
-import { initTableContext } from './shared/state/tableContext'
 import { getTelegramContext } from './shared/telegram'
 
 const root = document.querySelector<HTMLDivElement>('#app')
 const backendUrl = getBackendBaseUrl()
-const isDebug = Boolean(import.meta.env.DEV)
 const searchParams = new URLSearchParams(window.location.search)
-const screen = searchParams.get('screen')
 const mode = searchParams.get('mode')
 let dispose: (() => void) | null = null
 
@@ -26,27 +23,14 @@ try {
   // ignore WebApp expand errors
 }
 
-function render() {
-  dispose?.()
-  if (screen === 'catalog') {
-    dispose = renderCatalogScreen({ root, backendUrl, isDebug })
-    return
-  }
-  if (mode === 'venue') {
-    dispose = renderVenueMode({ root, backendUrl })
-    return
-  }
+if (mode === 'venue') {
   dispose = renderVenueMode({ root, backendUrl })
-}
-
-if (mode === 'venue' && screen !== 'catalog') {
-  render()
 } else {
   dispose = mountAuthGate({
     root,
     onReady: () => {
-      initTableContext()
-      render()
+      dispose?.()
+      dispose = mountGuestApp({ root })
     }
   })
 }

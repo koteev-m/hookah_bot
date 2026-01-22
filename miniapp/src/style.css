@@ -9,6 +9,99 @@ body {
   padding: 0;
 }
 
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-header {
+  background: #ffffff;
+  border-bottom: 1px solid #dfe3eb;
+  padding: 1rem 1.5rem;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.app-brand h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.app-subtitle {
+  margin: 0.25rem 0 0;
+  color: #64748b;
+}
+
+.table-status {
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  background: #f1f5f9;
+  border: 1px solid transparent;
+}
+
+.table-status-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.table-status-details {
+  margin: 0.25rem 0 0;
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+.app-shell[data-table-severity="ok"] .table-status {
+  background: #ecfdf3;
+  border-color: #86efac;
+}
+
+.app-shell[data-table-severity="warn"] .table-status {
+  background: #fffbeb;
+  border-color: #facc15;
+}
+
+.app-shell[data-table-severity="error"] .table-status {
+  background: #fff1f2;
+  border-color: #fca5a5;
+}
+
+.app-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.nav-button {
+  background-color: #e0e7ff;
+  color: #1f2a44;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.95rem;
+}
+
+.nav-button:hover {
+  background-color: #c7d2fe;
+}
+
+.nav-button[data-active="true"] {
+  background-color: #4f46e5;
+  color: #ffffff;
+}
+
+.app-content {
+  padding-top: 1rem;
+}
+
+.page-meta {
+  margin: 0.5rem 0 1rem;
+  color: #475569;
+}
+
+.page-body {
+  display: grid;
+  gap: 0.75rem;
+}
+
 .container {
   max-width: 720px;
   margin: 0 auto;
