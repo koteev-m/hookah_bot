@@ -4,6 +4,7 @@ import { getCartSnapshot, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
 import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
+import { renderCartScreen } from './cart'
 import { renderGuestVenueScreen } from './guestVenue'
 
 type GuestAppOptions = {
@@ -107,7 +108,8 @@ function renderRouteContent(
   container: HTMLElement,
   backendUrl: string,
   isDebug: boolean,
-  onOpenVenue: (venueId: number) => void
+  onOpenVenue: (venueId: number) => void,
+  onNavigateOrder: () => void
 ): () => void {
   const screenRoot = document.createElement('div')
   screenRoot.className = 'screen-root'
@@ -117,7 +119,7 @@ function renderRouteContent(
     case 'venue':
       return renderGuestVenueScreen({ root: screenRoot, backendUrl, isDebug, venueId: route.venueId })
     case 'cart':
-      return renderPlaceholder(screenRoot, 'Корзина', 'Здесь появятся выбранные позиции.')
+      return renderCartScreen({ root: screenRoot, backendUrl, isDebug, onNavigateOrder })
     case 'order':
       return renderPlaceholder(screenRoot, 'Заказ', 'Экран активного заказа появится позже.')
     case 'catalog':
@@ -179,9 +181,18 @@ export function mountGuestApp(options: GuestAppOptions) {
     const route = resolveRoute()
     updateNav(refs.navButtons, route.name)
     currentDispose?.()
-    currentDispose = renderRouteContent(route, refs.content, backendUrl, isDebug, (venueId) => {
-      navigate(`#/venue/${venueId}`)
-    })
+    currentDispose = renderRouteContent(
+      route,
+      refs.content,
+      backendUrl,
+      isDebug,
+      (venueId) => {
+        navigate(`#/venue/${venueId}`)
+      },
+      () => {
+        navigate('#/order')
+      }
+    )
   }
 
   const onHashChange = () => {

@@ -8,6 +8,7 @@ import { updateItemCache } from '../shared/state/itemCache'
 import { addToCart, getCartSnapshot, removeFromCart, subscribeCart } from '../shared/state/cartStore'
 import { append, el, on } from '../shared/ui/dom'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
+import { formatPrice } from '../shared/ui/price'
 
 const MAX_ITEM_QTY = 50
 
@@ -58,18 +59,6 @@ function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
     button.addEventListener('click', action.onClick)
     container.appendChild(button)
   })
-}
-
-function formatPrice(priceMinor: number, currency: string): string {
-  const value = Number.isFinite(priceMinor) ? priceMinor / 100 : 0
-  try {
-    return new Intl.NumberFormat('ru-RU', {
-      style: 'currency',
-      currency
-    }).format(value)
-  } catch {
-    return `${value.toFixed(2)} ${currency}`
-  }
 }
 
 function buildVenueDom(root: HTMLDivElement): VenueRefs {
