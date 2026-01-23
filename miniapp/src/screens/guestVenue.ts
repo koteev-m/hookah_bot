@@ -137,7 +137,6 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
       const badge = el('span', { className: 'menu-item-badge', text: 'Нет в наличии' })
       info.appendChild(badge)
       addButton.disabled = true
-      minusButton.disabled = true
       plusButton.disabled = true
     }
 
@@ -163,7 +162,7 @@ function updateItemControls(refs: MenuItemRefs, qty: number) {
   refs.qtyLabel.textContent = String(qty)
   refs.addButton.hidden = qty > 0
   refs.qtyControls.hidden = qty === 0
-  refs.minusButton.disabled = qty <= 0 || !refs.isAvailable
+  refs.minusButton.disabled = qty <= 0
   refs.plusButton.disabled = qty >= MAX_ITEM_QTY || !refs.isAvailable
   refs.addButton.disabled = !refs.isAvailable
 }
@@ -205,6 +204,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const showError = (error: ApiErrorInfo) => {
     const code = normalizeErrorCode(error)
     const actions: ErrorAction[] = []
+    let extraNotes: string[] | undefined
 
     if (code === ApiErrorCodes.NOT_FOUND) {
       refs.errorTitle.textContent = 'Заведение не найдено'
@@ -212,7 +212,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     } else if (code === ApiErrorCodes.SERVICE_SUSPENDED || code === ApiErrorCodes.SUBSCRIPTION_BLOCKED) {
       refs.errorTitle.textContent = 'Доступ к заведению ограничен'
       refs.errorMessage.textContent =
-        'Меню скрыто или временно недоступно. В зависимости от режима backend страница может быть скрыта (423/404).'
+        code === ApiErrorCodes.SERVICE_SUSPENDED
+          ? 'Заведение временно недоступно. Попробуйте позже.'
+          : 'Заказы временно недоступны. Попробуйте позже.'
+      extraNotes = ['В зависимости от режима backend страница может быть скрыта (423/404).']
     } else if (code === ApiErrorCodes.NETWORK_ERROR) {
       refs.errorTitle.textContent = 'Нет соединения'
       refs.errorMessage.textContent = 'Проверьте подключение к интернету и повторите попытку.'
@@ -234,7 +237,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
 
     renderErrorActions(refs.errorActions, actions)
-    renderErrorDetails(refs.errorDetails, error, { isDebug })
+    renderErrorDetails(refs.errorDetails, error, { isDebug, extraNotes })
     refs.error.hidden = false
   }
 
