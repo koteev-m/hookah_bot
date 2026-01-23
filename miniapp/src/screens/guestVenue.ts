@@ -214,9 +214,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       refs.errorTitle.textContent = 'Доступ к заведению ограничен'
       refs.errorMessage.textContent =
         code === ApiErrorCodes.SERVICE_SUSPENDED
-          ? `Заведение временно недоступно. Попробуйте позже. ${browseNote}`
-          : `Заказы временно недоступны. Попробуйте позже. ${browseNote}`
-      extraNotes = [browseNote]
+          ? 'Заведение временно недоступно. Попробуйте позже.'
+          : 'Заказы временно недоступны. Попробуйте позже.'
+      extraNotes = isDebug ? [browseNote] : undefined
     } else if (code === ApiErrorCodes.NETWORK_ERROR) {
       refs.errorTitle.textContent = 'Нет соединения'
       refs.errorMessage.textContent = 'Проверьте подключение к интернету и повторите попытку.'
