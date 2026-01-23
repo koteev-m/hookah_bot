@@ -205,6 +205,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const code = normalizeErrorCode(error)
     const actions: ErrorAction[] = []
     let extraNotes: string[] | undefined
+    const browseNote = 'В зависимости от режима backend страница может быть скрыта (423/404).'
 
     if (code === ApiErrorCodes.NOT_FOUND) {
       refs.errorTitle.textContent = 'Заведение не найдено'
@@ -213,9 +214,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       refs.errorTitle.textContent = 'Доступ к заведению ограничен'
       refs.errorMessage.textContent =
         code === ApiErrorCodes.SERVICE_SUSPENDED
-          ? 'Заведение временно недоступно. Попробуйте позже.'
-          : 'Заказы временно недоступны. Попробуйте позже.'
-      extraNotes = ['В зависимости от режима backend страница может быть скрыта (423/404).']
+          ? `Заведение временно недоступно. Попробуйте позже. ${browseNote}`
+          : `Заказы временно недоступны. Попробуйте позже. ${browseNote}`
+      extraNotes = [browseNote]
     } else if (code === ApiErrorCodes.NETWORK_ERROR) {
       refs.errorTitle.textContent = 'Нет соединения'
       refs.errorMessage.textContent = 'Проверьте подключение к интернету и повторите попытку.'
