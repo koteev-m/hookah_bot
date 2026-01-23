@@ -1,7 +1,10 @@
+import { getBackendBaseUrl } from '../shared/api/backend'
 import { formatTableStatus, initTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
-import { addToCart, clearCart, getCartSnapshot, removeFromCart, subscribeCart } from '../shared/state/cartStore'
+import { getCartSnapshot, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
 import { append, el, on } from '../shared/ui/dom'
+import { renderCatalogScreen } from './catalog'
+import { renderGuestVenueScreen } from './guestVenue'
 
 type GuestAppOptions = {
   root: HTMLDivElement | null
@@ -90,102 +93,37 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
   }
 }
 
-type PageResult = {
-  node: HTMLElement
-  cartCount: HTMLSpanElement
-}
-
-function buildPageLayout(title: string): { section: HTMLElement; body: HTMLDivElement; cartCount: HTMLSpanElement } {
+function renderPlaceholder(container: HTMLElement, title: string, body: string) {
   const section = el('section', { className: 'card' })
   const heading = el('h2', { text: title })
-  const cartLine = el('p', { className: 'page-meta' })
-  const cartCount = el('span', { text: '0' })
-  append(cartLine, document.createTextNode('Товаров в корзине: '), cartCount)
-  const body = el('div', { className: 'page-body' })
-  append(section, heading, cartLine, body)
-  return { section, body, cartCount }
+  const hint = el('p', { text: body })
+  append(section, heading, hint)
+  container.replaceChildren(section)
+  return () => undefined
 }
 
-function buildCatalogPage(): PageResult {
-  const { section, body, cartCount } = buildPageLayout('Каталог')
-  const hint = el('p', { text: 'Каталог появится здесь после подключения данных.' })
-  const actionRow = el('div', { className: 'button-row' })
-  const addButton = el('button', { className: 'button-small', text: 'Добавить тестовый товар' })
-  const removeButton = el('button', { className: 'button-small', text: 'Уменьшить количество' })
-  const clearButton = el('button', { className: 'button-small', text: 'Очистить корзину' })
-  const message = el('p', { className: 'status', text: '' })
-  append(actionRow, addButton, removeButton, clearButton)
-  append(body, hint, actionRow, message)
+function renderRouteContent(
+  route: Route,
+  container: HTMLElement,
+  backendUrl: string,
+  isDebug: boolean,
+  onOpenVenue: (venueId: number) => void
+): () => void {
+  const screenRoot = document.createElement('div')
+  screenRoot.className = 'screen-root'
+  container.replaceChildren(screenRoot)
 
-  const updateMessage = (text: string) => {
-    message.textContent = text
-  }
-
-  addButton.addEventListener('click', () => {
-    const result = addToCart(101)
-    if (!result.ok) {
-      if (result.reason === 'invalid') {
-        updateMessage('Некорректная позиция.')
-        return
-      }
-      updateMessage('Достигнут лимит по количеству позиций в корзине.')
-      return
-    }
-    updateMessage('Товар добавлен в корзину.')
-  })
-  removeButton.addEventListener('click', () => {
-    removeFromCart(101)
-    updateMessage('Количество уменьшено.')
-  })
-  clearButton.addEventListener('click', () => {
-    clearCart()
-    updateMessage('Корзина очищена.')
-  })
-
-  return { node: section, cartCount }
-}
-
-function buildVenuePage(venueId: number | null): PageResult {
-  const { section, body, cartCount } = buildPageLayout('Заведение')
-  const venueLine = el('p', { text: `Venue ID: ${venueId ?? '—'}` })
-  const hint = el('p', { text: 'Страница заведения будет здесь.' })
-  append(body, venueLine, hint)
-  return { node: section, cartCount }
-}
-
-function buildCartPage(): PageResult {
-  const { section, body, cartCount } = buildPageLayout('Корзина')
-  const hint = el('p', { text: 'Здесь появятся выбранные позиции.' })
-  append(body, hint)
-  return { node: section, cartCount }
-}
-
-function buildOrderPage(): PageResult {
-  const { section, body, cartCount } = buildPageLayout('Заказ')
-  const hint = el('p', { text: 'Экран активного заказа появится позже.' })
-  append(body, hint)
-  return { node: section, cartCount }
-}
-
-function renderRouteContent(route: Route, container: HTMLElement): HTMLSpanElement {
-  let content: PageResult
   switch (route.name) {
     case 'venue':
-      content = buildVenuePage(route.venueId)
-      break
+      return renderGuestVenueScreen({ root: screenRoot, backendUrl, isDebug, venueId: route.venueId })
     case 'cart':
-      content = buildCartPage()
-      break
+      return renderPlaceholder(screenRoot, 'Корзина', 'Здесь появятся выбранные позиции.')
     case 'order':
-      content = buildOrderPage()
-      break
+      return renderPlaceholder(screenRoot, 'Заказ', 'Экран активного заказа появится позже.')
     case 'catalog':
     default:
-      content = buildCatalogPage()
-      break
+      return renderCatalogScreen({ root: screenRoot, backendUrl, isDebug, onOpenVenue })
   }
-  container.replaceChildren(content.node)
-  return content.cartCount
 }
 
 function updateNav(navButtons: NavButtonRefs, active: RouteName) {
@@ -204,6 +142,8 @@ export function mountGuestApp(options: GuestAppOptions) {
   if (!root) return () => undefined
   initTableContext()
   ensureDefaultHash()
+  const backendUrl = getBackendBaseUrl()
+  const isDebug = Boolean(import.meta.env.DEV)
 
   const refs = buildGuestShell(root)
   const updateCartNav = (totalQty: number) => {
@@ -217,12 +157,8 @@ export function mountGuestApp(options: GuestAppOptions) {
     refs.app.dataset.tableSeverity = presentation.severity
   })
 
-  let currentCartCount: HTMLSpanElement | null = null
   const cartSubscription = subscribeCart((snapshot) => {
     updateCartNav(snapshot.totalQty)
-    if (currentCartCount) {
-      currentCartCount.textContent = String(snapshot.totalQty)
-    }
   })
   updateCartNav(getCartSnapshot().totalQty)
 
@@ -237,11 +173,15 @@ export function mountGuestApp(options: GuestAppOptions) {
   disposables.push(on(refs.navButtons.cart, 'click', () => navigate('#/cart')))
   disposables.push(on(refs.navButtons.order, 'click', () => navigate('#/order')))
 
+  let currentDispose: (() => void) | null = null
+
   const render = () => {
     const route = resolveRoute()
     updateNav(refs.navButtons, route.name)
-    currentCartCount = renderRouteContent(route, refs.content)
-    currentCartCount.textContent = String(getCartSnapshot().totalQty)
+    currentDispose?.()
+    currentDispose = renderRouteContent(route, refs.content, backendUrl, isDebug, (venueId) => {
+      navigate(`#/venue/${venueId}`)
+    })
   }
 
   const onHashChange = () => {
@@ -253,6 +193,7 @@ export function mountGuestApp(options: GuestAppOptions) {
 
   return () => {
     window.removeEventListener('hashchange', onHashChange)
+    currentDispose?.()
     disposables.forEach((dispose) => dispose())
     cartSubscription()
     tableSubscription()

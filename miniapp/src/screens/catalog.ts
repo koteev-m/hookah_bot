@@ -1,38 +1,29 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
-import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { requestApi } from '../shared/api/request'
-import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { clearSession, getAccessToken } from '../shared/api/auth'
-import { getTelegramContext } from '../shared/telegram'
-import { renderErrorDetails } from '../shared/ui/errorDetails'
+import { normalizeErrorCode } from '../shared/api/errorMapping'
+import { guestGetCatalog } from '../shared/api/guestApi'
+import type { CatalogVenueDto } from '../shared/api/guestDtos'
+import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
-import { parsePositiveInt } from '../shared/parse'
-
-type CatalogVenue = {
-  id: number
-  name: string
-  city?: string | null
-  address?: string | null
-}
-
-type CatalogResponse = {
-  venues: CatalogVenue[]
-}
-
-type VenueResponse = {
-  venue: {
-    id: number
-    name: string
-    city?: string | null
-    address?: string | null
-    status: string
-  }
-}
+import { renderErrorDetails } from '../shared/ui/errorDetails'
 
 type CatalogScreenOptions = {
   root: HTMLDivElement | null
   backendUrl: string
   isDebug: boolean
+  onOpenVenue: (venueId: number) => void
+}
+
+type CatalogRefs = {
+  status: HTMLParagraphElement
+  error: HTMLDivElement
+  errorTitle: HTMLHeadingElement
+  errorMessage: HTMLParagraphElement
+  errorDetails: HTMLDivElement
+  errorActions: HTMLDivElement
+  list: HTMLUListElement
+  searchInput: HTMLInputElement
+  retryButton: HTMLButtonElement
 }
 
 type ErrorAction = {
@@ -40,48 +31,8 @@ type ErrorAction = {
   onClick: () => void
 }
 
-type CatalogRuntimeState = {
-  backendUrl: string
-  isDebug: boolean
-  visibilitySuspendedObserved: boolean
-  venueNotFoundObserved: boolean
-}
-
-type CatalogRefs = {
-  catalogStatus: HTMLParagraphElement
-  catalogError: HTMLDivElement
-  catalogErrorTitle: HTMLHeadingElement
-  catalogErrorMessage: HTMLParagraphElement
-  catalogErrorActions: HTMLDivElement
-  catalogErrorDetails: HTMLDivElement
-  catalogList: HTMLUListElement
-  venueStatus: HTMLParagraphElement
-  venueError: HTMLDivElement
-  venueErrorTitle: HTMLHeadingElement
-  venueErrorMessage: HTMLParagraphElement
-  venueErrorActions: HTMLDivElement
-  venueErrorDetails: HTMLDivElement
-  venueDetails: HTMLDivElement
-  venueInput: HTMLInputElement
-  startParam: HTMLSpanElement
-  catalogRetryButton: HTMLButtonElement
-  venueLoadButton: HTMLButtonElement
-}
-
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
-}
-
-function logApiError(context: string, error: ApiErrorInfo, isDebug: boolean) {
-  if (!isDebug) {
-    return
-  }
-  console.warn(`[${context}] API error`, {
-    status: error.status,
-    code: error.code,
-    requestId: error.requestId,
-    message: error.message
-  })
 }
 
 function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
@@ -94,504 +45,180 @@ function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
   })
 }
 
-function getVisibilityNotes(state: CatalogRuntimeState) {
-  if (!state.isDebug || (!state.visibilitySuspendedObserved && !state.venueNotFoundObserved)) {
-    return []
-  }
-  return [
-    'Режим видимости задаётся ключами api.guest.suspendedMode или API_GUEST_SUSPENDED_MODE (explain|hide).',
-    'В режиме explain suspended_by_platform возвращает 423 SERVICE_SUSPENDED.',
-    'В режиме hide suspended_by_platform маскируется под 404 NOT_FOUND.'
-  ]
-}
+function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
+  const wrapper = el('div', { className: 'catalog-screen' })
+  const controls = el('div', { className: 'catalog-controls' })
+  const searchLabel = el('label', { text: 'Поиск по названию или городу', className: 'field-label' })
+  searchLabel.htmlFor = 'catalog-search'
+  const searchInput = el('input', { id: 'catalog-search' }) as HTMLInputElement
+  searchInput.type = 'search'
+  searchInput.placeholder = 'Начните вводить название или город'
+  const retryButton = el('button', { className: 'button-small', text: 'Обновить' })
+  append(controls, searchLabel, searchInput, retryButton)
 
-function getVenueVisibilityNotes(state: CatalogRuntimeState) {
-  const notes = getVisibilityNotes(state)
-  if (state.isDebug && state.venueNotFoundObserved) {
-    notes.push(
-      'Для hide-режима (api.guest.suspendedMode/API_GUEST_SUSPENDED_MODE=hide) статус 404 может означать скрытие suspended_by_platform.'
-    )
+  const status = el('p', { className: 'status', text: '' })
+
+  const error = el('div', { className: 'error-card' })
+  error.hidden = true
+  const errorTitle = el('h3')
+  const errorMessage = el('p')
+  const errorActions = el('div', { className: 'error-actions' })
+  const errorDetails = el('div')
+  append(error, errorTitle, errorMessage, errorActions, errorDetails)
+
+  const list = el('ul', { className: 'catalog-list' })
+
+  append(wrapper, controls, status, error, list)
+  root.replaceChildren(wrapper)
+
+  return {
+    status,
+    error,
+    errorTitle,
+    errorMessage,
+    errorDetails,
+    errorActions,
+    list,
+    searchInput,
+    retryButton
   }
-  return notes
 }
 
 function renderCatalogList(
-  venues: CatalogVenue[],
+  venues: CatalogVenueDto[],
   onOpenVenue: (venueId: number) => void,
-  refs: CatalogRefs
+  refs: CatalogRefs,
+  emptyMessage: string
 ) {
-  refs.catalogList.replaceChildren()
+  refs.list.replaceChildren()
   if (!venues.length) {
     const item = document.createElement('li')
-    item.textContent = 'Пока нет доступных заведений.'
-    refs.catalogList.appendChild(item)
+    item.textContent = emptyMessage
+    refs.list.appendChild(item)
     return
   }
   venues.forEach((venue) => {
     const item = document.createElement('li')
     item.className = 'catalog-item'
+
     const info = document.createElement('div')
     const name = document.createElement('strong')
     name.textContent = venue.name
-    const lineBreak = document.createElement('br')
-    const location = document.createElement('span')
-    location.textContent = `${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}`
+    const city = document.createElement('div')
+    city.className = 'catalog-meta'
+    city.textContent = venue.city ?? '—'
+    const address = document.createElement('div')
+    address.className = 'catalog-meta'
+    address.textContent = venue.address ?? ''
+
     info.appendChild(name)
-    info.appendChild(lineBreak)
-    info.appendChild(location)
+    info.appendChild(city)
+    if (venue.address) {
+      info.appendChild(address)
+    }
+
     const button = document.createElement('button')
-    button.textContent = 'Открыть'
-    button.addEventListener('click', () => {
-      refs.venueInput.value = String(venue.id)
-      void onOpenVenue(venue.id)
-    })
+    button.textContent = 'Открыть меню'
+    button.addEventListener('click', () => onOpenVenue(venue.id))
+
     item.appendChild(info)
     item.appendChild(button)
-    refs.catalogList.appendChild(item)
+    refs.list.appendChild(item)
   })
 }
 
-function buildCatalogDom(
-  root: HTMLDivElement,
-  initDataLength: number,
-  startParam: string,
-  userId: number | null
-): CatalogRefs {
-  const main = el('main', { className: 'container' })
-  const header = el('header')
-  append(header, el('h1', { text: 'Hookah Mini App' }), el('p', { text: 'Каталог кальянных' }))
-
-  const info = el('section', { className: 'info' })
-  const initDataLine = el('p')
-  append(
-    initDataLine,
-    el('strong', { text: 'initData length:' }),
-    document.createTextNode(` ${initDataLength}`)
-  )
-  const startParamLine = el('p')
-  const startParamSpan = el('span', { id: 'catalog-start-param' })
-  append(
-    startParamLine,
-    el('strong', { text: 'tgWebAppStartParam:' }),
-    document.createTextNode(' '),
-    startParamSpan
-  )
-  const userIdLine = el('p')
-  append(
-    userIdLine,
-    el('strong', { text: 'Telegram user id:' }),
-    document.createTextNode(` ${userId ?? '—'}`)
-  )
-  append(info, initDataLine, startParamLine, userIdLine)
-
-  const catalogCard = el('section', { className: 'card' })
-  const catalogHeader = el('div', { className: 'card-header' })
-  const catalogTitle = el('h2', { text: 'Каталог' })
-  const catalogRetryButton = el('button', { id: 'catalog-retry-btn', text: 'Обновить' })
-  append(catalogHeader, catalogTitle, catalogRetryButton)
-  const catalogStatus = el('p', { id: 'catalog-status', className: 'status', text: 'Загрузка каталога...' })
-  const catalogError = el('div', { id: 'catalog-error', className: 'error-card' })
-  catalogError.hidden = true
-  const catalogErrorTitle = el('h3', { id: 'catalog-error-title' })
-  const catalogErrorMessage = el('p', { id: 'catalog-error-message' })
-  const catalogErrorActions = el('div', { id: 'catalog-error-actions', className: 'error-actions' })
-  const catalogErrorDetails = el('div', { id: 'catalog-error-details' })
-  append(
-    catalogError,
-    catalogErrorTitle,
-    catalogErrorMessage,
-    catalogErrorActions,
-    catalogErrorDetails
-  )
-  const catalogList = el('ul', { id: 'catalog-list', className: 'catalog-list' })
-  append(catalogCard, catalogHeader, catalogStatus, catalogError, catalogList)
-
-  const venueCard = el('section', { className: 'card' })
-  const venueHeader = el('div', { className: 'card-header' })
-  append(venueHeader, el('h2', { text: 'Заведение по ID' }))
-  const venueLabel = el('label')
-  venueLabel.htmlFor = 'guest-venue-id'
-  venueLabel.textContent = 'ID заведения'
-  const venueInput = el('input', { id: 'guest-venue-id' }) as HTMLInputElement
-  venueInput.type = 'number'
-  venueInput.min = '1'
-  venueInput.step = '1'
-  venueInput.placeholder = 'Введите ID'
-  const venueButtonRow = el('div', { className: 'button-row' })
-  const venueLoadButton = el('button', { id: 'venue-load-btn', text: 'Открыть заведение' })
-  append(venueButtonRow, venueLoadButton)
-  const venueStatus = el('p', { id: 'venue-status', className: 'status', text: 'Введите ID и загрузите карточку.' })
-  const venueError = el('div', { id: 'venue-error', className: 'error-card' })
-  venueError.hidden = true
-  const venueErrorTitle = el('h3', { id: 'venue-error-title' })
-  const venueErrorMessage = el('p', { id: 'venue-error-message' })
-  const venueErrorActions = el('div', { id: 'venue-error-actions', className: 'error-actions' })
-  const venueErrorDetails = el('div', { id: 'venue-error-details' })
-  append(venueError, venueErrorTitle, venueErrorMessage, venueErrorActions, venueErrorDetails)
-  const venueDetails = el('div', { id: 'venue-details', className: 'venue-details' })
-  venueDetails.hidden = true
-  append(venueCard, venueHeader, venueLabel, venueInput, venueButtonRow, venueStatus, venueError, venueDetails)
-
-  append(main, header, info, catalogCard, venueCard)
-  root.replaceChildren(main)
-
-  startParamSpan.textContent = startParam || '—'
-
-  return {
-    catalogStatus,
-    catalogError,
-    catalogErrorTitle,
-    catalogErrorMessage,
-    catalogErrorActions,
-    catalogErrorDetails,
-    catalogList,
-    venueStatus,
-    venueError,
-    venueErrorTitle,
-    venueErrorMessage,
-    venueErrorActions,
-    venueErrorDetails,
-    venueDetails,
-    venueInput,
-    startParam: startParamSpan,
-    catalogRetryButton,
-    venueLoadButton
-  }
-}
-
 export function renderCatalogScreen(options: CatalogScreenOptions) {
-  const { root, backendUrl, isDebug } = options
+  const { root, backendUrl, isDebug, onOpenVenue } = options
   if (!root) return () => undefined
-  const state: CatalogRuntimeState = {
-    backendUrl,
-    isDebug,
-    visibilitySuspendedObserved: false,
-    venueNotFoundObserved: false
-  }
-  const telegramContext = getTelegramContext()
-  const initDataLength = telegramContext.initData?.length ?? 0
-  const startParam = telegramContext.startParam ?? ''
-  const userId = telegramContext.telegramUserId
-  const defaultVenueId = parsePositiveInt(startParam)
-  const refs = buildCatalogDom(root, initDataLength, startParam, userId)
-  refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
-  let catalogAbort: AbortController | null = null
-  let venueAbort: AbortController | null = null
+  const refs = buildCatalogDom(root)
   let disposed = false
+  let catalogAbort: AbortController | null = null
+  let venues: CatalogVenueDto[] = []
   const disposables: Array<() => void> = []
 
-  const setCatalogStatus = (text: string) => {
-    refs.catalogStatus.textContent = text
+  const setStatus = (text: string) => {
+    refs.status.textContent = text
   }
 
-  const setVenueStatus = (text: string) => {
-    refs.venueStatus.textContent = text
+  const hideError = () => {
+    refs.error.hidden = true
   }
 
-  const hideCatalogError = () => {
-    refs.catalogError.hidden = true
-  }
-
-  const hideVenueError = () => {
-    refs.venueError.hidden = true
-  }
-
-  const resetVenueUiForInputChange = () => {
-    hideVenueError()
-    refs.venueDetails.hidden = true
-    refs.venueDetails.replaceChildren()
-    setVenueStatus('Введите ID и загрузите карточку.')
-  }
-
-  const showCatalogError = (error: ApiErrorInfo) => {
+  const showError = (error: ApiErrorInfo) => {
     const code = normalizeErrorCode(error)
     const actions: ErrorAction[] = []
 
-    if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
-      refs.catalogErrorTitle.textContent = 'Каталог временно недоступен'
-      refs.catalogErrorMessage.textContent = 'Сервис перегружен или недоступен. Попробуйте ещё раз чуть позже.'
-      actions.push({
-        label: 'Повторить',
-        onClick: () => void loadCatalog()
-      })
-    } else if (code === ApiErrorCodes.NETWORK_ERROR) {
-      refs.catalogErrorTitle.textContent = 'Нет соединения'
-      refs.catalogErrorMessage.textContent = 'Нет соединения / ошибка сети. Проверьте подключение и повторите.'
-      actions.push({
-        label: 'Повторить',
-        onClick: () => void loadCatalog()
-      })
-    } else if (code === ApiErrorCodes.INITDATA_INVALID) {
-      refs.catalogErrorTitle.textContent = 'Нужен запуск из Telegram'
-      refs.catalogErrorMessage.textContent = 'Откройте мини-приложение из Telegram, чтобы продолжить.'
+    if (code === ApiErrorCodes.INITDATA_INVALID || code === ApiErrorCodes.UNAUTHORIZED) {
+      refs.errorTitle.textContent = 'Перезапустите Mini App'
+      refs.errorMessage.textContent = 'Сессия недействительна. Перезапустите Mini App в Telegram.'
       actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
-    } else if (code === ApiErrorCodes.UNAUTHORIZED) {
-      refs.catalogErrorTitle.textContent = 'Сессия истекла'
-      refs.catalogErrorMessage.textContent = 'Перезапустите мини-приложение или повторите авторизацию.'
-          actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
-          actions.push({
-            label: 'Повторить (переавторизоваться)',
-            onClick: () => {
-              clearSession()
-              void loadCatalog()
-            }
-          })
-    } else {
-      refs.catalogErrorTitle.textContent = 'Не удалось загрузить каталог'
-      refs.catalogErrorMessage.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
-      actions.push({
-        label: 'Повторить',
-        onClick: () => void loadCatalog()
-      })
-    }
-
-    renderErrorActions(refs.catalogErrorActions, actions)
-
-    renderErrorDetails(refs.catalogErrorDetails, error, {
-      isDebug: state.isDebug,
-      extraNotes: getVisibilityNotes(state)
-    })
-    refs.catalogError.hidden = false
-    logApiError('catalog', error, state.isDebug)
-  }
-
-  const showVenueError = (error: ApiErrorInfo) => {
-    const code = normalizeErrorCode(error)
-    const actions: ErrorAction[] = []
-
-    if (code === ApiErrorCodes.SERVICE_SUSPENDED) {
-      refs.venueErrorTitle.textContent = 'Заведение временно недоступно'
-      refs.venueErrorMessage.textContent = 'Попробуйте вернуться позже или выбрать другое заведение.'
-      actions.push({
-        label: 'Вернуться в каталог',
-        onClick: () => void loadCatalog()
-      })
-    } else if (code === ApiErrorCodes.NOT_FOUND) {
-      refs.venueErrorTitle.textContent = 'Заведение недоступно'
-      refs.venueErrorMessage.textContent = 'Проверьте ссылку или выберите другое заведение в каталоге.'
-      actions.push({
-        label: 'Вернуться в каталог',
-        onClick: () => void loadCatalog()
-      })
-    } else if (code === ApiErrorCodes.INVALID_INPUT) {
-      refs.venueErrorTitle.textContent = 'Некорректная ссылка'
-      refs.venueErrorMessage.textContent = 'Похоже, ID заведения указан неверно.'
-      actions.push({
-        label: 'Вернуться в каталог',
-        onClick: () => void loadCatalog()
-      })
+      clearSession()
+    } else if (code === ApiErrorCodes.NETWORK_ERROR) {
+      refs.errorTitle.textContent = 'Нет соединения'
+      refs.errorMessage.textContent = 'Проверьте подключение к интернету и повторите попытку.'
+      actions.push({ label: 'Повторить', onClick: () => void loadCatalog() })
     } else if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
-      refs.venueErrorTitle.textContent = 'Сервис временно недоступен'
-      refs.venueErrorMessage.textContent = 'Попробуйте повторить запрос чуть позже.'
-      actions.push({
-        label: 'Повторить',
-        onClick: () => {
-          const venueId = parsePositiveInt(refs.venueInput.value)
-          if (!venueId) {
-            showInvalidVenueId()
-            return
-          }
-          void loadVenue(venueId)
-        }
-      })
-    } else if (code === ApiErrorCodes.NETWORK_ERROR) {
-      refs.venueErrorTitle.textContent = 'Нет соединения'
-      refs.venueErrorMessage.textContent = 'Нет соединения / ошибка сети. Проверьте подключение и повторите.'
-      actions.push({
-        label: 'Повторить',
-        onClick: () => {
-          const venueId = parsePositiveInt(refs.venueInput.value)
-          if (!venueId) {
-            showInvalidVenueId()
-            return
-          }
-          void loadVenue(venueId)
-        }
-      })
-    } else if (code === ApiErrorCodes.INITDATA_INVALID) {
-      refs.venueErrorTitle.textContent = 'Нужен запуск из Telegram'
-      refs.venueErrorMessage.textContent = 'Откройте мини-приложение из Telegram, чтобы продолжить.'
-      actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
-    } else if (code === ApiErrorCodes.UNAUTHORIZED) {
-      refs.venueErrorTitle.textContent = 'Сессия истекла'
-      refs.venueErrorMessage.textContent = 'Перезапустите мини-приложение или повторите авторизацию.'
-      actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
-      actions.push({
-        label: 'Повторить (переавторизоваться)',
-        onClick: () => {
-          clearSession()
-          const venueId = parsePositiveInt(refs.venueInput.value)
-          if (!venueId) {
-            showInvalidVenueId()
-            return
-          }
-          void loadVenue(venueId)
-        }
-      })
+      refs.errorTitle.textContent = 'Каталог временно недоступен'
+      refs.errorMessage.textContent = 'Попробуйте ещё раз чуть позже.'
+      actions.push({ label: 'Повторить', onClick: () => void loadCatalog() })
     } else {
-      refs.venueErrorTitle.textContent = 'Не удалось загрузить заведение'
-      refs.venueErrorMessage.textContent = 'Попробуйте повторить запрос чуть позже.'
-      actions.push({
-        label: 'Повторить',
-        onClick: () => {
-          const venueId = parsePositiveInt(refs.venueInput.value)
-          if (!venueId) {
-            showInvalidVenueId()
-            return
-          }
-          void loadVenue(venueId)
-        }
-      })
+      refs.errorTitle.textContent = 'Не удалось загрузить каталог'
+      refs.errorMessage.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
+      actions.push({ label: 'Повторить', onClick: () => void loadCatalog() })
     }
 
-    renderErrorActions(refs.venueErrorActions, actions)
-
-    renderErrorDetails(refs.venueErrorDetails, error, {
-      isDebug: state.isDebug,
-      extraNotes: getVenueVisibilityNotes(state)
-    })
-    refs.venueError.hidden = false
-    refs.venueDetails.hidden = true
-    logApiError('venue', error, state.isDebug)
+    renderErrorActions(refs.errorActions, actions)
+    renderErrorDetails(refs.errorDetails, error, { isDebug })
+    refs.error.hidden = false
   }
 
-  const showInvalidVenueId = () => {
-    showVenueError({
-      status: 400,
-      code: ApiErrorCodes.INVALID_INPUT,
-      message: 'Некорректный ID'
-    })
-    refs.venueInput.focus()
-    refs.venueInput.select()
-  }
-
-  const renderVenueDetails = (venue: VenueResponse['venue']) => {
-    refs.venueDetails.replaceChildren()
-    const title = document.createElement('h3')
-    title.textContent = venue.name
-    const location = document.createElement('p')
-    location.textContent = `${venue.city ?? '—'}${venue.address ? `, ${venue.address}` : ''}`
-    const status = document.createElement('p')
-    status.className = 'status'
-    status.textContent = `Статус: ${venue.status}`
-    refs.venueDetails.appendChild(title)
-    refs.venueDetails.appendChild(location)
-    refs.venueDetails.appendChild(status)
-    refs.venueDetails.hidden = false
+  const applyFilter = () => {
+    const query = refs.searchInput.value.trim().toLowerCase()
+    const filtered = query
+      ? venues.filter((venue) => {
+          const haystack = `${venue.name} ${venue.city ?? ''}`.toLowerCase()
+          return haystack.includes(query)
+        })
+      : venues
+    const emptyMessage = venues.length
+      ? 'Ничего не найдено по заданному фильтру.'
+      : 'Пока нет доступных заведений.'
+    renderCatalogList(filtered, onOpenVenue, refs, emptyMessage)
   }
 
   async function loadCatalog() {
     if (disposed) return
-    setCatalogStatus('Загрузка каталога...')
-    hideCatalogError()
-    refs.catalogList.replaceChildren()
+    setStatus('Загрузка каталога...')
+    hideError()
+    refs.list.replaceChildren()
     if (catalogAbort) {
       catalogAbort.abort()
     }
     const controller = new AbortController()
     catalogAbort = controller
-    const result = await requestApi<CatalogResponse>(
-      state.backendUrl,
-      '/api/guest/catalog',
-      { signal: controller.signal },
-      buildApiDeps(state.isDebug)
-    )
-    if (disposed) {
-      // Screen was disposed while awaiting, skip UI updates.
-      return
-    }
-    if (catalogAbort !== controller) {
-      return
-    }
-    if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) {
-      return
-    }
-    if (!result.ok) {
-      if (result.error.status === 423) {
-        state.visibilitySuspendedObserved = true
-      }
-      showCatalogError(result.error)
-      setCatalogStatus('')
-      return
-    }
-    setCatalogStatus('')
-    renderCatalogList(result.data.venues ?? [], (venueId) => loadVenue(venueId), refs)
-  }
 
-  async function loadVenue(venueId: number) {
-    if (disposed) return
-    setVenueStatus('Загрузка заведения...')
-    hideVenueError()
-    refs.venueDetails.hidden = true
-    if (venueAbort) {
-      venueAbort.abort()
-    }
-    const controller = new AbortController()
-    venueAbort = controller
-    const result = await requestApi<VenueResponse>(
-      state.backendUrl,
-      `/api/guest/venue/${venueId}`,
-      { signal: controller.signal },
-      buildApiDeps(state.isDebug)
-    )
-    if (disposed) {
-      // Screen was disposed while awaiting, skip UI updates.
-      return
-    }
-    if (venueAbort !== controller) {
+    const result = await guestGetCatalog(backendUrl, buildApiDeps(isDebug), controller.signal)
+    if (disposed || catalogAbort !== controller) {
       return
     }
     if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) {
       return
     }
     if (!result.ok) {
-      if (result.error.status === 423) {
-        state.visibilitySuspendedObserved = true
-      }
-      if (result.error.status === 404) {
-        state.venueNotFoundObserved = true
-      }
-      showVenueError(result.error)
-      setVenueStatus('')
+      setStatus('')
+      showError(result.error)
       return
     }
-    setVenueStatus('')
-    renderVenueDetails(result.data.venue)
+
+    venues = result.data.venues ?? []
+    setStatus('')
+    applyFilter()
   }
 
   disposables.push(
-    on(refs.catalogRetryButton, 'click', () => void loadCatalog()),
-    on(refs.venueLoadButton, 'click', () => {
-      const venueId = parsePositiveInt(refs.venueInput.value)
-      if (!venueId) {
-        showInvalidVenueId()
-        return
-      }
-      void loadVenue(venueId)
-    }),
-    on(refs.venueInput, 'input', () => {
-      if (disposed) {
-        return
-      }
-      if (venueAbort) {
-        venueAbort.abort()
-        venueAbort = null
-      }
-      resetVenueUiForInputChange()
-    }),
-    on(refs.venueInput, 'keydown', (event) => {
-      if (event.key !== 'Enter') {
-        return
-      }
-      event.preventDefault()
-      const venueId = parsePositiveInt(refs.venueInput.value)
-      if (!venueId) {
-        showInvalidVenueId()
-        return
-      }
-      void loadVenue(venueId)
-    })
+    on(refs.retryButton, 'click', () => void loadCatalog()),
+    on(refs.searchInput, 'input', () => applyFilter())
   )
 
   void getAccessToken()
@@ -600,7 +227,6 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   return () => {
     disposed = true
     catalogAbort?.abort()
-    venueAbort?.abort()
     disposables.forEach((dispose) => dispose())
   }
 }
