@@ -7,6 +7,7 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { updateItemCache } from '../shared/state/itemCache'
 import { addToCart, getCartSnapshot, removeFromCart, subscribeCart } from '../shared/state/cartStore'
 import { append, el, on } from '../shared/ui/dom'
+import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { formatPrice } from '../shared/ui/price'
 
@@ -17,11 +18,6 @@ type VenueScreenOptions = {
   backendUrl: string
   isDebug: boolean
   venueId: number | null
-}
-
-type ErrorAction = {
-  label: string
-  onClick: () => void
 }
 
 type MenuItemRefs = {
@@ -51,11 +47,14 @@ function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
 }
 
-function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
+function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   container.replaceChildren()
   actions.forEach((action) => {
     const button = document.createElement('button')
     button.textContent = action.label
+    if (action.kind === 'secondary') {
+      button.classList.add('button-secondary')
+    }
     button.addEventListener('click', action.onClick)
     container.appendChild(button)
   })
@@ -191,43 +190,29 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const showError = (error: ApiErrorInfo) => {
-    const code = normalizeErrorCode(error)
-    const actions: ErrorAction[] = []
-    let extraNotes: string[] | undefined
-    const browseNote = 'В зависимости от режима backend страница может быть скрыта (423/404).'
-
-    if (code === ApiErrorCodes.NOT_FOUND) {
-      refs.errorTitle.textContent = 'Заведение не найдено'
-      refs.errorMessage.textContent = 'Проверьте ссылку или выберите другое заведение в каталоге.'
-    } else if (code === ApiErrorCodes.SERVICE_SUSPENDED || code === ApiErrorCodes.SUBSCRIPTION_BLOCKED) {
-      refs.errorTitle.textContent = 'Доступ к заведению ограничен'
-      refs.errorMessage.textContent =
-        code === ApiErrorCodes.SERVICE_SUSPENDED
-          ? 'Заведение временно недоступно. Попробуйте позже.'
-          : 'Заказы временно недоступны. Попробуйте позже.'
-      extraNotes = isDebug ? [browseNote] : undefined
-    } else if (code === ApiErrorCodes.NETWORK_ERROR) {
-      refs.errorTitle.textContent = 'Нет соединения'
-      refs.errorMessage.textContent = 'Проверьте подключение к интернету и повторите попытку.'
-    } else if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
-      refs.errorTitle.textContent = 'Меню временно недоступно'
-      refs.errorMessage.textContent = 'Попробуйте ещё раз чуть позже.'
-    } else if (code === ApiErrorCodes.INITDATA_INVALID || code === ApiErrorCodes.UNAUTHORIZED) {
-      refs.errorTitle.textContent = 'Перезапустите Mini App'
-      refs.errorMessage.textContent = 'Сессия недействительна. Перезапустите Mini App в Telegram.'
-      actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
+    const normalizedCode = normalizeErrorCode(error)
+    if (normalizedCode === ApiErrorCodes.UNAUTHORIZED || normalizedCode === ApiErrorCodes.INITDATA_INVALID) {
       clearSession()
-    } else {
-      refs.errorTitle.textContent = 'Не удалось загрузить меню'
-      refs.errorMessage.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
     }
-
+    const presentation = presentApiError(error, { isDebug })
+    refs.errorTitle.textContent = presentation.title
+    refs.errorMessage.textContent = presentation.message
+    refs.error.dataset.severity = presentation.severity
+    const actions = presentation.actions.map((action) => {
+      if (action.label === 'Повторить') {
+        return { ...action, onClick: () => void loadVenue() }
+      }
+      return action
+    })
     if (!actions.length) {
       actions.push({ label: 'Обновить', onClick: () => void loadVenue() })
     }
 
     renderErrorActions(refs.errorActions, actions)
-    renderErrorDetails(refs.errorDetails, error, { isDebug, extraNotes })
+    renderErrorDetails(refs.errorDetails, error, {
+      isDebug,
+      extraNotes: presentation.debugLine ? [presentation.debugLine] : undefined
+    })
     refs.error.hidden = false
   }
 

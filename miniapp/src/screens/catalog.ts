@@ -3,8 +3,9 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestGetCatalog } from '../shared/api/guestApi'
 import type { CatalogVenueDto } from '../shared/api/guestDtos'
-import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
+import type { ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
+import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 
 type CatalogScreenOptions = {
@@ -26,20 +27,18 @@ type CatalogRefs = {
   retryButton: HTMLButtonElement
 }
 
-type ErrorAction = {
-  label: string
-  onClick: () => void
-}
-
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
 }
 
-function renderErrorActions(container: HTMLElement, actions: ErrorAction[]) {
+function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   container.replaceChildren()
   actions.forEach((action) => {
     const button = document.createElement('button')
     button.textContent = action.label
+    if (action.kind === 'secondary') {
+      button.classList.add('button-secondary')
+    }
     button.addEventListener('click', action.onClick)
     container.appendChild(button)
   })
@@ -146,30 +145,28 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   }
 
   const showError = (error: ApiErrorInfo) => {
-    const code = normalizeErrorCode(error)
-    const actions: ErrorAction[] = []
-
-    if (code === ApiErrorCodes.INITDATA_INVALID || code === ApiErrorCodes.UNAUTHORIZED) {
-      refs.errorTitle.textContent = 'Перезапустите Mini App'
-      refs.errorMessage.textContent = 'Сессия недействительна. Перезапустите Mini App в Telegram.'
-      actions.push({ label: 'Перезапустить', onClick: () => window.location.reload() })
+    const normalizedCode = normalizeErrorCode(error)
+    if (normalizedCode === 'UNAUTHORIZED' || normalizedCode === 'INITDATA_INVALID') {
       clearSession()
-    } else if (code === ApiErrorCodes.NETWORK_ERROR) {
-      refs.errorTitle.textContent = 'Нет соединения'
-      refs.errorMessage.textContent = 'Проверьте подключение к интернету и повторите попытку.'
-      actions.push({ label: 'Повторить', onClick: () => void loadCatalog() })
-    } else if (code === ApiErrorCodes.DATABASE_UNAVAILABLE) {
-      refs.errorTitle.textContent = 'Каталог временно недоступен'
-      refs.errorMessage.textContent = 'Попробуйте ещё раз чуть позже.'
-      actions.push({ label: 'Повторить', onClick: () => void loadCatalog() })
-    } else {
-      refs.errorTitle.textContent = 'Не удалось загрузить каталог'
-      refs.errorMessage.textContent = 'Попробуйте обновить страницу или повторить запрос позже.'
+    }
+    const presentation = presentApiError(error, { isDebug })
+    refs.errorTitle.textContent = presentation.title
+    refs.errorMessage.textContent = presentation.message
+    refs.error.dataset.severity = presentation.severity
+    const actions = presentation.actions.map((action) => {
+      if (action.label === 'Повторить') {
+        return { ...action, onClick: () => void loadCatalog() }
+      }
+      return action
+    })
+    if (!actions.length) {
       actions.push({ label: 'Повторить', onClick: () => void loadCatalog() })
     }
-
     renderErrorActions(refs.errorActions, actions)
-    renderErrorDetails(refs.errorDetails, error, { isDebug })
+    renderErrorDetails(refs.errorDetails, error, {
+      isDebug,
+      extraNotes: presentation.debugLine ? [presentation.debugLine] : undefined
+    })
     refs.error.hidden = false
   }
 

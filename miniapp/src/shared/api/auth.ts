@@ -7,6 +7,7 @@ import {
   type ApiResult
 } from './types'
 import { getBackendBaseUrl } from './backend'
+import { isDebugEnabled } from '../debug'
 import { getTelegramContext } from '../telegram'
 
 export type SessionToken = {
@@ -23,7 +24,7 @@ type TelegramAuthResponse = {
 }
 
 const baseStorageKey = 'hookah_session_token'
-const isDebug = import.meta.env.DEV
+const isDebug = isDebugEnabled()
 const storageKey = resolveStorageKey()
 const sessionSafetySkewSeconds = 20
 let inMemorySession: SessionToken | null = null

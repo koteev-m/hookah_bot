@@ -15,7 +15,10 @@ import { getTableContext, subscribe as subscribeTable } from '../shared/state/ta
 import { getTelegramContext } from '../shared/telegram'
 import { openBotChat, sendChatOrder } from '../shared/telegramActions'
 import { append, el, on } from '../shared/ui/dom'
+import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
+import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { formatPrice } from '../shared/ui/price'
+import { showToast } from '../shared/ui/toast'
 
 const MAX_ITEMS = 50
 const MAX_ITEM_QTY = 50
@@ -33,15 +36,29 @@ type CartRefs = {
   items: HTMLDivElement
   emptyState: HTMLParagraphElement
   commentInput: HTMLTextAreaElement
+  commentCounter: HTMLParagraphElement
   sendButton: HTMLButtonElement
   message: HTMLParagraphElement
+  submitError: HTMLDivElement
+  submitErrorTitle: HTMLHeadingElement
+  submitErrorMessage: HTMLParagraphElement
+  submitErrorActions: HTMLDivElement
+  submitErrorDetails: HTMLDivElement
+  disabledReason: HTMLParagraphElement
   chatButton: HTMLButtonElement
   chatMessage: HTMLParagraphElement
   tableHint: HTMLParagraphElement
   staffReason: HTMLSelectElement
   staffComment: HTMLTextAreaElement
+  staffCounter: HTMLParagraphElement
   staffButton: HTMLButtonElement
   staffMessage: HTMLParagraphElement
+  staffError: HTMLDivElement
+  staffErrorTitle: HTMLHeadingElement
+  staffErrorMessage: HTMLParagraphElement
+  staffErrorActions: HTMLDivElement
+  staffErrorDetails: HTMLDivElement
+  staffDisabledReason: HTMLParagraphElement
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -73,29 +90,6 @@ function resolveTableHint(snapshot: ReturnType<typeof getTableContext>): string 
   }
 }
 
-function resolveSubmitError(error: ApiErrorInfo): string {
-  const code = normalizeErrorCode(error)
-  switch (code) {
-    case ApiErrorCodes.INVALID_INPUT:
-      return error.message && error.message.trim() ? error.message : 'Некорректные данные заказа.'
-    case ApiErrorCodes.NOT_FOUND:
-      return 'Стол не найден / обновите QR'
-    case ApiErrorCodes.SERVICE_SUSPENDED:
-      return 'Заведение временно недоступно'
-    case ApiErrorCodes.SUBSCRIPTION_BLOCKED:
-      return 'Заказы временно недоступны'
-    case ApiErrorCodes.DATABASE_UNAVAILABLE:
-      return 'База недоступна, попробуйте позже'
-    case ApiErrorCodes.NETWORK_ERROR:
-      return 'Нет соединения'
-    case ApiErrorCodes.UNAUTHORIZED:
-    case ApiErrorCodes.INITDATA_INVALID:
-      return 'Сессия истекла — перезапустите Mini App'
-    default:
-      return 'Не удалось отправить заказ. Попробуйте позже.'
-  }
-}
-
 function buildCartDom(root: HTMLDivElement): CartRefs {
   const wrapper = el('div', { className: 'cart-screen' })
   const header = el('div', { className: 'card' })
@@ -114,16 +108,26 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   commentInput.maxLength = MAX_COMMENT_LENGTH
   commentInput.rows = 3
   commentInput.placeholder = 'Комментарий к заказу'
-  append(commentCard, commentLabel, commentInput)
+  const commentCounter = el('p', { className: 'field-counter', text: `0/${MAX_COMMENT_LENGTH}` })
+  append(commentCard, commentLabel, commentInput, commentCounter)
 
   const actionCard = el('div', { className: 'card cart-actions' })
   const message = el('p', { className: 'cart-message', text: '' })
   message.hidden = true
+  const submitError = el('div', { className: 'error-card' })
+  submitError.hidden = true
+  const submitErrorTitle = el('h3')
+  const submitErrorMessage = el('p')
+  const submitErrorActions = el('div', { className: 'error-actions' })
+  const submitErrorDetails = el('div')
+  append(submitError, submitErrorTitle, submitErrorMessage, submitErrorActions, submitErrorDetails)
   const sendButton = el('button', { text: 'Отправить' }) as HTMLButtonElement
+  const disabledReason = el('p', { className: 'disabled-reason', text: '' })
+  disabledReason.hidden = true
   const chatMessage = el('p', { className: 'cart-chat-message', text: '' })
   chatMessage.hidden = true
   const chatButton = el('button', { className: 'button-secondary', text: 'Оформить в чате' }) as HTMLButtonElement
-  append(actionCard, message, sendButton, chatMessage, chatButton)
+  append(actionCard, message, submitError, sendButton, disabledReason, chatMessage, chatButton)
 
   const staffCard = el('div', { className: 'card staff-call' })
   const staffTitle = el('p', { className: 'field-label', text: 'Вызвать персонал' })
@@ -140,9 +144,19 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   staffComment.maxLength = MAX_STAFF_COMMENT_LENGTH
   staffComment.rows = 2
   staffComment.placeholder = 'Комментарий для персонала'
+  const staffCounter = el('p', { className: 'field-counter', text: `0/${MAX_STAFF_COMMENT_LENGTH}` })
   const staffMessage = el('p', { className: 'staff-message', text: '' })
   staffMessage.hidden = true
   const staffButton = el('button', { text: 'Вызвать персонал' }) as HTMLButtonElement
+  const staffError = el('div', { className: 'error-card' })
+  staffError.hidden = true
+  const staffErrorTitle = el('h3')
+  const staffErrorMessage = el('p')
+  const staffErrorActions = el('div', { className: 'error-actions' })
+  const staffErrorDetails = el('div')
+  append(staffError, staffErrorTitle, staffErrorMessage, staffErrorActions, staffErrorDetails)
+  const staffDisabledReason = el('p', { className: 'disabled-reason', text: '' })
+  staffDisabledReason.hidden = true
   append(
     staffCard,
     staffTitle,
@@ -150,8 +164,11 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
     staffReason,
     staffCommentLabel,
     staffComment,
+    staffCounter,
     staffMessage,
-    staffButton
+    staffError,
+    staffButton,
+    staffDisabledReason
   )
 
   append(wrapper, header, items, commentCard, actionCard, staffCard)
@@ -161,16 +178,43 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
     items,
     emptyState,
     commentInput,
+    commentCounter,
     sendButton,
     message,
+    submitError,
+    submitErrorTitle,
+    submitErrorMessage,
+    submitErrorActions,
+    submitErrorDetails,
+    disabledReason,
     chatButton,
     chatMessage,
     tableHint,
     staffReason,
     staffComment,
+    staffCounter,
     staffButton,
-    staffMessage
+    staffMessage,
+    staffError,
+    staffErrorTitle,
+    staffErrorMessage,
+    staffErrorActions,
+    staffErrorDetails,
+    staffDisabledReason
   }
+}
+
+function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
+  container.replaceChildren()
+  actions.forEach((action) => {
+    const button = document.createElement('button')
+    button.textContent = action.label
+    if (action.kind === 'secondary') {
+      button.classList.add('button-secondary')
+    }
+    button.addEventListener('click', action.onClick)
+    container.appendChild(button)
+  })
 }
 
 function formatItemTitle(itemId: number): string {
@@ -194,9 +238,14 @@ export function renderCartScreen(options: CartScreenOptions) {
   if (!root) return () => undefined
 
   const refs = buildCartDom(root)
+  refs.commentCounter.textContent = `${refs.commentInput.value.length}/${MAX_COMMENT_LENGTH}`
+  refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
   let disposed = false
   let isSubmitting = false
+  let isStaffCalling = false
+  let isChatSending = false
   let submitAbort: AbortController | null = null
+  let staffAbort: AbortController | null = null
   let cartSnapshot = getCartSnapshot()
   let tableSnapshot = getTableContext()
   let itemDisposables: Array<() => void> = []
@@ -219,6 +268,62 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.staffMessage.dataset.tone = tone
   }
 
+  const hideSubmitError = () => {
+    refs.submitError.hidden = true
+    refs.submitErrorActions.replaceChildren()
+    refs.submitErrorDetails.replaceChildren()
+  }
+
+  const showSubmitError = (error: ApiErrorInfo) => {
+    const presentation = presentApiError(error, { isDebug })
+    refs.submitErrorTitle.textContent = presentation.title
+    refs.submitErrorMessage.textContent = presentation.message
+    refs.submitError.dataset.severity = presentation.severity
+    const actions = presentation.actions.map((action) => {
+      if (action.label === 'Повторить') {
+        return { ...action, onClick: () => void handleSubmit() }
+      }
+      return action
+    })
+    if (!actions.length) {
+      actions.push({ label: 'Повторить', onClick: () => void handleSubmit() })
+    }
+    renderErrorActions(refs.submitErrorActions, actions)
+    renderErrorDetails(refs.submitErrorDetails, error, {
+      isDebug,
+      extraNotes: presentation.debugLine ? [presentation.debugLine] : undefined
+    })
+    refs.submitError.hidden = false
+  }
+
+  const hideStaffError = () => {
+    refs.staffError.hidden = true
+    refs.staffErrorActions.replaceChildren()
+    refs.staffErrorDetails.replaceChildren()
+  }
+
+  const showStaffError = (error: ApiErrorInfo) => {
+    const presentation = presentApiError(error, { isDebug })
+    refs.staffErrorTitle.textContent = presentation.title
+    refs.staffErrorMessage.textContent = presentation.message
+    refs.staffError.dataset.severity = presentation.severity
+    const actions = presentation.actions.map((action) => {
+      if (action.label === 'Повторить') {
+        return { ...action, onClick: () => void handleStaffCall() }
+      }
+      return action
+    })
+    if (!actions.length) {
+      actions.push({ label: 'Повторить', onClick: () => void handleStaffCall() })
+    }
+    renderErrorActions(refs.staffErrorActions, actions)
+    renderErrorDetails(refs.staffErrorDetails, error, {
+      isDebug,
+      extraNotes: presentation.debugLine ? [presentation.debugLine] : undefined
+    })
+    refs.staffError.hidden = false
+  }
+
   const isTableReady = () =>
     tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
 
@@ -230,9 +335,16 @@ export function renderCartScreen(options: CartScreenOptions) {
     const tableHint = tableReady ? null : resolveTableHint(tableSnapshot)
     refs.tableHint.textContent = tableHint ?? ''
     refs.tableHint.hidden = !tableHint
-    refs.sendButton.disabled = isSubmitting || !hasItems || !tableReady
-    refs.chatButton.disabled = isSubmitting || !hasItems || !tableReady
-    refs.staffButton.disabled = isSubmitting || !canCallStaff()
+    const submitDisabledReason = !hasItems ? 'Добавьте позиции в корзину.' : tableHint
+    refs.disabledReason.textContent = submitDisabledReason ?? ''
+    refs.disabledReason.hidden = !submitDisabledReason
+    refs.sendButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady
+    refs.chatButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady
+    const canStaff = canCallStaff()
+    const staffDisabledReason = canStaff ? null : resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR'
+    refs.staffDisabledReason.textContent = staffDisabledReason ?? ''
+    refs.staffDisabledReason.hidden = !staffDisabledReason
+    refs.staffButton.disabled = isSubmitting || isStaffCalling || !canStaff
   }
 
   const renderItems = () => {
@@ -336,6 +448,8 @@ export function renderCartScreen(options: CartScreenOptions) {
     setMessage('')
     setChatMessage('')
     setStaffMessage('', 'default')
+    hideSubmitError()
+    hideStaffError()
     const validation = validateBeforeSubmit()
     if (!validation.ok) {
       setMessage(validation.reason)
@@ -385,21 +499,25 @@ export function renderCartScreen(options: CartScreenOptions) {
         updateSubmitState()
         return
       }
-      setMessage(resolveSubmitError(result.error))
+      showSubmitError(result.error)
       updateSubmitState()
       return
     }
     clearCart()
     refs.commentInput.value = ''
+    refs.commentCounter.textContent = `0/${MAX_COMMENT_LENGTH}`
     updateSubmitState()
+    showToast('Отправлено в заказ')
     onNavigateOrder()
   }
 
   const handleChatOrder = () => {
-    if (isSubmitting) return
+    if (isSubmitting || isChatSending) return
     setMessage('')
     setChatMessage('')
     setStaffMessage('', 'default')
+    hideSubmitError()
+    hideStaffError()
     const validation = validateBeforeSubmit()
     if (!validation.ok) {
       setChatMessage(validation.reason, 'error')
@@ -419,10 +537,15 @@ export function renderCartScreen(options: CartScreenOptions) {
       })),
       comment: validation.comment
     }
+    isChatSending = true
+    updateSubmitState()
     const telegramContext = getTelegramContext()
     const result = sendChatOrder(telegramContext, payload)
+    isChatSending = false
+    updateSubmitState()
     if (result.ok) {
-      setChatMessage('Отправлено в чат', 'success')
+      showToast('Отправлено в чат')
+      setChatMessage('', 'success')
       return
     }
     const openResult = openBotChat(telegramContext)
@@ -433,34 +556,13 @@ export function renderCartScreen(options: CartScreenOptions) {
     setChatMessage('Откройте чат с ботом вручную.')
   }
 
-  const resolveStaffCallError = (error: ApiErrorInfo): string => {
-    const code = normalizeErrorCode(error)
-    switch (code) {
-      case ApiErrorCodes.SERVICE_SUSPENDED:
-        return 'Заведение временно недоступно'
-      case ApiErrorCodes.SUBSCRIPTION_BLOCKED:
-        return 'Заказы временно недоступны'
-      case ApiErrorCodes.NOT_FOUND:
-        return 'Стол не найден / обновите QR'
-      case ApiErrorCodes.INVALID_INPUT:
-        return 'Некорректные данные вызова.'
-      case ApiErrorCodes.DATABASE_UNAVAILABLE:
-        return 'База недоступна, попробуйте позже'
-      case ApiErrorCodes.NETWORK_ERROR:
-        return 'Нет соединения'
-      case ApiErrorCodes.UNAUTHORIZED:
-      case ApiErrorCodes.INITDATA_INVALID:
-        return 'Сессия истекла — перезапустите Mini App'
-      default:
-        return 'Не удалось вызвать персонал. Попробуйте позже.'
-    }
-  }
-
   const handleStaffCall = async () => {
-    if (isSubmitting) return
+    if (isSubmitting || isStaffCalling) return
     setMessage('')
     setChatMessage('')
     setStaffMessage('', 'default')
+    hideSubmitError()
+    hideStaffError()
     if (!canCallStaff()) {
       setStaffMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
       return
@@ -480,34 +582,38 @@ export function renderCartScreen(options: CartScreenOptions) {
       reason: refs.staffReason.value,
       comment: commentValue ? commentValue : null
     }
-    isSubmitting = true
+    isStaffCalling = true
     updateSubmitState()
-    if (submitAbort) {
-      submitAbort.abort()
+    if (staffAbort) {
+      staffAbort.abort()
     }
     const controller = new AbortController()
-    submitAbort = controller
+    staffAbort = controller
     const deps = buildApiDeps(isDebug)
     const result = await guestStaffCall(backendUrl, payload, deps, controller.signal)
     if (disposed) {
       return
     }
-    if (controller.signal.aborted || submitAbort !== controller) {
-      if (submitAbort === controller) {
-        submitAbort = null
-        isSubmitting = false
+    if (controller.signal.aborted || staffAbort !== controller) {
+      if (staffAbort === controller) {
+        staffAbort = null
+        isStaffCalling = false
         updateSubmitState()
       }
       return
     }
-    isSubmitting = false
-    submitAbort = null
+    isStaffCalling = false
+    staffAbort = null
     if (!result.ok) {
       const code = normalizeErrorCode(result.error)
       if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
         clearSession()
       }
-      setStaffMessage(resolveStaffCallError(result.error))
+      if (code === ApiErrorCodes.REQUEST_ABORTED) {
+        updateSubmitState()
+        return
+      }
+      showStaffError(result.error)
       updateSubmitState()
       return
     }
@@ -517,7 +623,9 @@ export function renderCartScreen(options: CartScreenOptions) {
     })
     setStaffMessage(`Персонал вызван (${timeLabel})`, 'success')
     refs.staffComment.value = ''
+    refs.staffCounter.textContent = `0/${MAX_STAFF_COMMENT_LENGTH}`
     updateSubmitState()
+    showToast('Вызов персонала отправлен')
   }
 
   updateSubmitState()
@@ -537,11 +645,13 @@ export function renderCartScreen(options: CartScreenOptions) {
       if (refs.commentInput.value.length > MAX_COMMENT_LENGTH) {
         refs.commentInput.value = refs.commentInput.value.slice(0, MAX_COMMENT_LENGTH)
       }
+      refs.commentCounter.textContent = `${refs.commentInput.value.length}/${MAX_COMMENT_LENGTH}`
     }),
     on(refs.staffComment, 'input', () => {
       if (refs.staffComment.value.length > MAX_STAFF_COMMENT_LENGTH) {
         refs.staffComment.value = refs.staffComment.value.slice(0, MAX_STAFF_COMMENT_LENGTH)
       }
+      refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
     })
   )
 
@@ -559,6 +669,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   return () => {
     disposed = true
     submitAbort?.abort()
+    staffAbort?.abort()
     cartSubscription()
     tableSubscription()
     itemDisposables.forEach((dispose) => dispose())
