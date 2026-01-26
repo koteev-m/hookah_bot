@@ -72,6 +72,14 @@ export function presentApiError(
       message = 'Попробуйте позже.'
       severity = 'warn'
       break
+    case ApiErrorCodes.FORBIDDEN:
+      title = scope === 'venue' ? 'Нет доступа' : 'Доступ запрещён'
+      message =
+        scope === 'venue'
+          ? 'У вас нет доступа к режиму заведения. Обратитесь к администратору.'
+          : 'У вас нет доступа к этой операции.'
+      severity = 'warn'
+      break
     case ApiErrorCodes.SUBSCRIPTION_BLOCKED:
       title = 'Заказы временно недоступны'
       message = 'Попробуйте позже.'

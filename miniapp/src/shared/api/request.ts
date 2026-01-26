@@ -1,5 +1,5 @@
 import { isAbortError, REQUEST_ABORTED_CODE } from './abort'
-import { isGuestApi, resolveRequestId } from './errorMapping'
+import { isAuthenticatedApi, resolveRequestId } from './errorMapping'
 import {
   ApiErrorCodes,
   REQUEST_ID_HEADER,
@@ -22,7 +22,7 @@ export async function requestApi<T>(
   deps: RequestDependencies
 ): Promise<ApiResult<T>> {
   try {
-    if (isGuestApi(path)) {
+    if (isAuthenticatedApi(path)) {
       const sessionResult = await deps.getAccessToken()
       if (!sessionResult.ok) {
         return { ok: false, error: sessionResult.error }
@@ -52,7 +52,7 @@ export async function requestApi<T>(
         message: envelope?.error?.message,
         requestId
       }
-      if (isGuestApi(path) && response.status === 401) {
+      if (isAuthenticatedApi(path) && response.status === 401) {
         deps.clearSession()
       }
       return { ok: false, error: errorInfo }

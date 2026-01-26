@@ -19,6 +19,7 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
@@ -118,18 +119,6 @@ private data class VersionResponse(
     val env: String,
     val version: String,
     val time: String
-)
-
-@Serializable
-private data class LinkCodeResponse(
-    val code: String,
-    val expiresAt: String,
-    val ttlSeconds: Long
-)
-
-@Serializable
-private data class LinkCodeRequest(
-    val userId: Long? = null
 )
 
 internal data class ModuleOverrides(
@@ -517,10 +506,14 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         call.respond(mapOf("ok" to true))
                     }
                 }
+                venueRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+                    venueRepository = venueRepository
+                )
             }
         }
 
-        staffChatLinkRoutes(staffChatLinkCodeRepository, venueAccessRepository, venueRepository)
         miniAppRoutes(miniAppDevServerUrl, miniAppStaticDir, httpClient)
 
         if (telegramConfig.enabled && telegramConfig.mode == TelegramBotConfig.Mode.WEBHOOK) {
@@ -651,57 +644,6 @@ private suspend fun ApplicationCall.redirectToMiniAppRoot() {
     val query = request.queryString()
     val target = if (query.isBlank()) "/miniapp/" else "/miniapp/?$query"
     respondRedirect(url = target, permanent = false)
-}
-
-private fun Route.staffChatLinkRoutes(
-    staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
-    venueAccessRepository: VenueAccessRepository,
-    venueRepository: VenueRepository
-) {
-    route("/api") {
-        post("/venue/{venueId}/staff-chat/link-code") {
-            val venueId = call.parameters["venueId"]?.toLongOrNull()
-            if (venueId == null) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_venue_id"))
-                return@post
-            }
-            val requestBody = runCatching { call.receive<LinkCodeRequest>() }.getOrNull()
-            val userId = call.request.headers["X-Telegram-User-Id"]?.toLongOrNull()
-                ?: requestBody?.userId
-            if (userId == null) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_user"))
-                return@post
-            }
-            val hasAccess = venueAccessRepository.hasVenueAdminOrOwner(userId, venueId)
-            if (!hasAccess) {
-                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "forbidden"))
-                return@post
-            }
-            val venueExists = venueRepository.findVenueById(venueId) != null
-            if (!venueExists) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "venue_not_found"))
-                return@post
-            }
-            val created = staffChatLinkCodeRepository.createLinkCode(venueId, userId)
-            if (created == null) {
-                call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "db_unavailable"))
-                return@post
-            }
-            logger.info(
-                "Generated staff chat link code venueId={} by userId={} expiresAt={}",
-                venueId,
-                userId,
-                created.expiresAt
-            )
-            call.respond(
-                LinkCodeResponse(
-                    code = created.code,
-                    expiresAt = created.expiresAt.toString(),
-                    ttlSeconds = created.ttlSeconds
-                )
-            )
-        }
-    }
 }
 
 private fun ApplicationConfig.optionalString(path: String): String? =

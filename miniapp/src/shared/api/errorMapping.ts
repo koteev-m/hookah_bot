@@ -20,6 +20,8 @@ export function normalizeErrorCode(error: ApiErrorInfo): ApiErrorCode | undefine
       return ApiErrorCodes.INVALID_INPUT
     case 401:
       return ApiErrorCodes.UNAUTHORIZED
+    case 403:
+      return ApiErrorCodes.FORBIDDEN
     case 404:
       return ApiErrorCodes.NOT_FOUND
     case 423:
@@ -31,6 +33,6 @@ export function normalizeErrorCode(error: ApiErrorInfo): ApiErrorCode | undefine
   }
 }
 
-export function isGuestApi(path: string) {
-  return path.startsWith('/api/guest/')
+export function isAuthenticatedApi(path: string) {
+  return path.startsWith('/api/guest/') || path.startsWith('/api/venue/')
 }
