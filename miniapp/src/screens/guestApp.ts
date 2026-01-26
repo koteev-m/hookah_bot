@@ -1,7 +1,9 @@
 import { getBackendBaseUrl } from '../shared/api/backend'
+import { isDebugEnabled } from '../shared/debug'
 import { formatTableStatus, initTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { getCartSnapshot, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
+import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
@@ -147,7 +149,7 @@ export function mountGuestApp(options: GuestAppOptions) {
   initTableContext()
   ensureDefaultHash()
   const backendUrl = getBackendBaseUrl()
-  const isDebug = Boolean(import.meta.env.DEV)
+  const isDebug = isDebugEnabled()
 
   const refs = buildGuestShell(root)
   const updateCartNav = (totalQty: number) => {
@@ -172,15 +174,63 @@ export function mountGuestApp(options: GuestAppOptions) {
     }
   }
 
+  const routeListeners = new Set<() => void>()
+  const notifyRouteChange = () => {
+    routeListeners.forEach((listener) => listener())
+  }
+
+  const historyStack: string[] = []
+  const updateHistory = (hash: string) => {
+    if (!hash || hash === '#') {
+      return
+    }
+    if (historyStack.length === 0) {
+      historyStack.push(hash)
+      return
+    }
+    const last = historyStack[historyStack.length - 1]
+    if (hash === last) {
+      return
+    }
+    const prev = historyStack[historyStack.length - 2]
+    if (prev === hash) {
+      historyStack.pop()
+      return
+    }
+    historyStack.push(hash)
+  }
+
   const disposables: Array<() => void> = []
   disposables.push(on(refs.navButtons.catalog, 'click', () => navigate('#/catalog')))
   disposables.push(on(refs.navButtons.cart, 'click', () => navigate('#/cart')))
   disposables.push(on(refs.navButtons.order, 'click', () => navigate('#/order')))
 
   let currentDispose: (() => void) | null = null
+  let currentRoute: Route = resolveRoute()
+
+  const router = {
+    getRouteName: () => currentRoute.name,
+    navigate,
+    back: () => {
+      if (historyStack.length > 1) {
+        historyStack.pop()
+        navigate(historyStack[historyStack.length - 1])
+        return
+      }
+      navigate('#/catalog')
+    },
+    canGoBack: () => historyStack.length > 1,
+    subscribe: (handler: () => void) => {
+      routeListeners.add(handler)
+      return () => routeListeners.delete(handler)
+    }
+  }
+
+  const unbindBackButton = bindTelegramBackButton(router)
 
   const render = () => {
     const route = resolveRoute()
+    currentRoute = route
     updateNav(refs.navButtons, route.name)
     currentDispose?.()
     currentDispose = renderRouteContent(
@@ -205,15 +255,20 @@ export function mountGuestApp(options: GuestAppOptions) {
   }
 
   const onHashChange = () => {
+    updateHistory(window.location.hash || '#/catalog')
     render()
+    notifyRouteChange()
   }
 
   window.addEventListener('hashchange', onHashChange)
+  updateHistory(window.location.hash || '#/catalog')
   render()
+  notifyRouteChange()
 
   return () => {
     window.removeEventListener('hashchange', onHashChange)
     currentDispose?.()
+    unbindBackButton()
     disposables.forEach((dispose) => dispose())
     cartSubscription()
     tableSubscription()

@@ -4,6 +4,7 @@ import { clearSession, getAccessToken } from '../api/auth'
 import { guestResolveTable } from '../api/guestApi'
 import type { TableResolveResponse } from '../api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../api/types'
+import { isDebugEnabled } from '../debug'
 import { getTelegramContext } from '../telegram'
 
 export type TableContextStatus =
@@ -34,7 +35,7 @@ export type TableStatusPresentation = {
   severity: 'ok' | 'warn' | 'error'
 }
 
-const isDebug = import.meta.env.DEV
+const isDebug = isDebugEnabled()
 const listeners = new Set<(snapshot: TableContextSnapshot) => void>()
 let currentSnapshot = buildEmptySnapshot('missing')
 let activeController: AbortController | null = null

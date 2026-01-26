@@ -1,7 +1,9 @@
 import { clearSession, getAccessToken } from './api/auth'
 import { ApiErrorCodes, type ApiErrorInfo } from './api/types'
+import { isDebugEnabled } from './debug'
 import { getTelegramContext } from './telegram'
 import { append, el } from './ui/dom'
+import { presentApiError } from './ui/apiErrorPresenter'
 
 export type AuthGateOptions = {
   root: HTMLDivElement | null
@@ -38,57 +40,39 @@ function renderActions(container: HTMLElement, actions: Array<{ label: string; o
   })
 }
 
-function resolveAuthMessage(error: ApiErrorInfo): string {
-  if (error.code === ApiErrorCodes.INITDATA_INVALID) {
-    return 'Сессия устарела. Закройте и откройте Mini App заново в Telegram.'
-  }
-  if (error.code === ApiErrorCodes.NETWORK_ERROR || error.status >= 500 || error.status === 0) {
-    return 'Сервис недоступен, попробуйте позже'
-  }
-  return 'Не удалось выполнить авторизацию. Попробуйте ещё раз.'
-}
-
 export function mountAuthGate(options: AuthGateOptions) {
   const { root, onReady } = options
   if (!root) return () => undefined
   const refs = buildAuthGateDom(root)
-  const isDebug = Boolean(import.meta.env.DEV)
+  const isDebug = isDebugEnabled()
   let disposed = false
 
-  const renderDebug = (error: ApiErrorInfo) => {
-    if (!isDebug) {
-      refs.debug.textContent = ''
-      return
-    }
-    const parts: string[] = []
-    if (error.code) parts.push(`code: ${error.code}`)
-    if (error.status) parts.push(`status: ${error.status}`)
-    if (error.requestId) parts.push(`requestId: ${error.requestId}`)
-    refs.debug.textContent = parts.join(' · ')
-  }
-
   const renderError = (error: ApiErrorInfo) => {
-    refs.message.textContent = resolveAuthMessage(error)
-    renderDebug(error)
-    renderActions(refs.actions, [
-      {
-        label: 'Повторить',
-        onClick: () => void runAuth()
-      },
-      {
-        label: 'Перезапустить',
-        onClick: () => window.location.reload()
+    const presentation = presentApiError(error, { isDebug })
+    refs.title.textContent = presentation.title
+    refs.message.textContent = presentation.message
+    refs.debug.textContent = presentation.debugLine ?? ''
+    const actions = presentation.actions.map((action) => {
+      if (action.label === 'Повторить') {
+        return { ...action, onClick: () => void runAuth() }
       }
-    ])
+      return action
+    })
+    if (!actions.length) {
+      actions.push({ label: 'Повторить', onClick: () => void runAuth() })
+    }
+    renderActions(refs.actions, actions)
   }
 
   const renderLoading = () => {
+    refs.title.textContent = 'Hookah Mini App'
     refs.message.textContent = 'Авторизация...'
     refs.actions.replaceChildren()
     refs.debug.textContent = ''
   }
 
   const renderTelegramRequired = () => {
+    refs.title.textContent = 'Hookah Mini App'
     refs.message.textContent = 'Откройте Mini App внутри Telegram'
     refs.actions.replaceChildren()
     refs.debug.textContent = ''

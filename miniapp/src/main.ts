@@ -9,6 +9,7 @@ const root = document.querySelector<HTMLDivElement>('#app')
 const backendUrl = getBackendBaseUrl()
 const searchParams = new URLSearchParams(window.location.search)
 const mode = searchParams.get('mode')
+const screen = searchParams.get('screen')
 let dispose: (() => void) | null = null
 
 const telegramContext = getTelegramContext()
@@ -23,7 +24,7 @@ try {
   // ignore WebApp expand errors
 }
 
-if (mode === 'venue') {
+if (mode === 'venue' && screen !== 'catalog') {
   dispose = renderVenueMode({ root, backendUrl })
 } else {
   dispose = mountAuthGate({

@@ -6,6 +6,8 @@ import type { ActiveOrderDto, OrderBatchDto } from '../shared/api/guestDtos'
 import { getItemMeta } from '../shared/state/itemCache'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
+import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
+import { renderErrorDetails } from '../shared/ui/errorDetails'
 
 const POLL_INTERVAL_MS = 12000
 
@@ -20,6 +22,11 @@ type OrderRefs = {
   statusValue: HTMLParagraphElement
   hint: HTMLParagraphElement
   message: HTMLParagraphElement
+  error: HTMLDivElement
+  errorTitle: HTMLHeadingElement
+  errorMessage: HTMLParagraphElement
+  errorActions: HTMLDivElement
+  errorDetails: HTMLDivElement
   refreshButton: HTMLButtonElement
   addButton: HTMLButtonElement
   content: HTMLDivElement
@@ -52,29 +59,6 @@ function resolveTableHint(snapshot: ReturnType<typeof getTableContext>): string 
   }
 }
 
-function resolveOrderError(error: ApiErrorInfo): string {
-  const code = normalizeErrorCode(error)
-  switch (code) {
-    case ApiErrorCodes.INVALID_INPUT:
-      return error.message && error.message.trim() ? error.message : 'Некорректный токен стола.'
-    case ApiErrorCodes.NOT_FOUND:
-      return 'Стол не найден / обновите QR'
-    case ApiErrorCodes.SERVICE_SUSPENDED:
-      return 'Заведение временно недоступно'
-    case ApiErrorCodes.SUBSCRIPTION_BLOCKED:
-      return 'Заказы временно недоступны'
-    case ApiErrorCodes.DATABASE_UNAVAILABLE:
-      return 'База недоступна, попробуйте позже'
-    case ApiErrorCodes.NETWORK_ERROR:
-      return 'Нет соединения'
-    case ApiErrorCodes.UNAUTHORIZED:
-    case ApiErrorCodes.INITDATA_INVALID:
-      return 'Сессия истекла — перезапустите Mini App'
-    default:
-      return 'Не удалось загрузить заказ. Попробуйте позже.'
-  }
-}
-
 function formatItemTitle(itemId: number): string {
   const meta = getItemMeta(itemId)
   if (!meta) {
@@ -100,12 +84,45 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
   const message = el('p', { className: 'order-message', text: '' })
   message.hidden = true
 
+  const error = el('div', { className: 'error-card' })
+  error.hidden = true
+  const errorTitle = el('h3')
+  const errorMessage = el('p')
+  const errorActions = el('div', { className: 'error-actions' })
+  const errorDetails = el('div')
+  append(error, errorTitle, errorMessage, errorActions, errorDetails)
+
   const content = el('div', { className: 'order-content' })
 
-  append(wrapper, header, message, content)
+  append(wrapper, header, message, error, content)
   root.replaceChildren(wrapper)
 
-  return { statusValue, hint, message, refreshButton, addButton, content }
+  return {
+    statusValue,
+    hint,
+    message,
+    error,
+    errorTitle,
+    errorMessage,
+    errorActions,
+    errorDetails,
+    refreshButton,
+    addButton,
+    content
+  }
+}
+
+function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
+  container.replaceChildren()
+  actions.forEach((action) => {
+    const button = document.createElement('button')
+    button.textContent = action.label
+    if (action.kind === 'secondary') {
+      button.classList.add('button-secondary')
+    }
+    button.addEventListener('click', action.onClick)
+    container.appendChild(button)
+  })
 }
 
 function renderBatches(container: HTMLElement, batches: OrderBatchDto[]) {
@@ -152,11 +169,43 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   let pollTimer: number | null = null
   let inFlight = false
   let currentOrder: ActiveOrderDto | null = null
-  let lastError: string | null = null
+  let lastError: ApiErrorInfo | null = null
 
   const setMessage = (text: string | null) => {
     refs.message.textContent = text ?? ''
     refs.message.hidden = !text
+  }
+
+  const hideError = () => {
+    refs.error.hidden = true
+    refs.errorActions.replaceChildren()
+    refs.errorDetails.replaceChildren()
+  }
+
+  const showError = (error: ApiErrorInfo) => {
+    const normalizedCode = normalizeErrorCode(error)
+    if (normalizedCode === ApiErrorCodes.UNAUTHORIZED || normalizedCode === ApiErrorCodes.INITDATA_INVALID) {
+      clearSession()
+    }
+    const presentation = presentApiError(error, { isDebug })
+    refs.errorTitle.textContent = presentation.title
+    refs.errorMessage.textContent = presentation.message
+    refs.error.dataset.severity = presentation.severity
+    const actions = presentation.actions.map((action) => {
+      if (action.label === 'Повторить') {
+        return { ...action, onClick: () => void loadOrder() }
+      }
+      return action
+    })
+    if (!actions.length) {
+      actions.push({ label: 'Повторить', onClick: () => void loadOrder() })
+    }
+    renderErrorActions(refs.errorActions, actions)
+    renderErrorDetails(refs.errorDetails, error, {
+      isDebug,
+      extraNotes: presentation.debugLine ? [presentation.debugLine] : undefined
+    })
+    refs.error.hidden = false
   }
 
   const getTableToken = () => (tableSnapshot.status === 'resolved' ? tableSnapshot.tableToken : null)
@@ -173,12 +222,14 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   const renderState = () => {
     refs.content.replaceChildren()
     updateHint()
+    hideError()
     if (inFlight) {
       refs.content.appendChild(el('p', { className: 'order-empty', text: 'Загрузка заказа…' }))
       return
     }
     if (lastError) {
-      refs.content.appendChild(el('p', { className: 'order-empty', text: lastError }))
+      showError(lastError)
+      refs.content.appendChild(el('p', { className: 'order-empty', text: 'Не удалось загрузить заказ.' }))
       return
     }
     if (!currentOrder) {
@@ -193,16 +244,16 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     const tableToken = getTableToken()
     if (!tableToken) {
       if (orderAbort) {
-        orderAbort.abort()
-        orderAbort = null
-      }
-      currentOrder = null
-      lastError = null
-      inFlight = false
-      refs.statusValue.textContent = 'Статус: —'
-      renderState()
-      return
+      orderAbort.abort()
+      orderAbort = null
     }
+    currentOrder = null
+    lastError = null
+    inFlight = false
+    refs.statusValue.textContent = 'Статус: —'
+    renderState()
+    return
+  }
     if (orderAbort) {
       orderAbort.abort()
     }
@@ -237,11 +288,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     inFlight = false
     orderAbort = null
     if (!result.ok) {
-      const code = normalizeErrorCode(result.error)
-      if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
-        clearSession()
-      }
-      lastError = resolveOrderError(result.error)
+      lastError = result.error
       currentOrder = null
       refs.statusValue.textContent = 'Статус: —'
       renderState()
@@ -277,14 +324,14 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     if (!nextToken) {
       if (orderAbort) {
         orderAbort.abort()
-        orderAbort = null
-      }
-      inFlight = false
-      currentOrder = null
-      lastError = null
-      refs.statusValue.textContent = 'Статус: —'
-      renderState()
+      orderAbort = null
     }
+    inFlight = false
+    currentOrder = null
+    lastError = null
+    refs.statusValue.textContent = 'Статус: —'
+    renderState()
+  }
   }
 
   const disposables: Array<() => void> = []

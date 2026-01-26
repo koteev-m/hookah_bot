@@ -136,6 +136,12 @@ button:hover {
   background-color: #4338ca;
 }
 
+button:disabled {
+  background-color: #cbd5f5;
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
 .button-secondary {
   background-color: #e2e8f0;
   color: #1e293b;
@@ -143,6 +149,10 @@ button:hover {
 
 .button-secondary:hover {
   background-color: #cbd5f5;
+}
+
+.button-secondary:disabled {
+  background-color: #e2e8f0;
 }
 
 .button-small {
@@ -211,6 +221,13 @@ input[type="number"] {
   font-weight: 600;
 }
 
+.field-counter {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+  text-align: right;
+}
+
 .catalog-controls input[type="search"],
 .catalog-controls input[type="text"] {
   width: 100%;
@@ -253,6 +270,16 @@ input[type="number"] {
   border-radius: 10px;
   border: 1px solid #fca5a5;
   background: #fff5f5;
+}
+
+.error-card[data-severity='warn'] {
+  border-color: #facc15;
+  background: #fffbeb;
+}
+
+.error-card[data-severity='info'] {
+  border-color: #93c5fd;
+  background: #eff6ff;
 }
 
 .error-card h3 {
@@ -424,6 +451,12 @@ input[type="number"] {
   color: #dc2626;
 }
 
+.disabled-reason {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
 .cart-empty {
   margin: 0;
   color: #64748b;
@@ -556,4 +589,24 @@ input[type="number"] {
 
 .order-item-qty {
   color: #52617d;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.5rem;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  color: #ffffff;
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 1000;
+}
+
+.toast[data-visible='true'] {
+  opacity: 1;
 }
