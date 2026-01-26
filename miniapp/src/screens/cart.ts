@@ -40,9 +40,6 @@ function buildApiDeps(isDebug: boolean) {
 }
 
 function resolveTableHint(snapshot: ReturnType<typeof getTableContext>): string | null {
-  if (!snapshot.tableToken) {
-    return 'Сначала отсканируйте QR'
-  }
   switch (snapshot.status) {
     case 'missing':
       return 'Сначала отсканируйте QR'
@@ -55,6 +52,9 @@ function resolveTableHint(snapshot: ReturnType<typeof getTableContext>): string 
     case 'error':
       return 'Не удалось загрузить стол. Попробуйте позже.'
     case 'resolved':
+      if (!snapshot.tableToken) {
+        return 'Сначала отсканируйте QR'
+      }
       if (!snapshot.orderAllowed) {
         return snapshot.blockReasonText ?? 'Заказы временно недоступны.'
       }
