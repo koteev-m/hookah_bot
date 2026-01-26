@@ -194,7 +194,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (normalizedCode === ApiErrorCodes.UNAUTHORIZED || normalizedCode === ApiErrorCodes.INITDATA_INVALID) {
       clearSession()
     }
-    const presentation = presentApiError(error, { isDebug })
+    const presentation = presentApiError(error, { isDebug, scope: 'venue' })
     refs.errorTitle.textContent = presentation.title
     refs.errorMessage.textContent = presentation.message
     refs.error.dataset.severity = presentation.severity

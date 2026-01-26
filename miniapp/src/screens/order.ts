@@ -187,7 +187,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     if (normalizedCode === ApiErrorCodes.UNAUTHORIZED || normalizedCode === ApiErrorCodes.INITDATA_INVALID) {
       clearSession()
     }
-    const presentation = presentApiError(error, { isDebug })
+    const presentation = presentApiError(error, { isDebug, scope: 'table' })
     refs.errorTitle.textContent = presentation.title
     refs.errorMessage.textContent = presentation.message
     refs.error.dataset.severity = presentation.severity

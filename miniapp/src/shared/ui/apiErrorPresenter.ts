@@ -15,6 +15,8 @@ export type ApiErrorPresentation = {
   debugLine?: string
 }
 
+export type ApiErrorScope = 'table' | 'venue' | 'generic'
+
 const noop = () => undefined
 
 function buildDebugLine(error: ApiErrorInfo, isDebug: boolean): string | undefined {
@@ -37,9 +39,10 @@ function buildDebugLine(error: ApiErrorInfo, isDebug: boolean): string | undefin
 
 export function presentApiError(
   error: ApiErrorInfo,
-  opts: { isDebug: boolean }
+  opts: { isDebug: boolean; scope?: ApiErrorScope }
 ): ApiErrorPresentation {
   const code = normalizeErrorCode(error) ?? error.code
+  const scope = opts.scope ?? 'generic'
   const actions: ApiErrorAction[] = []
   let title = 'Ошибка'
   let message = 'Попробуйте ещё раз.'
@@ -75,8 +78,16 @@ export function presentApiError(
       severity = 'warn'
       break
     case ApiErrorCodes.NOT_FOUND:
-      title = 'Не найдено'
-      message = 'Обновите QR или повторите вход.'
+      if (scope === 'table') {
+        title = 'Стол не найден'
+        message = 'Обновите QR и попробуйте снова.'
+      } else if (scope === 'venue') {
+        title = 'Заведение не найдено'
+        message = 'Проверьте ссылку или выберите другое заведение в каталоге.'
+      } else {
+        title = 'Не найдено'
+        message = 'Проверьте данные и попробуйте снова.'
+      }
       severity = 'info'
       break
     case ApiErrorCodes.INVALID_INPUT:
