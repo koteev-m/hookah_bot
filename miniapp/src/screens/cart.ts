@@ -1,6 +1,6 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestAddBatch } from '../shared/api/guestApi'
+import { guestAddBatch, guestStaffCall } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import {
   addToCart,
@@ -12,12 +12,15 @@ import {
 } from '../shared/state/cartStore'
 import { getItemMeta } from '../shared/state/itemCache'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
+import { getTelegramContext } from '../shared/telegram'
+import { openBotChat, sendChatOrder } from '../shared/telegramActions'
 import { append, el, on } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
 
 const MAX_ITEMS = 50
 const MAX_ITEM_QTY = 50
 const MAX_COMMENT_LENGTH = 500
+const MAX_STAFF_COMMENT_LENGTH = 500
 
 type CartScreenOptions = {
   root: HTMLDivElement | null
@@ -32,7 +35,13 @@ type CartRefs = {
   commentInput: HTMLTextAreaElement
   sendButton: HTMLButtonElement
   message: HTMLParagraphElement
+  chatButton: HTMLButtonElement
+  chatMessage: HTMLParagraphElement
   tableHint: HTMLParagraphElement
+  staffReason: HTMLSelectElement
+  staffComment: HTMLTextAreaElement
+  staffButton: HTMLButtonElement
+  staffMessage: HTMLParagraphElement
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -111,12 +120,57 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   const message = el('p', { className: 'cart-message', text: '' })
   message.hidden = true
   const sendButton = el('button', { text: 'Отправить' }) as HTMLButtonElement
-  append(actionCard, message, sendButton)
+  const chatMessage = el('p', { className: 'cart-chat-message', text: '' })
+  chatMessage.hidden = true
+  const chatButton = el('button', { className: 'button-secondary', text: 'Оформить в чате' }) as HTMLButtonElement
+  append(actionCard, message, sendButton, chatMessage, chatButton)
 
-  append(wrapper, header, items, commentCard, actionCard)
+  const staffCard = el('div', { className: 'card staff-call' })
+  const staffTitle = el('p', { className: 'field-label', text: 'Вызвать персонал' })
+  const staffReasonLabel = el('p', { className: 'field-label', text: 'Причина' })
+  const staffReason = document.createElement('select')
+  staffReason.className = 'staff-select'
+  staffReason.appendChild(new Option('Замена углей', 'COALS'))
+  staffReason.appendChild(new Option('Счёт', 'BILL'))
+  staffReason.appendChild(new Option('Подойти к столу', 'COME'))
+  staffReason.appendChild(new Option('Другое', 'OTHER'))
+  const staffCommentLabel = el('p', { className: 'field-label', text: 'Комментарий (необязательно)' })
+  const staffComment = document.createElement('textarea')
+  staffComment.className = 'staff-comment'
+  staffComment.maxLength = MAX_STAFF_COMMENT_LENGTH
+  staffComment.rows = 2
+  staffComment.placeholder = 'Комментарий для персонала'
+  const staffMessage = el('p', { className: 'staff-message', text: '' })
+  staffMessage.hidden = true
+  const staffButton = el('button', { text: 'Вызвать персонал' }) as HTMLButtonElement
+  append(
+    staffCard,
+    staffTitle,
+    staffReasonLabel,
+    staffReason,
+    staffCommentLabel,
+    staffComment,
+    staffMessage,
+    staffButton
+  )
+
+  append(wrapper, header, items, commentCard, actionCard, staffCard)
   root.replaceChildren(wrapper)
 
-  return { items, emptyState, commentInput, sendButton, message, tableHint }
+  return {
+    items,
+    emptyState,
+    commentInput,
+    sendButton,
+    message,
+    chatButton,
+    chatMessage,
+    tableHint,
+    staffReason,
+    staffComment,
+    staffButton,
+    staffMessage
+  }
 }
 
 function formatItemTitle(itemId: number): string {
@@ -153,8 +207,22 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.message.hidden = !text
   }
 
+  const setChatMessage = (text: string, tone: 'info' | 'error' | 'success' = 'info') => {
+    refs.chatMessage.textContent = text
+    refs.chatMessage.hidden = !text
+    refs.chatMessage.dataset.tone = tone
+  }
+
+  const setStaffMessage = (text: string, tone: 'default' | 'success' = 'default') => {
+    refs.staffMessage.textContent = text
+    refs.staffMessage.hidden = !text
+    refs.staffMessage.dataset.tone = tone
+  }
+
   const isTableReady = () =>
     tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
+
+  const canCallStaff = () => tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken)
 
   const updateSubmitState = () => {
     const hasItems = cartSnapshot.items.size > 0
@@ -163,6 +231,8 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.tableHint.textContent = tableHint ?? ''
     refs.tableHint.hidden = !tableHint
     refs.sendButton.disabled = isSubmitting || !hasItems || !tableReady
+    refs.chatButton.disabled = isSubmitting || !hasItems || !tableReady
+    refs.staffButton.disabled = isSubmitting || !canCallStaff()
   }
 
   const renderItems = () => {
@@ -264,6 +334,8 @@ export function renderCartScreen(options: CartScreenOptions) {
   const handleSubmit = async () => {
     if (isSubmitting) return
     setMessage('')
+    setChatMessage('')
+    setStaffMessage('', 'default')
     const validation = validateBeforeSubmit()
     if (!validation.ok) {
       setMessage(validation.reason)
@@ -323,6 +395,131 @@ export function renderCartScreen(options: CartScreenOptions) {
     onNavigateOrder()
   }
 
+  const handleChatOrder = () => {
+    if (isSubmitting) return
+    setMessage('')
+    setChatMessage('')
+    setStaffMessage('', 'default')
+    const validation = validateBeforeSubmit()
+    if (!validation.ok) {
+      setChatMessage(validation.reason, 'error')
+      return
+    }
+    const tableToken = tableSnapshot.tableToken
+    if (!tableToken) {
+      setChatMessage(resolveTableHint(tableSnapshot) ?? 'Не удалось загрузить стол. Попробуйте позже.', 'error')
+      return
+    }
+    const payload = {
+      type: 'CHAT_ORDER',
+      tableToken,
+      items: Array.from(cartSnapshot.items.entries()).map(([itemId, qty]) => ({
+        itemId,
+        qty
+      })),
+      comment: validation.comment
+    }
+    const telegramContext = getTelegramContext()
+    const result = sendChatOrder(telegramContext, payload)
+    if (result.ok) {
+      setChatMessage('Отправлено в чат', 'success')
+      return
+    }
+    const openResult = openBotChat(telegramContext)
+    if (openResult.ok) {
+      setChatMessage('Откройте чат с ботом и отправьте заказ там.')
+      return
+    }
+    setChatMessage('Откройте чат с ботом вручную.')
+  }
+
+  const resolveStaffCallError = (error: ApiErrorInfo): string => {
+    const code = normalizeErrorCode(error)
+    switch (code) {
+      case ApiErrorCodes.SERVICE_SUSPENDED:
+        return 'Заведение временно недоступно'
+      case ApiErrorCodes.SUBSCRIPTION_BLOCKED:
+        return 'Заказы временно недоступны'
+      case ApiErrorCodes.NOT_FOUND:
+        return 'Стол не найден / обновите QR'
+      case ApiErrorCodes.INVALID_INPUT:
+        return 'Некорректные данные вызова.'
+      case ApiErrorCodes.DATABASE_UNAVAILABLE:
+        return 'База недоступна, попробуйте позже'
+      case ApiErrorCodes.NETWORK_ERROR:
+        return 'Нет соединения'
+      case ApiErrorCodes.UNAUTHORIZED:
+      case ApiErrorCodes.INITDATA_INVALID:
+        return 'Сессия истекла — перезапустите Mini App'
+      default:
+        return 'Не удалось вызвать персонал. Попробуйте позже.'
+    }
+  }
+
+  const handleStaffCall = async () => {
+    if (isSubmitting) return
+    setMessage('')
+    setChatMessage('')
+    setStaffMessage('', 'default')
+    if (!canCallStaff()) {
+      setStaffMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
+      return
+    }
+    const tableToken = tableSnapshot.tableToken
+    if (!tableToken) {
+      setStaffMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
+      return
+    }
+    const commentValue = refs.staffComment.value.trim()
+    if (commentValue.length > MAX_STAFF_COMMENT_LENGTH) {
+      setStaffMessage('Комментарий должен быть не длиннее 500 символов.')
+      return
+    }
+    const payload = {
+      tableToken,
+      reason: refs.staffReason.value,
+      comment: commentValue ? commentValue : null
+    }
+    isSubmitting = true
+    updateSubmitState()
+    if (submitAbort) {
+      submitAbort.abort()
+    }
+    const controller = new AbortController()
+    submitAbort = controller
+    const deps = buildApiDeps(isDebug)
+    const result = await guestStaffCall(backendUrl, payload, deps, controller.signal)
+    if (disposed) {
+      return
+    }
+    if (controller.signal.aborted || submitAbort !== controller) {
+      if (submitAbort === controller) {
+        submitAbort = null
+        isSubmitting = false
+        updateSubmitState()
+      }
+      return
+    }
+    isSubmitting = false
+    submitAbort = null
+    if (!result.ok) {
+      const code = normalizeErrorCode(result.error)
+      if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
+        clearSession()
+      }
+      setStaffMessage(resolveStaffCallError(result.error))
+      updateSubmitState()
+      return
+    }
+    const timeLabel = new Date(result.data.createdAtEpochSeconds * 1000).toLocaleTimeString('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+    setStaffMessage(`Персонал вызван (${timeLabel})`, 'success')
+    refs.staffComment.value = ''
+    updateSubmitState()
+  }
+
   updateSubmitState()
   renderItems()
 
@@ -330,9 +527,20 @@ export function renderCartScreen(options: CartScreenOptions) {
     on(refs.sendButton, 'click', () => {
       void handleSubmit()
     }),
+    on(refs.chatButton, 'click', () => {
+      handleChatOrder()
+    }),
+    on(refs.staffButton, 'click', () => {
+      void handleStaffCall()
+    }),
     on(refs.commentInput, 'input', () => {
       if (refs.commentInput.value.length > MAX_COMMENT_LENGTH) {
         refs.commentInput.value = refs.commentInput.value.slice(0, MAX_COMMENT_LENGTH)
+      }
+    }),
+    on(refs.staffComment, 'input', () => {
+      if (refs.staffComment.value.length > MAX_STAFF_COMMENT_LENGTH) {
+        refs.staffComment.value = refs.staffComment.value.slice(0, MAX_STAFF_COMMENT_LENGTH)
       }
     })
   )
