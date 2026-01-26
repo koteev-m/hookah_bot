@@ -102,6 +102,41 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findItemNames(venueId: Long, itemIds: Set<Long>): Map<Long, String> {
+        if (itemIds.isEmpty()) {
+            return emptyMap()
+        }
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val placeholders = itemIds.joinToString(",") { "?" }
+                    val sql = """
+                        SELECT id, name
+                        FROM menu_items
+                        WHERE venue_id = ?
+                          AND id IN ($placeholders)
+                    """.trimIndent()
+                    connection.prepareStatement(sql).use { statement ->
+                        statement.setLong(1, venueId)
+                        itemIds.forEachIndexed { index, itemId ->
+                            statement.setLong(index + 2, itemId)
+                        }
+                        statement.executeQuery().use { rs ->
+                            val result = mutableMapOf<Long, String>()
+                            while (rs.next()) {
+                                result[rs.getLong("id")] = rs.getString("name")
+                            }
+                            result
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     private fun mapCategory(rs: ResultSet): MenuCategoryModel = MenuCategoryModel(
         id = rs.getLong("id"),
         name = rs.getString("name"),

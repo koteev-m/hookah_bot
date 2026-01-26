@@ -49,7 +49,8 @@ object VenuePermissions {
                 VenuePermission.ORDER_QUEUE_VIEW
             )
             VenueRole.STAFF -> setOf(
-                VenuePermission.ORDER_QUEUE_VIEW
+                VenuePermission.ORDER_QUEUE_VIEW,
+                VenuePermission.ORDER_STATUS_UPDATE
             )
         }
     }
