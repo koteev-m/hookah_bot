@@ -6,6 +6,7 @@ import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
 import { renderGuestVenueScreen } from './guestVenue'
+import { renderOrderScreen } from './order'
 
 type GuestAppOptions = {
   root: HTMLDivElement | null
@@ -109,7 +110,8 @@ function renderRouteContent(
   backendUrl: string,
   isDebug: boolean,
   onOpenVenue: (venueId: number) => void,
-  onNavigateOrder: () => void
+  onNavigateOrder: () => void,
+  onNavigateMenu: (venueId: number | null) => void
 ): () => void {
   const screenRoot = document.createElement('div')
   screenRoot.className = 'screen-root'
@@ -121,7 +123,7 @@ function renderRouteContent(
     case 'cart':
       return renderCartScreen({ root: screenRoot, backendUrl, isDebug, onNavigateOrder })
     case 'order':
-      return renderPlaceholder(screenRoot, 'Заказ', 'Экран активного заказа появится позже.')
+      return renderOrderScreen({ root: screenRoot, backendUrl, isDebug, onNavigateMenu })
     case 'catalog':
     default:
       return renderCatalogScreen({ root: screenRoot, backendUrl, isDebug, onOpenVenue })
@@ -191,6 +193,13 @@ export function mountGuestApp(options: GuestAppOptions) {
       },
       () => {
         navigate('#/order')
+      },
+      (venueId) => {
+        if (venueId) {
+          navigate(`#/venue/${venueId}`)
+          return
+        }
+        navigate('#/catalog')
       }
     )
   }
