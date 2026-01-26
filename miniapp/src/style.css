@@ -427,3 +427,84 @@ input[type="number"] {
 .menu-message {
   color: #dc2626;
 }
+
+.order-screen {
+  display: grid;
+  gap: 1rem;
+}
+
+.order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.order-status {
+  margin: 0.35rem 0 0;
+  color: #475569;
+}
+
+.order-hint {
+  margin: 0.35rem 0 0;
+  color: #dc2626;
+}
+
+.order-message {
+  margin: 0;
+  color: #dc2626;
+}
+
+.order-content {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.order-empty {
+  margin: 0;
+  color: #64748b;
+}
+
+.order-batches {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.order-batch {
+  padding: 0.75rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.order-batch-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.order-batch-comment {
+  margin: 0;
+  color: #52617d;
+}
+
+.order-items {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.order-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: #1f2a44;
+}
+
+.order-item-name {
+  font-weight: 600;
+}
+
+.order-item-qty {
+  color: #52617d;
+}
