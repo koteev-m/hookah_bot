@@ -275,7 +275,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   }
 
   const showSubmitError = (error: ApiErrorInfo) => {
-    const presentation = presentApiError(error, { isDebug })
+    const presentation = presentApiError(error, { isDebug, scope: 'table' })
     refs.submitErrorTitle.textContent = presentation.title
     refs.submitErrorMessage.textContent = presentation.message
     refs.submitError.dataset.severity = presentation.severity
@@ -303,7 +303,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   }
 
   const showStaffError = (error: ApiErrorInfo) => {
-    const presentation = presentApiError(error, { isDebug })
+    const presentation = presentApiError(error, { isDebug, scope: 'table' })
     refs.staffErrorTitle.textContent = presentation.title
     refs.staffErrorMessage.textContent = presentation.message
     refs.staffError.dataset.severity = presentation.severity
