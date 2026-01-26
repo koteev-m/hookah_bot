@@ -29,6 +29,16 @@ class InvalidInputException(
     details = details
 )
 
+class ForbiddenException(
+    message: String = "Forbidden",
+    details: JsonObject? = null
+) : ApiException(
+    code = ApiErrorCodes.FORBIDDEN,
+    httpStatus = HttpStatusCode.Forbidden,
+    message = message,
+    details = details
+)
+
 class NotFoundException(
     message: String = "Not found",
     details: JsonObject? = null

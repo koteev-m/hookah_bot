@@ -6,6 +6,11 @@ import kotlinx.coroutines.withContext
 import javax.sql.DataSource
 
 class VenueAccessRepository(private val dataSource: DataSource?) {
+    data class VenueMembership(
+        val venueId: Long,
+        val role: String
+    )
+
     suspend fun hasVenueRole(userId: Long): Boolean {
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
@@ -36,6 +41,64 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
             statement.setLong(1, userId)
             statement.setLong(2, venueId)
             statement.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
+    suspend fun listVenueMemberships(userId: Long): List<VenueMembership> {
+        val ds = dataSource ?: return emptyList()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                        SELECT venue_id, role
+                        FROM venue_members
+                        WHERE user_id = ?
+                        ORDER BY venue_id
+                    """.trimIndent()
+                ).use { statement ->
+                    statement.setLong(1, userId)
+                    statement.executeQuery().use { rs ->
+                        val result = mutableListOf<VenueMembership>()
+                        while (rs.next()) {
+                            result.add(
+                                VenueMembership(
+                                    venueId = rs.getLong("venue_id"),
+                                    role = rs.getString("role")
+                                )
+                            )
+                        }
+                        result
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun findVenueMembership(userId: Long, venueId: Long): VenueMembership? {
+        val ds = dataSource ?: return null
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                        SELECT venue_id, role
+                        FROM venue_members
+                        WHERE user_id = ? AND venue_id = ?
+                        LIMIT 1
+                    """.trimIndent()
+                ).use { statement ->
+                    statement.setLong(1, userId)
+                    statement.setLong(2, venueId)
+                    statement.executeQuery().use { rs ->
+                        if (!rs.next()) {
+                            return@withContext null
+                        }
+                        VenueMembership(
+                            venueId = rs.getLong("venue_id"),
+                            role = rs.getString("role")
+                        )
+                    }
+                }
+            }
         }
     }
 }

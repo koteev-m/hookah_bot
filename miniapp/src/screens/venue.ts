@@ -1,12 +1,13 @@
-import { getTelegramContext } from '../shared/telegram'
-import { append, el, on } from '../shared/ui/dom'
+import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
+import { clearSession, getAccessToken } from '../shared/api/auth'
+import { venueCreateStaffChatLinkCode, venueGetMe } from '../shared/api/venueApi'
+import type { VenueAccessDto } from '../shared/api/venueDtos'
+import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
+import { isDebugEnabled } from '../shared/debug'
 import { parsePositiveInt } from '../shared/parse'
-
-type LinkCodePayload = {
-  code: string
-  expiresAt: string
-  ttlSeconds: number
-}
+import { getTelegramContext } from '../shared/telegram'
+import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
+import { append, el, on } from '../shared/ui/dom'
 
 type VenueScreenOptions = {
   root: HTMLDivElement | null
@@ -14,10 +15,16 @@ type VenueScreenOptions = {
 }
 
 type VenueRefs = {
+  accessError: HTMLDivElement
+  accessErrorTitle: HTMLHeadingElement
+  accessErrorMessage: HTMLParagraphElement
+  accessErrorActions: HTMLDivElement
+  accessErrorDebug: HTMLParagraphElement
   startParam: HTMLSpanElement
   now: HTMLSpanElement
   pingButton: HTMLButtonElement
   backendStatus: HTMLParagraphElement
+  linkSection: HTMLElement
   venueInput: HTMLInputElement
   linkStatus: HTMLParagraphElement
   linkResult: HTMLDivElement
@@ -25,6 +32,23 @@ type VenueRefs = {
   linkCountdown: HTMLSpanElement
   copyButton: HTMLButtonElement
   generateButton: HTMLButtonElement
+}
+
+function buildApiDeps(isDebug: boolean) {
+  return { isDebug, getAccessToken, clearSession }
+}
+
+function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
+  container.replaceChildren()
+  actions.forEach((action) => {
+    const button = document.createElement('button')
+    button.textContent = action.label
+    if (action.kind === 'secondary') {
+      button.classList.add('button-secondary')
+    }
+    button.addEventListener('click', action.onClick)
+    container.appendChild(button)
+  })
 }
 
 function buildVenueDom(
@@ -68,12 +92,20 @@ function buildVenueDom(
   append(nowLine, el('strong', { text: 'Текущее время:' }), document.createTextNode(' '), nowSpan)
   append(info, initDataLine, startParamLine, userIdLine, nowLine)
 
+  const accessError = el('div', { className: 'error-card' }) as HTMLDivElement
+  const accessErrorTitle = el('h3')
+  const accessErrorMessage = el('p')
+  const accessErrorActions = el('div', { className: 'error-actions' })
+  const accessErrorDebug = el('p', { className: 'auth-debug' })
+  append(accessError, accessErrorTitle, accessErrorMessage, accessErrorActions, accessErrorDebug)
+  accessError.hidden = true
+
   const pingSection = el('section')
   const pingButton = el('button', { id: 'ping-btn', text: 'Ping backend /health' })
   const backendStatus = el('p', { id: 'backend-status', className: 'status', text: 'Idle' })
   append(pingSection, pingButton, backendStatus)
 
-  const linkSection = el('section', { className: 'link-card' })
+  const linkSection = el('section', { className: 'link-card' }) as HTMLElement
   const linkTitle = el('h2', { text: 'Привязать чат персонала' })
   const venueLabel = el('label')
   venueLabel.htmlFor = 'venue-id'
@@ -100,16 +132,22 @@ function buildVenueDom(
   const backendInfo = el('section')
   append(backendInfo, el('p', { text: `Backend URL: ${backendUrl}` }))
 
-  append(main, header, info, pingSection, linkSection, backendInfo)
+  append(main, header, info, accessError, pingSection, linkSection, backendInfo)
   root.replaceChildren(main)
 
   startParamSpan.textContent = startParam || '—'
 
   return {
+    accessError,
+    accessErrorTitle,
+    accessErrorMessage,
+    accessErrorActions,
+    accessErrorDebug,
     startParam: startParamSpan,
     now: nowSpan,
     pingButton,
     backendStatus,
+    linkSection,
     venueInput,
     linkStatus,
     linkResult,
@@ -124,6 +162,8 @@ export function renderVenueMode(options: VenueScreenOptions) {
   const { root, backendUrl } = options
   if (!root) return () => undefined
   const telegramContext = getTelegramContext()
+  const isDebug = isDebugEnabled()
+  const deps = buildApiDeps(isDebug)
   const initDataLength = telegramContext.initData?.length ?? 0
   const startParam = telegramContext.startParam ?? ''
   const userId = telegramContext.telegramUserId
@@ -132,10 +172,33 @@ export function renderVenueMode(options: VenueScreenOptions) {
   refs.venueInput.value = defaultVenueId ? String(defaultVenueId) : ''
 
   let disposed = false
+  let accessAbort: AbortController | null = null
+  let accessByVenueId = new Map<number, VenueAccessDto>()
   let countdownInterval: number | null = null
   let clockInterval: number | null = null
   let generating = false
+  let linkAbort: AbortController | null = null
   const disposables: Array<() => void> = []
+
+  const renderAccessError = (error: ApiErrorInfo) => {
+    const presentation = presentApiError(error, { isDebug, scope: 'venue' })
+    refs.accessErrorTitle.textContent = presentation.title
+    refs.accessErrorMessage.textContent = presentation.message
+    refs.accessErrorDebug.textContent = presentation.debugLine ?? ''
+    const actions: ApiErrorAction[] = presentation.actions.length
+      ? presentation.actions
+      : [{ label: 'Перезагрузить', kind: 'primary', onClick: () => window.location.reload() }]
+    renderErrorActions(refs.accessErrorActions, actions)
+    refs.accessError.hidden = false
+    refs.linkSection.hidden = true
+  }
+
+  const clearAccessError = () => {
+    refs.accessError.hidden = true
+    refs.linkSection.hidden = false
+    refs.accessErrorActions.replaceChildren()
+    refs.accessErrorDebug.textContent = ''
+  }
 
   const stopCountdown = () => {
     if (countdownInterval) {
@@ -174,6 +237,64 @@ export function renderVenueMode(options: VenueScreenOptions) {
     clockInterval = window.setInterval(update, 1000)
   }
 
+  const updateAccessUi = () => {
+    const venueId = parsePositiveInt(refs.venueInput.value)
+    const access = venueId ? accessByVenueId.get(venueId) ?? null : null
+    const canLink = access?.permissions.includes('STAFF_CHAT_LINK') ?? false
+    if (!access) {
+      refs.linkStatus.textContent = venueId
+        ? 'Нет доступа к выбранному заведению.'
+        : 'Укажите ID заведения.'
+      refs.generateButton.disabled = true
+      refs.linkResult.hidden = true
+      return
+    }
+    if (!canLink) {
+      refs.linkStatus.textContent = 'Недостаточно прав для привязки чата.'
+      refs.generateButton.disabled = true
+      refs.linkResult.hidden = true
+      return
+    }
+    refs.linkStatus.textContent = 'Сгенерируйте код, чтобы связать чат.'
+    refs.generateButton.disabled = generating
+  }
+
+  const loadVenueAccess = async () => {
+    accessAbort?.abort()
+    const controller = new AbortController()
+    accessAbort = controller
+    const result = await venueGetMe(backendUrl, deps, controller.signal)
+    if (disposed || controller.signal.aborted || accessAbort !== controller) {
+      if (accessAbort === controller) {
+        accessAbort = null
+      }
+      return
+    }
+    accessAbort = null
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) {
+        return
+      }
+      renderAccessError(result.error)
+      return
+    }
+    accessByVenueId = new Map(result.data.venues.map((venue) => [venue.venueId, venue]))
+    if (!accessByVenueId.size) {
+      renderAccessError({
+        status: 403,
+        code: ApiErrorCodes.FORBIDDEN,
+        message: 'Нет доступа'
+      })
+      return
+    }
+    if (!defaultVenueId && accessByVenueId.size === 1) {
+      const onlyVenueId = accessByVenueId.keys().next().value as number
+      refs.venueInput.value = String(onlyVenueId)
+    }
+    clearAccessError()
+    updateAccessUi()
+  }
+
   const pingBackend = async () => {
     refs.backendStatus.textContent = 'Pinging backend...'
     try {
@@ -195,8 +316,6 @@ export function renderVenueMode(options: VenueScreenOptions) {
       return
     }
     const venueId = parsePositiveInt(refs.venueInput.value)
-    const ctx = getTelegramContext()
-    const telegramUserId = ctx.telegramUserId
     if (!venueId) {
       refs.linkStatus.textContent = 'Укажите корректный ID заведения.'
       refs.linkResult.hidden = true
@@ -204,9 +323,14 @@ export function renderVenueMode(options: VenueScreenOptions) {
       refs.venueInput.select()
       return
     }
-    if (!telegramUserId) {
-      refs.linkStatus.textContent =
-        'Не удалось определить Telegram ID. Откройте мини-приложение из Telegram.'
+    const access = accessByVenueId.get(venueId)
+    if (!access) {
+      refs.linkStatus.textContent = 'Нет доступа к выбранному заведению.'
+      refs.linkResult.hidden = true
+      return
+    }
+    if (!access.permissions.includes('STAFF_CHAT_LINK')) {
+      refs.linkStatus.textContent = 'Недостаточно прав для привязки чата.'
       refs.linkResult.hidden = true
       return
     }
@@ -216,33 +340,38 @@ export function renderVenueMode(options: VenueScreenOptions) {
     refs.venueInput.disabled = true
     refs.linkStatus.textContent = 'Генерация кода...'
     try {
-      const response = await fetch(`${backendUrl}/api/venue/${venueId}/staff-chat/link-code`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Telegram-User-Id': telegramUserId.toString()
-        },
-        body: JSON.stringify({ userId: telegramUserId })
-      })
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Ошибка ${response.status}: ${errorText || 'неизвестно'}`)
+      if (linkAbort) {
+        linkAbort.abort()
       }
-      const payload = (await response.json()) as LinkCodePayload
-      if (disposed) return // Skip UI updates after screen dispose.
-      refs.linkCode.textContent = payload.code
+      const controller = new AbortController()
+      linkAbort = controller
+      const result = await venueCreateStaffChatLinkCode(backendUrl, venueId, deps, controller.signal)
+      if (disposed || controller.signal.aborted || linkAbort !== controller) {
+        if (linkAbort === controller) {
+          linkAbort = null
+        }
+        return
+      }
+      linkAbort = null
+      if (!result.ok) {
+        if (result.error.code === REQUEST_ABORTED_CODE) {
+          return
+        }
+        const presentation = presentApiError(result.error, { isDebug, scope: 'venue' })
+        refs.linkStatus.textContent = `${presentation.title}. ${presentation.message}`
+        refs.linkResult.hidden = true
+        return
+      }
+      refs.linkCode.textContent = result.data.code
       refs.linkStatus.textContent = 'Код сгенерирован. Отправьте /link <код> в чате персонала.'
       refs.linkResult.hidden = false
-      startCountdown(payload.expiresAt)
-    } catch (error) {
-      if (disposed) return // Skip UI updates after screen dispose.
-      refs.linkStatus.textContent = `Не удалось сгенерировать код: ${(error as Error).message}`
-      refs.linkResult.hidden = true
+      startCountdown(result.data.expiresAt)
     } finally {
       if (disposed) return
       generating = false
       refs.generateButton.disabled = false
       refs.venueInput.disabled = false
+      updateAccessUi()
     }
   }
 
@@ -271,6 +400,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
         return
       }
       resetLinkUiForVenueChange()
+      updateAccessUi()
     }),
     on(refs.venueInput, 'keydown', (event) => {
       if (event.key !== 'Enter') {
@@ -283,9 +413,12 @@ export function renderVenueMode(options: VenueScreenOptions) {
 
   setupCopyButton()
   startClock()
+  void loadVenueAccess()
 
   return () => {
     disposed = true
+    accessAbort?.abort()
+    linkAbort?.abort()
     if (clockInterval) {
       window.clearInterval(clockInterval)
     }
