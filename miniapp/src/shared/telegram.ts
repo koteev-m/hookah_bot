@@ -13,6 +13,9 @@ export type TelegramWebAppLike = {
   initDataUnsafe?: TelegramInitDataUnsafe
   ready?: () => void
   expand?: () => void
+  sendData?: (data: string) => void
+  openTelegramLink?: (url: string) => void
+  showAlert?: (message: string) => void
 }
 
 export type TelegramContext = {
