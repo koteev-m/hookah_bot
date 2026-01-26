@@ -77,7 +77,7 @@ class VenueRbacRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "ADMIN")
+        val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
         val token = issueToken(config)
 
         val response = client.post("/api/venue/$venueId/staff-chat/link-code") {
@@ -98,7 +98,7 @@ class VenueRbacRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+        val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
         val token = issueToken(config)
 
         val response = client.post("/api/venue/$venueId/staff-chat/link-code") {
@@ -107,6 +107,51 @@ class VenueRbacRoutesTest {
 
         assertEquals(HttpStatusCode.Forbidden, response.status)
         assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+    }
+
+    @Test
+    fun `venue me returns permissions for each role`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("venue-me")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val ownerVenueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+        val managerVenueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+        val staffVenueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
+        val token = issueToken(config)
+
+        val response = client.get("/api/venue/me") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val payload = json.decodeFromString(VenueMeResponse.serializer(), response.bodyAsText())
+        assertEquals(TELEGRAM_USER_ID, payload.userId)
+
+        val venuesById = payload.venues.associateBy { it.venueId }
+        assertEquals(setOf(ownerVenueId, managerVenueId, staffVenueId), venuesById.keys)
+
+        assertEquals("OWNER", venuesById.getValue(ownerVenueId).role)
+        assertEquals(
+            setOf("STAFF_CHAT_LINK", "VENUE_SETTINGS", "ORDER_STATUS_UPDATE", "ORDER_QUEUE_VIEW"),
+            venuesById.getValue(ownerVenueId).permissions.toSet()
+        )
+
+        assertEquals("MANAGER", venuesById.getValue(managerVenueId).role)
+        assertEquals(
+            setOf("ORDER_STATUS_UPDATE", "ORDER_QUEUE_VIEW"),
+            venuesById.getValue(managerVenueId).permissions.toSet()
+        )
+
+        assertEquals("STAFF", venuesById.getValue(staffVenueId).role)
+        assertEquals(
+            setOf("ORDER_QUEUE_VIEW"),
+            venuesById.getValue(staffVenueId).permissions.toSet()
+        )
     }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -133,7 +178,8 @@ class VenueRbacRoutesTest {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                    INSERT INTO users (telegram_user_id, username, first_name, last_name)
+                    MERGE INTO users (telegram_user_id, username, first_name, last_name)
+                    KEY (telegram_user_id)
                     VALUES (?, 'user', 'Test', 'User')
                 """.trimIndent()
             ).use { statement ->
@@ -176,6 +222,19 @@ class VenueRbacRoutesTest {
         val code: String,
         val expiresAt: String,
         val ttlSeconds: Long
+    )
+
+    @Serializable
+    private data class VenueMeResponse(
+        val userId: Long,
+        val venues: List<VenueAccessDto>
+    )
+
+    @Serializable
+    private data class VenueAccessDto(
+        val venueId: Long,
+        val role: String,
+        val permissions: List<String>
     )
 
     private companion object {
