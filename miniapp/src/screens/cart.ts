@@ -40,6 +40,9 @@ function buildApiDeps(isDebug: boolean) {
 }
 
 function resolveTableHint(snapshot: ReturnType<typeof getTableContext>): string | null {
+  if (!snapshot.tableToken) {
+    return 'Сначала отсканируйте QR'
+  }
   switch (snapshot.status) {
     case 'missing':
       return 'Сначала отсканируйте QR'
@@ -47,6 +50,15 @@ function resolveTableHint(snapshot: ReturnType<typeof getTableContext>): string 
       return 'Некорректный QR. Обновите и попробуйте снова.'
     case 'notFound':
       return 'Стол не найден / обновите QR'
+    case 'resolving':
+      return 'Загрузка стола…'
+    case 'error':
+      return 'Не удалось загрузить стол. Попробуйте позже.'
+    case 'resolved':
+      if (!snapshot.orderAllowed) {
+        return snapshot.blockReasonText ?? 'Заказы временно недоступны.'
+      }
+      return null
     default:
       return null
   }
@@ -128,7 +140,9 @@ export function renderCartScreen(options: CartScreenOptions) {
   if (!root) return () => undefined
 
   const refs = buildCartDom(root)
+  let disposed = false
   let isSubmitting = false
+  let submitAbort: AbortController | null = null
   let cartSnapshot = getCartSnapshot()
   let tableSnapshot = getTableContext()
   let itemDisposables: Array<() => void> = []
@@ -139,13 +153,16 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.message.hidden = !text
   }
 
+  const isTableReady = () =>
+    tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
+
   const updateSubmitState = () => {
-    const isTableBlocked = ['missing', 'invalid', 'notFound'].includes(tableSnapshot.status)
     const hasItems = cartSnapshot.items.size > 0
-    const tableHint = resolveTableHint(tableSnapshot)
+    const tableReady = isTableReady()
+    const tableHint = tableReady ? null : resolveTableHint(tableSnapshot)
     refs.tableHint.textContent = tableHint ?? ''
     refs.tableHint.hidden = !tableHint
-    refs.sendButton.disabled = isSubmitting || isTableBlocked || !hasItems
+    refs.sendButton.disabled = isSubmitting || !hasItems || !tableReady
   }
 
   const renderItems = () => {
@@ -235,8 +252,11 @@ export function renderCartScreen(options: CartScreenOptions) {
     if (commentValue.length > MAX_COMMENT_LENGTH) {
       return { ok: false, reason: 'Комментарий должен быть не длиннее 500 символов.' }
     }
-    if (!tableSnapshot.tableToken) {
-      return { ok: false, reason: 'Сначала отсканируйте QR' }
+    if (!isTableReady()) {
+      return {
+        ok: false,
+        reason: resolveTableHint(tableSnapshot) ?? 'Не удалось загрузить стол. Попробуйте позже.'
+      }
     }
     return { ok: true, comment: commentValue ? commentValue : null }
   }
@@ -249,24 +269,50 @@ export function renderCartScreen(options: CartScreenOptions) {
       setMessage(validation.reason)
       return
     }
-    if (!tableSnapshot.tableToken) {
-      setMessage('Сначала отсканируйте QR')
+    const tableToken = tableSnapshot.tableToken
+    if (!tableToken) {
+      setMessage(resolveTableHint(tableSnapshot) ?? 'Не удалось загрузить стол. Попробуйте позже.')
       return
     }
     isSubmitting = true
     updateSubmitState()
+    if (submitAbort) {
+      submitAbort.abort()
+    }
+    const controller = new AbortController()
+    submitAbort = controller
     const deps = buildApiDeps(isDebug)
     const payload = {
-      tableToken: tableSnapshot.tableToken,
+      tableToken,
       comment: validation.comment,
       items: Array.from(cartSnapshot.items.entries()).map(([itemId, qty]) => ({
         itemId,
         qty
       }))
     }
-    const result = await guestAddBatch(backendUrl, payload, deps)
+    const result = await guestAddBatch(backendUrl, payload, deps, controller.signal)
+    if (disposed) {
+      return
+    }
+    if (controller.signal.aborted || submitAbort !== controller) {
+      if (submitAbort === controller) {
+        submitAbort = null
+        isSubmitting = false
+        updateSubmitState()
+      }
+      return
+    }
     isSubmitting = false
+    submitAbort = null
     if (!result.ok) {
+      const code = normalizeErrorCode(result.error)
+      if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
+        clearSession()
+      }
+      if (code === ApiErrorCodes.REQUEST_ABORTED) {
+        updateSubmitState()
+        return
+      }
       setMessage(resolveSubmitError(result.error))
       updateSubmitState()
       return
@@ -303,6 +349,8 @@ export function renderCartScreen(options: CartScreenOptions) {
   })
 
   return () => {
+    disposed = true
+    submitAbort?.abort()
     cartSubscription()
     tableSubscription()
     itemDisposables.forEach((dispose) => dispose())
