@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import java.util.Locale
+
 enum class VenueRole {
     OWNER,
     MANAGER,
@@ -14,14 +16,19 @@ enum class VenuePermission {
 }
 
 object VenueRoleMapping {
+    /**
+     * Maps raw DB roles from venue_members.role to API roles.
+     *
+     * ADMIN is a legacy alias for MANAGER to avoid confusing expectations about access levels.
+     * MANAGER means a manager role (order status updates + queue view), STAFF is limited to queue view.
+     */
     fun fromDb(role: String?): VenueRole? {
         if (role.isNullOrBlank()) {
             return null
         }
-        return when (role.trim().uppercase()) {
+        return when (role.trim().uppercase(Locale.ROOT)) {
             "OWNER" -> VenueRole.OWNER
-            "ADMIN" -> VenueRole.MANAGER
-            "MANAGER" -> VenueRole.STAFF
+            "ADMIN", "MANAGER" -> VenueRole.MANAGER
             "STAFF" -> VenueRole.STAFF
             else -> null
         }

@@ -212,7 +212,6 @@ export function renderVenueMode(options: VenueScreenOptions) {
     refs.linkResult.hidden = true
     refs.linkCode.textContent = ''
     refs.linkCountdown.textContent = ''
-    refs.linkStatus.textContent = 'Сгенерируйте код, чтобы связать чат.'
   }
 
   const startCountdown = (expiresAt: string) => {
@@ -237,26 +236,36 @@ export function renderVenueMode(options: VenueScreenOptions) {
     clockInterval = window.setInterval(update, 1000)
   }
 
-  const updateAccessUi = () => {
+  const getAccessState = () => {
     const venueId = parsePositiveInt(refs.venueInput.value)
     const access = venueId ? accessByVenueId.get(venueId) ?? null : null
     const canLink = access?.permissions.includes('STAFF_CHAT_LINK') ?? false
+    return { venueId, access, canLink }
+  }
+
+  const updateGenerateButtonState = () => {
+    const { canLink } = getAccessState()
+    refs.generateButton.disabled = generating || !canLink
+  }
+
+  const renderLinkStatusForAccess = () => {
+    const { venueId, access, canLink } = getAccessState()
+    if (!venueId) {
+      refs.linkStatus.textContent = 'Укажите ID заведения.'
+      refs.linkResult.hidden = true
+      return
+    }
     if (!access) {
-      refs.linkStatus.textContent = venueId
-        ? 'Нет доступа к выбранному заведению.'
-        : 'Укажите ID заведения.'
-      refs.generateButton.disabled = true
+      refs.linkStatus.textContent = 'Нет доступа к выбранному заведению.'
       refs.linkResult.hidden = true
       return
     }
     if (!canLink) {
       refs.linkStatus.textContent = 'Недостаточно прав для привязки чата.'
-      refs.generateButton.disabled = true
       refs.linkResult.hidden = true
       return
     }
     refs.linkStatus.textContent = 'Сгенерируйте код, чтобы связать чат.'
-    refs.generateButton.disabled = generating
   }
 
   const loadVenueAccess = async () => {
@@ -292,7 +301,8 @@ export function renderVenueMode(options: VenueScreenOptions) {
       refs.venueInput.value = String(onlyVenueId)
     }
     clearAccessError()
-    updateAccessUi()
+    renderLinkStatusForAccess()
+    updateGenerateButtonState()
   }
 
   const pingBackend = async () => {
@@ -336,7 +346,7 @@ export function renderVenueMode(options: VenueScreenOptions) {
     }
     resetLinkUiForVenueChange()
     generating = true
-    refs.generateButton.disabled = true
+    updateGenerateButtonState()
     refs.venueInput.disabled = true
     refs.linkStatus.textContent = 'Генерация кода...'
     try {
@@ -369,9 +379,8 @@ export function renderVenueMode(options: VenueScreenOptions) {
     } finally {
       if (disposed) return
       generating = false
-      refs.generateButton.disabled = false
       refs.venueInput.disabled = false
-      updateAccessUi()
+      updateGenerateButtonState()
     }
   }
 
@@ -400,7 +409,8 @@ export function renderVenueMode(options: VenueScreenOptions) {
         return
       }
       resetLinkUiForVenueChange()
-      updateAccessUi()
+      renderLinkStatusForAccess()
+      updateGenerateButtonState()
     }),
     on(refs.venueInput, 'keydown', (event) => {
       if (event.key !== 'Enter') {
