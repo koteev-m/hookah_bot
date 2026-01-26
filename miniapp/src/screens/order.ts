@@ -192,6 +192,10 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   const loadOrder = async () => {
     const tableToken = getTableToken()
     if (!tableToken) {
+      if (orderAbort) {
+        orderAbort.abort()
+        orderAbort = null
+      }
       currentOrder = null
       lastError = null
       inFlight = false
@@ -211,7 +215,23 @@ export function renderOrderScreen(options: OrderScreenOptions) {
 
     const deps = buildApiDeps(isDebug)
     const result = await guestGetActiveOrder(backendUrl, tableToken, deps, controller.signal)
-    if (disposed || controller.signal.aborted || orderAbort !== controller) {
+    if (disposed || orderAbort !== controller) {
+      return
+    }
+    if (controller.signal.aborted) {
+      inFlight = false
+      orderAbort = null
+      renderState()
+      return
+    }
+    const currentToken = getTableToken()
+    if (currentToken !== tableToken) {
+      inFlight = false
+      orderAbort = null
+      currentOrder = null
+      lastError = null
+      refs.statusValue.textContent = 'Статус: —'
+      renderState()
       return
     }
     inFlight = false
@@ -239,6 +259,9 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       window.clearInterval(pollTimer)
     }
     pollTimer = window.setInterval(() => {
+      if (inFlight || orderAbort) {
+        return
+      }
       void loadOrder()
     }, POLL_INTERVAL_MS)
   }
@@ -252,6 +275,11 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       void loadOrder()
     }
     if (!nextToken) {
+      if (orderAbort) {
+        orderAbort.abort()
+        orderAbort = null
+      }
+      inFlight = false
       currentOrder = null
       lastError = null
       refs.statusValue.textContent = 'Статус: —'
