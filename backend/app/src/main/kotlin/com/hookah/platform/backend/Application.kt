@@ -20,6 +20,9 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
+import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
+import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
@@ -193,6 +196,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val guestVenuePolicy = GuestVenuePolicy(resolveVenueVisibilityMode(appConfig))
     val subscriptionRepository = SubscriptionRepository(dataSource)
     val ordersRepository = OrdersRepository(dataSource)
+    val venueOrdersRepository = VenueOrdersRepository(dataSource)
     val staffCallRepository = StaffCallRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
@@ -205,12 +209,20 @@ internal fun Application.module(overrides: ModuleOverrides) {
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
+    val staffChatNotifierScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier")
+    )
     val staffChatLinkCodeRepository = StaffChatLinkCodeRepository(
         dataSource = dataSource,
         pepper = telegramConfig.staffChatLinkSecretPepper,
         ttlSeconds = telegramConfig.staffChatLinkTtlSeconds
     )
     val venueAccessRepository = VenueAccessRepository(dataSource)
+    val staffChatNotifier = StaffChatNotifier(
+        venueRepository = venueRepository,
+        apiClientProvider = { telegramApiClient },
+        scope = staffChatNotifierScope
+    )
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
         telegramScope = CoroutineScope(
             SupervisorJob() + Dispatchers.Default + CoroutineName("telegram-bot")
@@ -303,6 +315,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
         httpClient.close()
         telegramApiClient?.close()
         telegramScope?.cancel()
+        staffChatNotifierScope.cancel()
         DatabaseFactory.close(dataSource)
     }
     environment.monitor.subscribe(ApplicationStopped) {
@@ -494,7 +507,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         guestVenueRepository = guestVenueRepository,
                         guestMenuRepository = guestMenuRepository,
                         subscriptionRepository = subscriptionRepository,
-                        ordersRepository = ordersRepository
+                        ordersRepository = ordersRepository,
+                        staffChatNotifier = staffChatNotifier
                     )
                     guestStaffCallRoutes(
                         tableTokenResolver = tableTokenResolver,
@@ -510,6 +524,10 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository
+                )
+                venueOrderRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    venueOrdersRepository = venueOrdersRepository
                 )
             }
         }

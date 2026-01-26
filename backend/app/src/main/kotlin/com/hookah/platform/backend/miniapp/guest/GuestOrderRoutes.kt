@@ -12,6 +12,8 @@ import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.telegram.NewBatchNotification
+import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrdersRepository
@@ -33,7 +35,8 @@ fun Route.guestOrderRoutes(
     guestVenueRepository: GuestVenueRepository,
     guestMenuRepository: GuestMenuRepository,
     subscriptionRepository: SubscriptionRepository,
-    ordersRepository: OrdersRepository
+    ordersRepository: OrdersRepository,
+    staffChatNotifier: StaffChatNotifier?
 ) {
     get("/order/active") {
         val rawToken = call.request.queryParameters["tableToken"]
@@ -72,6 +75,15 @@ fun Route.guestOrderRoutes(
             comment = comment,
             items = normalizedItems
         ) ?: throw NotFoundException()
+
+        notifyStaffChat(
+            notifier = staffChatNotifier,
+            table = table,
+            orderId = batch.orderId,
+            batchId = batch.batchId,
+            items = normalizedItems,
+            guestMenuRepository = guestMenuRepository
+        )
 
         call.respond(
             AddBatchResponse(
@@ -142,3 +154,31 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
         )
     }
 )
+
+private suspend fun notifyStaffChat(
+    notifier: StaffChatNotifier?,
+    table: TableContext,
+    orderId: Long,
+    batchId: Long,
+    items: List<OrderBatchItemInput>,
+    guestMenuRepository: GuestMenuRepository
+) {
+    if (notifier == null) {
+        return
+    }
+    val itemIds = items.map { it.itemId }.toSet()
+    val itemNames = runCatching { guestMenuRepository.findItemNames(table.venueId, itemIds) }.getOrDefault(emptyMap())
+    val summary = items.joinToString(separator = ", ") { item ->
+        val name = itemNames[item.itemId] ?: "item#${item.itemId}"
+        "$name x${item.qty}"
+    }
+    notifier.notifyNewBatch(
+        NewBatchNotification(
+            venueId = table.venueId,
+            orderId = orderId,
+            batchId = batchId,
+            tableLabel = table.tableNumber.toString(),
+            itemsSummary = summary
+        )
+    )
+}

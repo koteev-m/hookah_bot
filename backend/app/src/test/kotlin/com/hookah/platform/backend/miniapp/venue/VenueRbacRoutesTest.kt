@@ -149,7 +149,7 @@ class VenueRbacRoutesTest {
 
         assertEquals("STAFF", venuesById.getValue(staffVenueId).role)
         assertEquals(
-            setOf("ORDER_QUEUE_VIEW"),
+            setOf("ORDER_QUEUE_VIEW", "ORDER_STATUS_UPDATE"),
             venuesById.getValue(staffVenueId).permissions.toSet()
         )
     }
