@@ -133,6 +133,7 @@ class VenueMenuRoutesTest {
         val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
         val token = issueToken(config)
 
+        val createdCategoryIds = mutableListOf<Long>()
         var category: VenueMenuCategoryDto? = null
         for (attempt in 1..5) {
             val categoryResponse = client.post("/api/venue/menu/categories?venueId=$venueId") {
@@ -146,6 +147,7 @@ class VenueMenuRoutesTest {
             assertEquals(HttpStatusCode.OK, categoryResponse.status)
             val created = json.decodeFromString(VenueMenuCategoryDto.serializer(), categoryResponse.bodyAsText())
             assertEquals("Soups-$attempt", created.name)
+            createdCategoryIds.add(created.id)
             if (created.id != venueId) {
                 category = created
                 break
@@ -170,6 +172,14 @@ class VenueMenuRoutesTest {
         }
 
         assertEquals(HttpStatusCode.OK, deleteResponse.status)
+
+        createdCategoryIds
+            .filterNot { it == selectedCategory.id }
+            .forEach { categoryId ->
+                client.delete("/api/venue/menu/categories/$categoryId?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            }
     }
 
     @Test

@@ -1,0 +1,7 @@
+{
+  "name": "hookah-bot-root",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix miniapp run build"
+  }
+}
