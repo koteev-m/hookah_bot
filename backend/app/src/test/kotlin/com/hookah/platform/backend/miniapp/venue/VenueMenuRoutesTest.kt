@@ -120,6 +120,52 @@ class VenueMenuRoutesTest {
     }
 
     @Test
+    fun `menu routes prefer venueId over path id`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("menu-venue-id-priority")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+        val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+        val token = issueToken(config)
+
+        val categoryResponse = client.post("/api/venue/menu/categories?venueId=$venueId") {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer $token")
+                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            }
+            setBody("""{"name":"Soups"}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, categoryResponse.status)
+        val category = json.decodeFromString(VenueMenuCategoryDto.serializer(), categoryResponse.bodyAsText())
+        assertEquals("Soups", category.name)
+        assertTrue(venueId != category.id)
+
+        val updateResponse = client.patch("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer $token")
+                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            }
+            setBody("""{"name":"Starters"}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, updateResponse.status)
+        val updated = json.decodeFromString(VenueMenuCategoryDto.serializer(), updateResponse.bodyAsText())
+        assertEquals("Starters", updated.name)
+
+        val deleteResponse = client.delete("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.OK, deleteResponse.status)
+    }
+
+    @Test
     fun `reorder rejects foreign ids`() = testApplication {
         val jdbcUrl = buildJdbcUrl("menu-reorder")
         val config = buildConfig(jdbcUrl)
