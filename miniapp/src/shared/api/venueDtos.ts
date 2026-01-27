@@ -15,6 +15,88 @@ export type StaffChatLinkCodeResponse = {
   ttlSeconds: number
 }
 
+export type VenueMenuResponse = {
+  venueId: number
+  categories: VenueMenuCategoryDto[]
+}
+
+export type VenueMenuCategoryDto = {
+  id: number
+  name: string
+  sortOrder: number
+  items: VenueMenuItemDto[]
+}
+
+export type VenueMenuItemDto = {
+  id: number
+  categoryId: number
+  name: string
+  priceMinor: number
+  currency: string
+  isAvailable: boolean
+  sortOrder: number
+  options: VenueMenuOptionDto[]
+}
+
+export type VenueMenuOptionDto = {
+  id: number
+  itemId: number
+  name: string
+  priceDeltaMinor: number
+  isAvailable: boolean
+  sortOrder: number
+}
+
+export type VenueCreateCategoryRequest = {
+  name: string
+}
+
+export type VenueUpdateCategoryRequest = {
+  name?: string | null
+}
+
+export type VenueCreateItemRequest = {
+  categoryId: number
+  name: string
+  priceMinor: number
+  currency: string
+  isAvailable: boolean
+}
+
+export type VenueUpdateItemRequest = {
+  categoryId?: number | null
+  name?: string | null
+  priceMinor?: number | null
+  currency?: string | null
+  isAvailable?: boolean | null
+}
+
+export type VenueAvailabilityRequest = {
+  isAvailable: boolean
+}
+
+export type VenueReorderCategoriesRequest = {
+  categoryIds: number[]
+}
+
+export type VenueReorderItemsRequest = {
+  categoryId: number
+  itemIds: number[]
+}
+
+export type VenueCreateOptionRequest = {
+  itemId: number
+  name: string
+  priceDeltaMinor: number
+  isAvailable: boolean
+}
+
+export type VenueUpdateOptionRequest = {
+  name?: string | null
+  priceDeltaMinor?: number | null
+  isAvailable?: boolean | null
+}
+
 export type OrderQueueItemDto = {
   orderId: number
   batchId: number

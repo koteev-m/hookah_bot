@@ -137,19 +137,26 @@ class VenueRbacRoutesTest {
 
         assertEquals("OWNER", venuesById.getValue(ownerVenueId).role)
         assertEquals(
-            setOf("STAFF_CHAT_LINK", "VENUE_SETTINGS", "ORDER_STATUS_UPDATE", "ORDER_QUEUE_VIEW"),
+            setOf(
+                "STAFF_CHAT_LINK",
+                "VENUE_SETTINGS",
+                "ORDER_STATUS_UPDATE",
+                "ORDER_QUEUE_VIEW",
+                "MENU_VIEW",
+                "MENU_MANAGE"
+            ),
             venuesById.getValue(ownerVenueId).permissions.toSet()
         )
 
         assertEquals("MANAGER", venuesById.getValue(managerVenueId).role)
         assertEquals(
-            setOf("ORDER_STATUS_UPDATE", "ORDER_QUEUE_VIEW"),
+            setOf("ORDER_STATUS_UPDATE", "ORDER_QUEUE_VIEW", "MENU_VIEW", "MENU_MANAGE"),
             venuesById.getValue(managerVenueId).permissions.toSet()
         )
 
         assertEquals("STAFF", venuesById.getValue(staffVenueId).role)
         assertEquals(
-            setOf("ORDER_QUEUE_VIEW", "ORDER_STATUS_UPDATE"),
+            setOf("ORDER_QUEUE_VIEW", "ORDER_STATUS_UPDATE", "MENU_VIEW"),
             venuesById.getValue(staffVenueId).permissions.toSet()
         )
     }
