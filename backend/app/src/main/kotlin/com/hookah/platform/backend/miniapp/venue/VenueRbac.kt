@@ -12,7 +12,9 @@ enum class VenuePermission {
     STAFF_CHAT_LINK,
     VENUE_SETTINGS,
     ORDER_STATUS_UPDATE,
-    ORDER_QUEUE_VIEW
+    ORDER_QUEUE_VIEW,
+    MENU_VIEW,
+    MENU_MANAGE
 }
 
 object VenueRoleMapping {
@@ -42,15 +44,20 @@ object VenuePermissions {
                 VenuePermission.STAFF_CHAT_LINK,
                 VenuePermission.VENUE_SETTINGS,
                 VenuePermission.ORDER_STATUS_UPDATE,
-                VenuePermission.ORDER_QUEUE_VIEW
+                VenuePermission.ORDER_QUEUE_VIEW,
+                VenuePermission.MENU_VIEW,
+                VenuePermission.MENU_MANAGE
             )
             VenueRole.MANAGER -> setOf(
                 VenuePermission.ORDER_STATUS_UPDATE,
-                VenuePermission.ORDER_QUEUE_VIEW
+                VenuePermission.ORDER_QUEUE_VIEW,
+                VenuePermission.MENU_VIEW,
+                VenuePermission.MENU_MANAGE
             )
             VenueRole.STAFF -> setOf(
                 VenuePermission.ORDER_QUEUE_VIEW,
-                VenuePermission.ORDER_STATUS_UPDATE
+                VenuePermission.ORDER_STATUS_UPDATE,
+                VenuePermission.MENU_VIEW
             )
         }
     }

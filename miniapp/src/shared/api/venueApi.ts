@@ -1,5 +1,18 @@
 import { requestApi, type RequestDependencies } from './request'
 import type {
+  VenueAvailabilityRequest,
+  VenueCreateCategoryRequest,
+  VenueCreateItemRequest,
+  VenueCreateOptionRequest,
+  VenueMenuCategoryDto,
+  VenueMenuItemDto,
+  VenueMenuOptionDto,
+  VenueMenuResponse,
+  VenueReorderCategoriesRequest,
+  VenueReorderItemsRequest,
+  VenueUpdateCategoryRequest,
+  VenueUpdateItemRequest,
+  VenueUpdateOptionRequest,
   OrderAuditResponse,
   OrderDetailResponse,
   OrdersQueueResponse,
@@ -16,6 +29,266 @@ export async function venueGetMe(
   signal?: AbortSignal
 ) {
   return requestApi<VenueMeResponse>(backendUrl, '/api/venue/me', { signal }, deps)
+}
+
+export async function venueGetMenu(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(venueId) })
+  return requestApi<VenueMenuResponse>(
+    backendUrl,
+    `/api/venue/menu?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueCreateCategory(
+  backendUrl: string,
+  params: { venueId: number; body: VenueCreateCategoryRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuCategoryDto>(
+    backendUrl,
+    `/api/venue/menu/categories?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateCategory(
+  backendUrl: string,
+  params: { venueId: number; categoryId: number; body: VenueUpdateCategoryRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuCategoryDto>(
+    backendUrl,
+    `/api/venue/menu/categories/${params.categoryId}?${search.toString()}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueDeleteCategory(
+  backendUrl: string,
+  params: { venueId: number; categoryId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<{ ok: boolean }>(
+    backendUrl,
+    `/api/venue/menu/categories/${params.categoryId}?${search.toString()}`,
+    { method: 'DELETE', signal },
+    deps
+  )
+}
+
+export async function venueCreateItem(
+  backendUrl: string,
+  params: { venueId: number; body: VenueCreateItemRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuItemDto>(
+    backendUrl,
+    `/api/venue/menu/items?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateItem(
+  backendUrl: string,
+  params: { venueId: number; itemId: number; body: VenueUpdateItemRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuItemDto>(
+    backendUrl,
+    `/api/venue/menu/items/${params.itemId}?${search.toString()}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueDeleteItem(
+  backendUrl: string,
+  params: { venueId: number; itemId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<{ ok: boolean }>(
+    backendUrl,
+    `/api/venue/menu/items/${params.itemId}?${search.toString()}`,
+    { method: 'DELETE', signal },
+    deps
+  )
+}
+
+export async function venueReorderCategories(
+  backendUrl: string,
+  params: { venueId: number; body: VenueReorderCategoriesRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<{ ok: boolean }>(
+    backendUrl,
+    `/api/venue/menu/reorder/categories?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueReorderItems(
+  backendUrl: string,
+  params: { venueId: number; body: VenueReorderItemsRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<{ ok: boolean }>(
+    backendUrl,
+    `/api/venue/menu/reorder/items?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueSetItemAvailability(
+  backendUrl: string,
+  params: { venueId: number; itemId: number; body: VenueAvailabilityRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuItemDto>(
+    backendUrl,
+    `/api/venue/menu/items/${params.itemId}/availability?${search.toString()}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueCreateOption(
+  backendUrl: string,
+  params: { venueId: number; body: VenueCreateOptionRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuOptionDto>(
+    backendUrl,
+    `/api/venue/menu/options?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateOption(
+  backendUrl: string,
+  params: { venueId: number; optionId: number; body: VenueUpdateOptionRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuOptionDto>(
+    backendUrl,
+    `/api/venue/menu/options/${params.optionId}?${search.toString()}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueSetOptionAvailability(
+  backendUrl: string,
+  params: { venueId: number; optionId: number; body: VenueAvailabilityRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuOptionDto>(
+    backendUrl,
+    `/api/venue/menu/options/${params.optionId}/availability?${search.toString()}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueDeleteOption(
+  backendUrl: string,
+  params: { venueId: number; optionId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<{ ok: boolean }>(
+    backendUrl,
+    `/api/venue/menu/options/${params.optionId}?${search.toString()}`,
+    { method: 'DELETE', signal },
+    deps
+  )
 }
 
 export async function venueCreateStaffChatLinkCode(

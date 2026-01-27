@@ -20,6 +20,8 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
+import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
 import com.hookah.platform.backend.telegram.StaffChatNotifier
@@ -197,6 +199,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val subscriptionRepository = SubscriptionRepository(dataSource)
     val ordersRepository = OrdersRepository(dataSource)
     val venueOrdersRepository = VenueOrdersRepository(dataSource)
+    val venueMenuRepository = VenueMenuRepository(dataSource)
     val staffCallRepository = StaffCallRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
@@ -524,6 +527,10 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository
+                )
+                venueMenuRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    venueMenuRepository = venueMenuRepository
                 )
                 venueOrderRoutes(
                     venueAccessRepository = venueAccessRepository,
