@@ -49,7 +49,7 @@ fun Route.venueOrderRoutes(
                 ?: throw InvalidInputException("queue status is not supported")
             val cursor = OrderQueueCursor.parse(call.request.queryParameters["cursor"])
                 ?: if (call.request.queryParameters.contains("cursor")) {
-                    throw InvalidInputException("cursor must be in format <epochMs>:<batchId>")
+                    throw InvalidInputException("cursor must be in format <epochSec>:<nano>:<batchId>")
                 } else {
                     null
                 }

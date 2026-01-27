@@ -16,7 +16,7 @@ data class OrderQueueCursor(
     val createdAt: Instant,
     val batchId: Long
 ) {
-    fun encode(): String = "${createdAt.toEpochMilli()}:$batchId"
+    fun encode(): String = "${createdAt.epochSecond}:${createdAt.nano}:$batchId"
 
     companion object {
         fun parse(raw: String?): OrderQueueCursor? {
@@ -24,12 +24,16 @@ data class OrderQueueCursor(
                 return null
             }
             val parts = raw.split(":")
-            if (parts.size != 2) {
+            if (parts.size != 3) {
                 return null
             }
-            val epoch = parts[0].toLongOrNull() ?: return null
-            val batchId = parts[1].toLongOrNull() ?: return null
-            return OrderQueueCursor(Instant.ofEpochMilli(epoch), batchId)
+            val epochSecond = parts[0].toLongOrNull() ?: return null
+            val nano = parts[1].toLongOrNull() ?: return null
+            if (nano < 0 || nano > 999_999_999) {
+                return null
+            }
+            val batchId = parts[2].toLongOrNull() ?: return null
+            return OrderQueueCursor(Instant.ofEpochSecond(epochSecond, nano), batchId)
         }
     }
 }
@@ -202,7 +206,7 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val orderRow = connection.prepareStatement(
+                    val orderHeader = connection.prepareStatement(
                         """
                             SELECT o.id,
                                    o.status,
@@ -220,17 +224,16 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                         statement.setLong(2, venueId)
                         statement.executeQuery().use { rs ->
                             if (rs.next()) {
-                                rs.getString("status") to rs
+                                OrderHeader(
+                                    status = rs.getString("status"),
+                                    createdAt = rs.getTimestamp("created_at").toInstant(),
+                                    updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                                    tableId = rs.getLong("table_id"),
+                                    tableNumber = rs.getInt("table_number")
+                                )
                             } else null
                         }
                     } ?: return@use null
-
-                    val orderStatusRaw = orderRow.first
-                    val orderRs = orderRow.second
-                    val createdAt = orderRs.getTimestamp("created_at").toInstant()
-                    val updatedAt = orderRs.getTimestamp("updated_at").toInstant()
-                    val tableId = orderRs.getLong("table_id")
-                    val tableNumber = orderRs.getInt("table_number")
 
                     val batches = connection.prepareStatement(
                         """
@@ -270,16 +273,16 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                         batch.copy(items = itemsByBatch[batch.batchId].orEmpty())
                     }
 
-                    val workflowStatus = resolveOrderWorkflowStatus(orderStatusRaw, mappedBatches)
+                    val workflowStatus = resolveOrderWorkflowStatus(orderHeader.status, mappedBatches)
 
                     OrderDetail(
                         orderId = orderId,
                         venueId = venueId,
-                        tableId = tableId,
-                        tableNumber = tableNumber,
+                        tableId = orderHeader.tableId,
+                        tableNumber = orderHeader.tableNumber,
                         status = workflowStatus,
-                        createdAt = createdAt,
-                        updatedAt = updatedAt,
+                        createdAt = orderHeader.createdAt,
+                        updatedAt = orderHeader.updatedAt,
                         batches = mappedBatches
                     )
                 }
@@ -376,7 +379,26 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                     } else {
                         val batchStatus = OrderBatchStatus.fromWorkflow(nextStatus)
                             ?: throw IllegalStateException("Missing batch status for $nextStatus")
-                        updateLatestBatchStatus(connection, orderId, batchStatus.dbValue, now)
+                        val latestBatchId = orderRow.batches.firstOrNull()?.batchId
+                            ?: run {
+                                connection.rollback()
+                                return@use OrderStatusUpdateResult(
+                                    orderId = orderId,
+                                    status = current,
+                                    updatedAt = orderRow.updatedAt,
+                                    applied = false
+                                )
+                            }
+                        val updated = updateLatestBatchStatus(connection, latestBatchId, batchStatus.dbValue, now)
+                        if (updated != 1) {
+                            connection.rollback()
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false
+                            )
+                        }
                         updateOrderTimestamp(connection, orderId, now)
                     }
                     insertAudit(
@@ -396,6 +418,9 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                         updatedAt = now.toInstant(),
                         applied = true
                     )
+                } catch (e: SQLException) {
+                    connection.rollback()
+                    throw DatabaseUnavailableException()
                 } catch (e: Exception) {
                     connection.rollback()
                     throw e
@@ -433,7 +458,26 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                         )
                     }
                     val now = OffsetDateTime.now(ZoneOffset.UTC)
-                    updateLatestBatchRejected(connection, orderId, reasonCode, reasonText, now)
+                    val latestBatchId = orderRow.batches.firstOrNull()?.batchId
+                        ?: run {
+                            connection.rollback()
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false
+                            )
+                        }
+                    val updated = updateLatestBatchRejected(connection, latestBatchId, reasonCode, reasonText, now)
+                    if (updated != 1) {
+                        connection.rollback()
+                        return@use OrderStatusUpdateResult(
+                            orderId = orderId,
+                            status = current,
+                            updatedAt = orderRow.updatedAt,
+                            applied = false
+                        )
+                    }
                     updateOrderStatusOnly(connection, orderId)
                     insertAudit(
                         connection = connection,
@@ -452,6 +496,9 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                         updatedAt = now.toInstant(),
                         applied = true
                     )
+                } catch (e: SQLException) {
+                    connection.rollback()
+                    throw DatabaseUnavailableException()
                 } catch (e: Exception) {
                     connection.rollback()
                     throw e
@@ -517,6 +564,14 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
         val batches: List<OrderBatchDetail>
     )
 
+    private data class OrderHeader(
+        val status: String,
+        val createdAt: Instant,
+        val updatedAt: Instant,
+        val tableId: Long,
+        val tableNumber: Int
+    )
+
     private fun selectOrderForUpdate(connection: Connection, orderId: Long, venueId: Long): OrderRow? {
         val order = connection.prepareStatement(
             """
@@ -575,38 +630,32 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
 
     private fun updateLatestBatchStatus(
         connection: Connection,
-        orderId: Long,
+        batchId: Long,
         status: String,
         now: OffsetDateTime
-    ) {
-        connection.prepareStatement(
+    ): Int {
+        return connection.prepareStatement(
             """
                 UPDATE order_batches
                 SET status = ?, updated_at = ?
-                WHERE id = (
-                    SELECT id
-                    FROM order_batches
-                    WHERE order_id = ?
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                )
+                WHERE id = ?
             """.trimIndent()
         ).use { statement ->
             statement.setString(1, status)
             statement.setObject(2, now)
-            statement.setLong(3, orderId)
+            statement.setLong(3, batchId)
             statement.executeUpdate()
         }
     }
 
     private fun updateLatestBatchRejected(
         connection: Connection,
-        orderId: Long,
+        batchId: Long,
         reasonCode: String,
         reasonText: String?,
         now: OffsetDateTime
-    ) {
-        connection.prepareStatement(
+    ): Int {
+        return connection.prepareStatement(
             """
                 UPDATE order_batches
                 SET status = 'REJECTED',
@@ -614,13 +663,7 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                     rejected_reason_code = ?,
                     rejected_reason_text = ?,
                     rejected_at = ?
-                WHERE id = (
-                    SELECT id
-                    FROM order_batches
-                    WHERE order_id = ?
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                )
+                WHERE id = ?
             """.trimIndent()
         ).use { statement ->
             statement.setObject(1, now)
@@ -631,7 +674,7 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                 statement.setNull(3, java.sql.Types.VARCHAR)
             }
             statement.setObject(4, now)
-            statement.setLong(5, orderId)
+            statement.setLong(5, batchId)
             statement.executeUpdate()
         }
     }
