@@ -24,16 +24,23 @@ data class OrderQueueCursor(
                 return null
             }
             val parts = raw.split(":")
-            if (parts.size != 3) {
-                return null
+            return when (parts.size) {
+                3 -> {
+                    val epochSecond = parts[0].toLongOrNull() ?: return null
+                    val nano = parts[1].toLongOrNull() ?: return null
+                    if (nano < 0 || nano > 999_999_999) {
+                        return null
+                    }
+                    val batchId = parts[2].toLongOrNull() ?: return null
+                    OrderQueueCursor(Instant.ofEpochSecond(epochSecond, nano), batchId)
+                }
+                2 -> {
+                    val epochMs = parts[0].toLongOrNull() ?: return null
+                    val batchId = parts[1].toLongOrNull() ?: return null
+                    OrderQueueCursor(Instant.ofEpochMilli(epochMs), batchId)
+                }
+                else -> null
             }
-            val epochSecond = parts[0].toLongOrNull() ?: return null
-            val nano = parts[1].toLongOrNull() ?: return null
-            if (nano < 0 || nano > 999_999_999) {
-                return null
-            }
-            val batchId = parts[2].toLongOrNull() ?: return null
-            return OrderQueueCursor(Instant.ofEpochSecond(epochSecond, nano), batchId)
         }
     }
 }
@@ -356,42 +363,17 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
     ): OrderStatusUpdateResult? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.autoCommit = false
-                try {
-                    val orderRow = selectOrderForUpdate(connection, orderId, venueId) ?: run {
-                        connection.rollback()
-                        return@use null
-                    }
-                    val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
-                    if (!allowedNextStatuses(current).contains(nextStatus)) {
-                        connection.rollback()
-                        return@use OrderStatusUpdateResult(
-                            orderId = orderId,
-                            status = current,
-                            updatedAt = orderRow.updatedAt,
-                            applied = false
-                        )
-                    }
-                    val now = OffsetDateTime.now(ZoneOffset.UTC)
-                    if (nextStatus == OrderWorkflowStatus.CLOSED) {
-                        updateOrderStatusOnly(connection, orderId)
-                    } else {
-                        val batchStatus = OrderBatchStatus.fromWorkflow(nextStatus)
-                            ?: throw IllegalStateException("Missing batch status for $nextStatus")
-                        val latestBatchId = orderRow.batches.firstOrNull()?.batchId
-                            ?: run {
-                                connection.rollback()
-                                return@use OrderStatusUpdateResult(
-                                    orderId = orderId,
-                                    status = current,
-                                    updatedAt = orderRow.updatedAt,
-                                    applied = false
-                                )
-                            }
-                        val updated = updateLatestBatchStatus(connection, latestBatchId, batchStatus.dbValue, now)
-                        if (updated != 1) {
-                            connection.rollback()
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow = selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                            runCatching { connection.rollback() }
+                            return@use null
+                        }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (!allowedNextStatuses(current).contains(nextStatus)) {
+                            runCatching { connection.rollback() }
                             return@use OrderStatusUpdateResult(
                                 orderId = orderId,
                                 status = current,
@@ -399,34 +381,63 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                                 applied = false
                             )
                         }
-                        updateOrderTimestamp(connection, orderId, now)
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        if (nextStatus == OrderWorkflowStatus.CLOSED) {
+                            updateOrderStatusOnly(connection, orderId)
+                        } else {
+                            val batchStatus = OrderBatchStatus.fromWorkflow(nextStatus)
+                                ?: throw IllegalStateException("Missing batch status for $nextStatus")
+                            val latestBatchId = orderRow.batches.firstOrNull()?.batchId
+                                ?: run {
+                                    runCatching { connection.rollback() }
+                                    return@use OrderStatusUpdateResult(
+                                        orderId = orderId,
+                                        status = current,
+                                        updatedAt = orderRow.updatedAt,
+                                        applied = false
+                                    )
+                                }
+                            val updated = updateLatestBatchStatus(connection, latestBatchId, batchStatus.dbValue, now)
+                            if (updated != 1) {
+                                runCatching { connection.rollback() }
+                                return@use OrderStatusUpdateResult(
+                                    orderId = orderId,
+                                    status = current,
+                                    updatedAt = orderRow.updatedAt,
+                                    applied = false
+                                )
+                            }
+                            updateOrderTimestamp(connection, orderId, now)
+                        }
+                        insertAudit(
+                            connection = connection,
+                            orderId = orderId,
+                            actor = actor,
+                            action = "STATUS_CHANGE",
+                            fromStatus = current,
+                            toStatus = nextStatus,
+                            reasonCode = null,
+                            reasonText = null
+                        )
+                        connection.commit()
+                        OrderStatusUpdateResult(
+                            orderId = orderId,
+                            status = nextStatus,
+                            updatedAt = now.toInstant(),
+                            applied = true
+                        )
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
                     }
-                    insertAudit(
-                        connection = connection,
-                        orderId = orderId,
-                        actor = actor,
-                        action = "STATUS_CHANGE",
-                        fromStatus = current,
-                        toStatus = nextStatus,
-                        reasonCode = null,
-                        reasonText = null
-                    )
-                    connection.commit()
-                    OrderStatusUpdateResult(
-                        orderId = orderId,
-                        status = nextStatus,
-                        updatedAt = now.toInstant(),
-                        applied = true
-                    )
-                } catch (e: SQLException) {
-                    connection.rollback()
-                    throw DatabaseUnavailableException()
-                } catch (e: Exception) {
-                    connection.rollback()
-                    throw e
-                } finally {
-                    connection.autoCommit = true
                 }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
             }
         }
     }
@@ -440,27 +451,17 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
     ): OrderStatusUpdateResult? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.autoCommit = false
-                try {
-                    val orderRow = selectOrderForUpdate(connection, orderId, venueId) ?: run {
-                        connection.rollback()
-                        return@use null
-                    }
-                    val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
-                    if (current == OrderWorkflowStatus.CLOSED) {
-                        connection.rollback()
-                        return@use OrderStatusUpdateResult(
-                            orderId = orderId,
-                            status = current,
-                            updatedAt = orderRow.updatedAt,
-                            applied = false
-                        )
-                    }
-                    val now = OffsetDateTime.now(ZoneOffset.UTC)
-                    val latestBatchId = orderRow.batches.firstOrNull()?.batchId
-                        ?: run {
-                            connection.rollback()
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow = selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                            runCatching { connection.rollback() }
+                            return@use null
+                        }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
                             return@use OrderStatusUpdateResult(
                                 orderId = orderId,
                                 status = current,
@@ -468,43 +469,57 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                                 applied = false
                             )
                         }
-                    val updated = updateLatestBatchRejected(connection, latestBatchId, reasonCode, reasonText, now)
-                    if (updated != 1) {
-                        connection.rollback()
-                        return@use OrderStatusUpdateResult(
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val latestBatchId = orderRow.batches.firstOrNull()?.batchId
+                            ?: run {
+                                runCatching { connection.rollback() }
+                                return@use OrderStatusUpdateResult(
+                                    orderId = orderId,
+                                    status = current,
+                                    updatedAt = orderRow.updatedAt,
+                                    applied = false
+                                )
+                            }
+                        val updated = updateLatestBatchRejected(connection, latestBatchId, reasonCode, reasonText, now)
+                        if (updated != 1) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false
+                            )
+                        }
+                        updateOrderStatusOnly(connection, orderId)
+                        insertAudit(
+                            connection = connection,
                             orderId = orderId,
-                            status = current,
-                            updatedAt = orderRow.updatedAt,
-                            applied = false
+                            actor = actor,
+                            action = "REJECT",
+                            fromStatus = current,
+                            toStatus = OrderWorkflowStatus.CLOSED,
+                            reasonCode = reasonCode,
+                            reasonText = reasonText
                         )
+                        connection.commit()
+                        OrderStatusUpdateResult(
+                            orderId = orderId,
+                            status = OrderWorkflowStatus.CLOSED,
+                            updatedAt = now.toInstant(),
+                            applied = true
+                        )
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
                     }
-                    updateOrderStatusOnly(connection, orderId)
-                    insertAudit(
-                        connection = connection,
-                        orderId = orderId,
-                        actor = actor,
-                        action = "REJECT",
-                        fromStatus = current,
-                        toStatus = OrderWorkflowStatus.CLOSED,
-                        reasonCode = reasonCode,
-                        reasonText = reasonText
-                    )
-                    connection.commit()
-                    OrderStatusUpdateResult(
-                        orderId = orderId,
-                        status = OrderWorkflowStatus.CLOSED,
-                        updatedAt = now.toInstant(),
-                        applied = true
-                    )
-                } catch (e: SQLException) {
-                    connection.rollback()
-                    throw DatabaseUnavailableException()
-                } catch (e: Exception) {
-                    connection.rollback()
-                    throw e
-                } finally {
-                    connection.autoCommit = true
                 }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
             }
         }
     }
