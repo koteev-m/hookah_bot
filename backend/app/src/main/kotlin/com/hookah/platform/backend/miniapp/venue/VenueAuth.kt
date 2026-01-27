@@ -26,8 +26,8 @@ fun ApplicationCall.requireUserId(): Long {
 
 fun ApplicationCall.requireVenueId(): Long {
     val rawId = parameters["venueId"]
-        ?: parameters["id"]
         ?: request.queryParameters["venueId"]
+        ?: parameters["id"]
         ?: request.queryParameters["id"]
     return rawId?.toLongOrNull() ?: throw InvalidInputException("venueId must be a number")
 }
