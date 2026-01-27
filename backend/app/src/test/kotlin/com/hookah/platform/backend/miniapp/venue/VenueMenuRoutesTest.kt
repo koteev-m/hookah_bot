@@ -133,20 +133,27 @@ class VenueMenuRoutesTest {
         val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
         val token = issueToken(config)
 
-        val categoryResponse = client.post("/api/venue/menu/categories?venueId=$venueId") {
-            headers {
-                append(HttpHeaders.Authorization, "Bearer $token")
-                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+        var category: VenueMenuCategoryDto? = null
+        for (attempt in 1..5) {
+            val categoryResponse = client.post("/api/venue/menu/categories?venueId=$venueId") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $token")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody("""{"name":"Soups-$attempt"}""")
             }
-            setBody("""{"name":"Soups"}""")
+
+            assertEquals(HttpStatusCode.OK, categoryResponse.status)
+            val created = json.decodeFromString(VenueMenuCategoryDto.serializer(), categoryResponse.bodyAsText())
+            assertEquals("Soups-$attempt", created.name)
+            if (created.id != venueId) {
+                category = created
+                break
+            }
         }
+        val selectedCategory = requireNotNull(category) { "Failed to create category with id != venueId" }
 
-        assertEquals(HttpStatusCode.OK, categoryResponse.status)
-        val category = json.decodeFromString(VenueMenuCategoryDto.serializer(), categoryResponse.bodyAsText())
-        assertEquals("Soups", category.name)
-        assertTrue(venueId != category.id)
-
-        val updateResponse = client.patch("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+        val updateResponse = client.patch("/api/venue/menu/categories/${selectedCategory.id}?venueId=$venueId") {
             headers {
                 append(HttpHeaders.Authorization, "Bearer $token")
                 append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
@@ -158,7 +165,7 @@ class VenueMenuRoutesTest {
         val updated = json.decodeFromString(VenueMenuCategoryDto.serializer(), updateResponse.bodyAsText())
         assertEquals("Starters", updated.name)
 
-        val deleteResponse = client.delete("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+        val deleteResponse = client.delete("/api/venue/menu/categories/${selectedCategory.id}?venueId=$venueId") {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
         }
 
