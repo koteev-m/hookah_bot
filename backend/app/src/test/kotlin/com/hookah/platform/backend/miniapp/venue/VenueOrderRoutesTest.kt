@@ -175,6 +175,64 @@ class VenueOrderRoutesTest {
         assertEquals(olderBatchId, payload2.items.first().batchId)
     }
 
+    @Test
+    fun `order detail returns batches and items`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("orders-detail")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+        val tableId = seedTable(jdbcUrl, venueId, 3)
+        seedMenu(jdbcUrl, venueId)
+        val orderId = seedOrder(jdbcUrl, venueId, tableId, "ACTIVE")
+        val batchId = seedBatch(jdbcUrl, orderId, "NEW", Instant.now())
+        seedBatchItem(jdbcUrl, batchId)
+        val token = issueToken(config)
+
+        val response = client.get("/api/venue/orders/$orderId?venueId=$venueId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val payload = json.decodeFromString(OrderDetailResponse.serializer(), response.bodyAsText())
+        assertEquals("new", payload.order.status)
+        assertTrue(payload.order.batches.isNotEmpty())
+        val firstBatch = payload.order.batches.first()
+        assertEquals(batchId, firstBatch.batchId)
+        assertTrue(firstBatch.items.isNotEmpty())
+    }
+
+    @Test
+    fun `order audit returns empty list when no entries`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("orders-audit-empty")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+        val tableId = seedTable(jdbcUrl, venueId, 6)
+        seedMenu(jdbcUrl, venueId)
+        val orderId = seedOrder(jdbcUrl, venueId, tableId, "ACTIVE")
+        val batchId = seedBatch(jdbcUrl, orderId, "NEW", Instant.now())
+        seedBatchItem(jdbcUrl, batchId)
+        val token = issueToken(config)
+
+        val response = client.get("/api/venue/orders/$orderId/audit?venueId=$venueId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val payload = json.decodeFromString(OrderAuditResponse.serializer(), response.bodyAsText())
+        assertTrue(payload.items.isEmpty())
+    }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -356,6 +414,28 @@ class VenueOrderRoutesTest {
     @Serializable
     private data class OrderQueueItemDto(
         val batchId: Long
+    )
+
+    @Serializable
+    private data class OrderDetailResponse(
+        val order: OrderDetailDto
+    )
+
+    @Serializable
+    private data class OrderDetailDto(
+        val status: String,
+        val batches: List<OrderBatchDto>
+    )
+
+    @Serializable
+    private data class OrderBatchDto(
+        val batchId: Long,
+        val items: List<OrderBatchItemDto>
+    )
+
+    @Serializable
+    private data class OrderBatchItemDto(
+        val itemId: Long
     )
 
     @Serializable
