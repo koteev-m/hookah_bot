@@ -81,6 +81,7 @@ fun Route.guestOrderRoutes(
             table = table,
             orderId = batch.orderId,
             batchId = batch.batchId,
+            comment = comment,
             items = normalizedItems,
             guestMenuRepository = guestMenuRepository
         )
@@ -160,6 +161,7 @@ private suspend fun notifyStaffChat(
     table: TableContext,
     orderId: Long,
     batchId: Long,
+    comment: String?,
     items: List<OrderBatchItemInput>,
     guestMenuRepository: GuestMenuRepository
 ) {
@@ -178,7 +180,8 @@ private suspend fun notifyStaffChat(
             orderId = orderId,
             batchId = batchId,
             tableLabel = table.tableNumber.toString(),
-            itemsSummary = summary
+            itemsSummary = summary,
+            comment = comment
         )
     )
 }

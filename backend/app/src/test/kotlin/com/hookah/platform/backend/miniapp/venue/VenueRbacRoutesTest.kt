@@ -162,7 +162,6 @@ class VenueRbacRoutesTest {
                 "MENU_MANAGE",
                 "TABLE_VIEW",
                 "TABLE_MANAGE",
-                "TABLE_TOKEN_ROTATE",
                 "TABLE_QR_EXPORT"
             ),
             venuesById.getValue(managerVenueId).permissions.toSet()

@@ -26,7 +26,14 @@ import type {
   OrderStatusRequest,
   OrderStatusResponse,
   StaffChatLinkCodeResponse,
-  VenueMeResponse
+  VenueMeResponse,
+  VenueStaffChatStatusResponse,
+  VenueStaffInviteAcceptRequest,
+  VenueStaffInviteAcceptResponse,
+  VenueStaffInviteRequest,
+  VenueStaffInviteResponse,
+  VenueStaffListResponse,
+  VenueStaffUpdateRoleRequest
 } from './venueDtos'
 
 export async function venueGetMe(
@@ -307,6 +314,146 @@ export async function venueCreateStaffChatLinkCode(
     backendUrl,
     `/api/venue/${venueId}/staff-chat/link-code`,
     { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueCreateChatLinkCode(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return venueCreateStaffChatLinkCode(backendUrl, venueId, deps, signal)
+}
+
+export async function venueGetStaffChatStatus(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffChatStatusResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/staff-chat`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueGetChatLinkStatus(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return venueGetStaffChatStatus(backendUrl, venueId, deps, signal)
+}
+
+export async function venueUnlinkStaffChat(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<{ ok: boolean }>(
+    backendUrl,
+    `/api/venue/${venueId}/staff-chat/unlink`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueUnlinkChat(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return venueUnlinkStaffChat(backendUrl, venueId, deps, signal)
+}
+
+export async function venueGetStaff(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffListResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/staff`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueCreateInvite(
+  backendUrl: string,
+  params: { venueId: number; body: VenueStaffInviteRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffInviteResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/invites`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueAcceptInvite(
+  backendUrl: string,
+  body: VenueStaffInviteAcceptRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffInviteAcceptResponse>(
+    backendUrl,
+    '/api/venue/staff/invites/accept',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateRole(
+  backendUrl: string,
+  params: { venueId: number; userId: number; body: VenueStaffUpdateRoleRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffListResponse['members'][number]>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/${params.userId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueRemoveStaff(
+  backendUrl: string,
+  params: { venueId: number; userId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<{ ok: boolean }>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/${params.userId}`,
+    { method: 'DELETE', signal },
     deps
   )
 }
