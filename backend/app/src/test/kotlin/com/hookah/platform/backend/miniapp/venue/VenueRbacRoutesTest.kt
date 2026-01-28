@@ -143,20 +143,34 @@ class VenueRbacRoutesTest {
                 "ORDER_STATUS_UPDATE",
                 "ORDER_QUEUE_VIEW",
                 "MENU_VIEW",
-                "MENU_MANAGE"
+                "MENU_MANAGE",
+                "TABLE_VIEW",
+                "TABLE_MANAGE",
+                "TABLE_TOKEN_ROTATE",
+                "TABLE_TOKEN_ROTATE_ALL",
+                "TABLE_QR_EXPORT"
             ),
             venuesById.getValue(ownerVenueId).permissions.toSet()
         )
 
         assertEquals("MANAGER", venuesById.getValue(managerVenueId).role)
         assertEquals(
-            setOf("ORDER_STATUS_UPDATE", "ORDER_QUEUE_VIEW", "MENU_VIEW", "MENU_MANAGE"),
+            setOf(
+                "ORDER_STATUS_UPDATE",
+                "ORDER_QUEUE_VIEW",
+                "MENU_VIEW",
+                "MENU_MANAGE",
+                "TABLE_VIEW",
+                "TABLE_MANAGE",
+                "TABLE_TOKEN_ROTATE",
+                "TABLE_QR_EXPORT"
+            ),
             venuesById.getValue(managerVenueId).permissions.toSet()
         )
 
         assertEquals("STAFF", venuesById.getValue(staffVenueId).role)
         assertEquals(
-            setOf("ORDER_QUEUE_VIEW", "ORDER_STATUS_UPDATE", "MENU_VIEW"),
+            setOf("ORDER_QUEUE_VIEW", "ORDER_STATUS_UPDATE", "MENU_VIEW", "TABLE_VIEW"),
             venuesById.getValue(staffVenueId).permissions.toSet()
         )
     }

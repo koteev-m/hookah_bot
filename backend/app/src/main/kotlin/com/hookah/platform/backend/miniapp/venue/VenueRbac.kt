@@ -14,7 +14,12 @@ enum class VenuePermission {
     ORDER_STATUS_UPDATE,
     ORDER_QUEUE_VIEW,
     MENU_VIEW,
-    MENU_MANAGE
+    MENU_MANAGE,
+    TABLE_VIEW,
+    TABLE_MANAGE,
+    TABLE_TOKEN_ROTATE,
+    TABLE_TOKEN_ROTATE_ALL,
+    TABLE_QR_EXPORT
 }
 
 object VenueRoleMapping {
@@ -46,18 +51,28 @@ object VenuePermissions {
                 VenuePermission.ORDER_STATUS_UPDATE,
                 VenuePermission.ORDER_QUEUE_VIEW,
                 VenuePermission.MENU_VIEW,
-                VenuePermission.MENU_MANAGE
+                VenuePermission.MENU_MANAGE,
+                VenuePermission.TABLE_VIEW,
+                VenuePermission.TABLE_MANAGE,
+                VenuePermission.TABLE_TOKEN_ROTATE,
+                VenuePermission.TABLE_TOKEN_ROTATE_ALL,
+                VenuePermission.TABLE_QR_EXPORT
             )
             VenueRole.MANAGER -> setOf(
                 VenuePermission.ORDER_STATUS_UPDATE,
                 VenuePermission.ORDER_QUEUE_VIEW,
                 VenuePermission.MENU_VIEW,
-                VenuePermission.MENU_MANAGE
+                VenuePermission.MENU_MANAGE,
+                VenuePermission.TABLE_VIEW,
+                VenuePermission.TABLE_MANAGE,
+                VenuePermission.TABLE_TOKEN_ROTATE,
+                VenuePermission.TABLE_QR_EXPORT
             )
             VenueRole.STAFF -> setOf(
                 VenuePermission.ORDER_QUEUE_VIEW,
                 VenuePermission.ORDER_STATUS_UPDATE,
-                VenuePermission.MENU_VIEW
+                VenuePermission.MENU_VIEW,
+                VenuePermission.TABLE_VIEW
             )
         }
     }

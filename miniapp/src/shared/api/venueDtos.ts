@@ -15,6 +15,52 @@ export type StaffChatLinkCodeResponse = {
   ttlSeconds: number
 }
 
+export type VenueTableDto = {
+  tableId: number
+  tableNumber: number
+  tableLabel: string
+  isActive: boolean
+  activeTokenIssuedAt?: string | null
+}
+
+export type VenueTablesResponse = {
+  tables: VenueTableDto[]
+}
+
+export type VenueTableBatchCreateRequest = {
+  count: number
+  startNumber?: number
+  prefix?: string
+}
+
+export type VenueTableCreatedDto = {
+  tableId: number
+  tableNumber: number
+  tableLabel: string
+  activeTokenIssuedAt: string
+}
+
+export type VenueTableBatchCreateResponse = {
+  count: number
+  tables: VenueTableCreatedDto[]
+}
+
+export type VenueTableTokenRotateResponse = {
+  tableId: number
+  tableNumber: number
+  tableLabel: string
+  activeTokenIssuedAt: string
+}
+
+export type VenueTableRotateTokensRequest = {
+  tableIds?: number[]
+}
+
+export type VenueTableRotateTokensResponse = {
+  rotatedCount: number
+  tableIds: number[]
+}
+
 export type VenueMenuResponse = {
   venueId: number
   categories: VenueMenuCategoryDto[]
