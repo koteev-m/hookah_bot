@@ -243,25 +243,28 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         if (tableIds.isEmpty()) {
             return emptyList()
         }
+        val requestedTableIds = tableIds.distinct()
+        val sortedTableIds = requestedTableIds.sorted()
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val result = mutableListOf<VenueTableCreated>()
-                        for (tableId in tableIds) {
+                        val rotatedById = mutableMapOf<Long, VenueTableCreated>()
+                        for (tableId in sortedTableIds) {
                             val tableNumber = loadTableNumber(connection, venueId, tableId, forUpdate = true) ?: continue
                             revokeActiveToken(connection, tableId)
                             val issuedAt = Instant.now()
                             insertToken(connection, tableId, issuedAt)
-                            result.add(
-                                VenueTableCreated(
-                                    tableId = tableId,
-                                    tableNumber = tableNumber,
-                                    tokenIssuedAt = issuedAt
-                                )
+                            rotatedById[tableId] = VenueTableCreated(
+                                tableId = tableId,
+                                tableNumber = tableNumber,
+                                tokenIssuedAt = issuedAt
                             )
+                        }
+                        val result = requestedTableIds.mapNotNull { tableId ->
+                            rotatedById[tableId]
                         }
                         connection.commit()
                         result
