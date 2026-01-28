@@ -19,11 +19,14 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
+import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
+import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
@@ -200,8 +203,10 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val ordersRepository = OrdersRepository(dataSource)
     val venueOrdersRepository = VenueOrdersRepository(dataSource)
     val venueMenuRepository = VenueMenuRepository(dataSource)
+    val venueTableRepository = VenueTableRepository(dataSource)
     val staffCallRepository = StaffCallRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
+    val auditLogRepository = AuditLogRepository(dataSource, json)
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
     if (dataSource != null) {
@@ -527,6 +532,12 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository
+                )
+                venueTableRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    venueTableRepository = venueTableRepository,
+                    auditLogRepository = auditLogRepository,
+                    webAppPublicUrl = telegramConfig.webAppPublicUrl
                 )
                 venueMenuRoutes(
                     venueAccessRepository = venueAccessRepository,

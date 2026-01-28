@@ -36,6 +36,9 @@ dependencies {
     implementation(libs.flyway.postgresql)
     implementation(libs.postgresql)
     implementation(libs.hikaricp)
+    implementation(libs.zxing.core)
+    implementation(libs.zxing.javase)
+    implementation(libs.openpdf)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit.jupiter)

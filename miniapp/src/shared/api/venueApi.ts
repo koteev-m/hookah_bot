@@ -1,9 +1,15 @@
-import { requestApi, type RequestDependencies } from './request'
+import { requestApi, requestBinary, type RequestDependencies } from './request'
 import type {
   VenueAvailabilityRequest,
   VenueCreateCategoryRequest,
   VenueCreateItemRequest,
   VenueCreateOptionRequest,
+  VenueTableBatchCreateRequest,
+  VenueTableBatchCreateResponse,
+  VenueTableRotateTokensRequest,
+  VenueTableRotateTokensResponse,
+  VenueTableTokenRotateResponse,
+  VenueTablesResponse,
   VenueMenuCategoryDto,
   VenueMenuItemDto,
   VenueMenuOptionDto,
@@ -301,6 +307,94 @@ export async function venueCreateStaffChatLinkCode(
     backendUrl,
     `/api/venue/${venueId}/staff-chat/link-code`,
     { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueGetTables(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(venueId) })
+  return requestApi<VenueTablesResponse>(
+    backendUrl,
+    `/api/venue/tables?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueCreateTablesBatch(
+  backendUrl: string,
+  params: { venueId: number; body: VenueTableBatchCreateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueTableBatchCreateResponse>(
+    backendUrl,
+    `/api/venue/tables/batch-create?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueRotateTableToken(
+  backendUrl: string,
+  params: { venueId: number; tableId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueTableTokenRotateResponse>(
+    backendUrl,
+    `/api/venue/tables/${params.tableId}/rotate-token?${search.toString()}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueRotateTableTokens(
+  backendUrl: string,
+  params: { venueId: number; body: VenueTableRotateTokensRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueTableRotateTokensResponse>(
+    backendUrl,
+    `/api/venue/tables/rotate-tokens?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueExportQrPackage(
+  backendUrl: string,
+  params: { venueId: number; format: 'zip' | 'pdf' },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({
+    venueId: String(params.venueId),
+    format: params.format
+  })
+  return requestBinary(
+    backendUrl,
+    `/api/venue/tables/qr-package?${search.toString()}`,
+    { signal },
     deps
   )
 }
