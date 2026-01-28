@@ -15,6 +15,53 @@ export type StaffChatLinkCodeResponse = {
   ttlSeconds: number
 }
 
+export type VenueStaffMemberDto = {
+  userId: number
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+  createdAt: string
+  invitedByUserId?: number | null
+}
+
+export type VenueStaffListResponse = {
+  members: VenueStaffMemberDto[]
+}
+
+export type VenueStaffInviteRequest = {
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+  expiresIn?: number
+}
+
+export type VenueStaffInviteResponse = {
+  inviteCode: string
+  expiresAt: string
+  ttlSeconds: number
+  instructions: string
+}
+
+export type VenueStaffInviteAcceptRequest = {
+  inviteCode: string
+}
+
+export type VenueStaffInviteAcceptResponse = {
+  venueId: number
+  member: VenueStaffMemberDto
+  alreadyMember: boolean
+}
+
+export type VenueStaffUpdateRoleRequest = {
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+}
+
+export type VenueStaffChatStatusResponse = {
+  venueId: number
+  isLinked: boolean
+  chatId?: number | null
+  linkedAt?: string | null
+  linkedByUserId?: number | null
+  activeCodeHint?: string | null
+  activeCodeExpiresAt?: string | null
+}
+
 export type VenueTableDto = {
   tableId: number
   tableNumber: number

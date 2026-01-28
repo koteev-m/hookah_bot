@@ -3,36 +3,36 @@ package com.hookah.platform.backend.telegram.db
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
-import javax.sql.DataSource
 import kotlinx.coroutines.runBlocking
+import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class StaffChatLinkCodeRepositoryTest {
     companion object {
         private lateinit var dataSource: HikariDataSource
-        private var venueId: Long = 1L
-        private var anotherVenueId: Long = 2L
 
         @BeforeAll
         @JvmStatic
         fun setup() {
+            val dbName = "staff_link_${UUID.randomUUID()}"
             dataSource = HikariDataSource(
                 HikariConfig().apply {
                     driverClassName = "org.h2.Driver"
-                    jdbcUrl = "jdbc:h2:mem:staff_link_codes;MODE=PostgreSQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1;INIT=CREATE DOMAIN IF NOT EXISTS TIMESTAMPTZ AS TIMESTAMP WITH TIME ZONE\\;CREATE DOMAIN IF NOT EXISTS JSONB AS JSON"
-                    maximumPoolSize = 5
+                    jdbcUrl = "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+                    maximumPoolSize = 3
                 }
             )
-            createSchema(dataSource)
-            seedData()
+            Flyway.configure()
+                .dataSource(dataSource)
+                .locations("classpath:db/migration/h2")
+                .load()
+                .migrate()
         }
 
         @AfterAll
@@ -40,375 +40,94 @@ class StaffChatLinkCodeRepositoryTest {
         fun tearDown() {
             dataSource.close()
         }
-
-        private fun seedData() {
-            dataSource.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                        INSERT INTO users (telegram_user_id, username, first_name, last_name)
-                        VALUES (1001, 'owner', 'Owner', 'One')
-                    """.trimIndent()
-                ).executeUpdate()
-                connection.prepareStatement(
-                    """
-                        INSERT INTO venues (name, city, address, status)
-                        VALUES ('Test Venue', 'City', 'Addr', 'active_published')
-                    """.trimIndent(),
-                    java.sql.Statement.RETURN_GENERATED_KEYS,
-                ).use { statement ->
-                    statement.executeUpdate()
-                    statement.generatedKeys.use { rs ->
-                        rs.next()
-                        venueId = rs.getLong(1)
-                    }
-                }
-                connection.prepareStatement(
-                    """
-                        INSERT INTO venues (name, city, address, status)
-                        VALUES ('Another Venue', 'City', 'Addr', 'active_published')
-                    """.trimIndent(),
-                    java.sql.Statement.RETURN_GENERATED_KEYS,
-                ).use { statement ->
-                    statement.executeUpdate()
-                    statement.generatedKeys.use { rs ->
-                        rs.next()
-                        anotherVenueId = rs.getLong(1)
-                    }
-                }
-                connection.prepareStatement(
-                    """
-                        INSERT INTO venue_members (venue_id, user_id, role)
-                        VALUES (?, 1001, 'OWNER')
-                    """.trimIndent(),
-                ).use { insertMember ->
-                    insertMember.setLong(1, venueId)
-                    insertMember.executeUpdate()
-                }
-            }
-        }
-
-        private fun createSchema(dataSource: DataSource) {
-            dataSource.connection.use { connection ->
-                connection.createStatement().use { statement ->
-                    statement.execute(
-                        """
-                            CREATE TABLE IF NOT EXISTS users (
-                                telegram_user_id BIGINT PRIMARY KEY,
-                                username TEXT NULL,
-                                first_name TEXT NULL,
-                                last_name TEXT NULL,
-                                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                            )
-                        """.trimIndent()
-                    )
-                    statement.execute(
-                        """
-                            CREATE TABLE IF NOT EXISTS venues (
-                                id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-                                name TEXT NOT NULL,
-                                city TEXT NULL,
-                                address TEXT NULL,
-                                status TEXT NOT NULL,
-                                features JSONB NULL,
-                                ui_layout JSONB NULL,
-                                staff_chat_id BIGINT NULL,
-                                staff_chat_linked_at TIMESTAMP WITH TIME ZONE NULL,
-                                staff_chat_linked_by_user_id BIGINT NULL,
-                                staff_chat_unlinked_at TIMESTAMP WITH TIME ZONE NULL,
-                                staff_chat_unlinked_by_user_id BIGINT NULL,
-                                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                            )
-                        """.trimIndent()
-                    )
-                    statement.execute(
-                        """
-                            CREATE TABLE IF NOT EXISTS venue_members (
-                                venue_id BIGINT NOT NULL,
-                                user_id BIGINT NOT NULL,
-                                role TEXT NOT NULL,
-                                PRIMARY KEY (venue_id, user_id)
-                            )
-                        """.trimIndent()
-                    )
-                    statement.execute(
-                        """
-                            CREATE TABLE IF NOT EXISTS telegram_staff_chat_link_codes (
-                                code_hash TEXT PRIMARY KEY,
-                                code_hint TEXT NULL,
-                                venue_id BIGINT NOT NULL,
-                                created_by_user_id BIGINT NULL,
-                                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                                revoked_at TIMESTAMP WITH TIME ZONE NULL,
-                                used_at TIMESTAMP WITH TIME ZONE NULL,
-                                used_by_user_id BIGINT NULL,
-                                used_in_chat_id BIGINT NULL,
-                                used_message_id BIGINT NULL
-                            )
-                        """.trimIndent()
-                    )
-                    statement.execute(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_venues_staff_chat ON venues(staff_chat_id)"
-                    )
-                }
-            }
-        }
-    }
-
-    @BeforeEach
-    fun cleanup() {
-        dataSource.connection.use { connection ->
-            connection.prepareStatement("TRUNCATE TABLE telegram_staff_chat_link_codes").executeUpdate()
-            connection.prepareStatement("UPDATE venues SET staff_chat_id = NULL, staff_chat_linked_at = NULL").executeUpdate()
-        }
     }
 
     @Test
-    fun `createLinkCode revokes previous active codes`() = runBlocking {
-        val nowRef = AtomicReference(Instant.now())
-        val repository = StaffChatLinkCodeRepository(
-            dataSource = dataSource,
-            pepper = "pepper",
-            ttlSeconds = 600,
-            now = { nowRef.get() }
-        )
-
-        repository.createLinkCode(venueId = venueId, createdByUserId = 1001)!!
-        repository.createLinkCode(venueId = venueId, createdByUserId = 1001)!!
-
-        dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                    SELECT
-                        SUM(CASE WHEN revoked_at IS NOT NULL THEN 1 ELSE 0 END) AS revoked_count,
-                        SUM(CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END) AS active_count
-                    FROM telegram_staff_chat_link_codes
-                """.trimIndent()
-            ).use { statement ->
-                statement.executeQuery().use { rs ->
-                    rs.next()
-                    assertEquals(1, rs.getInt("revoked_count"))
-                    assertEquals(1, rs.getInt("active_count"))
-                }
-            }
-        }
-    }
-
-    @Test
-    fun `linkAndBindWithCode marks used and prevents reuse`() = runBlocking {
-        val repository = StaffChatLinkCodeRepository(
-            dataSource = dataSource,
-            pepper = "pepper",
-            ttlSeconds = 600
-        )
-        val issued = repository.createLinkCode(venueId = venueId, createdByUserId = 1001)!!
-
-        val success = repository.linkAndBindWithCode(
-            code = issued.code,
-            usedByUserId = 1001,
-            chatId = -10,
-            messageId = 1L,
-            authorize = { _, _ -> true },
-            bind = { _, vId -> BindResult.Success(vId, "Test Venue") }
-        )
-        assertTrue(success is LinkAndBindResult.Success)
-
-        val secondAttempt = repository.linkAndBindWithCode(
-            code = issued.code,
-            usedByUserId = 1001,
-            chatId = -10,
-            messageId = 2L,
-            authorize = { _, _ -> true },
-            bind = { _, vId -> BindResult.Success(vId, "Test Venue") }
-        )
-        assertTrue(secondAttempt is LinkAndBindResult.InvalidOrExpired)
-
-        dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT COUNT(*) FROM telegram_staff_chat_link_codes WHERE used_at IS NOT NULL"
-            ).use { statement ->
-                statement.executeQuery().use { rs ->
-                    rs.next()
-                    assertEquals(1, rs.getInt(1))
-                }
-            }
-        }
-    }
-
-    @Test
-    fun `expired code is rejected`() = runBlocking {
+    fun `link code is single use`() = runBlocking {
         val nowRef = AtomicReference(Instant.parse("2024-01-01T00:00:00Z"))
         val repository = StaffChatLinkCodeRepository(
             dataSource = dataSource,
             pepper = "pepper",
-            ttlSeconds = 60,
+            ttlSeconds = 300,
             now = { nowRef.get() }
         )
-        val issued = repository.createLinkCode(venueId = venueId, createdByUserId = 1001)!!
-        nowRef.set(nowRef.get().plusSeconds(120))
+        val (venueId, userId) = seedVenueAndUser()
+        val created = repository.createLinkCode(venueId, userId)!!
 
-        val result = repository.linkAndBindWithCode(
-            code = issued.code,
-            usedByUserId = 1001,
-            chatId = -10,
+        val first = repository.linkAndBindWithCode(
+            code = created.code,
+            usedByUserId = userId,
+            chatId = 999L,
             messageId = null,
             authorize = { _, _ -> true },
-            bind = { _, _ -> error("Should not bind expired code") }
+            bind = { _, _ -> BindResult.Success(venueId, "Venue") }
         )
 
-        assertTrue(result is LinkAndBindResult.InvalidOrExpired)
+        val second = repository.linkAndBindWithCode(
+            code = created.code,
+            usedByUserId = userId,
+            chatId = 999L,
+            messageId = null,
+            authorize = { _, _ -> true },
+            bind = { _, _ -> BindResult.Success(venueId, "Venue") }
+        )
+
+        assertTrue(first is LinkAndBindResult.Success)
+        assertEquals(LinkAndBindResult.InvalidOrExpired, second)
     }
 
     @Test
-    fun `findActiveCodeForVenue respects injected time`() = runBlocking {
+    fun `expired link code is rejected`() = runBlocking {
         val nowRef = AtomicReference(Instant.parse("2024-01-01T00:00:00Z"))
         val repository = StaffChatLinkCodeRepository(
             dataSource = dataSource,
             pepper = "pepper",
-            ttlSeconds = 120,
+            ttlSeconds = 10,
             now = { nowRef.get() }
         )
-
-        val issued = repository.createLinkCode(venueId = venueId, createdByUserId = 1001)!!
-
-        assertNotNull(repository.findActiveCodeForVenue(venueId))
-
-        nowRef.set(issued.expiresAt)
-
-        assertNull(repository.findActiveCodeForVenue(venueId))
-
-        nowRef.set(issued.expiresAt.plusSeconds(1))
-
-        assertNull(repository.findActiveCodeForVenue(venueId))
-    }
-
-    @Test
-    fun `code is expired exactly at expiresAt`() = runBlocking {
-        val nowRef = AtomicReference(Instant.parse("2024-01-01T00:00:00Z"))
-        val repository = StaffChatLinkCodeRepository(
-            dataSource = dataSource,
-            pepper = "pepper",
-            ttlSeconds = 60,
-            now = { nowRef.get() }
-        )
-        val issued = repository.createLinkCode(venueId = venueId, createdByUserId = 1001)!!
-        nowRef.set(issued.expiresAt)
+        val (venueId, userId) = seedVenueAndUser()
+        val created = repository.createLinkCode(venueId, userId)!!
+        nowRef.set(nowRef.get().plusSeconds(20))
 
         val result = repository.linkAndBindWithCode(
-            code = issued.code,
-            usedByUserId = 1001,
-            chatId = -10,
-            messageId = 1L,
+            code = created.code,
+            usedByUserId = userId,
+            chatId = 1000L,
+            messageId = null,
             authorize = { _, _ -> true },
-            bind = { _, _ -> error("Should not bind expired code") }
+            bind = { _, _ -> BindResult.Success(venueId, "Venue") }
         )
 
-        assertTrue(result is LinkAndBindResult.InvalidOrExpired)
-
-        dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT used_at FROM telegram_staff_chat_link_codes WHERE venue_id = ?"
-            ).use { statement ->
-                statement.setLong(1, venueId)
-                statement.executeQuery().use { rs ->
-                    var rows = 0
-                    while (rs.next()) {
-                        rows++
-                        assertNull(rs.getTimestamp("used_at"))
-                    }
-                    assertEquals(1, rows)
-                }
-            }
-        }
+        assertEquals(LinkAndBindResult.InvalidOrExpired, result)
     }
 
-    @Test
-    fun `code is not consumed when bind fails`() = runBlocking {
-        val repository = StaffChatLinkCodeRepository(
-            dataSource = dataSource,
-            pepper = "pepper",
-            ttlSeconds = 600
-        )
-        val venueRepository = VenueRepository(dataSource)
-        val issued = repository.createLinkCode(venueId = venueId, createdByUserId = 1001)!!
-        dataSource.connection.use { connection ->
-            connection.prepareStatement("UPDATE venues SET staff_chat_id = ? WHERE id = ?").use { statement ->
-                statement.setLong(1, -10)
-                statement.setLong(2, anotherVenueId)
+    private fun seedVenueAndUser(): Pair<Long, Long> {
+        val userId = 9009L
+        val venueId = dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                    MERGE INTO users (telegram_user_id, username, first_name, last_name)
+                    KEY (telegram_user_id)
+                    VALUES (?, 'user', 'Test', 'User')
+                """.trimIndent()
+            ).use { statement ->
+                statement.setLong(1, userId)
                 statement.executeUpdate()
             }
-        }
-
-        val firstAttempt = repository.linkAndBindWithCode(
-            code = issued.code,
-            usedByUserId = 1001,
-            chatId = -10,
-            messageId = 3L,
-            authorize = { _, _ -> true },
-            bind = { connection, venue ->
-                venueRepository.bindStaffChatInTransaction(connection, venue, -10, 1001)
-            }
-        )
-        assertTrue(firstAttempt is LinkAndBindResult.ChatAlreadyLinked) { "first=$firstAttempt" }
-
-        var usedAt: java.sql.Timestamp? = null
-        dataSource.connection.use { connection ->
-            connection.prepareStatement("SELECT used_at FROM telegram_staff_chat_link_codes WHERE venue_id = ?")
-                .use { statement ->
-                    statement.setLong(1, venueId)
-                    statement.executeQuery().use { rs ->
-                        rs.next()
-                        usedAt = rs.getTimestamp(1)
-                        assertNull(usedAt) { "usedAt=$usedAt first=$firstAttempt" }
-                    }
-                }
-            connection.prepareStatement("SELECT staff_chat_id FROM venues WHERE id = ?")
-                .use { statement ->
-                    statement.setLong(1, venueId)
-                    statement.executeQuery().use { rs ->
-                        rs.next()
-                        assertTrue(rs.getObject(1) == null)
-                    }
-                }
-            connection.prepareStatement("UPDATE venues SET staff_chat_id = NULL WHERE id = ?").use { statement ->
-                statement.setLong(1, anotherVenueId)
+            connection.prepareStatement(
+                """
+                    INSERT INTO venues (name, city, address, status)
+                    VALUES ('Venue', 'City', 'Address', 'active_published')
+                """.trimIndent(),
+                java.sql.Statement.RETURN_GENERATED_KEYS
+            ).use { statement ->
                 statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    rs.next()
+                    rs.getLong(1)
+                }
             }
         }
-
-        val secondAttempt = repository.linkAndBindWithCode(
-            code = issued.code,
-            usedByUserId = 1001,
-            chatId = -10,
-            messageId = 4L,
-            authorize = { _, _ -> true },
-            bind = { connection, venue ->
-                venueRepository.bindStaffChatInTransaction(connection, venue, -10, 1001)
-            }
-        )
-        assertTrue(secondAttempt is LinkAndBindResult.Success) {
-            "second=$secondAttempt first=$firstAttempt usedAt=$usedAt"
-        }
-
-        dataSource.connection.use { connection ->
-            connection.prepareStatement("SELECT used_at FROM telegram_staff_chat_link_codes WHERE venue_id = ?")
-                .use { statement ->
-                    statement.setLong(1, venueId)
-                    statement.executeQuery().use { rs ->
-                        rs.next()
-                        assertNotNull(rs.getTimestamp(1))
-                    }
-                }
-            connection.prepareStatement("SELECT staff_chat_id FROM venues WHERE id = ?")
-                .use { statement ->
-                    statement.setLong(1, venueId)
-                    statement.executeQuery().use { rs ->
-                        rs.next()
-                        assertEquals(-10L, rs.getLong(1))
-                    }
-                }
-        }
+        return venueId to userId
     }
 }

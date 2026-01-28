@@ -65,7 +65,6 @@ object VenuePermissions {
                 VenuePermission.MENU_MANAGE,
                 VenuePermission.TABLE_VIEW,
                 VenuePermission.TABLE_MANAGE,
-                VenuePermission.TABLE_TOKEN_ROTATE,
                 VenuePermission.TABLE_QR_EXPORT
             )
             VenueRole.STAFF -> setOf(

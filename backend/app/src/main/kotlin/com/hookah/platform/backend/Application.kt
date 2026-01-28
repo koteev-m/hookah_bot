@@ -21,10 +21,14 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
+import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.telegram.StaffChatNotifier
@@ -39,6 +43,7 @@ import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
+import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
@@ -214,6 +219,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     }
 
     val telegramConfig = TelegramBotConfig.from(appConfig)
+    val staffInviteConfig = StaffInviteConfig.from(appConfig, appEnv)
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
@@ -226,8 +232,15 @@ internal fun Application.module(overrides: ModuleOverrides) {
         ttlSeconds = telegramConfig.staffChatLinkTtlSeconds
     )
     val venueAccessRepository = VenueAccessRepository(dataSource)
+    val venueStaffRepository = VenueStaffRepository(dataSource)
+    val staffInviteRepository = StaffInviteRepository(
+        dataSource = dataSource,
+        pepper = staffInviteConfig.secretPepper
+    )
+    val staffChatNotificationRepository = StaffChatNotificationRepository(dataSource)
     val staffChatNotifier = StaffChatNotifier(
         venueRepository = venueRepository,
+        notificationRepository = staffChatNotificationRepository,
         apiClientProvider = { telegramApiClient },
         scope = staffChatNotifierScope
     )
@@ -532,6 +545,12 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository
+                )
+                venueStaffRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    venueStaffRepository = venueStaffRepository,
+                    staffInviteRepository = staffInviteRepository,
+                    staffInviteConfig = staffInviteConfig
                 )
                 venueTableRoutes(
                     venueAccessRepository = venueAccessRepository,

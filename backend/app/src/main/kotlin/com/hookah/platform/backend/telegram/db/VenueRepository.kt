@@ -7,6 +7,7 @@ import java.sql.SQLException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.time.Instant
 import javax.sql.DataSource
 
 open class VenueRepository(private val dataSource: DataSource?) {
@@ -30,6 +31,36 @@ open class VenueRepository(private val dataSource: DataSource?) {
                                 id = rs.getLong("id"),
                                 name = rs.getString("name"),
                                 staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() }
+                            )
+                        } else null
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun findStaffChatStatus(venueId: Long): StaffChatStatus? {
+        val ds = dataSource ?: return null
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                        SELECT id, staff_chat_id, staff_chat_linked_at, staff_chat_linked_by_user_id,
+                               staff_chat_unlinked_at, staff_chat_unlinked_by_user_id
+                        FROM venues
+                        WHERE id = ?
+                    """.trimIndent()
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            StaffChatStatus(
+                                venueId = rs.getLong("id"),
+                                staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() },
+                                linkedAt = rs.getTimestamp("staff_chat_linked_at")?.toInstant(),
+                                linkedByUserId = rs.getLong("staff_chat_linked_by_user_id").takeIf { !rs.wasNull() },
+                                unlinkedAt = rs.getTimestamp("staff_chat_unlinked_at")?.toInstant(),
+                                unlinkedByUserId = rs.getLong("staff_chat_unlinked_by_user_id").takeIf { !rs.wasNull() }
                             )
                         } else null
                     }
@@ -120,6 +151,70 @@ open class VenueRepository(private val dataSource: DataSource?) {
                         sanitizeTelegramForLog(e.message)
                     )
                     logger.debugTelegramException(e) { "unlinkStaffChat exception chatId=$chatId" }
+                    UnlinkResult.DatabaseError
+                } finally {
+                    connection.autoCommit = true
+                }
+            }
+        }
+    }
+
+    suspend fun unlinkStaffChatByVenueId(venueId: Long, userId: Long): UnlinkResult {
+        val ds = dataSource ?: return UnlinkResult.DatabaseError
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.autoCommit = false
+                try {
+                    val venue = connection.prepareStatement(
+                        """
+                            SELECT id, name, staff_chat_id
+                            FROM venues
+                            WHERE id = ?
+                            FOR UPDATE
+                        """.trimIndent()
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                VenueShort(
+                                    id = rs.getLong("id"),
+                                    name = rs.getString("name"),
+                                    staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() }
+                                )
+                            } else null
+                        }
+                    } ?: run {
+                        connection.rollback()
+                        return@withContext UnlinkResult.NotLinked
+                    }
+                    if (venue.staffChatId == null) {
+                        connection.rollback()
+                        return@withContext UnlinkResult.NotLinked
+                    }
+                    connection.prepareStatement(
+                        """
+                            UPDATE venues
+                            SET staff_chat_id = NULL,
+                                staff_chat_unlinked_at = now(),
+                                staff_chat_unlinked_by_user_id = ?,
+                                updated_at = now()
+                            WHERE id = ?
+                        """.trimIndent()
+                    ).use { statement ->
+                        statement.setLong(1, userId)
+                        statement.setLong(2, venue.id)
+                        statement.executeUpdate()
+                    }
+                    connection.commit()
+                    UnlinkResult.Success(venue.id, venue.name)
+                } catch (e: Exception) {
+                    connection.rollback()
+                    logger.warn(
+                        "Failed to unlink staff chat venueId={}: {}",
+                        venueId,
+                        sanitizeTelegramForLog(e.message)
+                    )
+                    logger.debugTelegramException(e) { "unlinkStaffChatByVenueId exception venueId=$venueId" }
                     UnlinkResult.DatabaseError
                 } finally {
                     connection.autoCommit = true
@@ -283,6 +378,15 @@ data class VenueShort(
     val id: Long,
     val name: String,
     val staffChatId: Long?
+)
+
+data class StaffChatStatus(
+    val venueId: Long,
+    val staffChatId: Long?,
+    val linkedAt: Instant?,
+    val linkedByUserId: Long?,
+    val unlinkedAt: Instant?,
+    val unlinkedByUserId: Long?
 )
 
 sealed interface BindResult {

@@ -36,6 +36,17 @@ data class StaffChatLinkCodeResponse(
     val ttlSeconds: Long
 )
 
+@Serializable
+data class StaffChatStatusResponse(
+    val venueId: Long,
+    val isLinked: Boolean,
+    val chatId: Long? = null,
+    val linkedAt: String? = null,
+    val linkedByUserId: Long? = null,
+    val activeCodeHint: String? = null,
+    val activeCodeExpiresAt: String? = null
+)
+
 fun Route.venueRoutes(
     venueAccessRepository: VenueAccessRepository,
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
@@ -95,6 +106,58 @@ fun Route.venueRoutes(
                     ttlSeconds = created.ttlSeconds
                 )
             )
+        }
+
+        get("/{venueId}/staff-chat") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            resolveVenueRole(
+                venueAccessRepository = venueAccessRepository,
+                userId = userId,
+                venueId = venueId
+            )
+            val status = venueRepository.findStaffChatStatus(venueId) ?: throw NotFoundException()
+            val activeCode = staffChatLinkCodeRepository.findActiveCodeForVenue(venueId)
+            call.respond(
+                StaffChatStatusResponse(
+                    venueId = status.venueId,
+                    isLinked = status.staffChatId != null,
+                    chatId = status.staffChatId,
+                    linkedAt = status.linkedAt?.toString(),
+                    linkedByUserId = status.linkedByUserId,
+                    activeCodeHint = activeCode?.codeHint,
+                    activeCodeExpiresAt = activeCode?.expiresAt?.toString()
+                )
+            )
+        }
+
+        post("/{venueId}/staff-chat/unlink") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(
+                venueAccessRepository = venueAccessRepository,
+                userId = userId,
+                venueId = venueId
+            )
+            val permissions = VenuePermissions.forRole(role)
+            if (!permissions.contains(VenuePermission.STAFF_CHAT_LINK)) {
+                throw ForbiddenException()
+            }
+            val venueExists = venueRepository.findVenueById(venueId) != null
+            if (!venueExists) {
+                throw NotFoundException()
+            }
+            when (venueRepository.unlinkStaffChatByVenueId(venueId, userId)) {
+                is com.hookah.platform.backend.telegram.db.UnlinkResult.Success -> {
+                    call.respond(mapOf("ok" to true))
+                }
+                com.hookah.platform.backend.telegram.db.UnlinkResult.NotLinked -> {
+                    call.respond(mapOf("ok" to true))
+                }
+                com.hookah.platform.backend.telegram.db.UnlinkResult.DatabaseError -> {
+                    throw DatabaseUnavailableException()
+                }
+            }
         }
     }
 }
