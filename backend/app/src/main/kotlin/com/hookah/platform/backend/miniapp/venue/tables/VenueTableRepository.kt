@@ -92,6 +92,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                             JOIN table_tokens tt
                               ON tt.table_id = vt.id AND tt.is_active = true
                             WHERE vt.venue_id = ?
+                              AND vt.is_active = true
                             ORDER BY vt.table_number, vt.id
                         """.trimIndent()
                     ).use { statement ->
@@ -219,7 +220,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val tableNumber = loadTableNumber(connection, venueId, tableId) ?: return@use null
+                        val tableNumber = loadTableNumber(connection, venueId, tableId, forUpdate = true) ?: return@use null
                         revokeActiveToken(connection, tableId)
                         val issuedAt = Instant.now()
                         insertToken(connection, tableId, issuedAt)
@@ -250,7 +251,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                     try {
                         val result = mutableListOf<VenueTableCreated>()
                         for (tableId in tableIds) {
-                            val tableNumber = loadTableNumber(connection, venueId, tableId) ?: continue
+                            val tableNumber = loadTableNumber(connection, venueId, tableId, forUpdate = true) ?: continue
                             revokeActiveToken(connection, tableId)
                             val issuedAt = Instant.now()
                             insertToken(connection, tableId, issuedAt)
@@ -287,6 +288,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                             SELECT id
                             FROM venue_tables
                             WHERE venue_id = ?
+                              AND is_active = true
                             ORDER BY table_number, id
                         """.trimIndent()
                     ).use { statement ->
@@ -316,7 +318,14 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setInt(2, tableNumber)
-            statement.executeUpdate()
+            try {
+                statement.executeUpdate()
+            } catch (e: SQLException) {
+                if (e.sqlState == "23505") {
+                    throw TableNumberConflictException()
+                }
+                throw e
+            }
             statement.generatedKeys.use { rs ->
                 if (rs.next()) {
                     rs.getLong(1)
@@ -366,12 +375,18 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun loadTableNumber(connection: Connection, venueId: Long, tableId: Long): Int? {
+    private fun loadTableNumber(
+        connection: Connection,
+        venueId: Long,
+        tableId: Long,
+        forUpdate: Boolean
+    ): Int? {
+        val sqlSuffix = if (forUpdate) " FOR UPDATE" else ""
         return connection.prepareStatement(
             """
                 SELECT table_number
                 FROM venue_tables
-                WHERE id = ? AND venue_id = ?
+                WHERE id = ? AND venue_id = ? AND is_active = true$sqlSuffix
             """.trimIndent()
         ).use { statement ->
             statement.setLong(1, tableId)
