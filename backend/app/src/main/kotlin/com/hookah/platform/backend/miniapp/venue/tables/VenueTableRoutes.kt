@@ -50,6 +50,7 @@ import java.io.ByteArrayOutputStream
 
 private const val MAX_TABLE_EXPORT = 500
 private const val MAX_TABLE_CREATE = 500
+private const val MAX_TABLE_ROTATE = 500
 private const val QR_IMAGE_SIZE = 512
 
 private val exportTimestampFormatter: DateTimeFormatter =
@@ -112,13 +113,20 @@ fun Route.venueTableRoutes(
             if (startNumber <= 0) {
                 throw InvalidInputException("startNumber must be a positive number")
             }
+            if (startNumber > Int.MAX_VALUE - count + 1) {
+                throw InvalidInputException("startNumber and count exceed maximum table number")
+            }
             val prefix = request.prefix?.trim().takeUnless { it.isNullOrBlank() }
             try {
                 venueTableRepository.ensureTablesAvailable(venueId, startNumber, count)
             } catch (_: TableNumberConflictException) {
                 throw InvalidInputException("Table numbers already exist in the requested range")
             }
-            val created = venueTableRepository.batchCreateTables(venueId, startNumber, count)
+            val created = try {
+                venueTableRepository.batchCreateTables(venueId, startNumber, count)
+            } catch (_: TableNumberConflictException) {
+                throw InvalidInputException("Table numbers already exist in the requested range")
+            }
             auditLogRepository.record(
                 venueId = venueId,
                 actorUserId = userId,
@@ -186,8 +194,8 @@ fun Route.venueTableRoutes(
             val role = resolveVenueRole(venueAccessRepository, userId, venueId)
             val permissions = VenuePermissions.forRole(role)
             val request = call.receive<VenueTableRotateTokensRequest>()
-            val tableIds = request.tableIds?.distinct().orEmpty()
-            if (request.tableIds == null) {
+            val requestedTableIds = request.tableIds
+            if (requestedTableIds == null) {
                 if (!permissions.contains(VenuePermission.TABLE_TOKEN_ROTATE_ALL)) {
                     throw ForbiddenException()
                 }
@@ -214,6 +222,19 @@ fun Route.venueTableRoutes(
             } else {
                 if (!permissions.contains(VenuePermission.TABLE_TOKEN_ROTATE)) {
                     throw ForbiddenException()
+                }
+                if (requestedTableIds.isEmpty()) {
+                    throw InvalidInputException("tableIds must not be empty")
+                }
+                if (requestedTableIds.size > MAX_TABLE_ROTATE) {
+                    throw InvalidInputException("Maximum rotate size is $MAX_TABLE_ROTATE tables")
+                }
+                if (requestedTableIds.any { it <= 0 }) {
+                    throw InvalidInputException("tableIds must contain only positive numbers")
+                }
+                val tableIds = requestedTableIds.distinct()
+                if (tableIds.size != requestedTableIds.size) {
+                    throw InvalidInputException("tableIds must not contain duplicates")
                 }
                 val rotated = venueTableRepository.rotateTokens(venueId, tableIds)
                 auditLogRepository.record(
