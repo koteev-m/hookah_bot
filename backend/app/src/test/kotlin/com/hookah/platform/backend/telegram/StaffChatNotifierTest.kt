@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
+import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
 import io.mockk.coEvery
@@ -30,8 +31,10 @@ class StaffChatNotifierTest {
             name = "Venue",
             staffChatId = 777L
         )
-        coEvery { notificationRepository.wasBatchNotified(10L) } returnsMany listOf(false, true)
-        coEvery { notificationRepository.markBatchNotified(10L, 777L) } returns true
+        coEvery { notificationRepository.tryClaim(10L, 777L) } returnsMany listOf(
+            StaffChatNotificationClaim.CLAIMED,
+            StaffChatNotificationClaim.ALREADY
+        )
 
         val event = NewBatchNotification(
             venueId = 1L,
@@ -47,6 +50,6 @@ class StaffChatNotifierTest {
         yield()
 
         coVerify(exactly = 1) { apiClient.sendMessage(777L, any()) }
-        coVerify(exactly = 1) { notificationRepository.markBatchNotified(10L, 777L) }
+        coVerify(exactly = 2) { notificationRepository.tryClaim(10L, 777L) }
     }
 }

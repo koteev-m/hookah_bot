@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
+import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -29,7 +30,8 @@ class StaffChatNotifier(
             try {
                 val venue = venueRepository.findVenueById(event.venueId) ?: return@launch
                 val chatId = venue.staffChatId ?: return@launch
-                if (notificationRepository.wasBatchNotified(event.batchId)) {
+                val claimResult = notificationRepository.tryClaim(event.batchId, chatId)
+                if (claimResult == StaffChatNotificationClaim.ALREADY) {
                     return@launch
                 }
                 val summary = event.itemsSummary?.takeIf { it.isNotBlank() } ?: "без деталей"
@@ -48,8 +50,14 @@ class StaffChatNotifier(
                         append('\n').append("Ссылки: ").append(links.joinToString(" "))
                     }
                 }
-                apiClient.sendMessage(chatId, message)
-                notificationRepository.markBatchNotified(event.batchId, chatId)
+                try {
+                    apiClient.sendMessage(chatId, message)
+                } catch (e: Exception) {
+                    if (claimResult == StaffChatNotificationClaim.CLAIMED) {
+                        notificationRepository.releaseClaim(event.batchId)
+                    }
+                    throw e
+                }
             } catch (e: Exception) {
                 val safeMessage = sanitizeTelegramForLog(e.message)
                 logger.warn("Failed to notify staff chat for new batch: {}", safeMessage)

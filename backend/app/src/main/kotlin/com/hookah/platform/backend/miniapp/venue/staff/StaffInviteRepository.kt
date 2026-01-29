@@ -98,7 +98,15 @@ class StaffInviteRepository(
                         return@use StaffInviteAcceptResult.Success(existingMember, alreadyMember = true)
                     }
                     val member = createMember(connection, invite.venueId, invite.role, invite.createdByUserId)
-                        ?: return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
+                    if (member == null) {
+                        val existingAfterInsert = loadMember(connection, invite.venueId, userId)
+                        if (existingAfterInsert != null) {
+                            markInviteUsed(connection, codeHash, nowTs, userId)
+                            connection.commit()
+                            return@use StaffInviteAcceptResult.Success(existingAfterInsert, alreadyMember = true)
+                        }
+                        return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
+                    }
                     markInviteUsed(connection, codeHash, nowTs, userId)
                     connection.commit()
                     StaffInviteAcceptResult.Success(member, alreadyMember = false)
