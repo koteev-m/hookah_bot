@@ -610,3 +610,205 @@ input[type="number"] {
 .toast[data-visible='true'] {
   opacity: 1;
 }
+
+.venue-shell {
+  min-height: 100vh;
+}
+
+.venue-shell .venue-header {
+  background: #ffffff;
+  border-bottom: 1px solid #dfe3eb;
+  padding: 1rem 1.5rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.venue-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.venue-access-state {
+  margin: 0;
+  color: #475569;
+}
+
+.venue-select,
+.venue-input,
+.venue-textarea {
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid #dfe3eb;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+.venue-textarea {
+  resize: vertical;
+}
+
+.venue-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.venue-content {
+  padding-top: 1rem;
+}
+
+.venue-summary {
+  display: grid;
+  gap: 0.5rem;
+  background: #ffffff;
+  border: 1px solid #dfe3eb;
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.venue-dashboard-subtitle {
+  margin: 0.25rem 0 0;
+  color: #52617d;
+}
+
+.venue-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.venue-orders-controls {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.venue-orders-list,
+.venue-menu-categories,
+.venue-table-list,
+.venue-staff-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.venue-order-row,
+.venue-table-row,
+.venue-staff-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-order-meta,
+.venue-table-info,
+.venue-staff-info {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.venue-order-sub {
+  margin: 0;
+  color: #52617d;
+  font-size: 0.9rem;
+}
+
+.venue-order-actions,
+.venue-table-actions,
+.venue-staff-actions {
+  display: grid;
+  gap: 0.5rem;
+  align-content: center;
+  justify-items: end;
+}
+
+.venue-empty {
+  margin: 0;
+  color: #64748b;
+}
+
+.venue-form-row {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.venue-form-grid {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.venue-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.venue-menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-menu-item-info {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.venue-menu-item-price {
+  color: #475569;
+}
+
+.venue-menu-item-actions {
+  display: grid;
+  gap: 0.4rem;
+  align-content: center;
+  justify-items: end;
+}
+
+.venue-help {
+  margin: 0.5rem 0 0;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.venue-invite-result {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  background: #eef2ff;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.venue-instructions {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+  color: #475569;
+}
+
+.venue-link-code {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.venue-flags {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.venue-flag {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #475569;
+}
