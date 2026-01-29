@@ -1,47 +1,62 @@
 package com.hookah.platform.backend.miniapp.venue
 
-import io.mockk.every
-import io.mockk.mockk
-import io.mockk.verify
-import java.sql.Connection
-import java.sql.DatabaseMetaData
-import java.sql.PreparedStatement
-import javax.sql.DataSource
+import com.zaxxer.hikari.HikariConfig
+import com.zaxxer.hikari.HikariDataSource
+import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.Test
-import org.postgresql.util.PGobject
+import kotlin.test.assertEquals
 
 class AuditLogRepositoryTest {
     @Test
-    fun `record uses jsonb binding for postgres`() = runBlocking {
-        val dataSource = mockk<DataSource>()
-        val connection = mockk<Connection>(relaxed = true)
-        val metaData = mockk<DatabaseMetaData>()
-        val statement = mockk<PreparedStatement>(relaxed = true)
-        val payload = buildJsonObject { put("key", "value") }
-        val payloadJson = Json.encodeToString(JsonObject.serializer(), payload)
+    fun `append writes payload_json`() = runBlocking {
+        val dbName = "audit_log_${UUID.randomUUID()}"
+        val dataSource = HikariDataSource(
+            HikariConfig().apply {
+                driverClassName = "org.h2.Driver"
+                jdbcUrl = "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+                maximumPoolSize = 2
+            }
+        )
+        try {
+            Flyway.configure()
+                .dataSource(dataSource)
+                .locations("classpath:db/migration/h2")
+                .load()
+                .migrate()
 
-        every { dataSource.connection } returns connection
-        every { connection.metaData } returns metaData
-        every { metaData.databaseProductName } returns "PostgreSQL"
-        every { connection.prepareStatement(any<String>()) } returns statement
-        every { statement.executeUpdate() } returns 1
+            val repository = AuditLogRepository(dataSource, Json)
+            val payloadJson = """{"key":"value"}"""
 
-        val repository = AuditLogRepository(dataSource, Json)
-
-        repository.record(venueId = 1, actorUserId = 2, action = "ACTION", payload = payload)
-
-        verify(exactly = 1) {
-            statement.setObject(
-                4,
-                match {
-                    it is PGobject && it.type == "jsonb" && it.value == payloadJson
-                }
+            repository.append(
+                actorUserId = 10,
+                action = "TEST_ACTION",
+                entityType = "venue",
+                entityId = 42,
+                payloadJson = payloadJson
             )
+
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                        SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                        FROM audit_log
+                    """.trimIndent()
+                ).use { statement ->
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        assertEquals(10L, rs.getLong("actor_user_id"))
+                        assertEquals("TEST_ACTION", rs.getString("action"))
+                        assertEquals("venue", rs.getString("entity_type"))
+                        assertEquals(42L, rs.getLong("entity_id"))
+                        assertEquals(payloadJson, rs.getString("payload_json"))
+                    }
+                }
+            }
+        } finally {
+            dataSource.close()
         }
     }
 }
