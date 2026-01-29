@@ -5,7 +5,10 @@ ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS payload_json TEXT;
 UPDATE audit_log
 SET entity_type = COALESCE(entity_type, CASE WHEN venue_id IS NOT NULL THEN 'venue' ELSE 'unknown' END),
     entity_id = COALESCE(entity_id, CASE WHEN venue_id IS NOT NULL THEN venue_id ELSE NULL END),
-    payload_json = COALESCE(payload_json, payload, '{}');
+    payload_json = COALESCE(payload_json, payload, '{}')
+WHERE entity_type IS NULL
+   OR payload_json IS NULL
+   OR (entity_id IS NULL AND venue_id IS NOT NULL);
 
 ALTER TABLE audit_log ALTER COLUMN action SET DATA TYPE VARCHAR;
 ALTER TABLE audit_log ALTER COLUMN created_at SET DATA TYPE TIMESTAMP;
