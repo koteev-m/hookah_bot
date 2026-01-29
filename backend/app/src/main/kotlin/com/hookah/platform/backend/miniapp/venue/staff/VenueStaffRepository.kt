@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
+import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
@@ -103,6 +104,58 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun updateRoleWithOwnerGuard(
+        venueId: Long,
+        userId: Long,
+        newRole: String
+    ): VenueStaffUpdateResult {
+        val ds = dataSource ?: return VenueStaffUpdateResult.DatabaseError
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val initialAutoCommit = connection.autoCommit
+                connection.autoCommit = false
+                try {
+                    val currentMember = loadMemberForUpdate(connection, venueId, userId)
+                        ?: return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.NotFound }
+                    val isDemotion = currentMember.role == VenueRole.OWNER.name && newRole != VenueRole.OWNER.name
+                    if (isDemotion && !hasAnotherOwner(connection, venueId)) {
+                        return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.LastOwner }
+                    }
+                    connection.prepareStatement(
+                        """
+                            UPDATE venue_members
+                            SET role = ?
+                            WHERE venue_id = ? AND user_id = ?
+                        """.trimIndent()
+                    ).use { statement ->
+                        statement.setString(1, newRole)
+                        statement.setLong(2, venueId)
+                        statement.setLong(3, userId)
+                        if (statement.executeUpdate() == 0) {
+                            return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.NotFound }
+                        }
+                    }
+                    connection.commit()
+                    VenueStaffUpdateResult.Success(
+                        currentMember.copy(role = newRole)
+                    )
+                } catch (e: Exception) {
+                    rollbackBestEffort(connection)
+                    logger.warn(
+                        "Failed to update venue member venueId={} userId={}: {}",
+                        venueId,
+                        userId,
+                        sanitizeTelegramForLog(e.message)
+                    )
+                    logger.debugTelegramException(e) { "updateRoleWithOwnerGuard exception venueId=$venueId userId=$userId" }
+                    VenueStaffUpdateResult.DatabaseError
+                } finally {
+                    connection.autoCommit = initialAutoCommit
+                }
+            }
+        }
+    }
+
     suspend fun removeMember(venueId: Long, userId: Long): Boolean {
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
@@ -121,22 +174,44 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun countOwners(venueId: Long): Int {
-        val ds = dataSource ?: return 0
+    suspend fun removeMemberWithOwnerGuard(venueId: Long, userId: Long): VenueStaffRemoveResult {
+        val ds = dataSource ?: return VenueStaffRemoveResult.DatabaseError
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                        SELECT COUNT(*)
-                        FROM venue_members
-                        WHERE venue_id = ? AND role = 'OWNER'
-                    """.trimIndent()
-                ).use { statement ->
-                    statement.setLong(1, venueId)
-                    statement.executeQuery().use { rs ->
-                        rs.next()
-                        rs.getInt(1)
+                val initialAutoCommit = connection.autoCommit
+                connection.autoCommit = false
+                try {
+                    val currentMember = loadMemberForUpdate(connection, venueId, userId)
+                        ?: return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.NotFound }
+                    if (currentMember.role == VenueRole.OWNER.name && !hasAnotherOwner(connection, venueId)) {
+                        return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.LastOwner }
                     }
+                    connection.prepareStatement(
+                        """
+                            DELETE FROM venue_members
+                            WHERE venue_id = ? AND user_id = ?
+                        """.trimIndent()
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, userId)
+                        if (statement.executeUpdate() == 0) {
+                            return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.NotFound }
+                        }
+                    }
+                    connection.commit()
+                    VenueStaffRemoveResult.Success
+                } catch (e: Exception) {
+                    rollbackBestEffort(connection)
+                    logger.warn(
+                        "Failed to remove venue member venueId={} userId={}: {}",
+                        venueId,
+                        userId,
+                        sanitizeTelegramForLog(e.message)
+                    )
+                    logger.debugTelegramException(e) { "removeMemberWithOwnerGuard exception venueId=$venueId userId=$userId" }
+                    VenueStaffRemoveResult.DatabaseError
+                } finally {
+                    connection.autoCommit = initialAutoCommit
                 }
             }
         }
@@ -197,6 +272,63 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
             null
         }
     }
+
+    private fun loadMemberForUpdate(connection: Connection, venueId: Long, userId: Long): VenueStaffMember? {
+        return connection.prepareStatement(
+            """
+                SELECT role, created_at, invited_by_user_id
+                FROM venue_members
+                WHERE venue_id = ? AND user_id = ?
+                FOR UPDATE
+            """.trimIndent()
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, userId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    VenueStaffMember(
+                        venueId = venueId,
+                        userId = userId,
+                        role = rs.getString("role"),
+                        createdAt = rs.getTimestamp("created_at").toInstant(),
+                        invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() }
+                    )
+                } else null
+            }
+        }
+    }
+
+    private fun hasAnotherOwner(connection: Connection, venueId: Long): Boolean {
+        return connection.prepareStatement(
+            """
+                SELECT user_id
+                FROM venue_members
+                WHERE venue_id = ? AND role = 'OWNER'
+                FOR UPDATE
+            """.trimIndent()
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                var count = 0
+                while (rs.next()) {
+                    count += 1
+                    if (count > 1) {
+                        return true
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    private fun rollbackBestEffort(connection: Connection) {
+        runCatching { connection.rollback() }
+    }
+
+    private fun <T> rollbackAndReturn(connection: Connection, block: () -> T): T {
+        runCatching { connection.rollback() }
+        return block()
+    }
 }
 
 data class VenueStaffMember(
@@ -206,3 +338,17 @@ data class VenueStaffMember(
     val createdAt: Instant,
     val invitedByUserId: Long?
 )
+
+sealed interface VenueStaffUpdateResult {
+    data class Success(val member: VenueStaffMember) : VenueStaffUpdateResult
+    data object NotFound : VenueStaffUpdateResult
+    data object LastOwner : VenueStaffUpdateResult
+    data object DatabaseError : VenueStaffUpdateResult
+}
+
+sealed interface VenueStaffRemoveResult {
+    data object Success : VenueStaffRemoveResult
+    data object NotFound : VenueStaffRemoveResult
+    data object LastOwner : VenueStaffRemoveResult
+    data object DatabaseError : VenueStaffRemoveResult
+}

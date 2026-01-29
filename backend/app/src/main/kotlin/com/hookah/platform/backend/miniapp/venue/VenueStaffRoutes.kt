@@ -8,7 +8,9 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -156,14 +158,12 @@ fun Route.venueStaffRoutes(
                 ?: throw InvalidInputException("userId must be a number")
             val request = call.receive<StaffUpdateRoleRequest>()
             val newRole = parseVenueRole(request.role)
-            val member = venueStaffRepository.findMember(venueId, targetUserId) ?: throw NotFoundException()
-            ensureOwnerStillPresent(member.role, newRole, venueId, venueStaffRepository)
-            val updated = venueStaffRepository.updateRole(venueId, targetUserId, newRole.name)
-            if (!updated) {
-                throw DatabaseUnavailableException()
+            when (val result = venueStaffRepository.updateRoleWithOwnerGuard(venueId, targetUserId, newRole.name)) {
+                is VenueStaffUpdateResult.Success -> call.respond(result.member.toDto())
+                VenueStaffUpdateResult.NotFound -> throw NotFoundException()
+                VenueStaffUpdateResult.LastOwner -> throw InvalidInputException("Cannot remove the last owner")
+                VenueStaffUpdateResult.DatabaseError -> throw DatabaseUnavailableException()
             }
-            val updatedMember = venueStaffRepository.findMember(venueId, targetUserId) ?: throw NotFoundException()
-            call.respond(updatedMember.toDto())
         }
 
         delete("/{venueId}/staff/{userId}") {
@@ -175,13 +175,12 @@ fun Route.venueStaffRoutes(
             }
             val targetUserId = call.parameters["userId"]?.toLongOrNull()
                 ?: throw InvalidInputException("userId must be a number")
-            val member = venueStaffRepository.findMember(venueId, targetUserId) ?: throw NotFoundException()
-            ensureOwnerStillPresent(member.role, null, venueId, venueStaffRepository)
-            val removed = venueStaffRepository.removeMember(venueId, targetUserId)
-            if (!removed) {
-                throw DatabaseUnavailableException()
+            when (venueStaffRepository.removeMemberWithOwnerGuard(venueId, targetUserId)) {
+                VenueStaffRemoveResult.Success -> call.respond(StaffRemoveResponse(ok = true))
+                VenueStaffRemoveResult.NotFound -> throw NotFoundException()
+                VenueStaffRemoveResult.LastOwner -> throw InvalidInputException("Cannot remove the last owner")
+                VenueStaffRemoveResult.DatabaseError -> throw DatabaseUnavailableException()
             }
-            call.respond(StaffRemoveResponse(ok = true))
         }
     }
 }
@@ -207,19 +206,4 @@ private fun resolveInviteTtl(requestedTtl: Long?, config: StaffInviteConfig): Lo
         throw InvalidInputException("expiresIn must be <= ${config.maxTtlSeconds} seconds")
     }
     return ttl
-}
-
-private suspend fun ensureOwnerStillPresent(
-    currentRole: String,
-    newRole: VenueRole?,
-    venueId: Long,
-    venueStaffRepository: VenueStaffRepository
-) {
-    val normalizedCurrent = VenueRoleMapping.fromDb(currentRole) ?: return
-    val isDemotion = normalizedCurrent == VenueRole.OWNER && (newRole == null || newRole != VenueRole.OWNER)
-    if (!isDemotion) return
-    val ownerCount = venueStaffRepository.countOwners(venueId)
-    if (ownerCount <= 1) {
-        throw InvalidInputException("Cannot remove the last owner")
-    }
 }
