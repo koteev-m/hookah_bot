@@ -125,6 +125,40 @@ class VenueStaffRoutesTest {
     }
 
     @Test
+    fun `owner can demote one of two owners but not the last`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("staff-owner-demote-two")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val ownerId = 4101L
+        val otherOwnerId = 4102L
+        val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+        seedVenueMembership(jdbcUrl, otherOwnerId, "OWNER", venueId)
+        val token = issueToken(config, ownerId)
+
+        val demoteOtherResponse = client.patch("/api/venue/$venueId/staff/$otherOwnerId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(StaffUpdateRoleRequest.serializer(), StaffUpdateRoleRequest(role = "STAFF")))
+        }
+
+        assertEquals(HttpStatusCode.OK, demoteOtherResponse.status)
+
+        val demoteLastResponse = client.patch("/api/venue/$venueId/staff/$ownerId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(StaffUpdateRoleRequest.serializer(), StaffUpdateRoleRequest(role = "STAFF")))
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, demoteLastResponse.status)
+        assertApiErrorEnvelope(demoteLastResponse, ApiErrorCodes.INVALID_INPUT)
+    }
+
+    @Test
     fun `owner can remove staff`() = testApplication {
         val jdbcUrl = buildJdbcUrl("staff-remove")
         val config = buildConfig(jdbcUrl)
