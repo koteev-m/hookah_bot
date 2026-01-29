@@ -1,6 +1,6 @@
 import './style.css'
 import { mountGuestApp } from './screens/guestApp'
-import { renderVenueMode } from './screens/venue'
+import { mountVenueApp } from './screens/venueApp'
 import { getBackendBaseUrl } from './shared/api/backend'
 import { mountAuthGate } from './shared/authGate'
 import { getTelegramContext } from './shared/telegram'
@@ -25,7 +25,13 @@ try {
 }
 
 if (mode === 'venue' && screen !== 'catalog') {
-  dispose = renderVenueMode({ root, backendUrl })
+  dispose = mountAuthGate({
+    root,
+    onReady: () => {
+      dispose?.()
+      dispose = mountVenueApp({ root, backendUrl })
+    }
+  })
 } else {
   dispose = mountAuthGate({
     root,
