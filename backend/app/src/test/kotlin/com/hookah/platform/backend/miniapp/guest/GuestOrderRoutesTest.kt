@@ -8,6 +8,7 @@ import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -49,7 +50,7 @@ class GuestOrderRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 4)
         seedTableToken(jdbcUrl, tableId, "active-token")
         seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -74,7 +75,7 @@ class GuestOrderRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 8)
         seedTableToken(jdbcUrl, tableId, "batch-token")
         seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -127,7 +128,7 @@ class GuestOrderRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 7)
         seedTableToken(jdbcUrl, tableId, "source-token")
         seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -162,7 +163,7 @@ class GuestOrderRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 5)
         seedTableToken(jdbcUrl, tableId, "missing-comment-token")
         seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -191,6 +192,39 @@ class GuestOrderRoutesTest {
     }
 
     @Test
+    fun `add-batch for paused venue returns not found`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-order-paused")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PAUSED.dbValue)
+        val tableId = seedTable(jdbcUrl, venueId, 9)
+        seedTableToken(jdbcUrl, tableId, "paused-token")
+        seedSubscription(jdbcUrl, venueId, "ACTIVE")
+        val categoryId = seedMenuCategory(jdbcUrl, venueId)
+        val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Herbal Tea")
+
+        val token = issueToken(config)
+        val request = AddBatchRequest(
+            tableToken = "paused-token",
+            items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+            comment = null
+        )
+        val response = client.post("/api/guest/order/add-batch") {
+            contentType(ContentType.Application.Json)
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+        }
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
+    }
+
+    @Test
     fun `blocked subscription rejects add-batch`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-order-blocked")
         val config = buildConfig(jdbcUrl)
@@ -200,7 +234,7 @@ class GuestOrderRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 2)
         seedTableToken(jdbcUrl, tableId, "blocked-token")
         seedSubscription(jdbcUrl, venueId, "PAST_DUE")

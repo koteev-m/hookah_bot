@@ -1,7 +1,10 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import java.sql.Connection
+import java.sql.SQLException
 import javax.sql.DataSource
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterAll
@@ -11,8 +14,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.sql.Connection
-import java.sql.SQLException
 
 class VenueRepositoryTest {
     companion object {
@@ -54,11 +55,12 @@ class VenueRepositoryTest {
             return connection.prepareStatement(
                 """
                     INSERT INTO venues (name, status)
-                    VALUES (?, 'active_published')
+                    VALUES (?, ?)
                 """.trimIndent(),
                 java.sql.Statement.RETURN_GENERATED_KEYS
             ).use { statement ->
                 statement.setString(1, name)
+                statement.setString(2, VenueStatus.PUBLISHED.dbValue)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     rs.next()

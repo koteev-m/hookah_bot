@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -83,7 +84,7 @@ class GuestVenueMenuRoutesTest {
     }
 
     @Test
-    fun `menu for hidden venue returns empty categories`() = testApplication {
+    fun `menu for hidden venue returns not found`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-hidden-menu")
         val config = buildConfig(jdbcUrl)
 
@@ -99,37 +100,14 @@ class GuestVenueMenuRoutesTest {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
         }
 
-        assertEquals(HttpStatusCode.OK, response.status)
-        val payload = json.decodeFromString(MenuResponse.serializer(), response.bodyAsText())
-        assertEquals(venues.hiddenId, payload.venueId)
-        assertTrue(payload.categories.isEmpty())
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
     }
 
     @Test
-    fun `menu for suspended venue returns locked by default`() = testApplication {
+    fun `menu for suspended venue returns not found`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-suspended-menu")
         val config = buildConfig(jdbcUrl)
-
-        environment { this.config = config }
-        application { module() }
-
-        client.get("/health")
-
-        val venues = seedVenues(jdbcUrl)
-        val token = issueToken(config)
-
-        val response = client.get("/api/guest/venue/${venues.suspendedId}/menu") {
-            headers { append(HttpHeaders.Authorization, "Bearer $token") }
-        }
-
-        assertEquals(HttpStatusCode.Locked, response.status)
-        assertApiErrorEnvelope(response, ApiErrorCodes.SERVICE_SUSPENDED)
-    }
-
-    @Test
-    fun `menu for suspended venue hides when configured`() = testApplication {
-        val jdbcUrl = buildJdbcUrl("guest-suspended-menu-hide")
-        val config = buildConfig(jdbcUrl, suspendedMode = "hide")
 
         environment { this.config = config }
         application { module() }
@@ -152,7 +130,7 @@ class GuestVenueMenuRoutesTest {
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String, suspendedMode: String? = null): MapApplicationConfig {
+    private fun buildConfig(jdbcUrl: String): MapApplicationConfig {
         val entries = mutableListOf(
             "app.env" to appEnv,
             "api.session.jwtSecret" to "test-secret",
@@ -160,9 +138,6 @@ class GuestVenueMenuRoutesTest {
             "db.user" to "sa",
             "db.password" to ""
         )
-        if (suspendedMode != null) {
-            entries.add("api.guest.suspendedMode" to suspendedMode)
-        }
         return MapApplicationConfig(*entries.toTypedArray())
     }
 
@@ -173,9 +148,9 @@ class GuestVenueMenuRoutesTest {
 
     private fun seedVenues(jdbcUrl: String): SeededVenues {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            val publishedId = insertVenue(connection, "Published", "City", "Address", VenueStatuses.ACTIVE_PUBLISHED)
-            val hiddenId = insertVenue(connection, "Hidden", "City", "Address", VenueStatuses.ACTIVE_HIDDEN)
-            val suspendedId = insertVenue(connection, "Suspended", "City", "Address", VenueStatuses.SUSPENDED_BY_PLATFORM)
+            val publishedId = insertVenue(connection, "Published", "City", "Address", VenueStatus.PUBLISHED.dbValue)
+            val hiddenId = insertVenue(connection, "Hidden", "City", "Address", VenueStatus.HIDDEN.dbValue)
+            val suspendedId = insertVenue(connection, "Suspended", "City", "Address", VenueStatus.SUSPENDED.dbValue)
             return SeededVenues(publishedId, hiddenId, suspendedId)
         }
     }
