@@ -127,10 +127,11 @@ fun Route.venueTableRoutes(
             } catch (_: TableNumberConflictException) {
                 throw InvalidInputException("Table numbers already exist in the requested range")
             }
-            auditLogRepository.record(
-                venueId = venueId,
+            auditLogRepository.appendJson(
                 actorUserId = userId,
                 action = "TABLES_BATCH_CREATE",
+                entityType = "venue",
+                entityId = venueId,
                 payload = buildJsonObject {
                     put("count", created.size)
                     put("startNumber", startNumber)
@@ -170,10 +171,11 @@ fun Route.venueTableRoutes(
             val tableId = call.parameters["tableId"]?.toLongOrNull()
                 ?: throw InvalidInputException("tableId must be a number")
             val rotated = venueTableRepository.rotateToken(venueId, tableId) ?: throw NotFoundException()
-            auditLogRepository.record(
-                venueId = venueId,
+            auditLogRepository.appendJson(
                 actorUserId = userId,
                 action = "TABLE_TOKEN_ROTATE",
+                entityType = "venue",
+                entityId = venueId,
                 payload = buildJsonObject {
                     put("tableId", tableId)
                 }
@@ -201,10 +203,11 @@ fun Route.venueTableRoutes(
                 }
                 val allTables = venueTableRepository.listTableIds(venueId)
                 val rotated = venueTableRepository.rotateTokens(venueId, allTables)
-                auditLogRepository.record(
-                    venueId = venueId,
+                auditLogRepository.appendJson(
                     actorUserId = userId,
                     action = "TABLE_TOKEN_ROTATE_ALL",
+                    entityType = "venue",
+                    entityId = venueId,
                     payload = buildJsonObject {
                         put("count", rotated.size)
                         put(
@@ -237,10 +240,11 @@ fun Route.venueTableRoutes(
                     throw InvalidInputException("tableIds must not contain duplicates")
                 }
                 val rotated = venueTableRepository.rotateTokens(venueId, tableIds)
-                auditLogRepository.record(
-                    venueId = venueId,
+                auditLogRepository.appendJson(
                     actorUserId = userId,
                     action = "TABLE_TOKEN_ROTATE_BATCH",
+                    entityType = "venue",
+                    entityId = venueId,
                     payload = buildJsonObject {
                         put("count", rotated.size)
                         put(
@@ -306,10 +310,11 @@ fun Route.venueTableRoutes(
                 }
                 else -> throw InvalidInputException("format must be zip or pdf")
             }
-            auditLogRepository.record(
-                venueId = venueId,
+            auditLogRepository.appendJson(
                 actorUserId = userId,
                 action = "TABLE_QR_EXPORT",
+                entityType = "venue",
+                entityId = venueId,
                 payload = buildJsonObject {
                     put("format", format)
                     put("count", tables.size)

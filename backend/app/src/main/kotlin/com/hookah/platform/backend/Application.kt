@@ -31,6 +31,8 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
+import com.hookah.platform.backend.platform.PlatformConfig
+import com.hookah.platform.backend.platform.platformRoutes
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
@@ -220,6 +222,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
     val telegramConfig = TelegramBotConfig.from(appConfig)
     val staffInviteConfig = StaffInviteConfig.from(appConfig, appEnv)
+    val platformConfig = PlatformConfig.from(appConfig)
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
@@ -566,6 +569,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     venueOrdersRepository = venueOrdersRepository
                 )
+                platformRoutes(platformConfig)
             }
         }
 
