@@ -8,6 +8,7 @@ import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Instant
+import java.util.Locale
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -68,12 +69,12 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                     }
                     when (filter.subscriptionFilter) {
                         SubscriptionFilter.TRIAL_ACTIVE -> {
-                            conditions.add("vs.status = ?")
+                            conditions.add("UPPER(vs.status) = ?")
                             params.add("TRIAL")
                             conditions.add("vs.trial_end IS NOT NULL AND vs.trial_end >= CURRENT_TIMESTAMP")
                         }
                         SubscriptionFilter.PAID -> {
-                            conditions.add("vs.status = ?")
+                            conditions.add("UPPER(vs.status) = ?")
                             params.add("ACTIVE")
                             conditions.add("vs.paid_start IS NOT NULL")
                         }
@@ -186,7 +187,7 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                                 PlatformSubscriptionSummary(
                                     trialEndDate = rs.getTimestamp("trial_end")?.toInstant(),
                                     paidStartDate = rs.getTimestamp("paid_start")?.toInstant(),
-                                    isPaid = rs.getString("status") == "ACTIVE"
+                                    isPaid = isPaidStatus(rs.getString("status"))
                                 )
                             } else {
                                 null
@@ -206,51 +207,55 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
     ): VenueStatusChangeResult {
         val ds = dataSource ?: return VenueStatusChangeResult.DatabaseError
         return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                val initialAutoCommit = connection.autoCommit
-                connection.autoCommit = false
-                try {
-                    val current = selectVenueStatus(connection, venueId)
-                        ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.NotFound }
-                    if (current == VenueStatus.DELETED && action == VenueStatusAction.DELETE) {
-                        return@use rollbackAndReturn(connection) { VenueStatusChangeResult.AlreadyDeleted }
-                    }
-                    if (action == VenueStatusAction.PUBLISH && countOwnerLike(connection, venueId) == 0) {
-                        return@use rollbackAndReturn(connection) { VenueStatusChangeResult.MissingOwner }
-                    }
-                    val targetStatus = resolveTransition(current, action)
-                        ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.InvalidTransition }
-                    val now = Timestamp.from(Instant.now())
-                    connection.prepareStatement(
-                        """
-                            UPDATE venues
-                            SET status = ?,
-                                deleted_at = ?,
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ?
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setString(1, targetStatus.dbValue)
-                        if (action == VenueStatusAction.DELETE) {
-                            statement.setTimestamp(2, now)
-                        } else {
-                            statement.setTimestamp(2, null)
+            try {
+                ds.connection.use { connection ->
+                    val initialAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val current = selectVenueStatus(connection, venueId)
+                            ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.NotFound }
+                        if (current == VenueStatus.DELETED && action == VenueStatusAction.DELETE) {
+                            return@use rollbackAndReturn(connection) { VenueStatusChangeResult.AlreadyDeleted }
                         }
-                        statement.setLong(3, venueId)
-                        if (statement.executeUpdate() == 0) {
-                            return@use rollbackAndReturn(connection) { VenueStatusChangeResult.NotFound }
+                        if (action == VenueStatusAction.PUBLISH && countOwnerLike(connection, venueId) == 0) {
+                            return@use rollbackAndReturn(connection) { VenueStatusChangeResult.MissingOwner }
                         }
+                        val targetStatus = resolveTransition(current, action)
+                            ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.InvalidTransition }
+                        val now = Timestamp.from(Instant.now())
+                        connection.prepareStatement(
+                            """
+                                UPDATE venues
+                                SET status = ?,
+                                    deleted_at = ?,
+                                    updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ?
+                            """.trimIndent()
+                        ).use { statement ->
+                            statement.setString(1, targetStatus.dbValue)
+                            if (action == VenueStatusAction.DELETE) {
+                                statement.setTimestamp(2, now)
+                            } else {
+                                statement.setTimestamp(2, null)
+                            }
+                            statement.setLong(3, venueId)
+                            if (statement.executeUpdate() == 0) {
+                                return@use rollbackAndReturn(connection) { VenueStatusChangeResult.NotFound }
+                            }
+                        }
+                        val updated = loadVenueDetail(connection, venueId)
+                            ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.DatabaseError }
+                        connection.commit()
+                        VenueStatusChangeResult.Success(updated, current, targetStatus)
+                    } catch (e: SQLException) {
+                        rollbackBestEffort(connection)
+                        VenueStatusChangeResult.DatabaseError
+                    } finally {
+                        runCatching { connection.autoCommit = initialAutoCommit }
                     }
-                    val updated = loadVenueDetail(connection, venueId)
-                        ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.DatabaseError }
-                    connection.commit()
-                    VenueStatusChangeResult.Success(updated, current, targetStatus)
-                } catch (e: SQLException) {
-                    rollbackBestEffort(connection)
-                    VenueStatusChangeResult.DatabaseError
-                } finally {
-                    connection.autoCommit = initialAutoCommit
                 }
+            } catch (e: SQLException) {
+                VenueStatusChangeResult.DatabaseError
             }
         }
     }
@@ -312,7 +317,7 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         val subscription = PlatformSubscriptionSummary(
             trialEndDate = rs.getTimestamp("trial_end")?.toInstant(),
             paidStartDate = rs.getTimestamp("paid_start")?.toInstant(),
-            isPaid = rs.getString("subscription_status") == "ACTIVE"
+            isPaid = isPaidStatus(rs.getString("subscription_status"))
         )
         return PlatformVenueSummary(
             id = rs.getLong("id"),
@@ -370,6 +375,10 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
             }
             VenueStatusAction.DELETE -> if (current != VenueStatus.DELETED) VenueStatus.DELETED else null
         }
+    }
+
+    private fun isPaidStatus(status: String?): Boolean {
+        return status?.trim()?.uppercase(Locale.ROOT) == "ACTIVE"
     }
 
     private fun rollbackBestEffort(connection: Connection) {
