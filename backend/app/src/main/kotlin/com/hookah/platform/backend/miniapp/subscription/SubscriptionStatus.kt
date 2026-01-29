@@ -1,6 +1,6 @@
 package com.hookah.platform.backend.miniapp.subscription
 
-import com.hookah.platform.backend.miniapp.guest.VenueStatuses
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import java.util.Locale
 
 enum class SubscriptionStatus(val wire: String) {
@@ -24,24 +24,15 @@ enum class SubscriptionStatus(val wire: String) {
 }
 
 data class VenueAvailability(
-    val venueStatus: String,
+    val venueStatus: VenueStatus,
     val subscriptionStatus: String,
     val available: Boolean,
     val reason: String?
 )
 
 object VenueAvailabilityResolver {
-    fun resolve(venueStatus: String, subscriptionStatus: SubscriptionStatus): VenueAvailability {
-        if (venueStatus == VenueStatuses.SUSPENDED_BY_PLATFORM) {
-            return VenueAvailability(
-                venueStatus = venueStatus,
-                subscriptionStatus = subscriptionStatus.wire,
-                available = false,
-                reason = "SERVICE_SUSPENDED"
-            )
-        }
-
-        if (venueStatus != VenueStatuses.ACTIVE_PUBLISHED && venueStatus != VenueStatuses.ACTIVE_HIDDEN) {
+    fun resolve(venueStatus: VenueStatus, subscriptionStatus: SubscriptionStatus): VenueAvailability {
+        if (venueStatus != VenueStatus.PUBLISHED) {
             return VenueAvailability(
                 venueStatus = venueStatus,
                 subscriptionStatus = subscriptionStatus.wire,

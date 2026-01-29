@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.subscription.db
 
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.runBlocking
@@ -45,10 +46,11 @@ class SubscriptionRepositoryTest {
             return connection.prepareStatement(
                 """
                     INSERT INTO venues (name, status)
-                    VALUES ('Test Venue', 'active_published')
+                    VALUES ('Test Venue', ?)
                 """.trimIndent(),
                 java.sql.Statement.RETURN_GENERATED_KEYS
             ).use { statement ->
+                statement.setString(1, VenueStatus.PUBLISHED.dbValue)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     rs.next()

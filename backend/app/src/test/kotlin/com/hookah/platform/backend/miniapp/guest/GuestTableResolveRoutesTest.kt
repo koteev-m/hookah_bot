@@ -5,6 +5,7 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -172,7 +173,7 @@ class GuestTableResolveRoutesTest {
     }
 
     @Test
-    fun `known token for suspended venue returns unavailable`() = testApplication {
+    fun `known token for suspended venue returns not found`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-table-suspended")
         val config = buildConfig(jdbcUrl)
 
@@ -182,7 +183,7 @@ class GuestTableResolveRoutesTest {
         client.get("/health")
 
         val tokenValue = "suspended-token"
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.SUSPENDED_BY_PLATFORM)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.SUSPENDED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 7)
         seedTableToken(jdbcUrl, tableId, tokenValue)
         seedSubscription(jdbcUrl, venueId, "active")
@@ -193,15 +194,8 @@ class GuestTableResolveRoutesTest {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
         }
 
-        assertEquals(HttpStatusCode.OK, response.status)
-        val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
-        assertEquals(venueId, payload.venueId)
-        assertEquals(tableId, payload.tableId)
-        assertEquals("7", payload.tableNumber)
-        assertEquals(VenueStatuses.SUSPENDED_BY_PLATFORM, payload.venueStatus)
-        assertEquals("active", payload.subscriptionStatus)
-        assertEquals(false, payload.available)
-        assertEquals("SERVICE_SUSPENDED", payload.unavailableReason)
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
     }
 
     @Test
@@ -215,7 +209,7 @@ class GuestTableResolveRoutesTest {
         client.get("/health")
 
         val tokenValue = "published-token"
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 3)
         seedTableToken(jdbcUrl, tableId, tokenValue)
 
@@ -230,7 +224,7 @@ class GuestTableResolveRoutesTest {
         assertEquals(venueId, payload.venueId)
         assertEquals(tableId, payload.tableId)
         assertEquals("3", payload.tableNumber)
-        assertEquals(VenueStatuses.ACTIVE_PUBLISHED, payload.venueStatus)
+        assertEquals(VenueStatus.PUBLISHED.dbValue, payload.venueStatus)
         assertEquals("trial", payload.subscriptionStatus)
         assertEquals(true, payload.available)
         assertNull(payload.unavailableReason)
@@ -247,7 +241,7 @@ class GuestTableResolveRoutesTest {
         client.get("/health")
 
         val tokenValue = "past-due-token"
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 12)
         seedTableToken(jdbcUrl, tableId, tokenValue)
         seedSubscription(jdbcUrl, venueId, "PAST_DUE")
@@ -263,7 +257,7 @@ class GuestTableResolveRoutesTest {
         assertEquals(venueId, payload.venueId)
         assertEquals(tableId, payload.tableId)
         assertEquals("12", payload.tableNumber)
-        assertEquals(VenueStatuses.ACTIVE_PUBLISHED, payload.venueStatus)
+        assertEquals(VenueStatus.PUBLISHED.dbValue, payload.venueStatus)
         assertEquals("past_due", payload.subscriptionStatus)
         assertEquals(false, payload.available)
         assertEquals("SUBSCRIPTION_BLOCKED", payload.unavailableReason)

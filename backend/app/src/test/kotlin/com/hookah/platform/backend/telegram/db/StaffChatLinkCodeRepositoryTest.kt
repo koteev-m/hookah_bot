@@ -2,6 +2,7 @@ package com.hookah.platform.backend.telegram.db
 
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
@@ -117,10 +118,11 @@ class StaffChatLinkCodeRepositoryTest {
             connection.prepareStatement(
                 """
                     INSERT INTO venues (name, city, address, status)
-                    VALUES ('Venue', 'City', 'Address', 'active_published')
+                    VALUES ('Venue', 'City', 'Address', ?)
                 """.trimIndent(),
                 java.sql.Statement.RETURN_GENERATED_KEYS
             ).use { statement ->
+                statement.setString(1, VenueStatus.PUBLISHED.dbValue)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     rs.next()

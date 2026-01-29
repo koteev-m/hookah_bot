@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.guest
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
@@ -85,22 +86,21 @@ class GuestVenueRoutesTest {
 
         assertEquals(HttpStatusCode.OK, publishedResponse.status)
         val publishedPayload = json.decodeFromString(VenueResponse.serializer(), publishedResponse.bodyAsText())
-        assertEquals(VenueStatuses.ACTIVE_PUBLISHED, publishedPayload.venue.status)
+        assertEquals(VenueStatus.PUBLISHED.dbValue, publishedPayload.venue.status)
 
         val hiddenResponse = client.get("/api/guest/venue/${venues.hiddenId}") {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
         }
 
-        assertEquals(HttpStatusCode.OK, hiddenResponse.status)
-        val hiddenPayload = json.decodeFromString(VenueResponse.serializer(), hiddenResponse.bodyAsText())
-        assertEquals(VenueStatuses.ACTIVE_HIDDEN, hiddenPayload.venue.status)
+        assertEquals(HttpStatusCode.NotFound, hiddenResponse.status)
+        assertApiErrorEnvelope(hiddenResponse, ApiErrorCodes.NOT_FOUND)
 
         val suspendedResponse = client.get("/api/guest/venue/${venues.suspendedId}") {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
         }
 
-        assertEquals(HttpStatusCode.Locked, suspendedResponse.status)
-        assertApiErrorEnvelope(suspendedResponse, ApiErrorCodes.SERVICE_SUSPENDED)
+        assertEquals(HttpStatusCode.NotFound, suspendedResponse.status)
+        assertApiErrorEnvelope(suspendedResponse, ApiErrorCodes.NOT_FOUND)
     }
 
     @Test
@@ -118,27 +118,6 @@ class GuestVenueRoutesTest {
         val missingId = maxOf(venues.publishedId, venues.hiddenId, venues.suspendedId) + 100
 
         val response = client.get("/api/guest/venue/$missingId") {
-            headers { append(HttpHeaders.Authorization, "Bearer $token") }
-        }
-
-        assertEquals(HttpStatusCode.NotFound, response.status)
-        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
-    }
-
-    @Test
-    fun `venue by id hides suspended when configured`() = testApplication {
-        val jdbcUrl = buildJdbcUrl("guest-hide")
-        val config = buildConfig(jdbcUrl, suspendedMode = "hide")
-
-        environment { this.config = config }
-        application { module() }
-
-        client.get("/health")
-
-        val venues = seedVenues(jdbcUrl)
-        val token = issueToken(config)
-
-        val response = client.get("/api/guest/venue/${venues.suspendedId}") {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
         }
 
@@ -211,7 +190,7 @@ class GuestVenueRoutesTest {
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String, suspendedMode: String? = null): MapApplicationConfig {
+    private fun buildConfig(jdbcUrl: String): MapApplicationConfig {
         val entries = mutableListOf(
             "app.env" to appEnv,
             "api.session.jwtSecret" to "test-secret",
@@ -219,9 +198,6 @@ class GuestVenueRoutesTest {
             "db.user" to "sa",
             "db.password" to ""
         )
-        if (suspendedMode != null) {
-            entries.add("api.guest.suspendedMode" to suspendedMode)
-        }
         return MapApplicationConfig(*entries.toTypedArray())
     }
 
@@ -232,9 +208,9 @@ class GuestVenueRoutesTest {
 
     private fun seedVenues(jdbcUrl: String): SeededVenues {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            val publishedId = insertVenue(connection, "Published", "City", "Address", VenueStatuses.ACTIVE_PUBLISHED)
-            val hiddenId = insertVenue(connection, "Hidden", "City", "Address", VenueStatuses.ACTIVE_HIDDEN)
-            val suspendedId = insertVenue(connection, "Suspended", "City", "Address", VenueStatuses.SUSPENDED_BY_PLATFORM)
+            val publishedId = insertVenue(connection, "Published", "City", "Address", VenueStatus.PUBLISHED.dbValue)
+            val hiddenId = insertVenue(connection, "Hidden", "City", "Address", VenueStatus.HIDDEN.dbValue)
+            val suspendedId = insertVenue(connection, "Suspended", "City", "Address", VenueStatus.SUSPENDED.dbValue)
             return SeededVenues(publishedId, hiddenId, suspendedId)
         }
     }

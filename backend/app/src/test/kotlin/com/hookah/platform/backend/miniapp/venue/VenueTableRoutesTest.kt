@@ -206,10 +206,11 @@ class VenueTableRoutesTest {
             val venueId = connection.prepareStatement(
                 """
                     INSERT INTO venues (name, city, address, status)
-                    VALUES ('Venue', 'City', 'Address', 'active_published')
+                    VALUES ('Venue', 'City', 'Address', ?)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS
             ).use { statement ->
+                statement.setString(1, VenueStatus.PUBLISHED.dbValue)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) rs.getLong(1) else error("Failed to insert venue")

@@ -1,6 +1,6 @@
 package com.hookah.platform.backend.miniapp.subscription
 
-import com.hookah.platform.backend.miniapp.guest.VenueStatuses
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +11,7 @@ class VenueAvailabilityResolverTest {
     @Test
     fun `trial subscription with active venue is available`() {
         val availability = VenueAvailabilityResolver.resolve(
-            venueStatus = VenueStatuses.ACTIVE_PUBLISHED,
+            venueStatus = VenueStatus.PUBLISHED,
             subscriptionStatus = SubscriptionStatus.TRIAL
         )
 
@@ -23,7 +23,7 @@ class VenueAvailabilityResolverTest {
     @Test
     fun `past due subscription blocks active venue`() {
         val availability = VenueAvailabilityResolver.resolve(
-            venueStatus = VenueStatuses.ACTIVE_PUBLISHED,
+            venueStatus = VenueStatus.PUBLISHED,
             subscriptionStatus = SubscriptionStatus.PAST_DUE
         )
 
@@ -33,14 +33,14 @@ class VenueAvailabilityResolverTest {
     }
 
     @Test
-    fun `suspended venue blocks even active subscription`() {
+    fun `suspended venue is not available even with active subscription`() {
         val availability = VenueAvailabilityResolver.resolve(
-            venueStatus = VenueStatuses.SUSPENDED_BY_PLATFORM,
+            venueStatus = VenueStatus.SUSPENDED,
             subscriptionStatus = SubscriptionStatus.ACTIVE
         )
 
         assertFalse(availability.available)
-        assertEquals("SERVICE_SUSPENDED", availability.reason)
+        assertEquals("VENUE_NOT_AVAILABLE", availability.reason)
         assertEquals("active", availability.subscriptionStatus)
     }
 }

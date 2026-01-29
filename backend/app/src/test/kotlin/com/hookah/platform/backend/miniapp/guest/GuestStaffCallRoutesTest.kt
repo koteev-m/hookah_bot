@@ -6,6 +6,7 @@ import com.hookah.platform.backend.miniapp.guest.api.StaffCallRequest
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -71,7 +72,7 @@ class GuestStaffCallRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 10)
         seedTableToken(jdbcUrl, tableId, "staff-token")
         seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -193,7 +194,7 @@ class GuestStaffCallRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         seedTable(jdbcUrl, venueId, 5)
         seedSubscription(jdbcUrl, venueId, "ACTIVE")
 
@@ -223,7 +224,7 @@ class GuestStaffCallRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.SUSPENDED_BY_PLATFORM)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.SUSPENDED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 1)
         seedTableToken(jdbcUrl, tableId, "suspended-token")
         seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -240,8 +241,8 @@ class GuestStaffCallRoutesTest {
             setBody(json.encodeToString(StaffCallRequest.serializer(), request))
         }
 
-        assertEquals(HttpStatusCode.Locked, response.status)
-        assertApiErrorEnvelope(response, ApiErrorCodes.SERVICE_SUSPENDED)
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
     }
 
     @Test
@@ -254,7 +255,7 @@ class GuestStaffCallRoutesTest {
 
         client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl, VenueStatuses.ACTIVE_PUBLISHED)
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 3)
         seedTableToken(jdbcUrl, tableId, "blocked-token")
         seedSubscription(jdbcUrl, venueId, "PAST_DUE")

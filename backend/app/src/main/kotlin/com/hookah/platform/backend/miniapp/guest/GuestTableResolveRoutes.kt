@@ -21,7 +21,7 @@ fun Route.guestTableResolveRoutes(
         val token = validateTableToken(rawToken)
 
         val table = tableTokenResolver(token) ?: throw NotFoundException()
-        val venue = guestVenueRepository.findVenueByIdForGuest(table.venueId) ?: throw NotFoundException()
+        val venue = ensureVenuePublishedForGuest(table.venueId, guestVenueRepository)
         val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(table.venueId)
         val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
 
@@ -30,7 +30,7 @@ fun Route.guestTableResolveRoutes(
                 venueId = table.venueId,
                 tableId = table.tableId,
                 tableNumber = table.tableNumber.toString(),
-                venueStatus = availability.venueStatus,
+                venueStatus = availability.venueStatus.dbValue,
                 subscriptionStatus = availability.subscriptionStatus,
                 available = availability.available,
                 unavailableReason = availability.reason

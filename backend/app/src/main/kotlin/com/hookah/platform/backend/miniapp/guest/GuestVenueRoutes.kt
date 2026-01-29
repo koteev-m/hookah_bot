@@ -1,7 +1,6 @@
 package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.InvalidInputException
-import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.CatalogVenueDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuCategoryDto
@@ -22,8 +21,7 @@ import io.ktor.server.routing.get
 
 fun Route.guestVenueRoutes(
     guestVenueRepository: GuestVenueRepository,
-    guestMenuRepository: GuestMenuRepository,
-    guestVenuePolicy: GuestVenuePolicy
+    guestMenuRepository: GuestMenuRepository
 ) {
     get("/catalog") {
         val venues = guestVenueRepository.listCatalogVenues()
@@ -33,16 +31,14 @@ fun Route.guestVenueRoutes(
     get("/venue/{id}") {
         val rawId = call.parameters["id"] ?: throw InvalidInputException("id is required")
         val venueId = rawId.toLongOrNull() ?: throw InvalidInputException("id must be a number")
-        val venue = guestVenueRepository.findVenueByIdForGuest(venueId) ?: throw NotFoundException()
-        guestVenuePolicy.ensureVenueReadable(venue.status)
+        val venue = ensureVenuePublishedForGuest(venueId, guestVenueRepository)
         call.respond(VenueResponse(venue = venue.toVenueDto()))
     }
 
     get("/venue/{id}/menu") {
         val rawId = call.parameters["id"] ?: throw InvalidInputException("id is required")
         val venueId = rawId.toLongOrNull() ?: throw InvalidInputException("id must be a number")
-        val venue = guestVenueRepository.findVenueByIdForGuest(venueId) ?: throw NotFoundException()
-        guestVenuePolicy.ensureVenueReadable(venue.status)
+        ensureVenuePublishedForGuest(venueId, guestVenueRepository)
         val menu = guestMenuRepository.getMenu(venueId)
         call.respond(menu.toResponse())
     }
@@ -60,7 +56,7 @@ private fun VenueShort.toVenueDto(): VenueDto = VenueDto(
     name = name,
     city = city,
     address = address,
-    status = status
+    status = status.dbValue
 )
 
 private fun MenuModel.toResponse(): MenuResponse = MenuResponse(

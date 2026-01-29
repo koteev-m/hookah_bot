@@ -8,12 +8,10 @@ import com.hookah.platform.backend.api.ApiHeaders
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
-import com.hookah.platform.backend.miniapp.guest.GuestVenuePolicy
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
-import com.hookah.platform.backend.miniapp.guest.resolveVenueVisibilityMode
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
@@ -32,6 +30,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.platform.PlatformConfig
+import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.platformRoutes
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
@@ -205,7 +204,6 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val userRepository = UserRepository(dataSource)
     val guestVenueRepository = GuestVenueRepository(dataSource)
     val guestMenuRepository = GuestMenuRepository(dataSource)
-    val guestVenuePolicy = GuestVenuePolicy(resolveVenueVisibilityMode(appConfig))
     val subscriptionRepository = SubscriptionRepository(dataSource)
     val ordersRepository = OrdersRepository(dataSource)
     val venueOrdersRepository = VenueOrdersRepository(dataSource)
@@ -214,6 +212,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val staffCallRepository = StaffCallRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val auditLogRepository = AuditLogRepository(dataSource, json)
+    val platformVenueRepository = PlatformVenueRepository(dataSource)
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
     if (dataSource != null) {
@@ -518,8 +517,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 route("/guest") {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
-                        guestMenuRepository = guestMenuRepository,
-                        guestVenuePolicy = guestVenuePolicy
+                        guestMenuRepository = guestMenuRepository
                     )
                     guestTableResolveRoutes(
                         tableTokenResolver = tableTokenResolver,
@@ -569,7 +567,11 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     venueOrdersRepository = venueOrdersRepository
                 )
-                platformRoutes(platformConfig)
+                platformRoutes(
+                    platformConfig = platformConfig,
+                    platformVenueRepository = platformVenueRepository,
+                    auditLogRepository = auditLogRepository
+                )
             }
         }
 

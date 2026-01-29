@@ -1,7 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
-import com.hookah.platform.backend.miniapp.guest.VenueStatuses
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import java.sql.ResultSet
 import java.sql.SQLException
 import javax.sql.DataSource
@@ -22,11 +22,11 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                             ORDER BY id ASC
                         """.trimIndent()
                     ).use { statement ->
-                        statement.setString(1, VenueStatuses.ACTIVE_PUBLISHED)
+                        statement.setString(1, VenueStatus.PUBLISHED.dbValue)
                         statement.executeQuery().use { rs ->
                             val venues = mutableListOf<VenueShort>()
                             while (rs.next()) {
-                                venues.add(mapVenueShort(rs))
+                                mapVenueShort(rs)?.let { venues.add(it) }
                             }
                             venues
                         }
@@ -66,13 +66,16 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun mapVenueShort(rs: ResultSet): VenueShort = VenueShort(
-        id = rs.getLong("id"),
-        name = rs.getString("name"),
-        city = rs.getString("city"),
-        address = rs.getString("address"),
-        status = rs.getString("status")
-    )
+    private fun mapVenueShort(rs: ResultSet): VenueShort? {
+        val status = VenueStatus.fromDb(rs.getString("status")) ?: return null
+        return VenueShort(
+            id = rs.getLong("id"),
+            name = rs.getString("name"),
+            city = rs.getString("city"),
+            address = rs.getString("address"),
+            status = status
+        )
+    }
 }
 
 data class VenueShort(
@@ -80,5 +83,5 @@ data class VenueShort(
     val name: String,
     val city: String?,
     val address: String?,
-    val status: String
+    val status: VenueStatus
 )

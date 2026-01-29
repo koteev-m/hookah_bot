@@ -24,11 +24,20 @@ fun ApplicationCall.requirePlatformOwner(platformConfig: PlatformConfig): Long {
     return userId
 }
 
-fun Route.platformRoutes(platformConfig: PlatformConfig) {
+fun Route.platformRoutes(
+    platformConfig: PlatformConfig,
+    platformVenueRepository: PlatformVenueRepository,
+    auditLogRepository: com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+) {
     route("/platform") {
         get("/me") {
             call.requirePlatformOwner(platformConfig)
             call.respond(PlatformMeResponse(ok = true, ownerUserId = platformConfig.ownerUserId!!))
         }
     }
+    platformVenueRoutes(
+        platformConfig = platformConfig,
+        venueRepository = platformVenueRepository,
+        auditLogRepository = auditLogRepository
+    )
 }
