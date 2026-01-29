@@ -145,6 +145,9 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
       refs.codeExpires.textContent = status.activeCodeExpiresAt
         ? new Date(status.activeCodeExpiresAt).toLocaleString()
         : '—'
+    } else {
+      refs.codeValue.textContent = '—'
+      refs.codeExpires.textContent = '—'
     }
   }
 

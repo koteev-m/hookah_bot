@@ -233,7 +233,15 @@ export function renderVenueTablesScreen(options: VenueTablesOptions) {
       return
     }
     const startNumberRaw = refs.startInput.value.trim()
-    const startNumber = startNumberRaw ? Number.parseInt(startNumberRaw, 10) : undefined
+    let startNumber: number | undefined
+    if (startNumberRaw) {
+      const parsedStartNumber = Number.parseInt(startNumberRaw, 10)
+      if (!Number.isFinite(parsedStartNumber) || parsedStartNumber <= 0) {
+        showToast('Введите корректный стартовый номер')
+        return
+      }
+      startNumber = parsedStartNumber
+    }
     const result = await venueCreateTablesBatch(
       backendUrl,
       { venueId, body: { count, startNumber } },

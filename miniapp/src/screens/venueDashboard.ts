@@ -120,6 +120,8 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
   let inFlight = false
   let loadSeq = 0
 
+  const canViewOrders = access.permissions.includes('ORDER_QUEUE_VIEW')
+
   const setStatus = (text: string) => {
     refs.status.textContent = text
   }
@@ -159,6 +161,48 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     loadAbort = controller
     const seq = ++loadSeq
     const baseVenuePromise = guestGetVenue(backendUrl, venueId, deps, controller.signal)
+    const chatPromise = venueGetStaffChatStatus(backendUrl, venueId, deps, controller.signal)
+
+    if (!canViewOrders) {
+      const responses = await Promise.all([baseVenuePromise, chatPromise])
+
+      if (disposed || loadSeq !== seq) return
+      inFlight = false
+      loadAbort = null
+
+      const venueResult = responses[0] as Awaited<typeof baseVenuePromise>
+      const chatResult = responses[1] as Awaited<typeof chatPromise>
+
+      if (!venueResult.ok && venueResult.error.code === REQUEST_ABORTED_CODE) {
+        return
+      }
+      if (!chatResult.ok && chatResult.error.code === REQUEST_ABORTED_CODE) {
+        return
+      }
+
+      if (!venueResult.ok) {
+        showError(venueResult.error)
+        setStatus('')
+        return
+      }
+      if (!chatResult.ok) {
+        showError(chatResult.error)
+        setStatus('')
+        return
+      }
+
+      const venue = venueResult.data.venue
+      refs.title.textContent = venue.name
+      refs.subtitle.textContent = `Venue #${venue.id} · Роль ${access.role}`
+
+      refs.summaryNew.textContent = '—'
+      refs.summaryActive.textContent = '—'
+      refs.summaryChat.textContent = chatResult.data.isLinked ? toStatusLabel('linked') : toStatusLabel('unlinked')
+
+      setStatus(`Обновлено: ${new Date().toLocaleTimeString()} · Нет доступа к очереди заказов`)
+      return
+    }
+
     const newQueuePromise = venueGetOrdersQueue(
       backendUrl,
       { venueId, status: 'new', limit: 50 },
@@ -169,7 +213,6 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     const activePromises = activeStatuses.map((status) =>
       venueGetOrdersQueue(backendUrl, { venueId, status, limit: 50 }, deps, controller.signal)
     )
-    const chatPromise = venueGetStaffChatStatus(backendUrl, venueId, deps, controller.signal)
 
     const responses = await Promise.all([baseVenuePromise, newQueuePromise, ...activePromises, chatPromise])
 
