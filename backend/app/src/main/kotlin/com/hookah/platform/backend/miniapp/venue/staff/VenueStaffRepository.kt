@@ -1,6 +1,5 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
-import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
@@ -9,6 +8,7 @@ import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.time.Instant
+import java.util.Locale
 import javax.sql.DataSource
 
 class VenueStaffRepository(private val dataSource: DataSource?) {
@@ -115,10 +115,12 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 try {
-                    val currentMember = loadMemberForUpdate(connection, venueId, userId)
+                    val members = loadMembersForOwnerGuard(connection, venueId, userId)
+                    val currentMember = members.firstOrNull { it.userId == userId }
                         ?: return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.NotFound }
-                    val isDemotion = currentMember.role == VenueRole.OWNER.name && newRole != VenueRole.OWNER.name
-                    if (isDemotion && !hasAnotherOwner(connection, venueId)) {
+                    val ownerLikeCount = members.count { isOwnerLikeRole(it.role) }
+                    val isDemotion = isOwnerLikeRole(currentMember.role) && !isOwnerLikeRole(newRole)
+                    if (isDemotion && ownerLikeCount <= 1) {
                         return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.LastOwner }
                     }
                     connection.prepareStatement(
@@ -181,9 +183,11 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 try {
-                    val currentMember = loadMemberForUpdate(connection, venueId, userId)
+                    val members = loadMembersForOwnerGuard(connection, venueId, userId)
+                    val currentMember = members.firstOrNull { it.userId == userId }
                         ?: return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.NotFound }
-                    if (currentMember.role == VenueRole.OWNER.name && !hasAnotherOwner(connection, venueId)) {
+                    val ownerLikeCount = members.count { isOwnerLikeRole(it.role) }
+                    if (isOwnerLikeRole(currentMember.role) && ownerLikeCount <= 1) {
                         return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.LastOwner }
                     }
                     connection.prepareStatement(
@@ -273,52 +277,38 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun loadMemberForUpdate(connection: Connection, venueId: Long, userId: Long): VenueStaffMember? {
+    private fun loadMembersForOwnerGuard(connection: Connection, venueId: Long, userId: Long): List<VenueStaffMember> {
         return connection.prepareStatement(
             """
-                SELECT role, created_at, invited_by_user_id
+                SELECT user_id, role, created_at, invited_by_user_id
                 FROM venue_members
-                WHERE venue_id = ? AND user_id = ?
+                WHERE venue_id = ? AND (user_id = ? OR UPPER(role) IN ('OWNER','ADMIN'))
+                ORDER BY user_id
                 FOR UPDATE
             """.trimIndent()
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, userId)
             statement.executeQuery().use { rs ->
-                if (rs.next()) {
-                    VenueStaffMember(
-                        venueId = venueId,
-                        userId = userId,
-                        role = rs.getString("role"),
-                        createdAt = rs.getTimestamp("created_at").toInstant(),
-                        invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() }
+                val members = mutableListOf<VenueStaffMember>()
+                while (rs.next()) {
+                    members.add(
+                        VenueStaffMember(
+                            venueId = venueId,
+                            userId = rs.getLong("user_id"),
+                            role = rs.getString("role"),
+                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                            invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() }
+                        )
                     )
-                } else null
+                }
+                members
             }
         }
     }
 
-    private fun hasAnotherOwner(connection: Connection, venueId: Long): Boolean {
-        return connection.prepareStatement(
-            """
-                SELECT user_id
-                FROM venue_members
-                WHERE venue_id = ? AND role = 'OWNER'
-                FOR UPDATE
-            """.trimIndent()
-        ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.executeQuery().use { rs ->
-                var count = 0
-                while (rs.next()) {
-                    count += 1
-                    if (count > 1) {
-                        return true
-                    }
-                }
-                false
-            }
-        }
+    private fun isOwnerLikeRole(role: String): Boolean {
+        return role.trim().uppercase(Locale.ROOT) in setOf("OWNER", "ADMIN")
     }
 
     private fun rollbackBestEffort(connection: Connection) {
