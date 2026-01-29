@@ -173,7 +173,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       const checkbox = document.createElement('input')
       checkbox.type = 'checkbox'
       checkbox.checked = true
-      checkbox.disabled = !canEdit
+      checkbox.disabled = true
       const span = document.createElement('span')
       span.textContent = perm
       append(label, checkbox, span)
@@ -211,8 +211,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       showToast('Недостаточно прав')
       return
     }
-    showToast('Настройки сохранены')
-    setStatus(`Сохранено: ${new Date().toLocaleTimeString()}`)
+    showToast('Сохранение недоступно')
   }
 
   const disableInputs = () => {
@@ -224,10 +223,10 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       refs.rulesInput
     ]
     fields.forEach((field) => {
-      field.disabled = !canEdit
+      field.disabled = true
     })
-    refs.saveButton.disabled = !canEdit
-    refs.saveButton.title = canEdit ? '' : 'Недостаточно прав'
+    refs.saveButton.disabled = true
+    refs.saveButton.title = canEdit ? 'Сохранение недоступно' : 'Недостаточно прав'
   }
 
   const disposables: Array<() => void> = []
