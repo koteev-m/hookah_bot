@@ -63,21 +63,45 @@ class PlatformRoutesTest {
         assertEquals(ownerId, payload.ownerUserId)
     }
 
+    @Test
+    fun `missing owner config cannot access platform me`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("platform-missing-owner")
+        val config = buildConfig(jdbcUrl, platformOwnerId = null)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val token = issueToken(config, userId = 404L)
+        val response = client.get("/api/platform/me") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.Forbidden, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+    }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String, platformOwnerId: Long): MapApplicationConfig {
-        return MapApplicationConfig(
+    private fun buildConfig(jdbcUrl: String, platformOwnerId: Long?): MapApplicationConfig {
+        val values = mutableListOf(
             "app.env" to appEnv,
             "api.session.jwtSecret" to "test-secret",
             "db.jdbcUrl" to jdbcUrl,
             "db.user" to "sa",
             "db.password" to "",
-            "platform.ownerUserId" to platformOwnerId.toString(),
             "venue.staffInviteSecretPepper" to "invite-pepper"
         )
+
+        if (platformOwnerId != null) {
+            values.add("platform.ownerUserId" to platformOwnerId.toString())
+        }
+
+        return MapApplicationConfig(*values.toTypedArray())
     }
 
     private fun issueToken(config: MapApplicationConfig, userId: Long): String {
