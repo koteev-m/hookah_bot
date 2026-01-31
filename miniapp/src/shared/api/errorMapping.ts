@@ -34,5 +34,5 @@ export function normalizeErrorCode(error: ApiErrorInfo): ApiErrorCode | undefine
 }
 
 export function isAuthenticatedApi(path: string) {
-  return path.startsWith('/api/guest/') || path.startsWith('/api/venue/')
+  return path.startsWith('/api/guest/') || path.startsWith('/api/venue/') || path.startsWith('/api/platform/')
 }

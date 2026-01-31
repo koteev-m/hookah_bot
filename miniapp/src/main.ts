@@ -1,5 +1,6 @@
 import './style.css'
 import { mountGuestApp } from './screens/guestApp'
+import { mountPlatformApp } from './screens/platformApp'
 import { mountVenueApp } from './screens/venueApp'
 import { getBackendBaseUrl } from './shared/api/backend'
 import { mountAuthGate } from './shared/authGate'
@@ -24,7 +25,15 @@ try {
   // ignore WebApp expand errors
 }
 
-if (mode === 'venue' && screen !== 'catalog') {
+if (mode === 'platform') {
+  dispose = mountAuthGate({
+    root,
+    onReady: () => {
+      dispose?.()
+      dispose = mountPlatformApp({ root, backendUrl })
+    }
+  })
+} else if (mode === 'venue' && screen !== 'catalog') {
   dispose = mountAuthGate({
     root,
     onReady: () => {
