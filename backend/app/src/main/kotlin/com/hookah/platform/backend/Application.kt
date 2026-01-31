@@ -30,6 +30,8 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.platform.PlatformConfig
+import com.hookah.platform.backend.platform.PlatformUserRepository
+import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.platformRoutes
 import com.hookah.platform.backend.telegram.StaffChatNotifier
@@ -213,6 +215,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val tableTokenRepository = TableTokenRepository(dataSource)
     val auditLogRepository = AuditLogRepository(dataSource, json)
     val platformVenueRepository = PlatformVenueRepository(dataSource)
+    val platformUserRepository = PlatformUserRepository(dataSource)
+    val platformVenueMemberRepository = PlatformVenueMemberRepository(dataSource)
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
     if (dataSource != null) {
@@ -570,7 +574,11 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 platformRoutes(
                     platformConfig = platformConfig,
                     platformVenueRepository = platformVenueRepository,
-                    auditLogRepository = auditLogRepository
+                    platformUserRepository = platformUserRepository,
+                    auditLogRepository = auditLogRepository,
+                    platformVenueMemberRepository = platformVenueMemberRepository,
+                    staffInviteRepository = staffInviteRepository,
+                    staffInviteConfig = staffInviteConfig
                 )
             }
         }
