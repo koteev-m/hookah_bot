@@ -12,8 +12,11 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import java.time.Instant
+import java.time.LocalDate
+import java.util.Locale
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -80,6 +83,61 @@ data class PlatformSubscriptionSummaryDto(
 )
 
 @Serializable
+data class PlatformSubscriptionSettingsDto(
+    val trialEndDate: String? = null,
+    val paidStartDate: String? = null,
+    val basePriceMinor: Int? = null,
+    val priceOverrideMinor: Int? = null,
+    val currency: String
+)
+
+@Serializable
+data class PlatformPriceScheduleItemDto(
+    val effectiveFrom: String,
+    val priceMinor: Int,
+    val currency: String
+)
+
+@Serializable
+data class PlatformEffectivePriceDto(
+    val priceMinor: Int,
+    val currency: String
+)
+
+@Serializable
+data class PlatformSubscriptionSettingsResponse(
+    val settings: PlatformSubscriptionSettingsDto,
+    val schedule: List<PlatformPriceScheduleItemDto>,
+    val effectivePriceToday: PlatformEffectivePriceDto? = null
+)
+
+@Serializable
+data class PlatformSubscriptionSettingsUpdateRequest(
+    val trialEndDate: String? = null,
+    val paidStartDate: String? = null,
+    val basePriceMinor: Int? = null,
+    val priceOverrideMinor: Int? = null,
+    val currency: String? = null
+)
+
+@Serializable
+data class PlatformPriceScheduleUpdateRequest(
+    val items: List<PlatformPriceScheduleItemInput>
+)
+
+@Serializable
+data class PlatformPriceScheduleItemInput(
+    val effectiveFrom: String,
+    val priceMinor: Int,
+    val currency: String
+)
+
+@Serializable
+data class PlatformPriceScheduleResponse(
+    val items: List<PlatformPriceScheduleItemDto>
+)
+
+@Serializable
 data class PlatformVenueStatusChangeRequest(
     val action: String
 )
@@ -114,6 +172,7 @@ fun Route.platformVenueRoutes(
     platformConfig: PlatformConfig,
     venueRepository: PlatformVenueRepository,
     auditLogRepository: AuditLogRepository,
+    subscriptionSettingsRepository: PlatformSubscriptionSettingsRepository,
     platformVenueMemberRepository: PlatformVenueMemberRepository,
     staffInviteRepository: StaffInviteRepository,
     staffInviteConfig: StaffInviteConfig
@@ -195,6 +254,68 @@ fun Route.platformVenueRoutes(
                     subscriptionSummary = subscriptionSummary?.toDto()
                 )
             )
+        }
+
+        get("/{venueId}/subscription") {
+            call.requirePlatformOwner(platformConfig)
+            val venueId = call.parameters["venueId"]?.toLongOrNull()
+                ?: throw InvalidInputException("venueId must be a number")
+            val snapshot = subscriptionSettingsRepository.getSubscriptionSnapshot(venueId)
+                ?: throw NotFoundException()
+            call.respond(snapshot.toResponse())
+        }
+
+        put("/{venueId}/subscription") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val venueId = call.parameters["venueId"]?.toLongOrNull()
+                ?: throw InvalidInputException("venueId must be a number")
+            val payload = call.receive<PlatformSubscriptionSettingsUpdateRequest>()
+            val update = payload.toUpdate()
+            val existingSnapshot = subscriptionSettingsRepository.getSubscriptionSnapshot(venueId)
+                ?: throw NotFoundException()
+            val resolvedSettings = applySettingsUpdate(existingSnapshot.settings, update)
+            validateSubscriptionSettings(resolvedSettings)
+            val updated = subscriptionSettingsRepository.updateSettings(venueId, update, actorUserId)
+                ?: throw NotFoundException()
+            val snapshot = subscriptionSettingsRepository.getSubscriptionSnapshot(venueId)
+                ?: PlatformSubscriptionSnapshot(updated, emptyList(), null)
+            auditLogRepository.appendJson(
+                actorUserId = actorUserId,
+                action = "VENUE_SUBSCRIPTION_UPDATE",
+                entityType = "venue",
+                entityId = venueId,
+                payload = buildJsonObject {
+                    put("venueId", venueId)
+                }
+            )
+            call.respond(snapshot.toResponse())
+        }
+
+        put("/{venueId}/price-schedule") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val venueId = call.parameters["venueId"]?.toLongOrNull()
+                ?: throw InvalidInputException("venueId must be a number")
+            val payload = call.receive<PlatformPriceScheduleUpdateRequest>()
+            val items = parseScheduleItems(payload)
+            validateScheduleItems(items)
+            val saved = subscriptionSettingsRepository.replaceSchedule(venueId, items, actorUserId)
+                ?: throw NotFoundException()
+            val range = if (saved.isEmpty()) null else saved.first().effectiveFrom to saved.last().effectiveFrom
+            auditLogRepository.appendJson(
+                actorUserId = actorUserId,
+                action = "VENUE_PRICE_SCHEDULE_UPDATE",
+                entityType = "venue",
+                entityId = venueId,
+                payload = buildJsonObject {
+                    put("venueId", venueId)
+                    put("count", saved.size)
+                    if (range != null) {
+                        put("from", range.first.toString())
+                        put("to", range.second.toString())
+                    }
+                }
+            )
+            call.respond(PlatformPriceScheduleResponse(items = saved.map { it.toDto() }))
         }
 
         post("/{venueId}/status") {
@@ -317,6 +438,133 @@ private fun PlatformSubscriptionSummary.toDto(): PlatformSubscriptionSummaryDto 
     paidStartDate = paidStartDate?.toString(),
     isPaid = isPaid
 )
+
+private fun PlatformSubscriptionSnapshot.toResponse(): PlatformSubscriptionSettingsResponse =
+    PlatformSubscriptionSettingsResponse(
+        settings = settings.toDto(),
+        schedule = schedule.map { it.toDto() },
+        effectivePriceToday = effectivePriceToday?.toDto()
+    )
+
+private fun PlatformSubscriptionSettings.toDto(): PlatformSubscriptionSettingsDto =
+    PlatformSubscriptionSettingsDto(
+        trialEndDate = trialEndDate?.toString(),
+        paidStartDate = paidStartDate?.toString(),
+        basePriceMinor = basePriceMinor,
+        priceOverrideMinor = priceOverrideMinor,
+        currency = currency
+    )
+
+private fun PlatformPriceScheduleItem.toDto(): PlatformPriceScheduleItemDto =
+    PlatformPriceScheduleItemDto(
+        effectiveFrom = effectiveFrom.toString(),
+        priceMinor = priceMinor,
+        currency = currency
+    )
+
+private fun PlatformEffectivePrice.toDto(): PlatformEffectivePriceDto =
+    PlatformEffectivePriceDto(
+        priceMinor = priceMinor,
+        currency = currency
+    )
+
+private fun PlatformSubscriptionSettingsUpdateRequest.toUpdate(): PlatformSubscriptionSettingsRepository.PlatformSubscriptionSettingsUpdate {
+    val trialEnd = trialEndDate?.let { parseLocalDate(it, "trialEndDate") }
+    val paidStart = paidStartDate?.let { parseLocalDate(it, "paidStartDate") }
+    val normalizedCurrency = currency?.trim()?.uppercase(Locale.ROOT)?.takeIf { it.isNotBlank() }
+    return PlatformSubscriptionSettingsRepository.PlatformSubscriptionSettingsUpdate(
+        trialEndDate = trialEnd,
+        paidStartDate = paidStart,
+        basePriceMinor = basePriceMinor,
+        priceOverrideMinor = priceOverrideMinor,
+        currency = normalizedCurrency
+    )
+}
+
+private fun applySettingsUpdate(
+    existing: PlatformSubscriptionSettings,
+    update: PlatformSubscriptionSettingsRepository.PlatformSubscriptionSettingsUpdate
+): PlatformSubscriptionSettings {
+    return PlatformSubscriptionSettings(
+        venueId = existing.venueId,
+        trialEndDate = update.trialEndDate ?: existing.trialEndDate,
+        paidStartDate = update.paidStartDate ?: existing.paidStartDate,
+        basePriceMinor = update.basePriceMinor ?: existing.basePriceMinor,
+        priceOverrideMinor = update.priceOverrideMinor ?: existing.priceOverrideMinor,
+        currency = update.currency ?: existing.currency
+    )
+}
+
+private fun parseScheduleItems(payload: PlatformPriceScheduleUpdateRequest): List<PlatformPriceScheduleItem> {
+    return payload.items.map { item ->
+        val effectiveFrom = parseLocalDate(item.effectiveFrom, "effectiveFrom")
+        val currency = item.currency.trim().uppercase(Locale.ROOT)
+        PlatformPriceScheduleItem(
+            venueId = 0L,
+            effectiveFrom = effectiveFrom,
+            priceMinor = item.priceMinor,
+            currency = currency
+        )
+    }
+}
+
+private fun validateSubscriptionSettings(settings: PlatformSubscriptionSettings) {
+    settings.basePriceMinor?.let { validatePrice(it, "basePriceMinor") }
+    settings.priceOverrideMinor?.let { validatePrice(it, "priceOverrideMinor") }
+    if (settings.trialEndDate != null && settings.paidStartDate != null) {
+        if (settings.paidStartDate.isBefore(settings.trialEndDate)) {
+            throw InvalidInputException("paidStartDate must be after or equal to trialEndDate")
+        }
+    }
+    validateCurrency(settings.currency)
+}
+
+private fun validateScheduleItems(items: List<PlatformPriceScheduleItem>) {
+    if (items.isEmpty()) {
+        return
+    }
+    val effectiveDates = items.map { it.effectiveFrom }
+    if (effectiveDates.toSet().size != effectiveDates.size) {
+        throw InvalidInputException("effectiveFrom must be unique")
+    }
+    val sorted = effectiveDates.sorted()
+    if (effectiveDates != sorted) {
+        throw InvalidInputException("price schedule must be sorted by effectiveFrom")
+    }
+    items.forEach { item ->
+        validatePrice(item.priceMinor, "priceMinor")
+        validateCurrency(item.currency)
+    }
+}
+
+private fun validatePrice(priceMinor: Int, fieldName: String) {
+    if (priceMinor <= 0) {
+        throw InvalidInputException("$fieldName must be > 0")
+    }
+}
+
+private fun validateCurrency(currency: String) {
+    if (currency.isBlank()) {
+        throw InvalidInputException("currency must not be blank")
+    }
+    if (!allowedCurrencies.contains(currency)) {
+        throw InvalidInputException("currency must be one of: ${allowedCurrencies.joinToString()}")
+    }
+}
+
+private fun parseLocalDate(value: String, field: String): LocalDate {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) {
+        throw InvalidInputException("$field must not be blank")
+    }
+    return try {
+        LocalDate.parse(trimmed)
+    } catch (e: Exception) {
+        throw InvalidInputException("$field must be a valid ISO date")
+    }
+}
+
+private val allowedCurrencies = setOf("RUB")
 
 private fun parseOwnerRole(rawRole: String?): String {
     val role = rawRole?.trim()?.takeIf { it.isNotEmpty() } ?: "OWNER"

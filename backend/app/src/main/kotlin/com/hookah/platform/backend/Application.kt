@@ -30,6 +30,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.platform.PlatformConfig
+import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformUserRepository
 import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
@@ -215,6 +216,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val tableTokenRepository = TableTokenRepository(dataSource)
     val auditLogRepository = AuditLogRepository(dataSource, json)
     val platformVenueRepository = PlatformVenueRepository(dataSource)
+    val subscriptionSettingsRepository = PlatformSubscriptionSettingsRepository(dataSource)
     val platformUserRepository = PlatformUserRepository(dataSource)
     val platformVenueMemberRepository = PlatformVenueMemberRepository(dataSource)
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
@@ -576,6 +578,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     platformVenueRepository = platformVenueRepository,
                     platformUserRepository = platformUserRepository,
                     auditLogRepository = auditLogRepository,
+                    subscriptionSettingsRepository = subscriptionSettingsRepository,
                     platformVenueMemberRepository = platformVenueMemberRepository,
                     staffInviteRepository = staffInviteRepository,
                     staffInviteConfig = staffInviteConfig
