@@ -65,7 +65,7 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                     }
                     if (!filter.query.isNullOrBlank()) {
                         conditions.add("LOWER(v.name) LIKE ?")
-                        params.add("%${filter.query.trim().lowercase()}%")
+                        params.add("%${filter.query.trim().lowercase(Locale.ROOT)}%")
                     }
                     when (filter.subscriptionFilter) {
                         SubscriptionFilter.TRIAL_ACTIVE -> {

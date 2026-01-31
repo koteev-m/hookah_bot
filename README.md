@@ -50,10 +50,10 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 Гостевые эндпойнты всегда скрывают недоступные/неопубликованные заведения: для browse-запросов ответ `NOT_FOUND` (404) вместо раскрытия причины. Исключение — бизнес-ограничения, где нужен явный 423.
 
 Точное поведение по типам запросов:
-- `GET /api/guest/table/resolve` возвращает 200 только для найденного `tableToken`. Доступность отражается полями `available` и `unavailableReason`; неизвестный `tableToken` — `NOT_FOUND` (404).
-- `POST /api/guest/order/add-batch`, `GET /api/guest/order/active`, `POST /api/guest/staff-call` возвращают 423 только для `SERVICE_SUSPENDED` / `SUBSCRIPTION_BLOCKED` (UX требование); случаи `venue not available` и `token not found` остаются `NOT_FOUND` (404).
+- `GET /api/guest/table/resolve` возвращает 200 только для найденного `tableToken`, привязанного к опубликованному заведению. Если `tableToken` не найден **или** найден, но заведение не опубликовано, — `NOT_FOUND` (404). При 200 доступность отражается полями `available` и `unavailableReason` (например, `SUBSCRIPTION_BLOCKED`).
+- `POST /api/guest/order/add-batch`, `GET /api/guest/order/active`, `POST /api/guest/staff-call` возвращают 423 только для `SUBSCRIPTION_BLOCKED` (UX требование); случаи `venue not available` и `token not found` остаются `NOT_FOUND` (404).
 - `GET /api/guest/venue/{id}` и `GET /api/guest/venue/{id}/menu`: для недоступных/неопубликованных заведений всегда `NOT_FOUND` (404).
-- `GET /api/guest/catalog` возвращает только `active_published` заведения; suspended заведения в список не попадают (нет 423/404 на этом эндпойнте).
+- `GET /api/guest/catalog` возвращает только опубликованные заведения; недоступные статусы в список не попадают (нет 423/404 на этом эндпойнте).
 
 ### Использование Bearer token для `/api/guest/*`
 Все гостевые эндпойнты защищены `Authorization: Bearer <token>`, где `<token>` — результат `POST /api/auth/telegram`.
@@ -92,7 +92,6 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 - `INITDATA_INVALID` (401) — `initData` не прошла проверку подписи/срока.
 - `INVALID_INPUT` (400) — некорректные параметры (например, `tableToken`, `reason`, `comment`).
 - `NOT_FOUND` (404) — неизвестный `tableToken` и т.п.
-- `SERVICE_SUSPENDED` (423) — venue suspended.
 - `SUBSCRIPTION_BLOCKED` (423) — подписка past_due/suspended.
 - `DATABASE_UNAVAILABLE` (503) — база данных недоступна.
 
@@ -155,7 +154,7 @@ curl http://localhost:8080/version
 - Проверка: в Telegram отправить `/start` и `/start <table_token>` — должно показать меню или контекст стола.
 - Для локальной проверки table_token (при поднятой БД `docker compose up -d postgres`):
   ```sql
-  INSERT INTO venues(name, status, staff_chat_id) VALUES ('Demo Hookah', 'active_published', NULL) RETURNING id;
+  INSERT INTO venues(name, status, staff_chat_id) VALUES ('Demo Hookah', 'PUBLISHED', NULL) RETURNING id;
   -- возьмите id из предыдущего шага
   INSERT INTO venue_tables(venue_id, table_number) VALUES (<venue_id>, 5) RETURNING id;
   INSERT INTO table_tokens(token, table_id) VALUES ('demo-token', <table_id>);
