@@ -6,6 +6,7 @@ import java.sql.Connection
 import java.sql.SQLException
 import java.time.Instant
 import javax.sql.DataSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -21,51 +22,60 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
     ): PlatformOwnerAssignmentResult {
         val ds = dataSource ?: return PlatformOwnerAssignmentResult.DatabaseError
         return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                val initialAutoCommit = connection.autoCommit
-                connection.autoCommit = false
-                try {
-                    if (!venueExists(connection, venueId)) {
-                        return@use rollbackAndReturn(connection) { PlatformOwnerAssignmentResult.NotFound }
-                    }
-                    val existing = loadMember(connection, venueId, userId)
-                    if (existing != null) {
-                        val updatedRole = ensureRole(connection, venueId, userId, role, existing.role)
-                        connection.commit()
-                        return@use PlatformOwnerAssignmentResult.Success(
-                            member = existing.copy(role = updatedRole),
-                            alreadyMember = true
-                        )
-                    }
-                    val createdAt = Instant.now()
-                    val inserted = insertMember(connection, venueId, userId, role, invitedByUserId, createdAt)
-                    if (inserted == null) {
-                        val after = loadMember(connection, venueId, userId)
-                        if (after != null) {
-                            val updatedRole = ensureRole(connection, venueId, userId, role, after.role)
+            try {
+                ds.connection.use { connection ->
+                    val initialAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        if (!venueExists(connection, venueId)) {
+                            return@use rollbackAndReturn(connection) { PlatformOwnerAssignmentResult.NotFound }
+                        }
+                        val existing = loadMember(connection, venueId, userId)
+                        if (existing != null) {
+                            val updatedRole = ensureRole(connection, venueId, userId, role, existing.role)
                             connection.commit()
                             return@use PlatformOwnerAssignmentResult.Success(
-                                member = after.copy(role = updatedRole),
+                                member = existing.copy(role = updatedRole),
                                 alreadyMember = true
                             )
                         }
-                        return@use rollbackAndReturn(connection) { PlatformOwnerAssignmentResult.DatabaseError }
+                        val createdAt = Instant.now()
+                        val inserted = insertMember(connection, venueId, userId, role, invitedByUserId, createdAt)
+                        if (inserted == null) {
+                            val after = loadMember(connection, venueId, userId)
+                            if (after != null) {
+                                val updatedRole = ensureRole(connection, venueId, userId, role, after.role)
+                                connection.commit()
+                                return@use PlatformOwnerAssignmentResult.Success(
+                                    member = after.copy(role = updatedRole),
+                                    alreadyMember = true
+                                )
+                            }
+                            return@use rollbackAndReturn(connection) { PlatformOwnerAssignmentResult.DatabaseError }
+                        }
+                        connection.commit()
+                        PlatformOwnerAssignmentResult.Success(member = inserted, alreadyMember = false)
+                    } catch (e: CancellationException) {
+                        rollbackBestEffort(connection)
+                        throw e
+                    } catch (e: Exception) {
+                        rollbackBestEffort(connection)
+                        logger.warn(
+                            "Failed to assign venue owner venueId={} userId={}: {}",
+                            venueId,
+                            userId,
+                            sanitizeTelegramForLog(e.message)
+                        )
+                        logger.debugTelegramException(e) { "assignOwner exception venueId=$venueId userId=$userId" }
+                        PlatformOwnerAssignmentResult.DatabaseError
+                    } finally {
+                        runCatching { connection.autoCommit = initialAutoCommit }
                     }
-                    connection.commit()
-                    PlatformOwnerAssignmentResult.Success(member = inserted, alreadyMember = false)
-                } catch (e: Exception) {
-                    rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to assign venue owner venueId={} userId={}: {}",
-                        venueId,
-                        userId,
-                        sanitizeTelegramForLog(e.message)
-                    )
-                    logger.debugTelegramException(e) { "assignOwner exception venueId=$venueId userId=$userId" }
-                    PlatformOwnerAssignmentResult.DatabaseError
-                } finally {
-                    connection.autoCommit = initialAutoCommit
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                PlatformOwnerAssignmentResult.DatabaseError
             }
         }
     }
