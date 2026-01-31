@@ -162,12 +162,12 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   const basePriceInput = document.createElement('input')
   basePriceInput.className = 'venue-input'
   basePriceInput.type = 'number'
-  basePriceInput.min = '0'
+  basePriceInput.min = '1'
   basePriceInput.placeholder = 'Base price (minor units)'
   const overridePriceInput = document.createElement('input')
   overridePriceInput.className = 'venue-input'
   overridePriceInput.type = 'number'
-  overridePriceInput.min = '0'
+  overridePriceInput.min = '1'
   overridePriceInput.placeholder = 'Override price (minor units)'
   const currencyLabel = el('span', { text: '' })
   const saveSubscriptionButton = el('button', { text: 'Сохранить настройки' }) as HTMLButtonElement
@@ -297,6 +297,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   let subscriptionAbort: AbortController | null = null
   let searchAbort: AbortController | null = null
   let loadSeq = 0
+  let searchDebounce: ReturnType<typeof setTimeout> | null = null
   let selectedUser: PlatformUserDto | null = null
   let currentVenue: PlatformVenueDetailResponse | null = null
   let currentSubscription: PlatformSubscriptionSettingsResponse | null = null
@@ -536,8 +537,17 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     })
   }
 
+  const clearSearchDebounce = () => {
+    if (searchDebounce) {
+      clearTimeout(searchDebounce)
+      searchDebounce = null
+    }
+  }
+
   const searchUsers = async (query: string) => {
     if (query.length < 2) {
+      searchAbort?.abort()
+      searchAbort = null
       refs.userResults.replaceChildren()
       return
     }
@@ -689,12 +699,21 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
         currency: currentSubscription.settings.currency
       })
     }
+    const sortedItems = [...items].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom))
+    for (let i = 1; i < sortedItems.length; i += 1) {
+      if (sortedItems[i].effectiveFrom === sortedItems[i - 1].effectiveFrom) {
+        showToast('Даты в расписании должны быть уникальными')
+        return
+      }
+    }
+    scheduleItems = sortedItems.map((item) => ({ ...item }))
+    renderSchedule()
     isUpdatingSchedule = true
     refs.saveScheduleButton.disabled = true
     const result = await platformUpdatePriceSchedule(
       backendUrl,
       venueId,
-      { items },
+      { items: sortedItems },
       deps
     )
     isUpdatingSchedule = false
@@ -724,7 +743,19 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
 
   const disposeSearch = on(refs.userSearch, 'input', () => {
     const query = refs.userSearch.value.trim()
-    void searchUsers(query)
+    clearSearchDebounce()
+    if (searchAbort) {
+      searchAbort.abort()
+      searchAbort = null
+    }
+    if (query.length < 2) {
+      void searchUsers(query)
+      return
+    }
+    searchDebounce = setTimeout(() => {
+      if (disposed) return
+      void searchUsers(query)
+    }, 300)
   })
 
   const disposeAssign = on(refs.assignButton, 'click', () => void handleAssignOwner())
@@ -744,6 +775,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     venueAbort = null
     subscriptionAbort = null
     searchAbort = null
+    clearSearchDebounce()
     disposeSearch()
     disposeAssign()
     disposeInvite()

@@ -145,6 +145,7 @@ export function renderPlatformVenuesListScreen(options: PlatformVenuesListOption
   let disposed = false
   let loadAbort: AbortController | null = null
   let loadSeq = 0
+  let searchDebounce: ReturnType<typeof setTimeout> | null = null
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -213,12 +214,30 @@ export function renderPlatformVenuesListScreen(options: PlatformVenuesListOption
     renderList(result.data.venues)
   }
 
-  const filtersHandler = () => void loadVenues()
+  const clearSearchDebounce = () => {
+    if (searchDebounce) {
+      clearTimeout(searchDebounce)
+      searchDebounce = null
+    }
+  }
+
+  const filtersHandler = () => {
+    clearSearchDebounce()
+    void loadVenues()
+  }
+
+  const searchHandler = () => {
+    clearSearchDebounce()
+    searchDebounce = setTimeout(() => {
+      if (disposed) return
+      void loadVenues()
+    }, 300)
+  }
 
   const disposables = [
     on(refs.statusFilter, 'change', filtersHandler),
     on(refs.subscriptionFilter, 'change', filtersHandler),
-    on(refs.searchInput, 'input', filtersHandler),
+    on(refs.searchInput, 'input', searchHandler),
     on(refs.createButton, 'click', () => onNavigate('#/create'))
   ]
 
@@ -228,6 +247,7 @@ export function renderPlatformVenuesListScreen(options: PlatformVenuesListOption
     disposed = true
     loadAbort?.abort()
     loadAbort = null
+    clearSearchDebounce()
     disposables.forEach((dispose) => dispose())
   }
 }
