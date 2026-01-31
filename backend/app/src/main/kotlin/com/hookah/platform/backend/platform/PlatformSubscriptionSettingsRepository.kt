@@ -8,6 +8,7 @@ import java.sql.Types
 import java.time.LocalDate
 import java.util.Locale
 import javax.sql.DataSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -106,7 +107,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                     connection.autoCommit = false
                     try {
                         if (!venueExists(connection, venueId)) {
-                            connection.rollback()
+                            rollbackBestEffort(connection)
                             return@use null
                         }
                         connection.prepareStatement(
@@ -145,11 +146,14 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                         }
                         connection.commit()
                         items
+                    } catch (e: CancellationException) {
+                        rollbackBestEffort(connection)
+                        throw e
                     } catch (e: SQLException) {
-                        connection.rollback()
+                        rollbackBestEffort(connection)
                         throw e
                     } finally {
-                        connection.autoCommit = initialAutoCommit
+                        runCatching { connection.autoCommit = initialAutoCommit }
                     }
                 }
             } catch (e: SQLException) {
@@ -362,6 +366,10 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         } else {
             statement.setInt(index, value)
         }
+    }
+
+    private fun rollbackBestEffort(connection: Connection) {
+        runCatching { connection.rollback() }
     }
 
     data class PlatformSubscriptionSettingsUpdate(
