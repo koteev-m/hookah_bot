@@ -4,6 +4,8 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -82,10 +84,39 @@ data class PlatformVenueStatusChangeRequest(
     val action: String
 )
 
+@Serializable
+data class PlatformOwnerAssignRequest(
+    val userId: Long,
+    val role: String? = null
+)
+
+@Serializable
+data class PlatformOwnerAssignResponse(
+    val ok: Boolean,
+    val alreadyMember: Boolean,
+    val role: String
+)
+
+@Serializable
+data class PlatformOwnerInviteRequest(
+    val ttlSeconds: Long? = null
+)
+
+@Serializable
+data class PlatformOwnerInviteResponse(
+    val code: String,
+    val expiresAt: String,
+    val instructions: String,
+    val deepLink: String?
+)
+
 fun Route.platformVenueRoutes(
     platformConfig: PlatformConfig,
     venueRepository: PlatformVenueRepository,
-    auditLogRepository: AuditLogRepository
+    auditLogRepository: AuditLogRepository,
+    platformVenueMemberRepository: PlatformVenueMemberRepository,
+    staffInviteRepository: StaffInviteRepository,
+    staffInviteConfig: StaffInviteConfig
 ) {
     route("/platform/venues") {
         get {
@@ -197,6 +228,60 @@ fun Route.platformVenueRoutes(
                 VenueStatusChangeResult.DatabaseError -> throw com.hookah.platform.backend.api.DatabaseUnavailableException()
             }
         }
+
+        post("/{venueId}/owners") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val venueId = call.parameters["venueId"]?.toLongOrNull()
+                ?: throw InvalidInputException("venueId must be a number")
+            val request = call.receive<PlatformOwnerAssignRequest>()
+            val role = parseOwnerRole(request.role)
+            when (val result = platformVenueMemberRepository.assignOwner(venueId, request.userId, role, actorUserId)) {
+                is PlatformOwnerAssignmentResult.Success -> {
+                    auditLogRepository.appendJson(
+                        actorUserId = actorUserId,
+                        action = "VENUE_OWNER_ASSIGN",
+                        entityType = "venue",
+                        entityId = venueId,
+                        payload = buildJsonObject {
+                            put("venueId", venueId)
+                            put("userId", request.userId)
+                            put("role", role)
+                        }
+                    )
+                    call.respond(
+                        PlatformOwnerAssignResponse(
+                            ok = true,
+                            alreadyMember = result.alreadyMember,
+                            role = result.member.role
+                        )
+                    )
+                }
+                PlatformOwnerAssignmentResult.NotFound -> throw NotFoundException()
+                PlatformOwnerAssignmentResult.DatabaseError -> throw com.hookah.platform.backend.api.DatabaseUnavailableException()
+            }
+        }
+
+        post("/{venueId}/owner-invite") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val venueId = call.parameters["venueId"]?.toLongOrNull()
+                ?: throw InvalidInputException("venueId must be a number")
+            val request = call.receive<PlatformOwnerInviteRequest>()
+            val ttlSeconds = resolveInviteTtl(request.ttlSeconds, staffInviteConfig)
+            val result = staffInviteRepository.createInvite(
+                venueId = venueId,
+                createdByUserId = actorUserId,
+                role = "OWNER",
+                ttlSeconds = ttlSeconds
+            ) ?: throw com.hookah.platform.backend.api.DatabaseUnavailableException()
+            call.respond(
+                PlatformOwnerInviteResponse(
+                    code = result.code,
+                    expiresAt = result.expiresAt.toString(),
+                    instructions = "Передайте код владельцу. Он должен открыть мини‑приложение и принять инвайт.",
+                    deepLink = null
+                )
+            )
+        }
     }
 }
 
@@ -232,3 +317,23 @@ private fun PlatformSubscriptionSummary.toDto(): PlatformSubscriptionSummaryDto 
     paidStartDate = paidStartDate?.toString(),
     isPaid = isPaid
 )
+
+private fun parseOwnerRole(rawRole: String?): String {
+    val role = rawRole?.trim()?.takeIf { it.isNotEmpty() } ?: "OWNER"
+    return when (role.uppercase()) {
+        "OWNER" -> "OWNER"
+        "ADMIN" -> "ADMIN"
+        else -> throw InvalidInputException("role must be OWNER or ADMIN")
+    }
+}
+
+private fun resolveInviteTtl(requestedTtl: Long?, config: StaffInviteConfig): Long {
+    val ttl = requestedTtl ?: config.defaultTtlSeconds
+    if (ttl < 60) {
+        throw InvalidInputException("ttlSeconds must be >= 60 seconds")
+    }
+    if (ttl > config.maxTtlSeconds) {
+        throw InvalidInputException("ttlSeconds must be <= ${config.maxTtlSeconds} seconds")
+    }
+    return ttl
+}
