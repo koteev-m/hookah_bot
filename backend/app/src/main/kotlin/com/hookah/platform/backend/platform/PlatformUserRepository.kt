@@ -16,7 +16,8 @@ class PlatformUserRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     val sql = StringBuilder(
                         """
-                            SELECT telegram_user_id, username, first_name, last_name, updated_at
+                            SELECT telegram_user_id, username, first_name, last_name,
+                                   COALESCE(updated_at, created_at) AS last_seen_at
                             FROM users
                         """.trimIndent()
                     )
@@ -35,7 +36,7 @@ class PlatformUserRepository(private val dataSource: DataSource?) {
                         params.add(like)
                         params.add(like)
                     }
-                    sql.append(" ORDER BY updated_at DESC, telegram_user_id DESC LIMIT ?")
+                    sql.append(" ORDER BY COALESCE(updated_at, created_at) DESC, telegram_user_id DESC LIMIT ?")
                     params.add(limit)
 
                     connection.prepareStatement(sql.toString()).use { statement ->
@@ -56,7 +57,7 @@ class PlatformUserRepository(private val dataSource: DataSource?) {
                                         username = rs.getString("username"),
                                         firstName = rs.getString("first_name"),
                                         lastName = rs.getString("last_name"),
-                                        lastSeenAt = rs.getTimestamp("updated_at").toInstant()
+                                        lastSeenAt = rs.getTimestamp("last_seen_at")?.toInstant() ?: Instant.EPOCH
                                     )
                                 )
                             }
