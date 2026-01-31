@@ -296,7 +296,7 @@ fun Route.platformVenueRoutes(
             val venueId = call.parameters["venueId"]?.toLongOrNull()
                 ?: throw InvalidInputException("venueId must be a number")
             val payload = call.receive<PlatformPriceScheduleUpdateRequest>()
-            val items = parseScheduleItems(payload)
+            val items = parseScheduleItems(venueId, payload)
             validateScheduleItems(items)
             val saved = subscriptionSettingsRepository.replaceSchedule(venueId, items, actorUserId)
                 ?: throw NotFoundException()
@@ -495,12 +495,15 @@ private fun applySettingsUpdate(
     )
 }
 
-private fun parseScheduleItems(payload: PlatformPriceScheduleUpdateRequest): List<PlatformPriceScheduleItem> {
+private fun parseScheduleItems(
+    venueId: Long,
+    payload: PlatformPriceScheduleUpdateRequest
+): List<PlatformPriceScheduleItem> {
     return payload.items.map { item ->
         val effectiveFrom = parseLocalDate(item.effectiveFrom, "effectiveFrom")
         val currency = item.currency.trim().uppercase(Locale.ROOT)
         PlatformPriceScheduleItem(
-            venueId = 0L,
+            venueId = venueId,
             effectiveFrom = effectiveFrom,
             priceMinor = item.priceMinor,
             currency = currency
