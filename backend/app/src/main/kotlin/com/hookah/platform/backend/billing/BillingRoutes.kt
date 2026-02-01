@@ -15,6 +15,15 @@ fun Route.billingWebhookRoutes(
 ) {
     route("/api/billing") {
         post("/webhook/{provider?}") {
+            val webhookSecret = config.webhookSecret?.takeIf { it.isNotBlank() }
+            if (webhookSecret != null) {
+                val headerSecret = call.request.headers["X-Billing-Webhook-Secret"]
+                if (headerSecret != webhookSecret) {
+                    call.respond(HttpStatusCode.Forbidden)
+                    return@post
+                }
+            }
+
             val providerName = call.parameters["provider"]?.takeIf { it.isNotBlank() }
                 ?: config.normalizedProvider
             val provider = providerRegistry.resolve(providerName)

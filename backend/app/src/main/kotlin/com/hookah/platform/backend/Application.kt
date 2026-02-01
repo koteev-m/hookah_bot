@@ -232,6 +232,9 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val billingProviderRegistry = BillingProviderRegistry(listOf(FakeBillingProvider()))
     val resolvedBillingProvider = billingProviderRegistry.resolve(billingConfig.normalizedProvider)
     if (resolvedBillingProvider == null) {
+        if (appEnv == "prod" || appEnv == "production") {
+            throw IllegalStateException("Unknown billing provider '${billingConfig.provider}' in production")
+        }
         logger.warn("Unknown billing provider '{}', falling back to FAKE", billingConfig.provider)
     }
     val billingProvider = resolvedBillingProvider ?: FakeBillingProvider()

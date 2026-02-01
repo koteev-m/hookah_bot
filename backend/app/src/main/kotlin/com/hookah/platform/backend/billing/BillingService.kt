@@ -39,7 +39,15 @@ class BillingService(
                 actorUserId = null
             )
 
+            if (invoice.providerInvoiceId != null ||
+                invoice.paymentUrl != null ||
+                invoice.providerRawPayload != null
+            ) {
+                return invoice
+            }
+
             val providerResult = provider.createInvoice(
+                invoiceId = invoice.id,
                 venueId = venueId,
                 amountMinor = amountMinor,
                 currency = currency,
@@ -94,18 +102,22 @@ class BillingService(
                 rawPayload = event.rawPayload
             )
 
-            if (!inserted) {
+            if (!inserted && event !is PaymentEvent.Paid) {
                 return
             }
 
             if (event is PaymentEvent.Paid) {
-                val marked = invoiceRepository.markInvoicePaid(
-                    invoiceId = invoice.id,
-                    paidAt = event.occurredAt,
-                    actorUserId = null
-                )
-                if (marked) {
-                    hooks.onInvoicePaid(invoice.copy(status = InvoiceStatus.PAID, paidAt = event.occurredAt), event)
+                val matchesInvoice = event.amountMinor == invoice.amountMinor &&
+                    event.currency == invoice.currency
+                if (matchesInvoice) {
+                    val marked = invoiceRepository.markInvoicePaid(
+                        invoiceId = invoice.id,
+                        paidAt = event.occurredAt,
+                        actorUserId = null
+                    )
+                    if (marked) {
+                        hooks.onInvoicePaid(invoice.copy(status = InvoiceStatus.PAID, paidAt = event.occurredAt), event)
+                    }
                 }
             }
         } catch (e: CancellationException) {
