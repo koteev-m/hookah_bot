@@ -3,12 +3,12 @@ package com.hookah.platform.backend.billing
 import io.ktor.server.application.ApplicationCall
 import java.time.Instant
 import java.time.LocalDate
-import java.util.UUID
 
 class FakeBillingProvider : BillingProvider {
     override fun providerName(): String = "FAKE"
 
     override suspend fun createInvoice(
+        invoiceId: Long,
         venueId: Long,
         amountMinor: Int,
         currency: String,
@@ -17,7 +17,7 @@ class FakeBillingProvider : BillingProvider {
         periodEnd: LocalDate,
         dueAt: Instant
     ): ProviderInvoiceResult {
-        val providerInvoiceId = "fake-${UUID.randomUUID()}"
+        val providerInvoiceId = "fake-$invoiceId"
         val paymentUrl = "fake://invoice/$providerInvoiceId"
         return ProviderInvoiceResult(
             providerInvoiceId = providerInvoiceId,

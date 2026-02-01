@@ -9,6 +9,7 @@ interface BillingProvider {
     fun providerName(): String
 
     suspend fun createInvoice(
+        invoiceId: Long,
         venueId: Long,
         amountMinor: Int,
         currency: String,
