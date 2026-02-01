@@ -217,7 +217,34 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         paidAt: Instant?,
         actorUserId: Long?
     ): Long? {
-        connection.prepareStatement(
+        val isH2 = connection.metaData.databaseProductName.equals("H2", ignoreCase = true)
+        val sql = if (isH2) {
+            """
+                INSERT INTO billing_invoices (
+                    venue_id,
+                    period_start,
+                    period_end,
+                    due_at,
+                    amount_minor,
+                    currency,
+                    description,
+                    provider,
+                    provider_invoice_id,
+                    payment_url,
+                    status,
+                    paid_at,
+                    updated_by_user_id
+                )
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM billing_invoices
+                    WHERE venue_id = ?
+                      AND period_start = ?
+                      AND period_end = ?
+                )
+            """.trimIndent()
+        } else {
             """
                 INSERT INTO billing_invoices (
                     venue_id,
@@ -235,10 +262,10 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                     updated_by_user_id
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT DO NOTHING
-            """.trimIndent(),
-            Statement.RETURN_GENERATED_KEYS
-        ).use { statement ->
+                ON CONFLICT (venue_id, period_start, period_end) DO NOTHING
+            """.trimIndent()
+        }
+        connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setLong(1, venueId)
             statement.setDate(2, java.sql.Date.valueOf(periodStart))
             statement.setDate(3, java.sql.Date.valueOf(periodEnd))
@@ -252,6 +279,11 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
             statement.setString(11, status.dbValue)
             setTimestampOrNull(statement, 12, paidAt)
             setLongOrNull(statement, 13, actorUserId)
+            if (isH2) {
+                statement.setLong(14, venueId)
+                statement.setDate(15, java.sql.Date.valueOf(periodStart))
+                statement.setDate(16, java.sql.Date.valueOf(periodEnd))
+            }
             val updated = statement.executeUpdate()
             if (updated == 0) {
                 return null

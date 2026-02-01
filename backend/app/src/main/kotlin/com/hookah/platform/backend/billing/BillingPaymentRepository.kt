@@ -23,7 +23,28 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
+                    val isH2 = connection.metaData.databaseProductName.equals("H2", ignoreCase = true)
+                    val sql = if (isH2) {
+                        """
+                            INSERT INTO billing_payments (
+                                invoice_id,
+                                provider,
+                                provider_event_id,
+                                amount_minor,
+                                currency,
+                                status,
+                                occurred_at,
+                                raw_payload
+                            )
+                            SELECT ?, ?, ?, ?, ?, ?, ?, ?
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                FROM billing_payments
+                                WHERE provider = ?
+                                  AND provider_event_id = ?
+                            )
+                        """.trimIndent()
+                    } else {
                         """
                             INSERT INTO billing_payments (
                                 invoice_id,
@@ -36,8 +57,11 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
                                 raw_payload
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT DO NOTHING
+                            ON CONFLICT (provider, provider_event_id) DO NOTHING
                         """.trimIndent()
+                    }
+                    connection.prepareStatement(
+                        sql
                     ).use { statement ->
                         statement.setLong(1, invoiceId)
                         statement.setString(2, provider)
@@ -50,6 +74,10 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
                             statement.setNull(8, java.sql.Types.VARCHAR)
                         } else {
                             statement.setString(8, rawPayload)
+                        }
+                        if (isH2) {
+                            statement.setString(9, provider)
+                            statement.setString(10, providerEventId)
                         }
                         statement.executeUpdate() > 0
                     }
