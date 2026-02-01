@@ -113,6 +113,7 @@ class BillingRepositoryTest {
             provider = "FAKE",
             providerInvoiceId = null,
             paymentUrl = null,
+            providerRawPayload = null,
             status = InvoiceStatus.OPEN,
             paidAt = null,
             actorUserId = null
@@ -128,6 +129,7 @@ class BillingRepositoryTest {
             provider = "FAKE",
             providerInvoiceId = null,
             paymentUrl = null,
+            providerRawPayload = null,
             status = InvoiceStatus.OPEN,
             paidAt = null,
             actorUserId = null
@@ -174,6 +176,7 @@ class BillingRepositoryTest {
             provider = "FAKE",
             providerInvoiceId = null,
             paymentUrl = null,
+            providerRawPayload = null,
             status = InvoiceStatus.OPEN,
             paidAt = null,
             actorUserId = null
@@ -232,6 +235,7 @@ class BillingRepositoryTest {
             provider = "FAKE",
             providerInvoiceId = null,
             paymentUrl = null,
+            providerRawPayload = null,
             status = InvoiceStatus.OPEN,
             paidAt = null,
             actorUserId = null
