@@ -26,6 +26,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         provider: String,
         providerInvoiceId: String?,
         paymentUrl: String?,
+        providerRawPayload: String?,
         status: InvoiceStatus,
         paidAt: Instant?,
         actorUserId: Long?
@@ -49,6 +50,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                             provider = provider,
                             providerInvoiceId = providerInvoiceId,
                             paymentUrl = paymentUrl,
+                            providerRawPayload = providerRawPayload,
                             status = status,
                             paidAt = paidAt,
                             actorUserId = actorUserId
@@ -137,6 +139,78 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun updateProviderDetails(
+        invoiceId: Long,
+        providerInvoiceId: String?,
+        paymentUrl: String?,
+        providerRawPayload: String?
+    ): BillingInvoice {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                            UPDATE billing_invoices
+                            SET provider_invoice_id = ?,
+                                payment_url = ?,
+                                provider_raw_payload = ?,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                        """.trimIndent()
+                    ).use { statement ->
+                        setStringOrNull(statement, 1, providerInvoiceId)
+                        setStringOrNull(statement, 2, paymentUrl)
+                        setStringOrNull(statement, 3, providerRawPayload)
+                        statement.setLong(4, invoiceId)
+                        statement.executeUpdate()
+                    }
+                    loadInvoiceById(connection, invoiceId) ?: throw SQLException("Invoice not found")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun findInvoiceByProviderInvoiceId(
+        provider: String,
+        providerInvoiceId: String
+    ): BillingInvoice? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                            SELECT *
+                            FROM billing_invoices
+                            WHERE provider = ?
+                              AND provider_invoice_id = ?
+                            ORDER BY id DESC
+                            LIMIT 1
+                        """.trimIndent()
+                    ).use { statement ->
+                        statement.setString(1, provider)
+                        statement.setString(2, providerInvoiceId)
+                        statement.executeQuery().use { rs ->
+                            if (!rs.next()) {
+                                return@withContext null
+                            }
+                            mapInvoice(rs)
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun listOpenInvoicesDueBefore(now: Instant): List<BillingInvoice> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -213,6 +287,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         provider: String,
         providerInvoiceId: String?,
         paymentUrl: String?,
+        providerRawPayload: String?,
         status: InvoiceStatus,
         paidAt: Instant?,
         actorUserId: Long?
@@ -231,11 +306,12 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                     provider,
                     provider_invoice_id,
                     payment_url,
+                    provider_raw_payload,
                     status,
                     paid_at,
                     updated_by_user_id
                 )
-                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 WHERE NOT EXISTS (
                     SELECT 1
                     FROM billing_invoices
@@ -257,11 +333,12 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                     provider,
                     provider_invoice_id,
                     payment_url,
+                    provider_raw_payload,
                     status,
                     paid_at,
                     updated_by_user_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (venue_id, period_start, period_end) DO NOTHING
             """.trimIndent()
         }
@@ -276,13 +353,14 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
             statement.setString(8, provider)
             setStringOrNull(statement, 9, providerInvoiceId)
             setStringOrNull(statement, 10, paymentUrl)
-            statement.setString(11, status.dbValue)
-            setTimestampOrNull(statement, 12, paidAt)
-            setLongOrNull(statement, 13, actorUserId)
+            setStringOrNull(statement, 11, providerRawPayload)
+            statement.setString(12, status.dbValue)
+            setTimestampOrNull(statement, 13, paidAt)
+            setLongOrNull(statement, 14, actorUserId)
             if (isH2) {
-                statement.setLong(14, venueId)
-                statement.setDate(15, java.sql.Date.valueOf(periodStart))
-                statement.setDate(16, java.sql.Date.valueOf(periodEnd))
+                statement.setLong(15, venueId)
+                statement.setDate(16, java.sql.Date.valueOf(periodStart))
+                statement.setDate(17, java.sql.Date.valueOf(periodEnd))
             }
             val updated = statement.executeUpdate()
             if (updated == 0) {
@@ -354,6 +432,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
             provider = rs.getString("provider"),
             providerInvoiceId = rs.getString("provider_invoice_id"),
             paymentUrl = rs.getString("payment_url"),
+            providerRawPayload = rs.getString("provider_raw_payload"),
             status = status,
             createdAt = rs.getTimestamp("created_at").toInstant(),
             updatedAt = rs.getTimestamp("updated_at").toInstant(),

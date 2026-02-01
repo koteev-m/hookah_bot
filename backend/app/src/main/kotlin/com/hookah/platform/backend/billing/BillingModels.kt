@@ -44,6 +44,7 @@ data class BillingInvoice(
     val provider: String,
     val providerInvoiceId: String?,
     val paymentUrl: String?,
+    val providerRawPayload: String?,
     val status: InvoiceStatus,
     val createdAt: Instant,
     val updatedAt: Instant,

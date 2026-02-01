@@ -5,6 +5,13 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.ApiHeaders
+import com.hookah.platform.backend.billing.BillingConfig
+import com.hookah.platform.backend.billing.BillingInvoiceRepository
+import com.hookah.platform.backend.billing.BillingPaymentRepository
+import com.hookah.platform.backend.billing.BillingProviderRegistry
+import com.hookah.platform.backend.billing.BillingService
+import com.hookah.platform.backend.billing.FakeBillingProvider
+import com.hookah.platform.backend.billing.billingWebhookRoutes
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
@@ -195,6 +202,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val miniAppStaticDir = appConfig.optionalString("miniapp.staticDir")?.takeIf { it.isNotBlank() }
     val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
     val sessionTokenService = SessionTokenService(sessionTokenConfig)
+    val billingConfig = BillingConfig.from(appConfig)
 
     val httpClient = HttpClient(Java) {
         install(ContentNegotiation) {
@@ -219,6 +227,19 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val subscriptionSettingsRepository = PlatformSubscriptionSettingsRepository(dataSource)
     val platformUserRepository = PlatformUserRepository(dataSource)
     val platformVenueMemberRepository = PlatformVenueMemberRepository(dataSource)
+    val billingInvoiceRepository = BillingInvoiceRepository(dataSource)
+    val billingPaymentRepository = BillingPaymentRepository(dataSource)
+    val billingProviderRegistry = BillingProviderRegistry(listOf(FakeBillingProvider()))
+    val resolvedBillingProvider = billingProviderRegistry.resolve(billingConfig.normalizedProvider)
+    if (resolvedBillingProvider == null) {
+        logger.warn("Unknown billing provider '{}', falling back to FAKE", billingConfig.provider)
+    }
+    val billingProvider = resolvedBillingProvider ?: FakeBillingProvider()
+    val billingService = BillingService(
+        provider = billingProvider,
+        invoiceRepository = billingInvoiceRepository,
+        paymentRepository = billingPaymentRepository
+    )
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
     if (dataSource != null) {
@@ -515,6 +536,12 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 )
             )
         }
+
+        billingWebhookRoutes(
+            config = billingConfig,
+            providerRegistry = billingProviderRegistry,
+            billingService = billingService
+        )
 
         miniAppAuthRoutes(appConfig, sessionTokenService, userRepository)
 
