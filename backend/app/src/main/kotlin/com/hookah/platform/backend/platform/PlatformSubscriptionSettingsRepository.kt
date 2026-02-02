@@ -179,7 +179,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         )
     }
 
-    private fun resolveEffectivePrice(
+    fun resolveEffectivePrice(
         settings: PlatformSubscriptionSettings,
         schedule: List<PlatformPriceScheduleItem>,
         today: LocalDate

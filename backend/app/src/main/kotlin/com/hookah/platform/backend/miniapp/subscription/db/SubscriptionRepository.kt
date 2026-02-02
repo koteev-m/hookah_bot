@@ -56,6 +56,41 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun updateStatus(
+        venueId: Long,
+        status: SubscriptionStatus,
+        paidStart: Instant? = null
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    ensureRowExistsForVenue(connection, venueId)
+                    connection.prepareStatement(
+                        """
+                            UPDATE venue_subscriptions
+                            SET status = ?,
+                                paid_start = COALESCE(?, paid_start),
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE venue_id = ?
+                        """.trimIndent()
+                    ).use { statement ->
+                        statement.setString(1, status.name)
+                        if (paidStart == null) {
+                            statement.setNull(2, Types.TIMESTAMP)
+                        } else {
+                            statement.setTimestamp(2, Timestamp.from(paidStart))
+                        }
+                        statement.setLong(3, venueId)
+                        statement.executeUpdate() > 0
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     private fun ensureRowExistsForVenue(connection: Connection, venueId: Long) {
         val now = Instant.now()
         val trialEnd = now.plus(14, ChronoUnit.DAYS)

@@ -242,6 +242,39 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun listOpenInvoicesDueBetween(start: Instant, end: Instant): List<BillingInvoice> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                            SELECT *
+                            FROM billing_invoices
+                            WHERE status = ?
+                              AND due_at >= ?
+                              AND due_at <= ?
+                            ORDER BY due_at ASC, id ASC
+                        """.trimIndent()
+                    ).use { statement ->
+                        statement.setString(1, InvoiceStatus.OPEN.dbValue)
+                        statement.setTimestamp(2, Timestamp.from(start))
+                        statement.setTimestamp(3, Timestamp.from(end))
+                        statement.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) {
+                                    add(mapInvoice(rs))
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun listInvoicesByVenue(venueId: Long, limit: Int, offset: Int): List<BillingInvoice> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
