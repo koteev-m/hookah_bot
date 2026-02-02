@@ -18,6 +18,7 @@ import { renderVenueOrderDetailScreen } from './venueOrderDetail'
 import { renderVenueOrdersScreen } from './venueOrders'
 import { renderVenueSettingsScreen } from './venueSettings'
 import { renderVenueStaffScreen } from './venueStaff'
+import { renderVenueManagerTablesScreen } from './venueManagerTables'
 import { renderVenueTablesScreen } from './venueTables'
 
 export type VenueAppOptions = {
@@ -25,7 +26,16 @@ export type VenueAppOptions = {
   backendUrl: string
 }
 
-type RouteName = 'dashboard' | 'orders' | 'order' | 'menu' | 'tables' | 'staff' | 'settings' | 'chat'
+type RouteName =
+  | 'dashboard'
+  | 'orders'
+  | 'order'
+  | 'menu'
+  | 'tables'
+  | 'manager-tables'
+  | 'staff'
+  | 'settings'
+  | 'chat'
 
 type Route = {
   name: RouteName
@@ -67,7 +77,10 @@ function resolveRoute(): Route {
   const [pathPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
-  if (!route || !['dashboard', 'orders', 'order', 'menu', 'tables', 'staff', 'settings', 'chat'].includes(route)) {
+  if (
+    !route ||
+    !['dashboard', 'orders', 'order', 'menu', 'tables', 'manager-tables', 'staff', 'settings', 'chat'].includes(route)
+  ) {
     return { name: 'dashboard', orderId: null }
   }
   if (route === 'order') {
@@ -111,6 +124,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     orders: el('button', { className: 'nav-button', text: 'Очередь' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы & QR' }) as HTMLButtonElement,
+    'manager-tables': el('button', { className: 'nav-button', text: 'Столы' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
     settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
     chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement
@@ -121,6 +135,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     navButtons.orders,
     navButtons.menu,
     navButtons.tables,
+    navButtons['manager-tables'],
     navButtons.staff,
     navButtons.settings,
     navButtons.chat
@@ -280,6 +295,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         return hasPermission('MENU_VIEW')
       case 'tables':
         return hasPermission('TABLE_VIEW')
+      case 'manager-tables':
+        return currentRole === 'OWNER' || currentRole === 'MANAGER'
       case 'settings':
         return hasPermission('VENUE_SETTINGS')
       default:
@@ -334,6 +351,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'tables':
         return renderVenueTablesScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+      case 'manager-tables':
+        return renderVenueManagerTablesScreen({ root: screenRoot, backendUrl, isDebug, venueId })
       case 'staff':
         return renderVenueStaffScreen({
           root: screenRoot,
@@ -363,6 +382,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.orders, 'click', () => navigate('#/orders')))
   disposables.push(on(refs.navButtons.menu, 'click', () => navigate('#/menu')))
   disposables.push(on(refs.navButtons.tables, 'click', () => navigate('#/tables')))
+  disposables.push(on(refs.navButtons['manager-tables'], 'click', () => navigate('#/manager-tables')))
   disposables.push(on(refs.navButtons.staff, 'click', () => navigate('#/staff')))
   disposables.push(on(refs.navButtons.settings, 'click', () => navigate('#/settings')))
   disposables.push(on(refs.navButtons.chat, 'click', () => navigate('#/chat')))

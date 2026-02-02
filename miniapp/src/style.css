@@ -812,3 +812,98 @@ input[type="number"] {
   gap: 0.5rem;
   color: #475569;
 }
+
+.manager-tables {
+  display: grid;
+  gap: 1rem;
+}
+
+.manager-seat-modes {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.manager-seat-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid #dbe1ee;
+  background: #f8fafc;
+  font-size: 0.9rem;
+}
+
+.manager-deposit-block {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.manager-deposit-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.manager-deposit-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.manager-deposit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.manager-deposit-row span {
+  flex: 1;
+  color: #52617d;
+}
+
+.manager-deposit-row input {
+  max-width: 140px;
+}
+
+.manager-deposit-summary {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.manager-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 1.5rem;
+  z-index: 40;
+}
+
+.manager-modal-card {
+  width: min(560px, 100%);
+}
+
+.manager-modal-content {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.manager-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.manager-unauthorized {
+  border-color: #f59e0b;
+}
+
+.is-hidden {
+  display: none;
+}
