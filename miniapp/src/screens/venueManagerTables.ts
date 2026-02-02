@@ -556,6 +556,7 @@ export function renderVenueManagerTablesScreen(options: VenueManagerTablesOption
     const nightKey = refs.nightKeyInput.value.trim()
     tablesStore.setParams(venueId, nightKey || undefined)
     if (!nightKey) {
+      tablesStore.abort()
       setStatus('Укажите ночь для загрузки столов.')
       refs.list.replaceChildren(el('p', { className: 'venue-empty', text: 'Выберите ночь.' }))
       hideError()
