@@ -8,6 +8,7 @@ enum class SubscriptionStatus(val wire: String) {
     ACTIVE("active"),
     PAST_DUE("past_due"),
     SUSPENDED("suspended"),
+    SUSPENDED_BY_PLATFORM("suspended_by_platform"),
     UNKNOWN("unknown");
 
     companion object {
@@ -17,6 +18,7 @@ enum class SubscriptionStatus(val wire: String) {
                 "active" -> ACTIVE
                 "past_due" -> PAST_DUE
                 "suspended" -> SUSPENDED
+                "suspended_by_platform" -> SUSPENDED_BY_PLATFORM
                 else -> UNKNOWN
             }
         }
@@ -43,6 +45,7 @@ object VenueAvailabilityResolver {
 
         if (subscriptionStatus == SubscriptionStatus.PAST_DUE ||
             subscriptionStatus == SubscriptionStatus.SUSPENDED ||
+            subscriptionStatus == SubscriptionStatus.SUSPENDED_BY_PLATFORM ||
             subscriptionStatus == SubscriptionStatus.UNKNOWN
         ) {
             return VenueAvailability(

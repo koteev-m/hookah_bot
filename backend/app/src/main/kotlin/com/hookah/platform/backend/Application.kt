@@ -7,11 +7,17 @@ import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.ApiHeaders
 import com.hookah.platform.backend.billing.BillingConfig
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
+import com.hookah.platform.backend.billing.BillingNotificationRepository
 import com.hookah.platform.backend.billing.BillingPaymentRepository
 import com.hookah.platform.backend.billing.BillingProviderRegistry
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.billing.FakeBillingProvider
 import com.hookah.platform.backend.billing.billingWebhookRoutes
+import com.hookah.platform.backend.billing.subscription.SubscriptionBillingConfig
+import com.hookah.platform.backend.billing.subscription.SubscriptionBillingEngine
+import com.hookah.platform.backend.billing.subscription.SubscriptionBillingHooks
+import com.hookah.platform.backend.billing.subscription.SubscriptionBillingJob
+import com.hookah.platform.backend.billing.subscription.SubscriptionBillingVenueRepository
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
@@ -79,6 +85,7 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.ApplicationStarted
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.application.call
@@ -203,6 +210,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
     val sessionTokenService = SessionTokenService(sessionTokenConfig)
     val billingConfig = BillingConfig.from(appConfig)
+    val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
+    val platformConfig = PlatformConfig.from(appConfig)
 
     val httpClient = HttpClient(Java) {
         install(ContentNegotiation) {
@@ -229,6 +238,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val platformVenueMemberRepository = PlatformVenueMemberRepository(dataSource)
     val billingInvoiceRepository = BillingInvoiceRepository(dataSource)
     val billingPaymentRepository = BillingPaymentRepository(dataSource)
+    val billingNotificationRepository = BillingNotificationRepository(dataSource)
     val billingProviderRegistry = BillingProviderRegistry(listOf(FakeBillingProvider()))
     val resolvedBillingProvider = billingProviderRegistry.resolve(billingConfig.normalizedProvider)
     if (resolvedBillingProvider == null) {
@@ -238,10 +248,29 @@ internal fun Application.module(overrides: ModuleOverrides) {
         logger.warn("Unknown billing provider '{}', falling back to FAKE", billingConfig.provider)
     }
     val billingProvider = resolvedBillingProvider ?: FakeBillingProvider()
+    val subscriptionBillingHooks = SubscriptionBillingHooks(subscriptionRepository)
     val billingService = BillingService(
         provider = billingProvider,
         invoiceRepository = billingInvoiceRepository,
-        paymentRepository = billingPaymentRepository
+        paymentRepository = billingPaymentRepository,
+        hooks = subscriptionBillingHooks
+    )
+    val subscriptionBillingEngine = SubscriptionBillingEngine(
+        dataSource = dataSource,
+        venueRepository = SubscriptionBillingVenueRepository(dataSource),
+        settingsRepository = subscriptionSettingsRepository,
+        billingService = billingService,
+        invoiceRepository = billingInvoiceRepository,
+        notificationRepository = billingNotificationRepository,
+        subscriptionRepository = subscriptionRepository,
+        auditLogRepository = auditLogRepository,
+        config = subscriptionBillingConfig,
+        platformOwnerUserId = platformConfig.ownerUserId,
+        json = json
+    )
+    val subscriptionBillingJob = SubscriptionBillingJob(
+        engine = subscriptionBillingEngine,
+        intervalSeconds = subscriptionBillingConfig.intervalSeconds
     )
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
@@ -251,12 +280,14 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
     val telegramConfig = TelegramBotConfig.from(appConfig)
     val staffInviteConfig = StaffInviteConfig.from(appConfig, appEnv)
-    val platformConfig = PlatformConfig.from(appConfig)
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
     val staffChatNotifierScope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier")
+    )
+    val subscriptionBillingScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineName("subscription-billing")
     )
     val staffChatLinkCodeRepository = StaffChatLinkCodeRepository(
         dataSource = dataSource,
@@ -363,12 +394,21 @@ internal fun Application.module(overrides: ModuleOverrides) {
         }
     }
 
+    environment.monitor.subscribe(ApplicationStarted) {
+        if (dataSource != null) {
+            subscriptionBillingJob.start(subscriptionBillingScope)
+        } else {
+            logger.info("Subscription billing job disabled: database is not configured")
+        }
+    }
     environment.monitor.subscribe(ApplicationStopping) {
         logger.info("Application stopping, closing resources")
+        subscriptionBillingJob.stop()
         httpClient.close()
         telegramApiClient?.close()
         telegramScope?.cancel()
         staffChatNotifierScope.cancel()
+        subscriptionBillingScope.cancel()
         DatabaseFactory.close(dataSource)
     }
     environment.monitor.subscribe(ApplicationStopped) {
