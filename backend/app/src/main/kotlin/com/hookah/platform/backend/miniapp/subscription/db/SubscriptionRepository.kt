@@ -77,7 +77,7 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
                     ).use { statement ->
                         statement.setString(1, status.name)
                         if (paidStart == null) {
-                            statement.setNull(2, Types.TIMESTAMP)
+                            statement.setNullTimestampWithTimezoneSafe(2)
                         } else {
                             statement.setTimestamp(2, Timestamp.from(paidStart))
                         }

@@ -20,6 +20,9 @@ class SubscriptionBillingJob(
         if (job != null) {
             return
         }
+        if (intervalSeconds <= 0) {
+            return
+        }
         job = scope.launch {
             while (isActive) {
                 try {
