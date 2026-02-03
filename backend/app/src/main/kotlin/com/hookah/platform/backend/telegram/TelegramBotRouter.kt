@@ -209,14 +209,26 @@ class TelegramBotRouter(
     }
 
     private suspend fun applyTableToken(chatId: Long, from: User?, token: String): ApplyTableTokenResult {
-        val context = tableTokenRepository.resolve(token) ?: return ApplyTableTokenResult.Invalid
+        val context = try {
+            tableTokenRepository.resolve(token)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            return ApplyTableTokenResult.DatabaseUnavailable
+        } ?: return ApplyTableTokenResult.Invalid
         val userId = from?.id ?: return ApplyTableTokenResult.Invalid
         when (checkSubscription(context.venueId)) {
             SubscriptionCheckResult.Available -> Unit
             SubscriptionCheckResult.Blocked -> return ApplyTableTokenResult.Blocked
             SubscriptionCheckResult.DatabaseUnavailable -> return ApplyTableTokenResult.DatabaseUnavailable
         }
-        chatContextRepository.saveContext(chatId, userId, context)
+        try {
+            chatContextRepository.saveContext(chatId, userId, context)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            return ApplyTableTokenResult.DatabaseUnavailable
+        }
         dialogStateRepository.clear(chatId)
         apiClient.sendMessage(
             chatId,
@@ -358,16 +370,29 @@ class TelegramBotRouter(
     }
 
     private suspend fun sendFallback(chatId: Long, from: User?, text: String = "Используйте меню ниже.") {
-        val context = loadContext(chatId)
-        if (context != null) {
-            apiClient.sendMessage(
-                chatId,
-                text,
-                TelegramKeyboards.tableContext(context.table, config.webAppPublicUrl)
-            )
+        when (val contextResult = loadContext(chatId)) {
+            is LoadContextResult.Loaded -> {
+                apiClient.sendMessage(
+                    chatId,
+                    text,
+                    TelegramKeyboards.tableContext(contextResult.context.table, config.webAppPublicUrl)
+                )
+                return
+            }
+            LoadContextResult.DatabaseUnavailable -> {
+                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            }
+            LoadContextResult.Missing -> Unit
+        }
+        val stored = try {
+            chatContextRepository.get(chatId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
             return
         }
-        val stored = chatContextRepository.get(chatId)
         val userId = from?.id ?: stored?.userId
         val hasVenueRole = userId?.let { venueAccessRepository.hasVenueRole(it) } ?: false
         val isOwner = config.platformOwnerId?.let { owner -> owner == userId } ?: false
@@ -378,17 +403,36 @@ class TelegramBotRouter(
         )
     }
 
-    private suspend fun loadContext(chatId: Long): ResolvedChatContext? {
-        val saved = chatContextRepository.get(chatId) ?: return null
-        val resolved = tableTokenRepository.resolve(saved.tableToken) ?: return null
-        return ResolvedChatContext(resolved, saved.userId)
+    private suspend fun loadContext(chatId: Long): LoadContextResult {
+        val saved = try {
+            chatContextRepository.get(chatId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            return LoadContextResult.DatabaseUnavailable
+        } ?: return LoadContextResult.Missing
+        val resolved = try {
+            tableTokenRepository.resolve(saved.tableToken)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            return LoadContextResult.DatabaseUnavailable
+        } ?: return LoadContextResult.Missing
+        return LoadContextResult.Loaded(ResolvedChatContext(resolved, saved.userId))
     }
 
     private suspend fun resolveGuestContext(chatId: Long): ResolvedChatContext? {
-        val context = loadContext(chatId)
-        if (context == null) {
-            askScanQr(chatId)
-            return null
+        val contextResult = loadContext(chatId)
+        val context = when (contextResult) {
+            is LoadContextResult.Loaded -> contextResult.context
+            LoadContextResult.DatabaseUnavailable -> {
+                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                return null
+            }
+            LoadContextResult.Missing -> {
+                askScanQr(chatId)
+                return null
+            }
         }
         return when (checkSubscription(context.table.venueId)) {
             SubscriptionCheckResult.Available -> context
@@ -575,6 +619,12 @@ class TelegramBotRouter(
         object Invalid : ApplyTableTokenResult()
         object Blocked : ApplyTableTokenResult()
         object DatabaseUnavailable : ApplyTableTokenResult()
+    }
+
+    private sealed class LoadContextResult {
+        data class Loaded(val context: ResolvedChatContext) : LoadContextResult()
+        object Missing : LoadContextResult()
+        object DatabaseUnavailable : LoadContextResult()
     }
 
     private sealed class SubscriptionCheckResult {
