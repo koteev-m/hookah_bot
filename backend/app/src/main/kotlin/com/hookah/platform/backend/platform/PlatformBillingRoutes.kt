@@ -63,9 +63,10 @@ fun Route.platformBillingRoutes(
             val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 200) ?: 50
             val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
 
-            val status = when (statusRaw?.trim()?.lowercase()) {
+            val statusNormalized = statusRaw?.trim()
+            val status = when (statusNormalized?.lowercase()) {
                 null, "", "any" -> null
-                else -> InvoiceStatus.fromDb(statusRaw)
+                else -> InvoiceStatus.fromDb(statusNormalized)
                     ?: throw InvalidInputException("status must be one of: DRAFT, OPEN, PAID, PAST_DUE, VOID, any")
             }
 
@@ -102,6 +103,10 @@ fun Route.platformBillingRoutes(
                 )
                 call.respond(PlatformMarkInvoicePaidResponse(ok = true, alreadyPaid = true))
                 return@post
+            }
+
+            if (invoice.status != InvoiceStatus.OPEN && invoice.status != InvoiceStatus.PAST_DUE) {
+                throw InvalidInputException("invoice must be OPEN or PAST_DUE to mark paid")
             }
 
             val providerInvoiceId = invoice.providerInvoiceId?.takeIf { it.isNotBlank() }
