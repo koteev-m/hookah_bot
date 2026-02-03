@@ -20,7 +20,7 @@ data class TelegramBotConfig(
     enum class Mode { LONG_POLLING, WEBHOOK }
 
     companion object {
-        fun from(config: ApplicationConfig): TelegramBotConfig {
+        fun from(config: ApplicationConfig, appEnv: String): TelegramBotConfig {
             val section = config.config("telegram")
             val enabled = section.propertyOrNull("enabled")?.getString()?.toBoolean() ?: false
             val token = section.propertyOrNull("token")?.getString()?.takeIf { it.isNotBlank() }
@@ -32,6 +32,11 @@ data class TelegramBotConfig(
                 ?: "/telegram/webhook"
             val webhookSecretToken =
                 section.propertyOrNull("webhookSecretToken")?.getString()?.takeIf { it.isNotBlank() }
+            if (appEnv == "prod" && enabled && mode == Mode.WEBHOOK && webhookSecretToken.isNullOrBlank()) {
+                val logger = LoggerFactory.getLogger(TelegramBotConfig::class.java)
+                logger.error("telegram.webhookSecretToken is required for webhook mode in prod")
+                error("telegram.webhookSecretToken must be configured for env=$appEnv")
+            }
             val webAppPublicUrl = section.propertyOrNull("webAppPublicUrl")?.getString()?.takeIf { it.isNotBlank() }
             val platformOwnerId = section.propertyOrNull("platformOwnerId")?.getString()?.toLongOrNull()
             val longPollingTimeoutSeconds =
