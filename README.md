@@ -98,6 +98,19 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 ### Security note
 **Не логируйте и не шарьте `initData` и session token**, не кладите их в багрепорты или тикеты. Все примеры в README содержат только placeholder-значения.
 
+## Billing (MVP)
+Минимальная схема биллинга:
+- Таблицы: `billing_invoices`, `billing_payments`, `billing_notifications`.
+- Статусы инвойсов: `DRAFT`, `OPEN`, `PAID`, `PAST_DUE`, `VOID`. Статусы платежей: `SUCCEEDED`, `FAILED`, `REFUNDED`.
+- `BillingProvider` определяет создание инвойса и обработку вебхуков; по умолчанию используется `FakeBillingProvider`.
+- `BillingService` хранит инвойс/платёж и применяет события оплаты через идемпотентные provider event id.
+- `SubscriptionBillingEngine` + `SubscriptionBillingJob` периодически создают инвойсы, рассылают напоминания, переводят просроченные счета в `PAST_DUE` и замораживают подписку. При оплате через `BillingHooks` подписка возвращается в `ACTIVE`.
+
+## Telegram payments: Stars vs external billing
+Telegram поддерживает оплату Stars и внешние платежи, это разные потоки:
+- Stars API: https://core.telegram.org/api/stars
+- Payments for bots: https://core.telegram.org/bots/payments
+
 ## Database (Postgres + Flyway)
 - Скопировать переменные окружения: `cp .env.example .env`
 - Для локальной разработки PostgreSQL: `docker compose up -d postgres`

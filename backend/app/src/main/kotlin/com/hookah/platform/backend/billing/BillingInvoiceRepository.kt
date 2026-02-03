@@ -275,12 +275,32 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun listInvoicesByVenue(venueId: Long, limit: Int, offset: Int): List<BillingInvoice> {
+    suspend fun getInvoiceById(invoiceId: Long): BillingInvoice? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
+                    loadInvoiceById(connection, invoiceId)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun listInvoicesByVenue(
+        venueId: Long,
+        status: InvoiceStatus?,
+        limit: Int,
+        offset: Int
+    ): List<BillingInvoice> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val sql = if (status == null) {
                         """
                             SELECT *
                             FROM billing_invoices
@@ -289,10 +309,27 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                             LIMIT ?
                             OFFSET ?
                         """.trimIndent()
-                    ).use { statement ->
+                    } else {
+                        """
+                            SELECT *
+                            FROM billing_invoices
+                            WHERE venue_id = ?
+                              AND status = ?
+                            ORDER BY period_start DESC, id DESC
+                            LIMIT ?
+                            OFFSET ?
+                        """.trimIndent()
+                    }
+                    connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, venueId)
-                        statement.setInt(2, limit)
-                        statement.setInt(3, offset)
+                        if (status == null) {
+                            statement.setInt(2, limit)
+                            statement.setInt(3, offset)
+                        } else {
+                            statement.setString(2, status.dbValue)
+                            statement.setInt(3, limit)
+                            statement.setInt(4, offset)
+                        }
                         statement.executeQuery().use { rs ->
                             buildList {
                                 while (rs.next()) {
