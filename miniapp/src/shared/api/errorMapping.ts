@@ -37,7 +37,6 @@ export function isAuthenticatedApi(path: string) {
   return (
     path.startsWith('/api/guest/') ||
     path.startsWith('/api/venue/') ||
-    path.startsWith('/api/platform/') ||
-    path.startsWith('/api/manager/')
+    path.startsWith('/api/platform/')
   )
 }
