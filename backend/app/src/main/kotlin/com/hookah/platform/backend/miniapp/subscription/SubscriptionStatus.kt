@@ -18,7 +18,7 @@ enum class SubscriptionStatus(val wire: String) {
             SUSPENDED_BY_PLATFORM,
             UNKNOWN
         )
-        val blockedDbValues: List<String> = blockedForGuest.map { it.name }
+        val blockedDbValues: List<String> = blockedForGuest.map { it.wire }
 
         fun fromDb(value: String?): SubscriptionStatus {
             return when (value?.lowercase(Locale.ROOT)) {

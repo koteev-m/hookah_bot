@@ -23,7 +23,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                             FROM venues v
                             LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
                             WHERE v.status = ?
-                              AND (vs.status IS NULL OR vs.status NOT IN ($blockedPlaceholders))
+                              AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
                             ORDER BY v.id ASC
                         """.trimIndent()
                     ).use { statement ->
