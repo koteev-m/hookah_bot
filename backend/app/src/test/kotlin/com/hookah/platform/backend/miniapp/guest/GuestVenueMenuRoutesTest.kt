@@ -125,6 +125,30 @@ class GuestVenueMenuRoutesTest {
         assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
     }
 
+    @Test
+    fun `menu for blocked subscription returns not found`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-blocked-menu")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            insertVenue(connection, "Published", "City", "Address", VenueStatus.PUBLISHED.dbValue)
+        }
+        seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
+        val token = issueToken(config)
+
+        val response = client.get("/api/guest/venue/$venueId/menu") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
+    }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -224,6 +248,21 @@ class GuestVenueMenuRoutesTest {
             }
         }
         error("Failed to insert venue")
+    }
+
+    private fun seedSubscription(jdbcUrl: String, venueId: Long, status: String) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                    INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """.trimIndent()
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, status)
+                statement.executeUpdate()
+            }
+        }
     }
 
     private fun insertMenuCategory(

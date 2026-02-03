@@ -14,6 +14,7 @@ import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
 import com.hookah.platform.backend.miniapp.guest.db.VenueShort
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import io.ktor.server.application.call
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -21,7 +22,8 @@ import io.ktor.server.routing.get
 
 fun Route.guestVenueRoutes(
     guestVenueRepository: GuestVenueRepository,
-    guestMenuRepository: GuestMenuRepository
+    guestMenuRepository: GuestMenuRepository,
+    subscriptionRepository: SubscriptionRepository
 ) {
     get("/catalog") {
         val venues = guestVenueRepository.listCatalogVenues()
@@ -31,14 +33,14 @@ fun Route.guestVenueRoutes(
     get("/venue/{id}") {
         val rawId = call.parameters["id"] ?: throw InvalidInputException("id is required")
         val venueId = rawId.toLongOrNull() ?: throw InvalidInputException("id must be a number")
-        val venue = ensureVenuePublishedForGuest(venueId, guestVenueRepository)
+        val venue = ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
         call.respond(VenueResponse(venue = venue.toVenueDto()))
     }
 
     get("/venue/{id}/menu") {
         val rawId = call.parameters["id"] ?: throw InvalidInputException("id is required")
         val venueId = rawId.toLongOrNull() ?: throw InvalidInputException("id must be a number")
-        ensureVenuePublishedForGuest(venueId, guestVenueRepository)
+        ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
         val menu = guestMenuRepository.getMenu(venueId)
         call.respond(menu.toResponse())
     }

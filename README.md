@@ -92,7 +92,7 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 - `INITDATA_INVALID` (401) — `initData` не прошла проверку подписи/срока.
 - `INVALID_INPUT` (400) — некорректные параметры (например, `tableToken`, `reason`, `comment`).
 - `NOT_FOUND` (404) — неизвестный `tableToken` и т.п.
-- `SUBSCRIPTION_BLOCKED` (423) — подписка past_due/suspended.
+- `SUBSCRIPTION_BLOCKED` (423) — подписка past_due/suspended/suspended_by_platform.
 - `DATABASE_UNAVAILABLE` (503) — база данных недоступна.
 
 ### Security note

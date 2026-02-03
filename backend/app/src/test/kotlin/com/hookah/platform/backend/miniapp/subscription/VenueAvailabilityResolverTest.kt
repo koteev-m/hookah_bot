@@ -33,6 +33,18 @@ class VenueAvailabilityResolverTest {
     }
 
     @Test
+    fun `suspended by platform blocks active venue`() {
+        val availability = VenueAvailabilityResolver.resolve(
+            venueStatus = VenueStatus.PUBLISHED,
+            subscriptionStatus = SubscriptionStatus.SUSPENDED_BY_PLATFORM
+        )
+
+        assertFalse(availability.available)
+        assertEquals("SUBSCRIPTION_BLOCKED", availability.reason)
+        assertEquals("suspended_by_platform", availability.subscriptionStatus)
+    }
+
+    @Test
     fun `suspended venue is not available even with active subscription`() {
         val availability = VenueAvailabilityResolver.resolve(
             venueStatus = VenueStatus.SUSPENDED,

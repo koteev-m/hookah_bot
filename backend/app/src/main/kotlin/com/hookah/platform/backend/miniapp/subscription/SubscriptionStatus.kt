@@ -12,6 +12,14 @@ enum class SubscriptionStatus(val wire: String) {
     UNKNOWN("unknown");
 
     companion object {
+        private val blockedForGuest = setOf(
+            PAST_DUE,
+            SUSPENDED,
+            SUSPENDED_BY_PLATFORM,
+            UNKNOWN
+        )
+        val blockedDbValues: List<String> = blockedForGuest.map { it.name }
+
         fun fromDb(value: String?): SubscriptionStatus {
             return when (value?.lowercase(Locale.ROOT)) {
                 "trial" -> TRIAL
@@ -23,6 +31,8 @@ enum class SubscriptionStatus(val wire: String) {
             }
         }
     }
+
+    fun isBlockedForGuest(): Boolean = blockedForGuest.contains(this)
 }
 
 data class VenueAvailability(
@@ -43,11 +53,7 @@ object VenueAvailabilityResolver {
             )
         }
 
-        if (subscriptionStatus == SubscriptionStatus.PAST_DUE ||
-            subscriptionStatus == SubscriptionStatus.SUSPENDED ||
-            subscriptionStatus == SubscriptionStatus.SUSPENDED_BY_PLATFORM ||
-            subscriptionStatus == SubscriptionStatus.UNKNOWN
-        ) {
+        if (subscriptionStatus.isBlockedForGuest()) {
             return VenueAvailability(
                 venueStatus = venueStatus,
                 subscriptionStatus = subscriptionStatus.wire,

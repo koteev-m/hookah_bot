@@ -258,7 +258,7 @@ class GuestStaffCallRoutesTest {
         val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 3)
         seedTableToken(jdbcUrl, tableId, "blocked-token")
-        seedSubscription(jdbcUrl, venueId, "PAST_DUE")
+        seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
 
         val token = issueToken(config)
         val request = StaffCallRequest(
