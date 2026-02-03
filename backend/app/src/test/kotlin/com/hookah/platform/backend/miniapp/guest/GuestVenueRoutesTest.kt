@@ -68,6 +68,35 @@ class GuestVenueRoutesTest {
     }
 
     @Test
+    fun `catalog hides blocked subscriptions`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-catalog-blocked")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val publishedId = DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            insertVenue(connection, "Open", "City", "Address", VenueStatus.PUBLISHED.dbValue)
+        }
+        val blockedId = DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            insertVenue(connection, "Blocked", "City", "Address", VenueStatus.PUBLISHED.dbValue)
+        }
+        seedSubscription(jdbcUrl, publishedId, "ACTIVE")
+        seedSubscription(jdbcUrl, blockedId, "SUSPENDED_BY_PLATFORM")
+        val token = issueToken(config)
+
+        val response = client.get("/api/guest/catalog") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val payload = json.decodeFromString(CatalogResponse.serializer(), response.bodyAsText())
+        assertEquals(listOf(publishedId), payload.venues.map { it.id })
+    }
+
+    @Test
     fun `venue by id respects visibility rules`() = testApplication {
         val jdbcUrl = buildJdbcUrl("guest-venue")
         val config = buildConfig(jdbcUrl)
@@ -101,6 +130,30 @@ class GuestVenueRoutesTest {
 
         assertEquals(HttpStatusCode.NotFound, suspendedResponse.status)
         assertApiErrorEnvelope(suspendedResponse, ApiErrorCodes.NOT_FOUND)
+    }
+
+    @Test
+    fun `venue by id with blocked subscription returns not found`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-venue-blocked")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            insertVenue(connection, "Blocked", "City", "Address", VenueStatus.PUBLISHED.dbValue)
+        }
+        seedSubscription(jdbcUrl, venueId, "PAST_DUE")
+        val token = issueToken(config)
+
+        val response = client.get("/api/guest/venue/$venueId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.NotFound, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
     }
 
     @Test
@@ -241,6 +294,21 @@ class GuestVenueRoutesTest {
             }
         }
         error("Failed to insert venue")
+    }
+
+    private fun seedSubscription(jdbcUrl: String, venueId: Long, status: String) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                    INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """.trimIndent()
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, status)
+                statement.executeUpdate()
+            }
+        }
     }
 
     private data class SeededVenues(

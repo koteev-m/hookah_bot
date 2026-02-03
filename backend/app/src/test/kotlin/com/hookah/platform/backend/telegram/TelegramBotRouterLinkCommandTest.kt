@@ -11,6 +11,7 @@ import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -34,6 +35,7 @@ class TelegramBotRouterLinkCommandTest {
     private val staffChatLinkCodeRepository: StaffChatLinkCodeRepository = mockk()
     private val venueRepository: VenueRepository = mockk()
     private val venueAccessRepository: VenueAccessRepository = mockk()
+    private val subscriptionRepository: SubscriptionRepository = mockk()
     private val router = TelegramBotRouter(
         config = TelegramBotConfig(
             enabled = true,
@@ -59,6 +61,7 @@ class TelegramBotRouterLinkCommandTest {
         staffChatLinkCodeRepository = staffChatLinkCodeRepository,
         venueRepository = venueRepository,
         venueAccessRepository = venueAccessRepository,
+        subscriptionRepository = subscriptionRepository,
         json = Json { ignoreUnknownKeys = true },
         scope = CoroutineScope(Dispatchers.Unconfined)
     )

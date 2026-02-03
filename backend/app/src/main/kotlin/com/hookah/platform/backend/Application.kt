@@ -339,6 +339,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
             staffChatLinkCodeRepository = staffChatLinkCodeRepository,
             venueRepository = venueRepository,
             venueAccessRepository = venueAccessRepository,
+            subscriptionRepository = subscriptionRepository,
             json = telegramJson,
             scope = botScope
         )
@@ -593,7 +594,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 route("/guest") {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
-                        guestMenuRepository = guestMenuRepository
+                        guestMenuRepository = guestMenuRepository,
+                        subscriptionRepository = subscriptionRepository
                     )
                     guestTableResolveRoutes(
                         tableTokenResolver = tableTokenResolver,

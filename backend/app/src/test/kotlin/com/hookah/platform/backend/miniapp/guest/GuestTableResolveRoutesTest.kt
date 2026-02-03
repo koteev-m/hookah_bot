@@ -263,6 +263,39 @@ class GuestTableResolveRoutesTest {
         assertEquals("SUBSCRIPTION_BLOCKED", payload.unavailableReason)
     }
 
+    @Test
+    fun `known token for suspended by platform subscription returns unavailable`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-table-suspended-by-platform")
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val tokenValue = "suspended-platform-token"
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+        val tableId = seedTable(jdbcUrl, venueId, 14)
+        seedTableToken(jdbcUrl, tableId, tokenValue)
+        seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
+
+        val token = issueToken(config)
+
+        val response = client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
+        assertEquals(venueId, payload.venueId)
+        assertEquals(tableId, payload.tableId)
+        assertEquals("14", payload.tableNumber)
+        assertEquals(VenueStatus.PUBLISHED.dbValue, payload.venueStatus)
+        assertEquals("suspended_by_platform", payload.subscriptionStatus)
+        assertEquals(false, payload.available)
+        assertEquals("SUBSCRIPTION_BLOCKED", payload.unavailableReason)
+    }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"

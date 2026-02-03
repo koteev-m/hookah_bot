@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -11,18 +12,25 @@ import kotlinx.coroutines.withContext
 class GuestVenueRepository(private val dataSource: DataSource?) {
     suspend fun listCatalogVenues(): List<VenueShort> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
+        val blockedStatuses = SubscriptionStatus.blockedDbValues
+        val blockedPlaceholders = blockedStatuses.joinToString(",") { "?" }
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT id, name, city, address, status
-                            FROM venues
-                            WHERE status = ?
-                            ORDER BY id ASC
+                            SELECT v.id, v.name, v.city, v.address, v.status
+                            FROM venues v
+                            LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
+                            WHERE v.status = ?
+                              AND (vs.status IS NULL OR vs.status NOT IN ($blockedPlaceholders))
+                            ORDER BY v.id ASC
                         """.trimIndent()
                     ).use { statement ->
                         statement.setString(1, VenueStatus.PUBLISHED.dbValue)
+                        blockedStatuses.forEachIndexed { index, status ->
+                            statement.setString(index + 2, status)
+                        }
                         statement.executeQuery().use { rs ->
                             val venues = mutableListOf<VenueShort>()
                             while (rs.next()) {

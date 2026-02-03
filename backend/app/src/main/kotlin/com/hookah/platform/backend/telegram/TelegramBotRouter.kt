@@ -17,6 +17,9 @@ import com.hookah.platform.backend.telegram.db.UnlinkResult
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.summarizeJsonKeysForLog
+import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
@@ -41,10 +44,12 @@ class TelegramBotRouter(
     private val staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
     private val venueRepository: VenueRepository,
     private val venueAccessRepository: VenueAccessRepository,
+    private val subscriptionRepository: SubscriptionRepository,
     private val json: Json,
     private val scope: CoroutineScope
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
+    private val subscriptionBlockedMessage = "Подписка заведения заблокирована. Заказы недоступны."
 
     suspend fun process(update: TelegramUpdate) {
         val chatId = update.message?.chat?.id ?: update.callbackQuery?.message?.chat?.id
@@ -106,10 +111,20 @@ class TelegramBotRouter(
         val cmd = obj["cmd"]?.jsonPrimitive?.content
         val token = obj["table_token"]?.jsonPrimitive?.content
         if (!token.isNullOrBlank()) {
-            val applied = applyTableToken(chatId, from, token)
-            if (!applied) {
-                sendFallback(chatId, from, "QR недействителен или база недоступна. Используйте меню ниже.")
-                return
+            when (applyTableToken(chatId, from, token)) {
+                ApplyTableTokenResult.Applied -> Unit
+                ApplyTableTokenResult.Invalid -> {
+                    sendFallback(chatId, from, "QR недействителен или база недоступна. Используйте меню ниже.")
+                    return
+                }
+                ApplyTableTokenResult.Blocked -> {
+                    apiClient.sendMessage(chatId, subscriptionBlockedMessage)
+                    return
+                }
+                ApplyTableTokenResult.DatabaseUnavailable -> {
+                    apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                    return
+                }
             }
         }
         when (cmd) {
@@ -181,15 +196,26 @@ class TelegramBotRouter(
             showMainMenu(chatId, from)
             return
         }
-        val applied = applyTableToken(chatId, from, token)
-        if (!applied) {
-            sendFallback(chatId, from, "QR недействителен или база недоступна. Используйте меню ниже.")
+        when (applyTableToken(chatId, from, token)) {
+            ApplyTableTokenResult.Applied -> Unit
+            ApplyTableTokenResult.Invalid -> sendFallback(
+                chatId,
+                from,
+                "QR недействителен или база недоступна. Используйте меню ниже."
+            )
+            ApplyTableTokenResult.Blocked -> apiClient.sendMessage(chatId, subscriptionBlockedMessage)
+            ApplyTableTokenResult.DatabaseUnavailable -> apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
         }
     }
 
-    private suspend fun applyTableToken(chatId: Long, from: User?, token: String): Boolean {
-        val context = tableTokenRepository.resolve(token) ?: return false
-        val userId = from?.id ?: return false
+    private suspend fun applyTableToken(chatId: Long, from: User?, token: String): ApplyTableTokenResult {
+        val context = tableTokenRepository.resolve(token) ?: return ApplyTableTokenResult.Invalid
+        val userId = from?.id ?: return ApplyTableTokenResult.Invalid
+        when (checkSubscription(context.venueId)) {
+            SubscriptionCheckResult.Available -> Unit
+            SubscriptionCheckResult.Blocked -> return ApplyTableTokenResult.Blocked
+            SubscriptionCheckResult.DatabaseUnavailable -> return ApplyTableTokenResult.DatabaseUnavailable
+        }
         chatContextRepository.saveContext(chatId, userId, context)
         dialogStateRepository.clear(chatId)
         apiClient.sendMessage(
@@ -197,7 +223,7 @@ class TelegramBotRouter(
             "Вы за столом №${context.tableNumber} в ${context.venueName}",
             TelegramKeyboards.tableContext(context, config.webAppPublicUrl)
         )
-        return true
+        return ApplyTableTokenResult.Applied
     }
 
     private suspend fun showMainMenu(chatId: Long, from: User?) {
@@ -213,11 +239,7 @@ class TelegramBotRouter(
     }
 
     private suspend fun showActiveOrder(chatId: Long) {
-        val context = loadContext(chatId)
-        if (context == null) {
-            askScanQr(chatId)
-            return
-        }
+        val context = resolveGuestContext(chatId) ?: return
         val summary = ordersRepository.findActiveOrderSummary(context.table.tableId)
         if (summary != null) {
             apiClient.sendMessage(
@@ -235,11 +257,7 @@ class TelegramBotRouter(
     }
 
     private suspend fun startQuickOrder(chatId: Long) {
-        val context = loadContext(chatId)
-        if (context == null) {
-            askScanQr(chatId)
-            return
-        }
+        val context = resolveGuestContext(chatId) ?: return
         dialogStateRepository.set(chatId, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
         apiClient.sendMessage(chatId, "Опишите, что хотите заказать.")
     }
@@ -257,11 +275,7 @@ class TelegramBotRouter(
     }
 
     private suspend fun confirmQuickOrder(chatId: Long) {
-        val context = loadContext(chatId)
-        if (context == null) {
-            askScanQr(chatId)
-            return
-        }
+        val context = resolveGuestContext(chatId) ?: return
         val state = dialogStateRepository.get(chatId)
         val text = state.payload["text"]
         if (text.isNullOrBlank()) {
@@ -288,11 +302,7 @@ class TelegramBotRouter(
     }
 
     private suspend fun showStaffCallReasons(chatId: Long) {
-        val context = loadContext(chatId)
-        if (context == null) {
-            askScanQr(chatId)
-            return
-        }
+        val context = resolveGuestContext(chatId) ?: return
         dialogStateRepository.clear(chatId)
         apiClient.sendMessage(chatId, "Выберите причину:", TelegramKeyboards.inlineStaffCallReasons())
     }
@@ -302,11 +312,7 @@ class TelegramBotRouter(
     }
 
     private suspend fun createStaffCall(chatId: Long, reason: StaffCallReason, comment: String?) {
-        val context = loadContext(chatId)
-        if (context == null) {
-            askScanQr(chatId)
-            return
-        }
+        val context = resolveGuestContext(chatId) ?: return
         if (reason == StaffCallReason.OTHER && comment.isNullOrBlank()) {
             dialogStateRepository.set(chatId, DialogState(DialogStateType.STAFF_CALL_WAIT_COMMENT))
             apiClient.sendMessage(chatId, "Опишите, что нужно сделать.")
@@ -376,6 +382,25 @@ class TelegramBotRouter(
         val saved = chatContextRepository.get(chatId) ?: return null
         val resolved = tableTokenRepository.resolve(saved.tableToken) ?: return null
         return ResolvedChatContext(resolved, saved.userId)
+    }
+
+    private suspend fun resolveGuestContext(chatId: Long): ResolvedChatContext? {
+        val context = loadContext(chatId)
+        if (context == null) {
+            askScanQr(chatId)
+            return null
+        }
+        return when (checkSubscription(context.table.venueId)) {
+            SubscriptionCheckResult.Available -> context
+            SubscriptionCheckResult.Blocked -> {
+                apiClient.sendMessage(chatId, subscriptionBlockedMessage)
+                null
+            }
+            SubscriptionCheckResult.DatabaseUnavailable -> {
+                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                null
+            }
+        }
     }
 
     private suspend fun askScanQr(chatId: Long) {
@@ -528,6 +553,34 @@ class TelegramBotRouter(
             }
             ChatAdminCheckResult.Allowed -> GroupCommandContext(chatId, userId)
         }
+    }
+
+    private suspend fun checkSubscription(venueId: Long): SubscriptionCheckResult {
+        return try {
+            val status = subscriptionRepository.getSubscriptionStatus(venueId)
+            if (status.isBlockedForGuest()) {
+                SubscriptionCheckResult.Blocked
+            } else {
+                SubscriptionCheckResult.Available
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            SubscriptionCheckResult.DatabaseUnavailable
+        }
+    }
+
+    private sealed class ApplyTableTokenResult {
+        object Applied : ApplyTableTokenResult()
+        object Invalid : ApplyTableTokenResult()
+        object Blocked : ApplyTableTokenResult()
+        object DatabaseUnavailable : ApplyTableTokenResult()
+    }
+
+    private sealed class SubscriptionCheckResult {
+        object Available : SubscriptionCheckResult()
+        object Blocked : SubscriptionCheckResult()
+        object DatabaseUnavailable : SubscriptionCheckResult()
     }
 
     private fun isGroupChat(type: String): Boolean = type == "group" || type == "supergroup"

@@ -22,3 +22,14 @@ suspend fun ensureGuestActionAvailable(
         else -> throw NotFoundException()
     }
 }
+
+suspend fun ensureGuestBrowseAvailable(
+    venueId: Long,
+    guestVenueRepository: GuestVenueRepository,
+    subscriptionRepository: SubscriptionRepository
+) = ensureVenuePublishedForGuest(venueId, guestVenueRepository).also {
+    val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(venueId)
+    if (subscriptionStatus.isBlockedForGuest()) {
+        throw NotFoundException()
+    }
+}

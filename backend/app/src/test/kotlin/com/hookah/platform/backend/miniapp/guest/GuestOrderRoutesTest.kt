@@ -9,6 +9,7 @@ import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -26,6 +27,7 @@ import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Instant
+import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
@@ -237,7 +239,7 @@ class GuestOrderRoutesTest {
         val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
         val tableId = seedTable(jdbcUrl, venueId, 2)
         seedTableToken(jdbcUrl, tableId, "blocked-token")
-        seedSubscription(jdbcUrl, venueId, "PAST_DUE")
+        seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
         val categoryId = seedMenuCategory(jdbcUrl, venueId)
         val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Coffee")
 
@@ -255,6 +257,65 @@ class GuestOrderRoutesTest {
 
         assertEquals(HttpStatusCode.Locked, response.status)
         assertApiErrorEnvelope(response, ApiErrorCodes.SUBSCRIPTION_BLOCKED)
+    }
+
+    @Test
+    fun `mark paid unblocks add-batch`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("guest-order-mark-paid")
+        val ownerId = 5151L
+        val config = buildConfig(jdbcUrl, platformOwnerId = ownerId)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+        val tableId = seedTable(jdbcUrl, venueId, 6)
+        seedTableToken(jdbcUrl, tableId, "paid-token")
+        seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
+        val categoryId = seedMenuCategory(jdbcUrl, venueId)
+        val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Cappuccino")
+        val invoiceId = seedInvoice(jdbcUrl, venueId, status = "PAST_DUE")
+
+        val guestToken = issueToken(config, TELEGRAM_USER_ID)
+        val request = AddBatchRequest(
+            tableToken = "paid-token",
+            items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+            comment = "test"
+        )
+        val blockedResponse = client.post("/api/guest/order/add-batch") {
+            contentType(ContentType.Application.Json)
+            headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+            setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+        }
+
+        assertEquals(HttpStatusCode.Locked, blockedResponse.status)
+        assertApiErrorEnvelope(blockedResponse, ApiErrorCodes.SUBSCRIPTION_BLOCKED)
+
+        val ownerToken = issueToken(config, ownerId)
+        val markPaidResponse = client.post("/api/platform/invoices/$invoiceId/mark-paid") {
+            headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+            contentType(ContentType.Application.Json)
+            setBody(
+                json.encodeToString(
+                    PlatformMarkInvoicePaidRequest.serializer(),
+                    PlatformMarkInvoicePaidRequest()
+                )
+            )
+        }
+
+        assertEquals(HttpStatusCode.OK, markPaidResponse.status)
+
+        val unblockedResponse = client.post("/api/guest/order/add-batch") {
+            contentType(ContentType.Application.Json)
+            headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+            setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+        }
+
+        assertEquals(HttpStatusCode.OK, unblockedResponse.status)
+        val payload = json.decodeFromString(AddBatchResponse.serializer(), unblockedResponse.bodyAsText())
+        assertNotNull(payload.orderId)
     }
 
     @Test
@@ -300,19 +361,23 @@ class GuestOrderRoutesTest {
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String): MapApplicationConfig {
-        return MapApplicationConfig(
+    private fun buildConfig(jdbcUrl: String, platformOwnerId: Long? = null): MapApplicationConfig {
+        val entries = mutableListOf(
             "app.env" to appEnv,
             "api.session.jwtSecret" to "test-secret",
             "db.jdbcUrl" to jdbcUrl,
             "db.user" to "sa",
             "db.password" to ""
         )
+        if (platformOwnerId != null) {
+            entries.add("platform.ownerUserId" to platformOwnerId.toString())
+        }
+        return MapApplicationConfig(*entries.toTypedArray())
     }
 
-    private fun issueToken(config: MapApplicationConfig): String {
+    private fun issueToken(config: MapApplicationConfig, userId: Long = TELEGRAM_USER_ID): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
-        return service.issueToken(TELEGRAM_USER_ID).token
+        return service.issueToken(userId).token
     }
 
     private fun seedVenue(jdbcUrl: String, status: String): Long {
@@ -394,6 +459,50 @@ class GuestOrderRoutesTest {
                 statement.executeUpdate()
             }
         }
+    }
+
+    private fun seedInvoice(jdbcUrl: String, venueId: Long, status: String): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                    INSERT INTO billing_invoices (
+                        venue_id,
+                        period_start,
+                        period_end,
+                        due_at,
+                        amount_minor,
+                        currency,
+                        description,
+                        provider,
+                        provider_invoice_id,
+                        payment_url,
+                        status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS
+            ).use { statement ->
+                val today = LocalDate.now()
+                statement.setLong(1, venueId)
+                statement.setDate(2, java.sql.Date.valueOf(today))
+                statement.setDate(3, java.sql.Date.valueOf(today.plusDays(30)))
+                statement.setTimestamp(4, Timestamp.from(Instant.now().plusSeconds(86_400)))
+                statement.setInt(5, 12000)
+                statement.setString(6, "RUB")
+                statement.setString(7, "Subscription")
+                statement.setString(8, "FAKE")
+                statement.setString(9, "fake-invoice-$venueId")
+                statement.setString(10, "fake://invoice/fake-invoice-$venueId")
+                statement.setString(11, status)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong(1)
+                    }
+                }
+            }
+        }
+        error("Failed to insert invoice")
     }
 
     private fun seedMenuCategory(jdbcUrl: String, venueId: Long): Long {
