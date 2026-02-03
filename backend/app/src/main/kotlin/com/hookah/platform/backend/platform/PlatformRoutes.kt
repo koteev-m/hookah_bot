@@ -1,6 +1,8 @@
 package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.billing.BillingInvoiceRepository
+import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond
@@ -42,6 +44,8 @@ fun Route.platformRoutes(
     platformVenueRepository: PlatformVenueRepository,
     platformUserRepository: PlatformUserRepository,
     auditLogRepository: com.hookah.platform.backend.miniapp.venue.AuditLogRepository,
+    billingInvoiceRepository: BillingInvoiceRepository,
+    billingService: BillingService,
     subscriptionSettingsRepository: PlatformSubscriptionSettingsRepository,
     platformVenueMemberRepository: PlatformVenueMemberRepository,
     staffInviteRepository: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository,
@@ -72,6 +76,12 @@ fun Route.platformRoutes(
         platformVenueMemberRepository = platformVenueMemberRepository,
         staffInviteRepository = staffInviteRepository,
         staffInviteConfig = staffInviteConfig
+    )
+    platformBillingRoutes(
+        platformConfig = platformConfig,
+        billingInvoiceRepository = billingInvoiceRepository,
+        billingService = billingService,
+        auditLogRepository = auditLogRepository
     )
 }
 

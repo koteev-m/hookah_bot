@@ -648,6 +648,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     platformVenueRepository = platformVenueRepository,
                     platformUserRepository = platformUserRepository,
                     auditLogRepository = auditLogRepository,
+                    billingInvoiceRepository = billingInvoiceRepository,
+                    billingService = billingService,
                     subscriptionSettingsRepository = subscriptionSettingsRepository,
                     platformVenueMemberRepository = platformVenueMemberRepository,
                     staffInviteRepository = staffInviteRepository,
