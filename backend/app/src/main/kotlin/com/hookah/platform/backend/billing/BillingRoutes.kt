@@ -20,7 +20,14 @@ fun Route.billingWebhookRoutes(
         post("/webhook/{provider?}") {
             val allowlist = config.webhookIpAllowlist
             if (allowlist != null) {
-                val clientIp = call.request.origin.remoteHost
+                val clientIp = if (config.webhookIpAllowlistUseXForwardedFor) {
+                    call.request.headers["X-Forwarded-For"]
+                        ?.split(',', limit = 2)
+                        ?.firstOrNull()
+                        ?.trim()
+                } else {
+                    call.request.origin.remoteHost
+                }
                 if (!allowlist.isAllowed(clientIp)) {
                     throw ForbiddenException()
                 }

@@ -8,7 +8,8 @@ import com.hookah.platform.backend.security.IpAllowlist
 data class BillingConfig(
     val provider: String,
     val webhookSecret: String,
-    val webhookIpAllowlist: IpAllowlist?
+    val webhookIpAllowlist: IpAllowlist?,
+    val webhookIpAllowlistUseXForwardedFor: Boolean
 ) {
     val normalizedProvider: String = provider.trim().lowercase(Locale.ROOT)
 
@@ -27,10 +28,15 @@ data class BillingConfig(
             val webhookIpAllowlist = IpAllowlist.parse(
                 config.propertyOrNull("billing.webhookIpAllowlist")?.getString()
             )
+            val webhookIpAllowlistUseXForwardedFor =
+                config.propertyOrNull("billing.webhookIpAllowlistUseXForwardedFor")?.getString()
+                    ?.toBooleanStrictOrNull()
+                    ?: false
             return BillingConfig(
                 provider = provider,
                 webhookSecret = webhookSecret ?: "dev-billing-webhook-secret",
-                webhookIpAllowlist = webhookIpAllowlist
+                webhookIpAllowlist = webhookIpAllowlist,
+                webhookIpAllowlistUseXForwardedFor = webhookIpAllowlistUseXForwardedFor
             )
         }
     }
