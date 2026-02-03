@@ -9,8 +9,11 @@ class TelegramWebhookConfigTest {
     fun `webhook secret is required in prod`() {
         val config = MapApplicationConfig(
             "telegram.enabled" to "true",
+            "telegram.token" to "token",
             "telegram.mode" to "webhook",
             "telegram.webhookPath" to "/telegram/webhook",
+            "telegram.longPollingTimeoutSeconds" to "25",
+            "telegram.staffChatLinkTtlSeconds" to "900",
             "telegram.staffChatLinkSecretPepper" to "pepper"
         )
 

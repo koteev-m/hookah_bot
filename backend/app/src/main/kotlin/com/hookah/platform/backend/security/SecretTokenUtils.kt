@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.security
 
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.security.MessageDigest
 
@@ -82,9 +83,41 @@ private fun applyMask(bytes: ByteArray, prefixLength: Int): ByteArray {
 }
 
 private fun parseAddress(value: String): InetAddress? {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return null
+
+    return if (trimmed.contains(':')) {
+        if (!isValidIpv6Literal(trimmed)) return null
+        try {
+            val address = InetAddress.getByName(trimmed)
+            if (address is Inet6Address) address else null
+        } catch (e: Exception) {
+            null
+        }
+    } else {
+        parseIpv4Literal(trimmed)
+    }
+}
+
+private fun parseIpv4Literal(value: String): InetAddress? {
+    if (value.any { it != '.' && !it.isDigit() }) return null
+    val parts = value.split('.', limit = 4)
+    if (parts.size != 4) return null
+    val bytes = ByteArray(4)
+    for ((index, part) in parts.withIndex()) {
+        if (part.isEmpty()) return null
+        val number = part.toIntOrNull() ?: return null
+        if (number !in 0..255) return null
+        bytes[index] = number.toByte()
+    }
     return try {
-        InetAddress.getByName(value)
+        InetAddress.getByAddress(bytes)
     } catch (e: Exception) {
         null
     }
+}
+
+private fun isValidIpv6Literal(value: String): Boolean {
+    if (!value.contains(':')) return false
+    return value.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' }
 }
