@@ -2,7 +2,6 @@ package com.hookah.platform.backend.billing
 
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
-import io.ktor.server.plugins.origin
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
@@ -26,7 +25,7 @@ fun Route.billingWebhookRoutes(
                         ?.firstOrNull()
                         ?.trim()
                 } else {
-                    call.request.origin.remoteHost
+                    call.request.local.remoteHost
                 }
                 if (!allowlist.isAllowed(clientIp)) {
                     throw ForbiddenException()
