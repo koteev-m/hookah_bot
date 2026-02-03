@@ -67,6 +67,7 @@ import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
+import com.hookah.platform.backend.security.constantTimeEquals
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.client.HttpClient
@@ -209,7 +210,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val miniAppStaticDir = appConfig.optionalString("miniapp.staticDir")?.takeIf { it.isNotBlank() }
     val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
     val sessionTokenService = SessionTokenService(sessionTokenConfig)
-    val billingConfig = BillingConfig.from(appConfig)
+    val billingConfig = BillingConfig.from(appConfig, appEnv)
     val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
     val platformConfig = PlatformConfig.from(appConfig)
 
@@ -278,7 +279,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
         logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
     }
 
-    val telegramConfig = TelegramBotConfig.from(appConfig)
+    val telegramConfig = TelegramBotConfig.from(appConfig, appEnv)
     val staffInviteConfig = StaffInviteConfig.from(appConfig, appEnv)
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
@@ -669,7 +670,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     val secret = telegramConfig.webhookSecretToken
                     if (!secret.isNullOrBlank()) {
                         val header = call.request.headers["X-Telegram-Bot-Api-Secret-Token"]
-                        if (header != secret) {
+                        if (!constantTimeEquals(secret, header)) {
                             call.respond(HttpStatusCode.Forbidden)
                             return@post
                         }

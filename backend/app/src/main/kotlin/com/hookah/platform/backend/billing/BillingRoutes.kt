@@ -2,11 +2,14 @@ package com.hookah.platform.backend.billing
 
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
+import io.ktor.server.plugins.origin
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.coroutines.CancellationException
+import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.security.constantTimeEquals
 
 fun Route.billingWebhookRoutes(
     config: BillingConfig,
@@ -15,13 +18,18 @@ fun Route.billingWebhookRoutes(
 ) {
     route("/api/billing") {
         post("/webhook/{provider?}") {
-            val webhookSecret = config.webhookSecret?.takeIf { it.isNotBlank() }
-            if (webhookSecret != null) {
-                val headerSecret = call.request.headers["X-Billing-Webhook-Secret"]
-                if (headerSecret != webhookSecret) {
-                    call.respond(HttpStatusCode.Forbidden)
-                    return@post
+            val allowlist = config.webhookIpAllowlist
+            if (allowlist != null) {
+                val clientIp = call.request.origin.remoteHost
+                if (!allowlist.isAllowed(clientIp)) {
+                    throw ForbiddenException()
                 }
+            }
+
+            val headerSecret = call.request.headers["X-Webhook-Secret-Token"]
+                ?: call.request.headers["X-Billing-Webhook-Secret"]
+            if (!constantTimeEquals(config.webhookSecret, headerSecret)) {
+                throw ForbiddenException()
             }
 
             val providerName = call.parameters["provider"]?.takeIf { it.isNotBlank() }
