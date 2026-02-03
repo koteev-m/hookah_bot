@@ -125,6 +125,41 @@ class PlatformBillingRoutesTest {
         assertEquals(1, countPayments(jdbcUrl, "manual:$invoiceId"))
     }
 
+    @Test
+    fun `mark paid rejects non payable invoices`() = testApplication {
+        val jdbcUrl = buildJdbcUrl("platform-billing-invalid-status")
+        val ownerId = 4404L
+        val config = buildConfig(jdbcUrl, ownerId)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenue(jdbcUrl)
+        val invoiceId = seedInvoice(jdbcUrl, venueId, status = "VOID")
+        val token = issueToken(config, userId = ownerId)
+
+        val response = client.post("/api/platform/invoices/$invoiceId/mark-paid") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            contentType(ContentType.Application.Json)
+            setBody(
+                json.encodeToString(
+                    PlatformMarkInvoicePaidRequest.serializer(),
+                    PlatformMarkInvoicePaidRequest()
+                )
+            )
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+        assertEquals(0, countPayments(jdbcUrl, "manual:$invoiceId"))
+
+        val invoiceAfter = invoiceStatus(jdbcUrl, invoiceId)
+        assertEquals("VOID", invoiceAfter.first)
+        assertEquals(null, invoiceAfter.second)
+    }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -166,7 +201,7 @@ class PlatformBillingRoutesTest {
         error("Failed to insert venue")
     }
 
-    private fun seedInvoice(jdbcUrl: String, venueId: Long): Long {
+    private fun seedInvoice(jdbcUrl: String, venueId: Long, status: String = "OPEN"): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -198,7 +233,7 @@ class PlatformBillingRoutesTest {
                 statement.setString(8, "FAKE")
                 statement.setString(9, "fake-invoice-$venueId")
                 statement.setString(10, "fake://invoice/fake-invoice-$venueId")
-                statement.setString(11, "OPEN")
+                statement.setString(11, status)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) return rs.getLong(1)
