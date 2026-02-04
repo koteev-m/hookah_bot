@@ -45,8 +45,8 @@ class BillingWebhookRoutesTest {
     private fun insertVenue(connection: Connection): Long {
         return connection.prepareStatement(
             """
-                INSERT INTO venues (name, status)
-                VALUES ('Billing Venue', ?)
+                INSERT INTO venues (name, city, address, status)
+                VALUES ('Billing Venue', 'Test City', 'Test Address', ?)
             """.trimIndent(),
             java.sql.Statement.RETURN_GENERATED_KEYS
         ).use { statement ->

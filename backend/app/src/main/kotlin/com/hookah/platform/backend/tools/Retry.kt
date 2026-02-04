@@ -25,6 +25,8 @@ suspend fun <T> retryWithBackoff(
             return block(attempt)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: Error) {
+            throw e
         } catch (e: Throwable) {
             if (attempt >= maxAttempts || !shouldRetry(e)) {
                 throw e
