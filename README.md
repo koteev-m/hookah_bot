@@ -140,6 +140,7 @@ Billing webhook:
 Telegram webhook (если используете webhook-режим бота):
 - `TELEGRAM_BOT_ENABLED=true`
 - `TELEGRAM_BOT_TOKEN=<telegram-bot-token>`
+- `TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER=<staff-chat-link-secret-pepper>`
 - `TELEGRAM_WEBHOOK_SECRET_TOKEN=<telegram-webhook-secret>`
 - `TELEGRAM_WEBHOOK_PATH=/telegram/webhook`
 
@@ -157,7 +158,7 @@ server {
     proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 }
@@ -176,7 +177,7 @@ example.com {
 ```
 
 ### X-Forwarded-For и IP allowlist для billing webhook
-Если вы используете `BILLING_WEBHOOK_IP_ALLOWLIST`, то сервис может проверять IP запроса. За proxy/ingress реальный IP приходит в `X-Forwarded-For`, поэтому включайте `BILLING_WEBHOOK_IP_ALLOWLIST_USE_X_FORWARDED_FOR=true` **только** если edge гарантированно очищает/перезаписывает этот заголовок. Иначе злоумышленник сможет подставить IP в `X-Forwarded-For`.
+Если вы используете `BILLING_WEBHOOK_IP_ALLOWLIST`, то сервис может проверять IP запроса. За proxy/ingress реальный IP приходит в `X-Forwarded-For`, поэтому включайте `BILLING_WEBHOOK_IP_ALLOWLIST_USE_X_FORWARDED_FOR=true` **только** если edge гарантированно очищает/перезаписывает этот заголовок. Иначе злоумышленник сможет подставить IP в `X-Forwarded-For`. Не используйте `$proxy_add_x_forwarded_for` для allowlist, если входной `X-Forwarded-For` не очищается: он сохраняет первый IP из клиентского заголовка.
 
 ### Минимальный security checklist
 - **Не логировать** `initData` и session token (см. секцию Auth: `POST /api/auth/telegram`).
