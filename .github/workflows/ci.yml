@@ -51,9 +51,11 @@ jobs:
         with:
           version: 9
       - name: Install dependencies
-        run: pnpm install -C miniapp
+        working-directory: miniapp
+        run: pnpm install
       - name: Build miniapp
-        run: pnpm -C miniapp build
+        working-directory: miniapp
+        run: pnpm build
 
   docker:
     runs-on: ubuntu-latest
