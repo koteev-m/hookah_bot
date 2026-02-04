@@ -14,8 +14,8 @@ class BillingRepositoryPostgresTest {
     private fun insertVenue(connection: Connection): Long {
         return connection.prepareStatement(
             """
-                INSERT INTO venues (name, status)
-                VALUES ('Billing Venue', ?)
+                INSERT INTO venues (name, city, address, status)
+                VALUES ('Billing Venue', 'Moscow', 'Tverskaya 1', ?)
             """.trimIndent(),
             java.sql.Statement.RETURN_GENERATED_KEYS
         ).use { statement ->
