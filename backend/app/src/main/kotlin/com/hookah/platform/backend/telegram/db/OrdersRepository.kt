@@ -2,13 +2,14 @@ package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.ActiveOrderSummary
+import com.hookah.platform.backend.tools.retryWithBackoff
 import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Types
+import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import javax.sql.DataSource
 
 data class OrderBatchItemInput(
     val itemId: Long,
@@ -202,11 +203,14 @@ class OrdersRepository(private val dataSource: DataSource?) {
     ): CreatedOrderBatch? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
-            var attempt = 0
-            var result: CreatedOrderBatch? = null
-            while (true) {
-                try {
-                    result = ds.connection.use { connection ->
+            try {
+                retryWithBackoff(
+                    maxAttempts = 2,
+                    maxDelayMillis = 200,
+                    jitterRatio = 0.2,
+                    shouldRetry = { e -> e is SQLException && e.sqlState == "23505" }
+                ) {
+                    ds.connection.use { connection ->
                         connection.autoCommit = false
                         try {
                             if (!lockTable(connection, tableId)) {
@@ -226,16 +230,10 @@ class OrdersRepository(private val dataSource: DataSource?) {
                             connection.autoCommit = true
                         }
                     }
-                    break
-                } catch (e: SQLException) {
-                    if (e.sqlState == "23505" && attempt == 0) {
-                        attempt += 1
-                        continue
-                    }
-                    throw DatabaseUnavailableException()
                 }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
             }
-            result
         }
     }
 

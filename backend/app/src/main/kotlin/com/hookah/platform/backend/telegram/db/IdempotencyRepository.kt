@@ -32,7 +32,7 @@ class IdempotencyRepository(private val dataSource: DataSource?) {
                 }
             }.getOrElse { throwable ->
                 logInsertFailure(throwable)
-                true
+                false
             }
         }
     }

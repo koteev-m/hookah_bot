@@ -83,6 +83,9 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
                     }
                 }
             } catch (e: SQLException) {
+                if (e.sqlState == "23505") {
+                    return@withContext false
+                }
                 throw DatabaseUnavailableException()
             }
         }
