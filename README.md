@@ -119,6 +119,71 @@ Telegram поддерживает оплату Stars и внешние плат�
 - Проверить: `curl -f http://localhost:8080/db/health`
 - В Docker backend подключается к `postgres:5432`, снаружи Docker — к `localhost:5432`
 
+## Deployment (MVP)
+Ниже — минимальный набор шагов и параметров для безопасного деплоя. Все значения — placeholder, реальные секреты не храните в репозитории.
+
+### Обязательные переменные окружения
+База данных:
+- `DB_JDBC_URL=jdbc:postgresql://<db-host>:5432/<db-name>`
+- `DB_USER=<db-user>`
+- `DB_PASSWORD=<db-password>`
+
+JWT/сессии Mini App:
+- `API_SESSION_JWT_SECRET=<session-jwt-secret>`
+- `API_SESSION_TTL_SECONDS=3600`
+
+Billing webhook:
+- `BILLING_WEBHOOK_SECRET=<billing-webhook-secret>`
+- `BILLING_WEBHOOK_IP_ALLOWLIST=<cidr-or-ip-list>` (опционально, через запятую)
+- `BILLING_WEBHOOK_IP_ALLOWLIST_USE_X_FORWARDED_FOR=true|false` (включать только за доверенным прокси)
+
+Telegram webhook (если используете webhook-режим бота):
+- `TELEGRAM_BOT_ENABLED=true`
+- `TELEGRAM_BOT_TOKEN=<telegram-bot-token>`
+- `TELEGRAM_WEBHOOK_SECRET_TOKEN=<telegram-webhook-secret>`
+- `TELEGRAM_WEBHOOK_PATH=/telegram/webhook`
+
+### HTTPS termination через reverse proxy
+Backend слушает HTTP, TLS завершается на edge. Пример для Nginx:
+```nginx
+server {
+  listen 443 ssl http2;
+  server_name example.com;
+
+  ssl_certificate     /etc/ssl/certs/fullchain.pem;
+  ssl_certificate_key /etc/ssl/private/privkey.pem;
+
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+Пример для Caddy:
+```caddy
+example.com {
+  reverse_proxy 127.0.0.1:8080 {
+    header_up Host {host}
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+}
+```
+
+### X-Forwarded-For и IP allowlist для billing webhook
+Если вы используете `BILLING_WEBHOOK_IP_ALLOWLIST`, то сервис может проверять IP запроса. За proxy/ingress реальный IP приходит в `X-Forwarded-For`, поэтому включайте `BILLING_WEBHOOK_IP_ALLOWLIST_USE_X_FORWARDED_FOR=true` **только** если edge гарантированно очищает/перезаписывает этот заголовок. Иначе злоумышленник сможет подставить IP в `X-Forwarded-For`.
+
+### Минимальный security checklist
+- **Не логировать** `initData` и session token (см. секцию Auth: `POST /api/auth/telegram`).
+- **Не коммитить** секреты и реальные токены (`.env`, `BILLING_WEBHOOK_SECRET`, `TELEGRAM_BOT_TOKEN`, `API_SESSION_JWT_SECRET` и т.д.).
+- **Ограничить доступ** к `POST /api/billing/webhook` на уровне сети (firewall, security groups, allowlist).
+- **Включить rate limits** на edge (Nginx/Caddy/ingress), если возможно.
+
 ## Mini App локально
 ```bash
 cd miniapp
