@@ -6,7 +6,9 @@ import io.ktor.server.config.MapApplicationConfig
 import java.sql.DriverManager
 import java.util.UUID
 import org.flywaydb.core.Flyway
+import org.junit.jupiter.api.Assumptions
 import org.testcontainers.containers.PostgreSQLContainer
+import org.testcontainers.DockerClientFactory
 import org.testcontainers.utility.DockerImageName
 
 data class PostgresTestDatabase(
@@ -17,6 +19,11 @@ data class PostgresTestDatabase(
 )
 
 object PostgresTestEnv {
+    private val dockerAvailable: Boolean by lazy {
+        runCatching { DockerClientFactory.instance().isDockerAvailable }
+            .getOrElse { false }
+    }
+
     private val container: PostgreSQLContainer<*> by lazy {
         val image = DockerImageName.parse("postgres:16-alpine")
         PostgreSQLContainer(image).apply {
@@ -28,6 +35,10 @@ object PostgresTestEnv {
     }
 
     fun createDatabase(): PostgresTestDatabase {
+        Assumptions.assumeTrue(
+            dockerAvailable,
+            "Docker is required to run Postgres Testcontainers tests"
+        )
         if (!container.isRunning) {
             container.start()
         }
@@ -37,7 +48,7 @@ object PostgresTestEnv {
                 statement.execute("CREATE SCHEMA $schema")
             }
         }
-        val jdbcUrl = "${container.jdbcUrl}?currentSchema=$schema"
+        val jdbcUrl = buildJdbcUrlWithSchema(container.jdbcUrl, schema)
         return PostgresTestDatabase(
             schema = schema,
             jdbcUrl = jdbcUrl,
@@ -48,10 +59,13 @@ object PostgresTestEnv {
 
     fun buildConfig(database: PostgresTestDatabase): MapApplicationConfig {
         return MapApplicationConfig(
+            "app.env" to "test",
+            "api.session.jwtSecret" to "test-secret",
             "db.jdbcUrl" to database.jdbcUrl,
             "db.user" to database.user,
             "db.password" to database.password,
-            "db.maxPoolSize" to "3"
+            "db.maxPoolSize" to "3",
+            "telegram.enabled" to "false"
         )
     }
 
@@ -72,5 +86,10 @@ object PostgresTestEnv {
                 .migrate()
         }
         return dataSource
+    }
+
+    private fun buildJdbcUrlWithSchema(jdbcUrl: String, schema: String): String {
+        val delimiter = if (jdbcUrl.contains("?")) "&" else "?"
+        return "$jdbcUrl${delimiter}currentSchema=$schema"
     }
 }

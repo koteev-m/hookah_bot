@@ -25,13 +25,15 @@ class SubscriptionBillingPostgresTest {
     private fun insertVenue(connection: Connection, name: String): Long {
         return connection.prepareStatement(
             """
-                INSERT INTO venues (name, status)
-                VALUES (?, ?)
+                INSERT INTO venues (name, city, address, status)
+                VALUES (?, ?, ?, ?)
             """.trimIndent(),
             java.sql.Statement.RETURN_GENERATED_KEYS
         ).use { statement ->
             statement.setString(1, name)
-            statement.setString(2, VenueStatus.PUBLISHED.dbValue)
+            statement.setString(2, "Moscow")
+            statement.setString(3, "Tverskaya 1")
+            statement.setString(4, VenueStatus.PUBLISHED.dbValue)
             statement.executeUpdate()
             statement.generatedKeys.use { rs ->
                 rs.next()
