@@ -54,10 +54,8 @@ class TelegramBotRouter(
     suspend fun process(update: TelegramUpdate) {
         val chatId = update.message?.chat?.id ?: update.callbackQuery?.message?.chat?.id
         val messageId = update.message?.messageId ?: update.callbackQuery?.message?.messageId
-        if (chatId != null) {
-            val acquired = idempotencyRepository.tryAcquire(update.updateId, chatId, messageId)
-            if (!acquired) return
-        }
+        val acquired = idempotencyRepository.tryAcquire(update.updateId, chatId, messageId)
+        if (!acquired) return
 
         when {
             update.message != null -> handleMessage(update.message)

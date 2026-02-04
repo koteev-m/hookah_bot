@@ -67,6 +67,7 @@ import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
+import com.hookah.platform.backend.tools.retryWithBackoff
 import com.hookah.platform.backend.security.constantTimeEquals
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
@@ -353,10 +354,17 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         var offset: Long? = null
                         while (isActive) {
                             val updates: List<TelegramUpdate> = try {
-                                telegramApiClient.getUpdates(
-                                    offset,
-                                    telegramConfig.longPollingTimeoutSeconds
-                                )
+                                retryWithBackoff(
+                                    maxAttempts = 3,
+                                    maxDelayMillis = 2000,
+                                    jitterRatio = 0.2,
+                                    shouldRetry = { e -> e !is CancellationException }
+                                ) {
+                                    telegramApiClient.getUpdates(
+                                        offset,
+                                        telegramConfig.longPollingTimeoutSeconds
+                                    )
+                                }
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
