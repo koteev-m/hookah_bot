@@ -1,9 +1,12 @@
 package com.hookah.platform.backend.telegram.db
 
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.debugTelegramException
+import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.sql.SQLException
+import kotlinx.coroutines.CancellationException
 import javax.sql.DataSource
 import org.slf4j.LoggerFactory
 
@@ -13,7 +16,7 @@ class IdempotencyRepository(private val dataSource: DataSource?) {
     suspend fun tryAcquire(updateId: Long, chatId: Long?, messageId: Long?): Boolean {
         val ds = dataSource ?: return true
         return withContext(Dispatchers.IO) {
-            runCatching {
+            try {
                 ds.connection.use { connection ->
                     val sql = """
                         INSERT INTO telegram_processed_updates (update_id, chat_id, message_id)
@@ -30,9 +33,18 @@ class IdempotencyRepository(private val dataSource: DataSource?) {
                         inserted > 0
                     }
                 }
-            }.getOrElse { throwable ->
-                logInsertFailure(throwable)
-                false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                if (isUniqueViolation(e)) {
+                    false
+                } else {
+                    logInsertFailure(e)
+                    throw DatabaseUnavailableException()
+                }
+            } catch (e: Throwable) {
+                logInsertFailure(e)
+                throw DatabaseUnavailableException()
             }
         }
     }
@@ -41,5 +53,24 @@ class IdempotencyRepository(private val dataSource: DataSource?) {
         val safeMessage = sanitizeTelegramForLog(throwable.message ?: throwable::class.simpleName.orEmpty())
         logger.warn("Idempotency insert failed: {}", safeMessage)
         logger.debugTelegramException(throwable) { "Idempotency insert exception" }
+    }
+
+    private fun isUniqueViolation(throwable: SQLException): Boolean {
+        var current: Throwable? = throwable
+        while (current != null) {
+            val sqlException = current as? SQLException
+            if (sqlException?.sqlState == UNIQUE_VIOLATION_SQL_STATE) {
+                return true
+            }
+            current = when (current) {
+                is SQLException -> current.nextException ?: current.cause
+                else -> current.cause
+            }
+        }
+        return false
+    }
+
+    private companion object {
+        private const val UNIQUE_VIOLATION_SQL_STATE = "23505"
     }
 }

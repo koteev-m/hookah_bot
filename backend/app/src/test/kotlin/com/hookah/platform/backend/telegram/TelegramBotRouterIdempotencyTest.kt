@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
@@ -84,5 +85,68 @@ class TelegramBotRouterIdempotencyTest {
         coVerify(exactly = 1) {
             apiClient.sendMessage(200, "Эту команду нужно отправить в групповом чате персонала.")
         }
+    }
+
+    @Test
+    fun `database unavailable during idempotency acquire sends safe message`() = runBlocking {
+        val apiClient: TelegramApiClient = mockk(relaxed = true)
+        val idempotencyRepository: IdempotencyRepository = mockk()
+        val userRepository: UserRepository = mockk(relaxed = true)
+        val tableTokenRepository: TableTokenRepository = mockk()
+        val chatContextRepository: ChatContextRepository = mockk()
+        val dialogStateRepository: DialogStateRepository = mockk(relaxed = true)
+        val ordersRepository: OrdersRepository = mockk()
+        val staffCallRepository: StaffCallRepository = mockk()
+        val staffChatLinkCodeRepository: StaffChatLinkCodeRepository = mockk()
+        val venueRepository: VenueRepository = mockk()
+        val venueAccessRepository: VenueAccessRepository = mockk()
+        val subscriptionRepository: SubscriptionRepository = mockk()
+
+        coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } throws DatabaseUnavailableException()
+
+        val router = TelegramBotRouter(
+            config = TelegramBotConfig(
+                enabled = true,
+                token = "test",
+                mode = TelegramBotConfig.Mode.LONG_POLLING,
+                webhookPath = "/",
+                webhookSecretToken = null,
+                webAppPublicUrl = null,
+                platformOwnerId = null,
+                longPollingTimeoutSeconds = 25,
+                staffChatLinkTtlSeconds = 900,
+                staffChatLinkSecretPepper = "pepper",
+                requireStaffChatAdmin = false
+            ),
+            apiClient = apiClient,
+            idempotencyRepository = idempotencyRepository,
+            userRepository = userRepository,
+            tableTokenRepository = tableTokenRepository,
+            chatContextRepository = chatContextRepository,
+            dialogStateRepository = dialogStateRepository,
+            ordersRepository = ordersRepository,
+            staffCallRepository = staffCallRepository,
+            staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+            venueRepository = venueRepository,
+            venueAccessRepository = venueAccessRepository,
+            subscriptionRepository = subscriptionRepository,
+            json = Json { ignoreUnknownKeys = true },
+            scope = CoroutineScope(Dispatchers.Unconfined)
+        )
+
+        val update = TelegramUpdate(
+            updateId = 202,
+            message = Message(
+                messageId = 12,
+                chat = Chat(id = 201, type = "private"),
+                fromUser = User(id = 301),
+                text = "/start"
+            )
+        )
+
+        router.process(update)
+
+        coVerify { apiClient.sendMessage(201, "База недоступна, попробуйте позже.") }
+        coVerify(exactly = 0) { userRepository.upsert(any()) }
     }
 }

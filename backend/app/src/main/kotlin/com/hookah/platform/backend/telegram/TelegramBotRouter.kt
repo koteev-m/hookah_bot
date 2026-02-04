@@ -54,7 +54,16 @@ class TelegramBotRouter(
     suspend fun process(update: TelegramUpdate) {
         val chatId = update.message?.chat?.id ?: update.callbackQuery?.message?.chat?.id
         val messageId = update.message?.messageId ?: update.callbackQuery?.message?.messageId
-        val acquired = idempotencyRepository.tryAcquire(update.updateId, chatId, messageId)
+        val acquired = try {
+            idempotencyRepository.tryAcquire(update.updateId, chatId, messageId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            if (chatId != null) {
+                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+            }
+            return
+        }
         if (!acquired) return
 
         when {
