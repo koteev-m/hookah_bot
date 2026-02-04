@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ktor)
+    id("org.jlleitschuh.gradle.ktlint") version "12.1.2"
     application
 }
 
@@ -57,4 +58,11 @@ tasks.withType<KotlinCompile>().configureEach {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+ktlint {
+    filter {
+        include("**/src/main/kotlin/**")
+        include("**/src/test/kotlin/**")
+    }
 }
