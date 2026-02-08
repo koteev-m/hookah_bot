@@ -7,6 +7,7 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.ApiHeaders
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.billing.BillingConfig
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingNotificationRepository
@@ -56,6 +57,7 @@ import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
+import com.hookah.platform.backend.telegram.TelegramInboundUpdateWorker
 import com.hookah.platform.backend.telegram.TelegramUpdate
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
@@ -65,6 +67,7 @@ import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
+import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateQueueRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
@@ -105,7 +108,7 @@ import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
 import io.ktor.server.request.queryString
-import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
@@ -121,6 +124,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -145,6 +149,9 @@ private data class HealthResponse(val status: String)
 
 @Serializable
 private data class DbHealthResponse(val status: String, val message: String? = null)
+
+@Serializable
+private data class TelegramQueueHealthResponse(val status: String, val depth: Long? = null)
 
 @Serializable
 private data class VersionResponse(
@@ -294,6 +301,9 @@ internal fun Application.module(overrides: ModuleOverrides) {
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
+    var telegramWebhookWorkerScope: CoroutineScope? = null
+    var telegramWebhookWorkerJob: Job? = null
+    val telegramInboundUpdateQueueRepository = TelegramInboundUpdateQueueRepository(dataSource)
     val staffChatNotifierScope =
         CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier"),
@@ -419,6 +429,22 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
             TelegramBotConfig.Mode.WEBHOOK -> {
                 logger.info("Telegram webhook mode enabled at {}", telegramConfig.webhookPath)
+                if (dataSource != null && telegramRouter != null) {
+                    telegramWebhookWorkerScope =
+                        CoroutineScope(
+                            SupervisorJob() + Dispatchers.IO + CoroutineName("telegram-webhook-worker"),
+                        )
+                    val worker =
+                        TelegramInboundUpdateWorker(
+                            repository = telegramInboundUpdateQueueRepository,
+                            router = telegramRouter,
+                            json = telegramJson,
+                            scope = telegramWebhookWorkerScope!!,
+                        )
+                    telegramWebhookWorkerJob = worker.start()
+                } else if (dataSource == null) {
+                    logger.warn("Telegram webhook worker disabled: database is not configured")
+                }
             }
         }
     }
@@ -436,6 +462,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
         httpClient.close()
         telegramApiClient?.close()
         telegramScope?.cancel()
+        telegramWebhookWorkerJob?.cancel()
+        telegramWebhookWorkerScope?.cancel()
         staffChatNotifierScope.cancel()
         subscriptionBillingScope.cancel()
         DatabaseFactory.close(dataSource)
@@ -600,6 +628,20 @@ internal fun Application.module(overrides: ModuleOverrides) {
             }
         }
 
+        if (telegramConfig.enabled && telegramConfig.mode == TelegramBotConfig.Mode.WEBHOOK) {
+            get("/telegram/queue/health") {
+                try {
+                    val depth = telegramInboundUpdateQueueRepository.queueDepth()
+                    call.respond(TelegramQueueHealthResponse(status = "ok", depth = depth))
+                } catch (e: DatabaseUnavailableException) {
+                    call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        TelegramQueueHealthResponse(status = "db_unavailable"),
+                    )
+                }
+            }
+        }
+
         get("/version") {
             val time = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
             call.respond(
@@ -694,8 +736,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
         miniAppRoutes(miniAppDevServerUrl, miniAppStaticDir, httpClient)
 
         if (telegramConfig.enabled && telegramConfig.mode == TelegramBotConfig.Mode.WEBHOOK) {
-            val router = telegramRouter
-            if (router != null) {
+            if (telegramRouter != null) {
                 post(telegramConfig.webhookPath) {
                     val secret = telegramConfig.webhookSecretToken
                     if (!secret.isNullOrBlank()) {
@@ -706,13 +747,20 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         }
                     }
                     try {
-                        val update = call.receive<TelegramUpdate>()
-                        router.process(update)
+                        val payload = call.receiveText()
+                        val update = telegramJson.decodeFromString(TelegramUpdate.serializer(), payload)
+                        telegramInboundUpdateQueueRepository.enqueue(update.updateId, payload)
                         call.respond(HttpStatusCode.OK)
                     } catch (e: Exception) {
-                        logger.warn("Webhook processing failed: {}", sanitizeTelegramForLog(e.message))
-                        logger.debugTelegramException(e) { "Webhook processing exception" }
-                        call.respond(HttpStatusCode.InternalServerError)
+                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
+                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                        val status =
+                            if (e is DatabaseUnavailableException) {
+                                HttpStatusCode.ServiceUnavailable
+                            } else {
+                                HttpStatusCode.BadRequest
+                            }
+                        call.respond(status)
                     }
                 }
             }
