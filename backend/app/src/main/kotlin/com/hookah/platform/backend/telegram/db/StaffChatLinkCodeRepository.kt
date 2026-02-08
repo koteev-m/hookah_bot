@@ -16,9 +16,8 @@ class StaffChatLinkCodeRepository(
     private val dataSource: DataSource?,
     private val pepper: String,
     private val ttlSeconds: Long,
-    private val now: () -> Instant = { Instant.now() }
+    private val now: () -> Instant = { Instant.now() },
 ) {
-
     private val logger = LoggerFactory.getLogger(StaffChatLinkCodeRepository::class.java)
     private val random = SecureRandom()
 
@@ -26,7 +25,10 @@ class StaffChatLinkCodeRepository(
         require(pepper.isNotBlank()) { "staff chat link pepper must not be blank" }
     }
 
-    suspend fun createLinkCode(venueId: Long, createdByUserId: Long): LinkCodeResult? {
+    suspend fun createLinkCode(
+        venueId: Long,
+        createdByUserId: Long,
+    ): LinkCodeResult? {
         val ds = dataSource ?: return null
         val code = generateCode()
         val codeHash = hashCode(code)
@@ -39,10 +41,10 @@ class StaffChatLinkCodeRepository(
                 try {
                     connection.prepareStatement(
                         """
-                            UPDATE telegram_staff_chat_link_codes
-                            SET revoked_at = ?
-                            WHERE venue_id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
-                        """.trimIndent()
+                        UPDATE telegram_staff_chat_link_codes
+                        SET revoked_at = ?
+                        WHERE venue_id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setTimestamp(1, java.sql.Timestamp.from(nowTs))
                         statement.setLong(2, venueId)
@@ -51,11 +53,11 @@ class StaffChatLinkCodeRepository(
                     }
                     connection.prepareStatement(
                         """
-                            INSERT INTO telegram_staff_chat_link_codes (
-                                code_hash, code_hint, venue_id, created_by_user_id, created_at, expires_at
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """.trimIndent()
+                        INSERT INTO telegram_staff_chat_link_codes (
+                            code_hash, code_hint, venue_id, created_by_user_id, created_at, expires_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, codeHash)
                         statement.setString(2, codeHint)
@@ -72,7 +74,7 @@ class StaffChatLinkCodeRepository(
                     logger.warn(
                         "Failed to create staff chat link code venueId={}: {}",
                         venueId,
-                        sanitizeTelegramForLog(e.message)
+                        sanitizeTelegramForLog(e.message),
                     )
                     logger.debugTelegramException(e) { "createLinkCode exception venueId=$venueId" }
                     null
@@ -90,7 +92,7 @@ class StaffChatLinkCodeRepository(
         chatId: Long,
         messageId: Long?,
         authorize: suspend (Connection, Long) -> Boolean,
-        bind: suspend (Connection, Long) -> BindResult
+        bind: suspend (Connection, Long) -> BindResult,
     ): LinkAndBindResult = linkAndBindWithCode(code, usedByUserId, chatId, messageId, authorize, bind)
 
     suspend fun linkAndBindWithCode(
@@ -99,7 +101,7 @@ class StaffChatLinkCodeRepository(
         chatId: Long,
         messageId: Long?,
         authorize: suspend (Connection, Long) -> Boolean,
-        bind: suspend (Connection, Long) -> BindResult
+        bind: suspend (Connection, Long) -> BindResult,
     ): LinkAndBindResult {
         val ds = dataSource ?: return LinkAndBindResult.DatabaseError
         val normalizedCode = StaffChatLinkCodeFormat.normalizeCode(code)
@@ -108,33 +110,34 @@ class StaffChatLinkCodeRepository(
         }
         val codeHash = hashCode(normalizedCode)
         return withContext(Dispatchers.IO) {
-            ds.connection.use use@ { connection ->
+            ds.connection.use use@{ connection ->
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 var record: LinkCodeDbRow? = null
                 try {
-                    record = connection.prepareStatement(
-                        """
+                    record =
+                        connection.prepareStatement(
+                            """
                             SELECT venue_id, expires_at, revoked_at, used_at
                             FROM telegram_staff_chat_link_codes
                             WHERE code_hash = ?
                             FOR UPDATE
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setString(1, codeHash)
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                LinkCodeDbRow(
-                                    venueId = rs.getLong("venue_id"),
-                                    expiresAt = rs.getTimestamp("expires_at").toInstant(),
-                                    revokedAt = rs.getTimestamp("revoked_at")?.toInstant(),
-                                    usedAt = rs.getTimestamp("used_at")?.toInstant()
-                                )
-                            } else {
-                                null
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setString(1, codeHash)
+                            statement.executeQuery().use { rs ->
+                                if (rs.next()) {
+                                    LinkCodeDbRow(
+                                        venueId = rs.getLong("venue_id"),
+                                        expiresAt = rs.getTimestamp("expires_at").toInstant(),
+                                        revokedAt = rs.getTimestamp("revoked_at")?.toInstant(),
+                                        usedAt = rs.getTimestamp("used_at")?.toInstant(),
+                                    )
+                                } else {
+                                    null
+                                }
                             }
                         }
-                    }
 
                     if (record == null) {
                         return@use rollbackAndReturn(connection) { LinkAndBindResult.InvalidOrExpired }
@@ -146,36 +149,40 @@ class StaffChatLinkCodeRepository(
                         return@use rollbackAndReturn(connection) { LinkAndBindResult.InvalidOrExpired }
                     }
 
-                    val authorized = runCatching { authorize(connection, record.venueId) }.getOrElse { throwable ->
-                        logger.warn(
-                            "Authorization check failed venueId={} chatId={} userId={}: {}",
-                            record.venueId,
-                            chatId,
-                            usedByUserId,
-                            sanitizeTelegramForLog(throwable.message)
-                        )
-                        logger.debugTelegramException(throwable) { "Authorization check exception venueId=${record.venueId}" }
-                        false
-                    }
+                    val authorized =
+                        runCatching { authorize(connection, record.venueId) }.getOrElse { throwable ->
+                            logger.warn(
+                                "Authorization check failed venueId={} chatId={} userId={}: {}",
+                                record.venueId,
+                                chatId,
+                                usedByUserId,
+                                sanitizeTelegramForLog(throwable.message),
+                            )
+                            logger.debugTelegramException(
+                                throwable,
+                            ) { "Authorization check exception venueId=${record.venueId}" }
+                            false
+                        }
                     if (!authorized) {
                         return@use rollbackAndReturn(connection) {
                             LinkAndBindResult.Unauthorized(record.venueId)
                         }
                     }
 
-                    val bindResult = runCatching { bind(connection, record.venueId) }.getOrElse { throwable ->
-                        logger.warn(
-                            "Bind attempt failed venueId={} chatId={} userId={}: {}",
-                            record.venueId,
-                            chatId,
-                            usedByUserId,
-                            sanitizeTelegramForLog(throwable.message)
-                        )
-                        logger.debugTelegramException(throwable) {
-                            "bind callback exception venueId=${record.venueId} chatId=$chatId userId=$usedByUserId"
-                        }
-                        null
-                    } ?: return@use rollbackAndReturn(connection) { LinkAndBindResult.DatabaseError }
+                    val bindResult =
+                        runCatching { bind(connection, record.venueId) }.getOrElse { throwable ->
+                            logger.warn(
+                                "Bind attempt failed venueId={} chatId={} userId={}: {}",
+                                record.venueId,
+                                chatId,
+                                usedByUserId,
+                                sanitizeTelegramForLog(throwable.message),
+                            )
+                            logger.debugTelegramException(throwable) {
+                                "bind callback exception venueId=${record.venueId} chatId=$chatId userId=$usedByUserId"
+                            }
+                            null
+                        } ?: return@use rollbackAndReturn(connection) { LinkAndBindResult.DatabaseError }
 
                     when (bindResult) {
                         is BindResult.Success -> {
@@ -209,7 +216,7 @@ class StaffChatLinkCodeRepository(
                         chatId,
                         usedByUserId,
                         record?.venueId,
-                        sanitizeTelegramForLog(e.message)
+                        sanitizeTelegramForLog(e.message),
                     )
                     logger.debugTelegramException(e) {
                         "linkAndBindWithCode exception chatId=$chatId userId=$usedByUserId venueId=${record?.venueId}"
@@ -229,12 +236,12 @@ class StaffChatLinkCodeRepository(
             ds.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                        SELECT code_hint, expires_at
-                        FROM telegram_staff_chat_link_codes
-                        WHERE venue_id = ? AND revoked_at IS NULL AND used_at IS NULL AND expires_at > ?
-                        ORDER BY expires_at DESC
-                        LIMIT 1
-                    """.trimIndent()
+                    SELECT code_hint, expires_at
+                    FROM telegram_staff_chat_link_codes
+                    WHERE venue_id = ? AND revoked_at IS NULL AND used_at IS NULL AND expires_at > ?
+                    ORDER BY expires_at DESC
+                    LIMIT 1
+                    """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, venueId)
                     statement.setTimestamp(2, java.sql.Timestamp.from(nowTs))
@@ -242,9 +249,11 @@ class StaffChatLinkCodeRepository(
                         if (rs.next()) {
                             ActiveLinkCode(
                                 codeHint = rs.getString("code_hint"),
-                                expiresAt = rs.getTimestamp("expires_at").toInstant()
+                                expiresAt = rs.getTimestamp("expires_at").toInstant(),
                             )
-                        } else null
+                        } else {
+                            null
+                        }
                     }
                 }
             }
@@ -268,21 +277,20 @@ class StaffChatLinkCodeRepository(
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-
     private fun markCodeUsed(
         connection: Connection,
         codeHash: String,
         nowTs: Instant,
         usedByUserId: Long,
         chatId: Long,
-        messageId: Long?
+        messageId: Long?,
     ) {
         connection.prepareStatement(
             """
-                UPDATE telegram_staff_chat_link_codes
-                SET used_at = ?, used_by_user_id = ?, used_in_chat_id = ?, used_message_id = ?
-                WHERE code_hash = ?
-            """.trimIndent()
+            UPDATE telegram_staff_chat_link_codes
+            SET used_at = ?, used_by_user_id = ?, used_in_chat_id = ?, used_message_id = ?
+            WHERE code_hash = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setTimestamp(1, java.sql.Timestamp.from(nowTs))
             statement.setLong(2, usedByUserId)
@@ -296,7 +304,7 @@ class StaffChatLinkCodeRepository(
                     codeHash,
                     chatId,
                     usedByUserId,
-                    updatedRows
+                    updatedRows,
                 )
                 throw IllegalStateException("Failed to mark code as used")
             }
@@ -307,7 +315,10 @@ class StaffChatLinkCodeRepository(
         runCatching { connection.rollback() }
     }
 
-    private fun <T> rollbackAndReturn(connection: Connection, block: () -> T): T {
+    private fun <T> rollbackAndReturn(
+        connection: Connection,
+        block: () -> T,
+    ): T {
         runCatching { connection.rollback() }
         return block()
     }
@@ -316,26 +327,31 @@ class StaffChatLinkCodeRepository(
 data class LinkCodeResult(
     val code: String,
     val expiresAt: Instant,
-    val ttlSeconds: Long
+    val ttlSeconds: Long,
 )
 
 sealed interface LinkAndBindResult {
     data class Success(val venueId: Long, val venueName: String) : LinkAndBindResult
+
     data class AlreadyBoundSameChat(val venueId: Long, val venueName: String) : LinkAndBindResult
+
     data class ChatAlreadyLinked(val venueId: Long?) : LinkAndBindResult
+
     data class Unauthorized(val venueId: Long) : LinkAndBindResult
+
     data object InvalidOrExpired : LinkAndBindResult
+
     data object DatabaseError : LinkAndBindResult
 }
 
 data class ActiveLinkCode(
     val codeHint: String?,
-    val expiresAt: Instant
+    val expiresAt: Instant,
 )
 
 private data class LinkCodeDbRow(
     val venueId: Long,
     val expiresAt: Instant,
     val revokedAt: Instant?,
-    val usedAt: Instant?
+    val usedAt: Instant?,
 )

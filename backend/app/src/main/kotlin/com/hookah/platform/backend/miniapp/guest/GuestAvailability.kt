@@ -9,7 +9,7 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 suspend fun ensureGuestActionAvailable(
     venueId: Long,
     guestVenueRepository: GuestVenueRepository,
-    subscriptionRepository: SubscriptionRepository
+    subscriptionRepository: SubscriptionRepository,
 ) {
     val venue = ensureVenuePublishedForGuest(venueId, guestVenueRepository)
     val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(venueId)
@@ -26,7 +26,7 @@ suspend fun ensureGuestActionAvailable(
 suspend fun ensureGuestBrowseAvailable(
     venueId: Long,
     guestVenueRepository: GuestVenueRepository,
-    subscriptionRepository: SubscriptionRepository
+    subscriptionRepository: SubscriptionRepository,
 ) = ensureVenuePublishedForGuest(venueId, guestVenueRepository).also {
     val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(venueId)
     if (subscriptionStatus.isBlockedForGuest()) {

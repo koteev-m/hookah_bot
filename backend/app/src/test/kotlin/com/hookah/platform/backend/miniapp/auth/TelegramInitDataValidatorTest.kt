@@ -12,12 +12,13 @@ class TelegramInitDataValidatorTest {
     private val maxAgeSeconds = 300L
     private val maxFutureSkewSeconds = 30L
 
-    private val validator = TelegramInitDataValidator(
-        botTokenProvider = { botToken },
-        nowEpochSeconds = { nowEpochSeconds },
-        maxAgeSeconds = maxAgeSeconds,
-        maxFutureSkewSeconds = maxFutureSkewSeconds,
-    )
+    private val validator =
+        TelegramInitDataValidator(
+            botTokenProvider = { botToken },
+            nowEpochSeconds = { nowEpochSeconds },
+            maxAgeSeconds = maxAgeSeconds,
+            maxFutureSkewSeconds = maxFutureSkewSeconds,
+        )
 
     @Test
     fun `valid init data passes validation`() {
@@ -44,12 +45,13 @@ class TelegramInitDataValidatorTest {
     @Test
     fun `missing auth date fails`() {
         val userJson = """{"id":1}"""
-        val initData = generateValidInitData(
-            botToken,
-            userJson,
-            nowEpochSeconds,
-            includeAuthDate = false,
-        )
+        val initData =
+            generateValidInitData(
+                botToken,
+                userJson,
+                nowEpochSeconds,
+                includeAuthDate = false,
+            )
 
         assertFailsWith<TelegramInitDataError.MissingField> {
             validator.validate(initData)
@@ -83,12 +85,13 @@ class TelegramInitDataValidatorTest {
         val userJson = """{"id":1}"""
         val initData = generateValidInitData(botToken, userJson, nowEpochSeconds)
 
-        val failingValidator = TelegramInitDataValidator(
-            botTokenProvider = { null },
-            nowEpochSeconds = { nowEpochSeconds },
-            maxAgeSeconds = maxAgeSeconds,
-            maxFutureSkewSeconds = maxFutureSkewSeconds,
-        )
+        val failingValidator =
+            TelegramInitDataValidator(
+                botTokenProvider = { null },
+                nowEpochSeconds = { nowEpochSeconds },
+                maxAgeSeconds = maxAgeSeconds,
+                maxFutureSkewSeconds = maxFutureSkewSeconds,
+            )
 
         assertFailsWith<TelegramInitDataError.BotTokenNotConfigured> {
             failingValidator.validate(initData)
@@ -116,11 +119,12 @@ class TelegramInitDataValidatorTest {
     fun `uppercase hash is accepted`() {
         val userJson = """{"id":1}"""
         val initData = generateValidInitData(botToken, userJson, nowEpochSeconds)
-        val uppercasedHash = initData.replace(Regex("(hash=)([a-f0-9]{64})")) { matchResult ->
-            val prefix = matchResult.groupValues[1]
-            val hashValue = matchResult.groupValues[2]
-            prefix + hashValue.uppercase()
-        }
+        val uppercasedHash =
+            initData.replace(Regex("(hash=)([a-f0-9]{64})")) { matchResult ->
+                val prefix = matchResult.groupValues[1]
+                val hashValue = matchResult.groupValues[2]
+                prefix + hashValue.uppercase()
+            }
 
         val validated = validator.validate(uppercasedHash)
 

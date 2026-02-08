@@ -19,12 +19,12 @@ object ApiErrorCodes {
 @Serializable
 data class ApiErrorEnvelope(
     val error: ApiError,
-    val requestId: String? = null
+    val requestId: String? = null,
 )
 
 @Serializable
 data class ApiError(
     val code: String,
     val message: String,
-    val details: JsonObject? = null
+    val details: JsonObject? = null,
 )

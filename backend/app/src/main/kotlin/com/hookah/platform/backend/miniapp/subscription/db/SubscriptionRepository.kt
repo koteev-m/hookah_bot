@@ -2,6 +2,8 @@ package com.hookah.platform.backend.miniapp.subscription.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.SQLException
@@ -10,8 +12,6 @@ import java.sql.Types
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class SubscriptionRepository(private val dataSource: DataSource?) {
     suspend fun getSubscriptionStatus(venueId: Long): SubscriptionStatus {
@@ -22,10 +22,10 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
                     ensureRowExistsForVenue(connection, venueId)
                     connection.prepareStatement(
                         """
-                            SELECT status
-                            FROM venue_subscriptions
-                            WHERE venue_id = ?
-                        """.trimIndent()
+                        SELECT status
+                        FROM venue_subscriptions
+                        WHERE venue_id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.executeQuery().use { rs ->
@@ -59,7 +59,7 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
     suspend fun updateStatus(
         venueId: Long,
         status: SubscriptionStatus,
-        paidStart: Instant? = null
+        paidStart: Instant? = null,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -68,12 +68,12 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
                     ensureRowExistsForVenue(connection, venueId)
                     connection.prepareStatement(
                         """
-                            UPDATE venue_subscriptions
-                            SET status = ?,
-                                paid_start = COALESCE(?, paid_start),
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE venue_id = ?
-                        """.trimIndent()
+                        UPDATE venue_subscriptions
+                        SET status = ?,
+                            paid_start = COALESCE(?, paid_start),
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE venue_id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, status.name)
                         if (paidStart == null) {
@@ -91,19 +91,22 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun ensureRowExistsForVenue(connection: Connection, venueId: Long) {
+    private fun ensureRowExistsForVenue(
+        connection: Connection,
+        venueId: Long,
+    ) {
         val now = Instant.now()
         val trialEnd = now.plus(14, ChronoUnit.DAYS)
         connection.prepareStatement(
             """
-                INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
-                SELECT ?, ?, ?, ?, ?
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM venue_subscriptions
-                    WHERE venue_id = ?
-                )
-            """.trimIndent()
+            INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
+            SELECT ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM venue_subscriptions
+                WHERE venue_id = ?
+            )
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setString(2, SubscriptionStatus.TRIAL.name)

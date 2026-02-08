@@ -15,13 +15,14 @@ object DatabaseFactory {
             return null
         }
 
-        val hikariConfig = HikariConfig().apply {
-            jdbcUrl = dbConfig.jdbcUrl
-            dbConfig.user?.let { username = it }
-            dbConfig.password?.let { password = it }
-            dbConfig.maxPoolSize?.let { maximumPoolSize = it }
-            dbConfig.connectionTimeoutMs?.let { connectionTimeout = it }
-        }
+        val hikariConfig =
+            HikariConfig().apply {
+                jdbcUrl = dbConfig.jdbcUrl
+                dbConfig.user?.let { username = it }
+                dbConfig.password?.let { password = it }
+                dbConfig.maxPoolSize?.let { maximumPoolSize = it }
+                dbConfig.connectionTimeoutMs?.let { connectionTimeout = it }
+            }
 
         val dataSource = HikariDataSource(hikariConfig)
 
@@ -33,9 +34,10 @@ object DatabaseFactory {
                 .load()
                 .migrate()
         } catch (e: Exception) {
-            val safeMessage = (e.message ?: "unknown error")
-                .replace(Regex("[\\r\\n\\t]"), " ")
-                .take(200)
+            val safeMessage =
+                (e.message ?: "unknown error")
+                    .replace(Regex("[\\r\\n\\t]"), " ")
+                    .take(200)
             logger.error("Flyway migration failed: {} {}", e::class.simpleName, safeMessage)
             dataSource.close()
             throw e

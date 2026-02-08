@@ -2,9 +2,9 @@ package com.hookah.platform.backend.security
 
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlin.test.assertFalse
 
 class IpAllowlistTest {
     @Test

@@ -1,6 +1,8 @@
 package com.hookah.platform.backend.miniapp.venue.tables
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.security.SecureRandom
 import java.sql.Connection
 import java.sql.SQLException
@@ -9,27 +11,25 @@ import java.sql.Timestamp
 import java.time.Instant
 import java.util.Base64
 import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 data class VenueTableSummary(
     val tableId: Long,
     val tableNumber: Int,
     val isActive: Boolean,
-    val activeTokenIssuedAt: Instant?
+    val activeTokenIssuedAt: Instant?,
 )
 
 data class VenueTableCreated(
     val tableId: Long,
     val tableNumber: Int,
-    val tokenIssuedAt: Instant
+    val tokenIssuedAt: Instant,
 )
 
 data class VenueTableToken(
     val tableId: Long,
     val tableNumber: Int,
     val token: String,
-    val issuedAt: Instant
+    val issuedAt: Instant,
 )
 
 class VenueTableRepository(private val dataSource: DataSource?) {
@@ -42,17 +42,17 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT vt.id,
-                                   vt.table_number,
-                                   vt.is_active,
-                                   tt.issued_at
-                            FROM venue_tables vt
-                            LEFT JOIN table_tokens tt
-                              ON tt.table_id = vt.id AND tt.is_active = true
-                            WHERE vt.venue_id = ?
-                              AND vt.is_active = true
-                            ORDER BY vt.table_number, vt.id
-                        """.trimIndent()
+                        SELECT vt.id,
+                               vt.table_number,
+                               vt.is_active,
+                               tt.issued_at
+                        FROM venue_tables vt
+                        LEFT JOIN table_tokens tt
+                          ON tt.table_id = vt.id AND tt.is_active = true
+                        WHERE vt.venue_id = ?
+                          AND vt.is_active = true
+                        ORDER BY vt.table_number, vt.id
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.executeQuery().use { rs ->
@@ -63,8 +63,8 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                                         tableId = rs.getLong("id"),
                                         tableNumber = rs.getInt("table_number"),
                                         isActive = rs.getBoolean("is_active"),
-                                        activeTokenIssuedAt = rs.getTimestamp("issued_at")?.toInstant()
-                                    )
+                                        activeTokenIssuedAt = rs.getTimestamp("issued_at")?.toInstant(),
+                                    ),
                                 )
                             }
                             result
@@ -84,17 +84,17 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT vt.id,
-                                   vt.table_number,
-                                   tt.token,
-                                   tt.issued_at
-                            FROM venue_tables vt
-                            JOIN table_tokens tt
-                              ON tt.table_id = vt.id AND tt.is_active = true
-                            WHERE vt.venue_id = ?
-                              AND vt.is_active = true
-                            ORDER BY vt.table_number, vt.id
-                        """.trimIndent()
+                        SELECT vt.id,
+                               vt.table_number,
+                               tt.token,
+                               tt.issued_at
+                        FROM venue_tables vt
+                        JOIN table_tokens tt
+                          ON tt.table_id = vt.id AND tt.is_active = true
+                        WHERE vt.venue_id = ?
+                          AND vt.is_active = true
+                        ORDER BY vt.table_number, vt.id
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.executeQuery().use { rs ->
@@ -105,8 +105,8 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                                         tableId = rs.getLong("id"),
                                         tableNumber = rs.getInt("table_number"),
                                         token = rs.getString("token"),
-                                        issuedAt = rs.getTimestamp("issued_at").toInstant()
-                                    )
+                                        issuedAt = rs.getTimestamp("issued_at").toInstant(),
+                                    ),
                                 )
                             }
                             result
@@ -119,19 +119,23 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun ensureTablesAvailable(venueId: Long, startNumber: Int, count: Int) {
+    suspend fun ensureTablesAvailable(
+        venueId: Long,
+        startNumber: Int,
+        count: Int,
+    ) {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT table_number
-                            FROM venue_tables
-                            WHERE venue_id = ?
-                              AND table_number BETWEEN ? AND ?
-                            LIMIT 1
-                        """.trimIndent()
+                        SELECT table_number
+                        FROM venue_tables
+                        WHERE venue_id = ?
+                          AND table_number BETWEEN ? AND ?
+                        LIMIT 1
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.setInt(2, startNumber)
@@ -156,10 +160,10 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT COALESCE(MAX(table_number), 0) AS max_number
-                            FROM venue_tables
-                            WHERE venue_id = ?
-                        """.trimIndent()
+                        SELECT COALESCE(MAX(table_number), 0) AS max_number
+                        FROM venue_tables
+                        WHERE venue_id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.executeQuery().use { rs ->
@@ -177,7 +181,11 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun batchCreateTables(venueId: Long, startNumber: Int, count: Int): List<VenueTableCreated> {
+    suspend fun batchCreateTables(
+        venueId: Long,
+        startNumber: Int,
+        count: Int,
+    ): List<VenueTableCreated> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -194,8 +202,8 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                                 VenueTableCreated(
                                     tableId = tableId,
                                     tableNumber = tableNumber,
-                                    tokenIssuedAt = issuedAt
-                                )
+                                    tokenIssuedAt = issuedAt,
+                                ),
                             )
                         }
                         connection.commit()
@@ -213,14 +221,19 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun rotateToken(venueId: Long, tableId: Long): VenueTableCreated? {
+    suspend fun rotateToken(
+        venueId: Long,
+        tableId: Long,
+    ): VenueTableCreated? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val tableNumber = loadTableNumber(connection, venueId, tableId, forUpdate = true) ?: return@use null
+                        val tableNumber =
+                            loadTableNumber(connection, venueId, tableId, forUpdate = true)
+                                ?: return@use null
                         revokeActiveToken(connection, tableId)
                         val issuedAt = Instant.now()
                         insertToken(connection, tableId, issuedAt)
@@ -239,7 +252,10 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun rotateTokens(venueId: Long, tableIds: List<Long>): List<VenueTableCreated> {
+    suspend fun rotateTokens(
+        venueId: Long,
+        tableIds: List<Long>,
+    ): List<VenueTableCreated> {
         if (tableIds.isEmpty()) {
             return emptyList()
         }
@@ -253,19 +269,23 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                     try {
                         val rotatedById = mutableMapOf<Long, VenueTableCreated>()
                         for (tableId in sortedTableIds) {
-                            val tableNumber = loadTableNumber(connection, venueId, tableId, forUpdate = true) ?: continue
+                            val tableNumber =
+                                loadTableNumber(connection, venueId, tableId, forUpdate = true)
+                                    ?: continue
                             revokeActiveToken(connection, tableId)
                             val issuedAt = Instant.now()
                             insertToken(connection, tableId, issuedAt)
-                            rotatedById[tableId] = VenueTableCreated(
-                                tableId = tableId,
-                                tableNumber = tableNumber,
-                                tokenIssuedAt = issuedAt
-                            )
+                            rotatedById[tableId] =
+                                VenueTableCreated(
+                                    tableId = tableId,
+                                    tableNumber = tableNumber,
+                                    tokenIssuedAt = issuedAt,
+                                )
                         }
-                        val result = requestedTableIds.mapNotNull { tableId ->
-                            rotatedById[tableId]
-                        }
+                        val result =
+                            requestedTableIds.mapNotNull { tableId ->
+                                rotatedById[tableId]
+                            }
                         connection.commit()
                         result
                     } catch (e: Exception) {
@@ -288,12 +308,12 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT id
-                            FROM venue_tables
-                            WHERE venue_id = ?
-                              AND is_active = true
-                            ORDER BY table_number, id
-                        """.trimIndent()
+                        SELECT id
+                        FROM venue_tables
+                        WHERE venue_id = ?
+                          AND is_active = true
+                        ORDER BY table_number, id
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.executeQuery().use { rs ->
@@ -311,13 +331,17 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun insertTable(connection: Connection, venueId: Long, tableNumber: Int): Long {
+    private fun insertTable(
+        connection: Connection,
+        venueId: Long,
+        tableNumber: Int,
+    ): Long {
         return connection.prepareStatement(
             """
-                INSERT INTO venue_tables (venue_id, table_number, is_active)
-                VALUES (?, ?, true)
+            INSERT INTO venue_tables (venue_id, table_number, is_active)
+            VALUES (?, ?, true)
             """.trimIndent(),
-            Statement.RETURN_GENERATED_KEYS
+            Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setInt(2, tableNumber)
@@ -339,15 +363,19 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun insertToken(connection: Connection, tableId: Long, issuedAt: Instant): String {
+    private fun insertToken(
+        connection: Connection,
+        tableId: Long,
+        issuedAt: Instant,
+    ): String {
         repeat(5) {
             val token = tokenGenerator.generate()
             try {
                 connection.prepareStatement(
                     """
-                        INSERT INTO table_tokens (token, table_id, is_active, issued_at)
-                        VALUES (?, ?, true, ?)
-                    """.trimIndent()
+                    INSERT INTO table_tokens (token, table_id, is_active, issued_at)
+                    VALUES (?, ?, true, ?)
+                    """.trimIndent(),
                 ).use { statement ->
                     statement.setString(1, token)
                     statement.setLong(2, tableId)
@@ -364,14 +392,17 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         throw DatabaseUnavailableException()
     }
 
-    private fun revokeActiveToken(connection: Connection, tableId: Long) {
+    private fun revokeActiveToken(
+        connection: Connection,
+        tableId: Long,
+    ) {
         connection.prepareStatement(
             """
-                UPDATE table_tokens
-                SET is_active = false,
-                    revoked_at = now()
-                WHERE table_id = ? AND is_active = true
-            """.trimIndent()
+            UPDATE table_tokens
+            SET is_active = false,
+                revoked_at = now()
+            WHERE table_id = ? AND is_active = true
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, tableId)
             statement.executeUpdate()
@@ -382,15 +413,15 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         connection: Connection,
         venueId: Long,
         tableId: Long,
-        forUpdate: Boolean
+        forUpdate: Boolean,
     ): Int? {
         val sqlSuffix = if (forUpdate) " FOR UPDATE" else ""
         return connection.prepareStatement(
             """
-                SELECT table_number
-                FROM venue_tables
-                WHERE id = ? AND venue_id = ? AND is_active = true$sqlSuffix
-            """.trimIndent()
+            SELECT table_number
+            FROM venue_tables
+            WHERE id = ? AND venue_id = ? AND is_active = true$sqlSuffix
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, tableId)
             statement.setLong(2, venueId)

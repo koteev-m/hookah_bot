@@ -1,12 +1,12 @@
 package com.hookah.platform.backend.miniapp.auth
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.Json
 
 @Serializable
 data class TelegramWebAppUser(
@@ -32,10 +32,12 @@ fun parseInitData(raw: String): Map<String, String> {
         val pieces = part.split("=", limit = 2)
         val rawKey = pieces.getOrElse(0) { "" }
         val rawValue = pieces.getOrElse(1) { "" }
-        val key = runCatching { URLDecoder.decode(rawKey, StandardCharsets.UTF_8) }
-            .getOrElse { throw TelegramInitDataError.InvalidFormat }
-        val value = runCatching { URLDecoder.decode(rawValue, StandardCharsets.UTF_8) }
-            .getOrElse { throw TelegramInitDataError.InvalidFormat }
+        val key =
+            runCatching { URLDecoder.decode(rawKey, StandardCharsets.UTF_8) }
+                .getOrElse { throw TelegramInitDataError.InvalidFormat }
+        val value =
+            runCatching { URLDecoder.decode(rawValue, StandardCharsets.UTF_8) }
+                .getOrElse { throw TelegramInitDataError.InvalidFormat }
 
         if (result.containsKey(key)) {
             throw TelegramInitDataError.InvalidFormat
@@ -60,12 +62,13 @@ internal fun normalizeHexLower64(value: String): String? {
 
     val builder = StringBuilder(value.length)
     for (char in value) {
-        val normalized = when (char) {
-            in '0'..'9' -> char
-            in 'a'..'f' -> char
-            in 'A'..'F' -> (char.code + 32).toChar()
-            else -> return null
-        }
+        val normalized =
+            when (char) {
+                in '0'..'9' -> char
+                in 'a'..'f' -> char
+                in 'A'..'F' -> (char.code + 32).toChar()
+                else -> return null
+            }
         builder.append(normalized)
     }
 
@@ -74,12 +77,19 @@ internal fun normalizeHexLower64(value: String): String? {
 
 sealed class TelegramInitDataError(message: String) : RuntimeException(message) {
     class MissingField(val field: String) : TelegramInitDataError("Missing field: $field")
+
     object InvalidHash : TelegramInitDataError("Invalid hash")
+
     object InvalidFormat : TelegramInitDataError("Invalid init data format")
+
     object InvalidAuthDate : TelegramInitDataError("Invalid auth_date")
+
     object Expired : TelegramInitDataError("Init data expired")
+
     object TooFarInFuture : TelegramInitDataError("auth_date is too far in the future")
+
     object BotTokenNotConfigured : TelegramInitDataError("Bot token is not configured")
+
     object InvalidUserJson : TelegramInitDataError("Invalid user json")
 }
 
@@ -92,8 +102,9 @@ class TelegramInitDataValidator(
     private val json = Json { ignoreUnknownKeys = true }
 
     fun validate(rawInitData: String): TelegramInitDataValidated {
-        val botToken = botTokenProvider()?.trim()?.takeIf { it.isNotBlank() }
-            ?: throw TelegramInitDataError.BotTokenNotConfigured
+        val botToken =
+            botTokenProvider()?.trim()?.takeIf { it.isNotBlank() }
+                ?: throw TelegramInitDataError.BotTokenNotConfigured
         val data = parseInitData(rawInitData)
 
         val receivedHashRaw = data["hash"] ?: throw TelegramInitDataError.MissingField("hash")
@@ -119,26 +130,33 @@ class TelegramInitDataValidator(
             throw TelegramInitDataError.InvalidHash
         }
 
-        val user = runCatching {
-            json.decodeFromString<TelegramWebAppUser>(userJson)
-        }.getOrElse { throwable ->
-            if (throwable is SerializationException || throwable is IllegalArgumentException) {
-                throw TelegramInitDataError.InvalidUserJson
+        val user =
+            runCatching {
+                json.decodeFromString<TelegramWebAppUser>(userJson)
+            }.getOrElse { throwable ->
+                if (throwable is SerializationException || throwable is IllegalArgumentException) {
+                    throw TelegramInitDataError.InvalidUserJson
+                }
+                throw throwable
             }
-            throw throwable
-        }
 
         return TelegramInitDataValidated(user = user, authDateEpochSeconds = authDate)
     }
 }
 
-internal fun calculateTelegramInitDataHash(botToken: String, dataCheckString: String): String {
+internal fun calculateTelegramInitDataHash(
+    botToken: String,
+    dataCheckString: String,
+): String {
     val secretKey = hmacSha256(WEB_APP_DATA_KEY, botToken.toByteArray(StandardCharsets.UTF_8))
     val dataHash = hmacSha256(secretKey, dataCheckString.toByteArray(StandardCharsets.UTF_8))
     return dataHash.toHexString()
 }
 
-internal fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
+internal fun hmacSha256(
+    key: ByteArray,
+    message: ByteArray,
+): ByteArray {
     val mac = Mac.getInstance(HMAC_ALGORITHM)
     mac.init(SecretKeySpec(key, HMAC_ALGORITHM))
     return mac.doFinal(message)
@@ -154,7 +172,10 @@ internal fun ByteArray.toHexString(): String {
     return String(chars)
 }
 
-fun constantTimeEquals(a: String, b: String): Boolean {
+fun constantTimeEquals(
+    a: String,
+    b: String,
+): Boolean {
     if (a.length != b.length) return false
 
     var result = 0

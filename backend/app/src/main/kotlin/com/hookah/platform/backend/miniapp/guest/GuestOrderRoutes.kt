@@ -36,7 +36,7 @@ fun Route.guestOrderRoutes(
     guestMenuRepository: GuestMenuRepository,
     subscriptionRepository: SubscriptionRepository,
     ordersRepository: OrdersRepository,
-    staffChatNotifier: StaffChatNotifier?
+    staffChatNotifier: StaffChatNotifier?,
 ) {
     get("/order/active") {
         val rawToken = call.request.queryParameters["tableToken"]
@@ -47,8 +47,8 @@ fun Route.guestOrderRoutes(
         val activeOrder = ordersRepository.findActiveOrderDetails(table.tableId)
         call.respond(
             ActiveOrderResponse(
-                order = activeOrder?.toDto(table)
-            )
+                order = activeOrder?.toDto(table),
+            ),
         )
     }
 
@@ -61,20 +61,22 @@ fun Route.guestOrderRoutes(
         ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
 
         val itemIds = normalizedItems.map { it.itemId }.toSet()
-        val availableItems = guestMenuRepository.findAvailableItemIds(
-            venueId = table.venueId,
-            itemIds = itemIds
-        )
+        val availableItems =
+            guestMenuRepository.findAvailableItemIds(
+                venueId = table.venueId,
+                itemIds = itemIds,
+            )
         if (availableItems.size != itemIds.size) {
             throw InvalidInputException("Some items are unavailable")
         }
 
-        val batch = ordersRepository.createGuestOrderBatch(
-            tableId = table.tableId,
-            venueId = table.venueId,
-            comment = comment,
-            items = normalizedItems
-        ) ?: throw NotFoundException()
+        val batch =
+            ordersRepository.createGuestOrderBatch(
+                tableId = table.tableId,
+                venueId = table.venueId,
+                comment = comment,
+                items = normalizedItems,
+            ) ?: throw NotFoundException()
 
         notifyStaffChat(
             notifier = staffChatNotifier,
@@ -83,14 +85,14 @@ fun Route.guestOrderRoutes(
             batchId = batch.batchId,
             comment = comment,
             items = normalizedItems,
-            guestMenuRepository = guestMenuRepository
+            guestMenuRepository = guestMenuRepository,
         )
 
         call.respond(
             AddBatchResponse(
                 orderId = batch.orderId,
-                batchId = batch.batchId
-            )
+                batchId = batch.batchId,
+            ),
         )
     }
 }
@@ -134,27 +136,28 @@ private fun normalizeComment(comment: String?): String? {
     return trimmed
 }
 
-private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
-    table: TableContext
-): ActiveOrderDto = ActiveOrderDto(
-    orderId = orderId,
-    venueId = table.venueId,
-    tableId = table.tableId,
-    tableNumber = table.tableNumber.toString(),
-    status = status,
-    batches = batches.map { batch ->
-        OrderBatchDto(
-            batchId = batch.batchId,
-            comment = batch.comment,
-            items = batch.items.map { item ->
-                OrderBatchItemDto(
-                    itemId = item.itemId,
-                    qty = item.qty
+private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(table: TableContext): ActiveOrderDto =
+    ActiveOrderDto(
+        orderId = orderId,
+        venueId = table.venueId,
+        tableId = table.tableId,
+        tableNumber = table.tableNumber.toString(),
+        status = status,
+        batches =
+            batches.map { batch ->
+                OrderBatchDto(
+                    batchId = batch.batchId,
+                    comment = batch.comment,
+                    items =
+                        batch.items.map { item ->
+                            OrderBatchItemDto(
+                                itemId = item.itemId,
+                                qty = item.qty,
+                            )
+                        },
                 )
-            }
-        )
-    }
-)
+            },
+    )
 
 private suspend fun notifyStaffChat(
     notifier: StaffChatNotifier?,
@@ -163,17 +166,18 @@ private suspend fun notifyStaffChat(
     batchId: Long,
     comment: String?,
     items: List<OrderBatchItemInput>,
-    guestMenuRepository: GuestMenuRepository
+    guestMenuRepository: GuestMenuRepository,
 ) {
     if (notifier == null) {
         return
     }
     val itemIds = items.map { it.itemId }.toSet()
     val itemNames = runCatching { guestMenuRepository.findItemNames(table.venueId, itemIds) }.getOrDefault(emptyMap())
-    val summary = items.joinToString(separator = ", ") { item ->
-        val name = itemNames[item.itemId] ?: "item#${item.itemId}"
-        "$name x${item.qty}"
-    }
+    val summary =
+        items.joinToString(separator = ", ") { item ->
+            val name = itemNames[item.itemId] ?: "item#${item.itemId}"
+            "$name x${item.qty}"
+        }
     notifier.notifyNewBatch(
         NewBatchNotification(
             venueId = table.venueId,
@@ -181,7 +185,7 @@ private suspend fun notifyStaffChat(
             batchId = batchId,
             tableLabel = table.tableNumber.toString(),
             itemsSummary = summary,
-            comment = comment
-        )
+            comment = comment,
+        ),
     )
 }

@@ -25,7 +25,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class VenueStaffListResponse(
-    val members: List<VenueStaffMemberDto>
+    val members: List<VenueStaffMemberDto>,
 )
 
 @Serializable
@@ -33,13 +33,13 @@ data class VenueStaffMemberDto(
     val userId: Long,
     val role: String,
     val createdAt: String,
-    val invitedByUserId: Long? = null
+    val invitedByUserId: Long? = null,
 )
 
 @Serializable
 data class StaffInviteRequest(
     val role: String,
-    val expiresIn: Long? = null
+    val expiresIn: Long? = null,
 )
 
 @Serializable
@@ -47,36 +47,36 @@ data class StaffInviteResponse(
     val inviteCode: String,
     val expiresAt: String,
     val ttlSeconds: Long,
-    val instructions: String
+    val instructions: String,
 )
 
 @Serializable
 data class StaffInviteAcceptRequest(
-    val inviteCode: String
+    val inviteCode: String,
 )
 
 @Serializable
 data class StaffInviteAcceptResponse(
     val venueId: Long,
     val member: VenueStaffMemberDto,
-    val alreadyMember: Boolean
+    val alreadyMember: Boolean,
 )
 
 @Serializable
 data class StaffUpdateRoleRequest(
-    val role: String
+    val role: String,
 )
 
 @Serializable
 data class StaffRemoveResponse(
-    val ok: Boolean
+    val ok: Boolean,
 )
 
 fun Route.venueStaffRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueStaffRepository: VenueStaffRepository,
     staffInviteRepository: StaffInviteRepository,
-    staffInviteConfig: StaffInviteConfig
+    staffInviteConfig: StaffInviteConfig,
 ) {
     route("/venue") {
         get("/{venueId}/staff") {
@@ -86,8 +86,8 @@ fun Route.venueStaffRoutes(
             val members = venueStaffRepository.listMembers(venueId)
             call.respond(
                 VenueStaffListResponse(
-                    members = members.map { it.toDto() }
-                )
+                    members = members.map { it.toDto() },
+                ),
             )
         }
 
@@ -104,44 +104,52 @@ fun Route.venueStaffRoutes(
                 throw ForbiddenException()
             }
             val ttlSeconds = resolveInviteTtl(request.expiresIn, staffInviteConfig)
-            val result = staffInviteRepository.createInvite(
-                venueId = venueId,
-                createdByUserId = userId,
-                role = targetRole.name,
-                ttlSeconds = ttlSeconds
-            ) ?: throw DatabaseUnavailableException()
+            val result =
+                staffInviteRepository.createInvite(
+                    venueId = venueId,
+                    createdByUserId = userId,
+                    role = targetRole.name,
+                    ttlSeconds = ttlSeconds,
+                ) ?: throw DatabaseUnavailableException()
             call.respond(
                 StaffInviteResponse(
                     inviteCode = result.code,
                     expiresAt = result.expiresAt.toString(),
                     ttlSeconds = result.ttlSeconds,
-                    instructions = "Передайте код сотруднику. Он должен открыть мини‑приложение и принять инвайт."
-                )
+                    instructions = "Передайте код сотруднику. Он должен открыть мини‑приложение и принять инвайт.",
+                ),
             )
         }
 
         post("/staff/invites/accept") {
             val userId = call.requireUserId()
             val request = call.receive<StaffInviteAcceptRequest>()
-            val result = staffInviteRepository.acceptInvite(
-                code = request.inviteCode,
-                userId = userId,
-                createMember = { connection, venueId, role, invitedByUserId ->
-                    venueStaffRepository.createMemberInTransaction(connection, venueId, userId, role, invitedByUserId)
-                }
-            )
+            val result =
+                staffInviteRepository.acceptInvite(
+                    code = request.inviteCode,
+                    userId = userId,
+                    createMember = { connection, venueId, role, invitedByUserId ->
+                        venueStaffRepository.createMemberInTransaction(
+                            connection,
+                            venueId,
+                            userId,
+                            role,
+                            invitedByUserId,
+                        )
+                    },
+                )
             when (result) {
                 is StaffInviteAcceptResult.Success -> {
                     call.respond(
                         StaffInviteAcceptResponse(
                             venueId = result.member.venueId,
                             member = result.member.toDto(),
-                            alreadyMember = result.alreadyMember
-                        )
+                            alreadyMember = result.alreadyMember,
+                        ),
                     )
                 }
                 StaffInviteAcceptResult.InvalidOrExpired -> throw InvalidInputException(
-                    message = "Invite code is invalid or expired"
+                    message = "Invite code is invalid or expired",
                 )
                 StaffInviteAcceptResult.DatabaseError -> throw DatabaseUnavailableException()
             }
@@ -154,8 +162,9 @@ fun Route.venueStaffRoutes(
             if (requesterRole != VenueRole.OWNER) {
                 throw ForbiddenException()
             }
-            val targetUserId = call.parameters["userId"]?.toLongOrNull()
-                ?: throw InvalidInputException("userId must be a number")
+            val targetUserId =
+                call.parameters["userId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("userId must be a number")
             val request = call.receive<StaffUpdateRoleRequest>()
             val newRole = parseVenueRole(request.role)
             when (val result = venueStaffRepository.updateRoleWithOwnerGuard(venueId, targetUserId, newRole.name)) {
@@ -173,8 +182,9 @@ fun Route.venueStaffRoutes(
             if (requesterRole != VenueRole.OWNER) {
                 throw ForbiddenException()
             }
-            val targetUserId = call.parameters["userId"]?.toLongOrNull()
-                ?: throw InvalidInputException("userId must be a number")
+            val targetUserId =
+                call.parameters["userId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("userId must be a number")
             when (venueStaffRepository.removeMemberWithOwnerGuard(venueId, targetUserId)) {
                 VenueStaffRemoveResult.Success -> call.respond(StaffRemoveResponse(ok = true))
                 VenueStaffRemoveResult.NotFound -> throw NotFoundException()
@@ -185,19 +195,23 @@ fun Route.venueStaffRoutes(
     }
 }
 
-private fun VenueStaffMember.toDto(): VenueStaffMemberDto = VenueStaffMemberDto(
-    userId = userId,
-    role = role,
-    createdAt = createdAt.toString(),
-    invitedByUserId = invitedByUserId
-)
+private fun VenueStaffMember.toDto(): VenueStaffMemberDto =
+    VenueStaffMemberDto(
+        userId = userId,
+        role = role,
+        createdAt = createdAt.toString(),
+        invitedByUserId = invitedByUserId,
+    )
 
 private fun parseVenueRole(rawRole: String): VenueRole {
     val role = VenueRoleMapping.fromDb(rawRole)
     return role ?: throw InvalidInputException("role must be one of OWNER, MANAGER, STAFF")
 }
 
-private fun resolveInviteTtl(requestedTtl: Long?, config: StaffInviteConfig): Long {
+private fun resolveInviteTtl(
+    requestedTtl: Long?,
+    config: StaffInviteConfig,
+): Long {
     val ttl = requestedTtl ?: config.defaultTtlSeconds
     if (ttl < 60) {
         throw InvalidInputException("expiresIn must be >= 60 seconds")

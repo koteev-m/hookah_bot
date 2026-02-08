@@ -10,5 +10,5 @@ data class TableResolveResponse(
     val venueStatus: String,
     val subscriptionStatus: String,
     val available: Boolean,
-    val unavailableReason: String?
+    val unavailableReason: String?,
 )

@@ -26,7 +26,7 @@ private val instantFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
 
 fun Route.venueOrderRoutes(
     venueAccessRepository: VenueAccessRepository,
-    venueOrdersRepository: VenueOrdersRepository
+    venueOrdersRepository: VenueOrdersRepository,
 ) {
     route("/venue") {
         get("/orders/queue") {
@@ -43,39 +43,48 @@ fun Route.venueOrderRoutes(
                 throw InvalidInputException("limit must be between 1 and $MAX_QUEUE_LIMIT")
             }
             val statusRaw = call.request.queryParameters["status"] ?: "new"
-            val status = OrderWorkflowStatus.fromApi(statusRaw)
-                ?: throw InvalidInputException("status must be one of: new, accepted, cooking, delivering, delivered, closed")
-            val batchStatus = OrderBatchStatus.fromWorkflow(status)
-                ?: throw InvalidInputException("queue status is not supported")
-            val cursor = OrderQueueCursor.parse(call.request.queryParameters["cursor"])
-                ?: if (call.request.queryParameters.contains("cursor")) {
-                    throw InvalidInputException("cursor must be in format <epochSec>:<nano>:<batchId> or <epochMs>:<batchId>")
-                } else {
-                    null
-                }
+            val status =
+                OrderWorkflowStatus.fromApi(statusRaw)
+                    ?: throw InvalidInputException(
+                        "status must be one of: new, accepted, cooking, delivering, delivered, closed",
+                    )
+            val batchStatus =
+                OrderBatchStatus.fromWorkflow(status)
+                    ?: throw InvalidInputException("queue status is not supported")
+            val cursor =
+                OrderQueueCursor.parse(call.request.queryParameters["cursor"])
+                    ?: if (call.request.queryParameters.contains("cursor")) {
+                        throw InvalidInputException(
+                            "cursor must be in format <epochSec>:<nano>:<batchId> or <epochMs>:<batchId>",
+                        )
+                    } else {
+                        null
+                    }
 
-            val result = venueOrdersRepository.listQueue(
-                venueId = venueId,
-                status = batchStatus,
-                limit = limit,
-                cursor = cursor
-            )
+            val result =
+                venueOrdersRepository.listQueue(
+                    venueId = venueId,
+                    status = batchStatus,
+                    limit = limit,
+                    cursor = cursor,
+                )
             call.respond(
                 OrdersQueueResponse(
-                    items = result.items.map { item ->
-                        OrderQueueItemDto(
-                            orderId = item.orderId,
-                            batchId = item.batchId,
-                            tableNumber = item.tableNumber.toString(),
-                            tableLabel = item.tableNumber.toString(),
-                            createdAt = formatInstant(item.createdAt),
-                            comment = item.comment,
-                            itemsCount = item.itemsCount,
-                            status = item.status.toApi()
-                        )
-                    },
-                    nextCursor = result.nextCursor?.encode()
-                )
+                    items =
+                        result.items.map { item ->
+                            OrderQueueItemDto(
+                                orderId = item.orderId,
+                                batchId = item.batchId,
+                                tableNumber = item.tableNumber.toString(),
+                                tableLabel = item.tableNumber.toString(),
+                                createdAt = formatInstant(item.createdAt),
+                                comment = item.comment,
+                                itemsCount = item.itemsCount,
+                                status = item.status.toApi(),
+                            )
+                        },
+                    nextCursor = result.nextCursor?.encode(),
+                ),
             )
         }
 
@@ -87,14 +96,16 @@ fun Route.venueOrderRoutes(
             if (!permissions.contains(VenuePermission.ORDER_QUEUE_VIEW)) {
                 throw ForbiddenException()
             }
-            val orderId = call.parameters["orderId"]?.toLongOrNull()
-                ?: throw InvalidInputException("orderId must be a number")
-            val detail = venueOrdersRepository.loadOrderDetail(venueId, orderId)
-                ?: throw NotFoundException()
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
+            val detail =
+                venueOrdersRepository.loadOrderDetail(venueId, orderId)
+                    ?: throw NotFoundException()
             call.respond(
                 OrderDetailResponse(
-                    order = detail.toDto()
-                )
+                    order = detail.toDto(),
+                ),
             )
         }
 
@@ -106,8 +117,9 @@ fun Route.venueOrderRoutes(
             if (!permissions.contains(VenuePermission.ORDER_QUEUE_VIEW)) {
                 throw ForbiddenException()
             }
-            val orderId = call.parameters["orderId"]?.toLongOrNull()
-                ?: throw InvalidInputException("orderId must be a number")
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
             val audit = venueOrdersRepository.loadAudit(venueId, orderId)
             if (audit.isEmpty()) {
                 venueOrdersRepository.loadOrderDetail(venueId, orderId) ?: throw NotFoundException()
@@ -116,20 +128,21 @@ fun Route.venueOrderRoutes(
             }
             call.respond(
                 OrderAuditResponse(
-                    items = audit.map { entry ->
-                        OrderAuditEntryDto(
-                            orderId = entry.orderId,
-                            actorUserId = entry.actorUserId,
-                            actorRole = entry.actorRole,
-                            action = entry.action,
-                            fromStatus = entry.fromStatus.toApi(),
-                            toStatus = entry.toStatus.toApi(),
-                            reasonCode = entry.reasonCode,
-                            reasonText = entry.reasonText,
-                            createdAt = formatInstant(entry.createdAt)
-                        )
-                    }
-                )
+                    items =
+                        audit.map { entry ->
+                            OrderAuditEntryDto(
+                                orderId = entry.orderId,
+                                actorUserId = entry.actorUserId,
+                                actorRole = entry.actorRole,
+                                action = entry.action,
+                                fromStatus = entry.fromStatus.toApi(),
+                                toStatus = entry.toStatus.toApi(),
+                                reasonCode = entry.reasonCode,
+                                reasonText = entry.reasonText,
+                                createdAt = formatInstant(entry.createdAt),
+                            )
+                        },
+                ),
             )
         }
 
@@ -141,28 +154,34 @@ fun Route.venueOrderRoutes(
             if (!permissions.contains(VenuePermission.ORDER_STATUS_UPDATE)) {
                 throw ForbiddenException()
             }
-            val orderId = call.parameters["orderId"]?.toLongOrNull()
-                ?: throw InvalidInputException("orderId must be a number")
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
             val request = call.receive<OrderStatusRequest>()
-            val nextStatus = OrderWorkflowStatus.fromApi(request.nextStatus)
-                ?: throw InvalidInputException("nextStatus must be one of: new, accepted, cooking, delivering, delivered, closed")
+            val nextStatus =
+                OrderWorkflowStatus.fromApi(request.nextStatus)
+                    ?: throw InvalidInputException(
+                        "nextStatus must be one of: new, accepted, cooking, delivering, delivered, closed",
+                    )
             if (role == VenueRole.STAFF) {
-                val allowedForStaff = setOf(
-                    OrderWorkflowStatus.ACCEPTED,
-                    OrderWorkflowStatus.COOKING,
-                    OrderWorkflowStatus.DELIVERING,
-                    OrderWorkflowStatus.DELIVERED
-                )
+                val allowedForStaff =
+                    setOf(
+                        OrderWorkflowStatus.ACCEPTED,
+                        OrderWorkflowStatus.COOKING,
+                        OrderWorkflowStatus.DELIVERING,
+                        OrderWorkflowStatus.DELIVERED,
+                    )
                 if (!allowedForStaff.contains(nextStatus)) {
                     throw ForbiddenException()
                 }
             }
-            val result = venueOrdersRepository.updateOrderStatus(
-                venueId = venueId,
-                orderId = orderId,
-                nextStatus = nextStatus,
-                actor = OrderActionActor(userId, role)
-            ) ?: throw NotFoundException()
+            val result =
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = venueId,
+                    orderId = orderId,
+                    nextStatus = nextStatus,
+                    actor = OrderActionActor(userId, role),
+                ) ?: throw NotFoundException()
             if (!result.applied) {
                 throw InvalidInputException("Invalid status transition")
             }
@@ -170,8 +189,8 @@ fun Route.venueOrderRoutes(
                 OrderStatusResponse(
                     orderId = result.orderId,
                     status = result.status.toApi(),
-                    updatedAt = formatInstant(result.updatedAt)
-                )
+                    updatedAt = formatInstant(result.updatedAt),
+                ),
             )
         }
 
@@ -182,21 +201,23 @@ fun Route.venueOrderRoutes(
             if (role == VenueRole.STAFF) {
                 throw ForbiddenException()
             }
-            val orderId = call.parameters["orderId"]?.toLongOrNull()
-                ?: throw InvalidInputException("orderId must be a number")
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
             val request = call.receive<OrderRejectRequest>()
             val reasonCode = request.reasonCode.trim()
             if (reasonCode.isBlank()) {
                 throw InvalidInputException("reasonCode must not be blank")
             }
             val reasonText = request.reasonText?.trim()?.takeIf { it.isNotBlank() }
-            val result = venueOrdersRepository.rejectOrder(
-                venueId = venueId,
-                orderId = orderId,
-                reasonCode = reasonCode,
-                reasonText = reasonText,
-                actor = OrderActionActor(userId, role)
-            ) ?: throw NotFoundException()
+            val result =
+                venueOrdersRepository.rejectOrder(
+                    venueId = venueId,
+                    orderId = orderId,
+                    reasonCode = reasonCode,
+                    reasonText = reasonText,
+                    actor = OrderActionActor(userId, role),
+                ) ?: throw NotFoundException()
             if (!result.applied) {
                 throw InvalidInputException("Order already closed")
             }
@@ -204,8 +225,8 @@ fun Route.venueOrderRoutes(
                 OrderStatusResponse(
                     orderId = result.orderId,
                     status = result.status.toApi(),
-                    updatedAt = formatInstant(result.updatedAt)
-                )
+                    updatedAt = formatInstant(result.updatedAt),
+                ),
             )
         }
     }
@@ -221,25 +242,27 @@ private fun OrderDetail.toDto(): OrderDetailDto {
         status = status.toApi(),
         createdAt = formatInstant(createdAt),
         updatedAt = formatInstant(updatedAt),
-        batches = batches.map { batch ->
-            OrderBatchDto(
-                batchId = batch.batchId,
-                status = batch.status.toApi(),
-                source = batch.source,
-                comment = batch.comment,
-                createdAt = formatInstant(batch.createdAt),
-                updatedAt = formatInstant(batch.updatedAt),
-                rejectedReasonCode = batch.rejectedReasonCode,
-                rejectedReasonText = batch.rejectedReasonText,
-                items = batch.items.map { item ->
-                    OrderBatchItemDto(
-                        itemId = item.itemId,
-                        name = item.name,
-                        qty = item.qty
-                    )
-                }
-            )
-        }
+        batches =
+            batches.map { batch ->
+                OrderBatchDto(
+                    batchId = batch.batchId,
+                    status = batch.status.toApi(),
+                    source = batch.source,
+                    comment = batch.comment,
+                    createdAt = formatInstant(batch.createdAt),
+                    updatedAt = formatInstant(batch.updatedAt),
+                    rejectedReasonCode = batch.rejectedReasonCode,
+                    rejectedReasonText = batch.rejectedReasonText,
+                    items =
+                        batch.items.map { item ->
+                            OrderBatchItemDto(
+                                itemId = item.itemId,
+                                name = item.name,
+                                qty = item.qty,
+                            )
+                        },
+                )
+            },
     )
 }
 

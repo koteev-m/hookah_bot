@@ -9,15 +9,17 @@ enum class SubscriptionStatus(val wire: String) {
     PAST_DUE("past_due"),
     SUSPENDED("suspended"),
     SUSPENDED_BY_PLATFORM("suspended_by_platform"),
-    UNKNOWN("unknown");
+    UNKNOWN("unknown"),
+    ;
 
     companion object {
-        private val blockedForGuest = setOf(
-            PAST_DUE,
-            SUSPENDED,
-            SUSPENDED_BY_PLATFORM,
-            UNKNOWN
-        )
+        private val blockedForGuest =
+            setOf(
+                PAST_DUE,
+                SUSPENDED,
+                SUSPENDED_BY_PLATFORM,
+                UNKNOWN,
+            )
         val blockedDbValues: List<String> = blockedForGuest.map { it.wire }
 
         fun fromDb(value: String?): SubscriptionStatus {
@@ -39,17 +41,20 @@ data class VenueAvailability(
     val venueStatus: VenueStatus,
     val subscriptionStatus: String,
     val available: Boolean,
-    val reason: String?
+    val reason: String?,
 )
 
 object VenueAvailabilityResolver {
-    fun resolve(venueStatus: VenueStatus, subscriptionStatus: SubscriptionStatus): VenueAvailability {
+    fun resolve(
+        venueStatus: VenueStatus,
+        subscriptionStatus: SubscriptionStatus,
+    ): VenueAvailability {
         if (venueStatus != VenueStatus.PUBLISHED) {
             return VenueAvailability(
                 venueStatus = venueStatus,
                 subscriptionStatus = subscriptionStatus.wire,
                 available = false,
-                reason = "VENUE_NOT_AVAILABLE"
+                reason = "VENUE_NOT_AVAILABLE",
             )
         }
 
@@ -58,7 +63,7 @@ object VenueAvailabilityResolver {
                 venueStatus = venueStatus,
                 subscriptionStatus = subscriptionStatus.wire,
                 available = false,
-                reason = "SUBSCRIPTION_BLOCKED"
+                reason = "SUBSCRIPTION_BLOCKED",
             )
         }
 
@@ -66,7 +71,7 @@ object VenueAvailabilityResolver {
             venueStatus = venueStatus,
             subscriptionStatus = subscriptionStatus.wire,
             available = true,
-            reason = null
+            reason = null,
         )
     }
 }

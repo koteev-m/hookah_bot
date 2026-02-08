@@ -14,7 +14,7 @@ import io.ktor.server.routing.get
 fun Route.guestTableResolveRoutes(
     tableTokenResolver: suspend (String) -> TableContext?,
     guestVenueRepository: GuestVenueRepository,
-    subscriptionRepository: SubscriptionRepository
+    subscriptionRepository: SubscriptionRepository,
 ) {
     get("/table/resolve") {
         val rawToken = call.request.queryParameters["tableToken"]
@@ -33,8 +33,8 @@ fun Route.guestTableResolveRoutes(
                 venueStatus = availability.venueStatus.dbValue,
                 subscriptionStatus = availability.subscriptionStatus,
                 available = availability.available,
-                unavailableReason = availability.reason
-            )
+                unavailableReason = availability.reason,
+            ),
         )
     }
 }

@@ -6,11 +6,11 @@ import kotlinx.serialization.Serializable
 data class StaffCallRequest(
     val tableToken: String,
     val reason: String,
-    val comment: String? = null
+    val comment: String? = null,
 )
 
 @Serializable
 data class StaffCallResponse(
     val staffCallId: Long,
-    val createdAtEpochSeconds: Long
+    val createdAtEpochSeconds: Long,
 )

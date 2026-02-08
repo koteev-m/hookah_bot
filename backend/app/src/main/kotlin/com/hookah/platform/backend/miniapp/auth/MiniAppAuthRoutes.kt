@@ -27,15 +27,16 @@ private const val DEFAULT_INIT_DATA_MAX_FUTURE_SKEW_SECONDS = 30L
 fun Route.miniAppAuthRoutes(
     appConfig: ApplicationConfig,
     sessionTokenService: SessionTokenService,
-    userRepository: UserRepository
+    userRepository: UserRepository,
 ) {
     val initDataConfig = initDataValidationConfig(appConfig)
-    val authService = TelegramAuthService(
-        appConfig = appConfig,
-        userRepository = userRepository,
-        sessionTokenService = sessionTokenService,
-        initDataConfig = initDataConfig
-    )
+    val authService =
+        TelegramAuthService(
+            appConfig = appConfig,
+            userRepository = userRepository,
+            sessionTokenService = sessionTokenService,
+            initDataConfig = initDataConfig,
+        )
     route("/api") {
         post("/auth/telegram") {
             val request = call.receive<TelegramAuthRequest>()
@@ -48,19 +49,23 @@ fun Route.miniAppAuthRoutes(
                 TelegramAuthResponse(
                     token = result.token.token,
                     expiresAtEpochSeconds = result.token.expiresAtEpochSeconds,
-                    user = MiniAppUserDto(
-                        telegramUserId = result.user.id,
-                        username = result.user.username,
-                        firstName = result.user.first_name,
-                        lastName = result.user.last_name
-                    )
-                )
+                    user =
+                        MiniAppUserDto(
+                            telegramUserId = result.user.id,
+                            username = result.user.username,
+                            firstName = result.user.first_name,
+                            lastName = result.user.last_name,
+                        ),
+                ),
             )
         }
     }
 }
 
-private fun validateInitData(initData: String, config: InitDataValidationConfig) {
+private fun validateInitData(
+    initData: String,
+    config: InitDataValidationConfig,
+) {
     if (initData.isBlank()) {
         throw InvalidInputException("initData is required")
     }
@@ -73,43 +78,49 @@ private class TelegramAuthService(
     private val appConfig: ApplicationConfig,
     private val userRepository: UserRepository,
     private val sessionTokenService: SessionTokenService,
-    private val initDataConfig: InitDataValidationConfig
+    private val initDataConfig: InitDataValidationConfig,
 ) {
-    private val validator = TelegramInitDataValidator(
-        botTokenProvider = { findTelegramBotToken(appConfig) },
-        nowEpochSeconds = { Instant.now().epochSecond },
-        maxAgeSeconds = initDataConfig.maxAgeSeconds,
-        maxFutureSkewSeconds = initDataConfig.maxFutureSkewSeconds
-    )
+    private val validator =
+        TelegramInitDataValidator(
+            botTokenProvider = { findTelegramBotToken(appConfig) },
+            nowEpochSeconds = { Instant.now().epochSecond },
+            maxAgeSeconds = initDataConfig.maxAgeSeconds,
+            maxFutureSkewSeconds = initDataConfig.maxFutureSkewSeconds,
+        )
 
     suspend fun authenticate(initData: String): TelegramAuthResult {
-        val validated = try {
-            validator.validate(initData)
-        } catch (error: TelegramInitDataError) {
-            when (error) {
-                TelegramInitDataError.BotTokenNotConfigured -> throw ConfigException("Telegram bot token is required")
-                TelegramInitDataError.InvalidHash,
-                TelegramInitDataError.Expired,
-                TelegramInitDataError.TooFarInFuture,
-                is TelegramInitDataError.MissingField,
-                TelegramInitDataError.InvalidAuthDate,
-                TelegramInitDataError.InvalidUserJson,
-                TelegramInitDataError.InvalidFormat -> throw InitDataInvalidException()
+        val validated =
+            try {
+                validator.validate(initData)
+            } catch (error: TelegramInitDataError) {
+                when (error) {
+                    TelegramInitDataError.BotTokenNotConfigured -> throw ConfigException(
+                        "Telegram bot token is required",
+                    )
+                    TelegramInitDataError.InvalidHash,
+                    TelegramInitDataError.Expired,
+                    TelegramInitDataError.TooFarInFuture,
+                    is TelegramInitDataError.MissingField,
+                    TelegramInitDataError.InvalidAuthDate,
+                    TelegramInitDataError.InvalidUserJson,
+                    TelegramInitDataError.InvalidFormat,
+                    -> throw InitDataInvalidException()
+                }
             }
-        }
 
-        val upsertedId = try {
-            userRepository.upsert(
-                User(
-                    id = validated.user.id,
-                    username = validated.user.username,
-                    firstName = validated.user.first_name,
-                    lastName = validated.user.last_name
+        val upsertedId =
+            try {
+                userRepository.upsert(
+                    User(
+                        id = validated.user.id,
+                        username = validated.user.username,
+                        firstName = validated.user.first_name,
+                        lastName = validated.user.last_name,
+                    ),
                 )
-            )
-        } catch (e: SQLException) {
-            throw DatabaseUnavailableException()
-        }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
 
         if (upsertedId == null) {
             throw DatabaseUnavailableException()
@@ -122,43 +133,47 @@ private class TelegramAuthService(
 }
 
 private fun findTelegramBotToken(config: ApplicationConfig): String? {
-    val fromConfig = config.propertyOrNull("telegram.token")
-        ?.getString()
-        ?.trim()
-        ?.takeIf { it.isNotBlank() }
-    val fromEnv = System.getenv("TELEGRAM_BOT_TOKEN")
-        ?.trim()
-        ?.takeIf { it.isNotBlank() }
+    val fromConfig =
+        config.propertyOrNull("telegram.token")
+            ?.getString()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+    val fromEnv =
+        System.getenv("TELEGRAM_BOT_TOKEN")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
 
     return fromConfig ?: fromEnv
 }
 
 private data class TelegramAuthResult(
     val token: com.hookah.platform.backend.miniapp.session.IssuedToken,
-    val user: TelegramWebAppUser
+    val user: TelegramWebAppUser,
 )
 
 private data class InitDataValidationConfig(
     val maxAgeSeconds: Long,
     val maxFutureSkewSeconds: Long,
-    val maxLength: Int
+    val maxLength: Int,
 )
 
 private fun initDataValidationConfig(appConfig: ApplicationConfig): InitDataValidationConfig {
     return InitDataValidationConfig(
-        maxAgeSeconds = resolvePositiveLong(
-            appConfig = appConfig,
-            configKey = "telegram.miniapp.initData.maxAgeSeconds",
-            envKey = "TELEGRAM_MINIAPP_INITDATA_MAX_AGE_SECONDS",
-            defaultValue = DEFAULT_INIT_DATA_MAX_AGE_SECONDS
-        ),
-        maxFutureSkewSeconds = resolvePositiveLong(
-            appConfig = appConfig,
-            configKey = "telegram.miniapp.initData.maxFutureSkewSeconds",
-            envKey = "TELEGRAM_MINIAPP_INITDATA_MAX_FUTURE_SKEW_SECONDS",
-            defaultValue = DEFAULT_INIT_DATA_MAX_FUTURE_SKEW_SECONDS
-        ),
-        maxLength = INIT_DATA_MAX_LENGTH
+        maxAgeSeconds =
+            resolvePositiveLong(
+                appConfig = appConfig,
+                configKey = "telegram.miniapp.initData.maxAgeSeconds",
+                envKey = "TELEGRAM_MINIAPP_INITDATA_MAX_AGE_SECONDS",
+                defaultValue = DEFAULT_INIT_DATA_MAX_AGE_SECONDS,
+            ),
+        maxFutureSkewSeconds =
+            resolvePositiveLong(
+                appConfig = appConfig,
+                configKey = "telegram.miniapp.initData.maxFutureSkewSeconds",
+                envKey = "TELEGRAM_MINIAPP_INITDATA_MAX_FUTURE_SKEW_SECONDS",
+                defaultValue = DEFAULT_INIT_DATA_MAX_FUTURE_SKEW_SECONDS,
+            ),
+        maxLength = INIT_DATA_MAX_LENGTH,
     )
 }
 
@@ -166,15 +181,17 @@ private fun resolvePositiveLong(
     appConfig: ApplicationConfig,
     configKey: String,
     envKey: String,
-    defaultValue: Long
+    defaultValue: Long,
 ): Long {
-    val fromConfig = appConfig.propertyOrNull(configKey)
-        ?.getString()
-        ?.trim()
-        ?.takeIf { it.isNotBlank() }
-    val fromEnv = System.getenv(envKey)
-        ?.trim()
-        ?.takeIf { it.isNotBlank() }
+    val fromConfig =
+        appConfig.propertyOrNull(configKey)
+            ?.getString()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+    val fromEnv =
+        System.getenv(envKey)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
 
     val raw = fromConfig ?: fromEnv ?: return defaultValue
     val parsed = raw.toLongOrNull()

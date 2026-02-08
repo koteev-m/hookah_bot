@@ -24,7 +24,7 @@ fun Route.guestStaffCallRoutes(
     tableTokenResolver: suspend (String) -> TableContext?,
     guestVenueRepository: GuestVenueRepository,
     subscriptionRepository: SubscriptionRepository,
-    staffCallRepository: StaffCallRepository
+    staffCallRepository: StaffCallRepository,
 ) {
     post("/staff-call") {
         val request = call.receive<StaffCallRequest>()
@@ -35,18 +35,19 @@ fun Route.guestStaffCallRoutes(
         val table = tableTokenResolver(token) ?: throw NotFoundException()
         ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
 
-        val created = staffCallRepository.createGuestStaffCall(
-            venueId = table.venueId,
-            tableId = table.tableId,
-            reason = reason,
-            comment = comment
-        )
+        val created =
+            staffCallRepository.createGuestStaffCall(
+                venueId = table.venueId,
+                tableId = table.tableId,
+                reason = reason,
+                comment = comment,
+            )
 
         call.respond(
             StaffCallResponse(
                 staffCallId = created.id,
-                createdAtEpochSeconds = created.createdAt.epochSecond
-            )
+                createdAtEpochSeconds = created.createdAt.epochSecond,
+            ),
         )
     }
 }
@@ -64,7 +65,11 @@ private fun normalizeReason(rawReason: String): StaffCallReason {
         throw InvalidInputException("reason must match ${REASON_REGEX.pattern}")
     }
     return runCatching { StaffCallReason.valueOf(normalized) }
-        .getOrElse { throw InvalidInputException("reason must be one of ${StaffCallReason.values().joinToString { it.name }}") }
+        .getOrElse {
+            throw InvalidInputException(
+                "reason must be one of ${StaffCallReason.values().joinToString { it.name }}",
+            )
+        }
 }
 
 private fun normalizeComment(comment: String?): String? {

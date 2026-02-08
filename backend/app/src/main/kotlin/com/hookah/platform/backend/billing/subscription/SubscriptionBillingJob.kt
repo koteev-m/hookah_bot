@@ -11,7 +11,7 @@ import org.slf4j.LoggerFactory
 
 class SubscriptionBillingJob(
     private val engine: SubscriptionBillingEngine,
-    private val intervalSeconds: Long
+    private val intervalSeconds: Long,
 ) {
     private val logger = LoggerFactory.getLogger(SubscriptionBillingJob::class.java)
     private var job: Job? = null
@@ -23,18 +23,19 @@ class SubscriptionBillingJob(
         if (intervalSeconds <= 0) {
             return
         }
-        job = scope.launch {
-            while (isActive) {
-                try {
-                    engine.tick()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    logger.warn("Subscription billing tick failed: {}", sanitizeTelegramForLog(e.message))
+        job =
+            scope.launch {
+                while (isActive) {
+                    try {
+                        engine.tick()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        logger.warn("Subscription billing tick failed: {}", sanitizeTelegramForLog(e.message))
+                    }
+                    delay(intervalSeconds * 1000)
                 }
-                delay(intervalSeconds * 1000)
             }
-        }
     }
 
     fun stop() {

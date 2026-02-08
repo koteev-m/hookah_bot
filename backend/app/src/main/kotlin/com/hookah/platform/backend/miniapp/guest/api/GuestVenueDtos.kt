@@ -10,7 +10,7 @@ data class CatalogVenueDto(
     val id: Long,
     val name: String,
     val city: String? = null,
-    val address: String? = null
+    val address: String? = null,
 )
 
 @Serializable
@@ -22,5 +22,5 @@ data class VenueDto(
     val name: String,
     val city: String? = null,
     val address: String? = null,
-    val status: String
+    val status: String,
 )

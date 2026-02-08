@@ -7,8 +7,8 @@ import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
-import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
@@ -36,35 +36,37 @@ class TelegramBotRouterTableTokenTest {
     private val venueRepository: VenueRepository = mockk()
     private val venueAccessRepository: VenueAccessRepository = mockk()
     private val subscriptionRepository: SubscriptionRepository = mockk()
-    private val router = TelegramBotRouter(
-        config = TelegramBotConfig(
-            enabled = true,
-            token = "test",
-            mode = TelegramBotConfig.Mode.LONG_POLLING,
-            webhookPath = "/",
-            webhookSecretToken = null,
-            webAppPublicUrl = null,
-            platformOwnerId = null,
-            longPollingTimeoutSeconds = 25,
-            staffChatLinkTtlSeconds = 900,
-            staffChatLinkSecretPepper = "pepper",
-            requireStaffChatAdmin = false
-        ),
-        apiClient = apiClient,
-        idempotencyRepository = idempotencyRepository,
-        userRepository = userRepository,
-        tableTokenRepository = tableTokenRepository,
-        chatContextRepository = chatContextRepository,
-        dialogStateRepository = dialogStateRepository,
-        ordersRepository = ordersRepository,
-        staffCallRepository = staffCallRepository,
-        staffChatLinkCodeRepository = staffChatLinkCodeRepository,
-        venueRepository = venueRepository,
-        venueAccessRepository = venueAccessRepository,
-        subscriptionRepository = subscriptionRepository,
-        json = Json { ignoreUnknownKeys = true },
-        scope = CoroutineScope(Dispatchers.Unconfined)
-    )
+    private val router =
+        TelegramBotRouter(
+            config =
+                TelegramBotConfig(
+                    enabled = true,
+                    token = "test",
+                    mode = TelegramBotConfig.Mode.LONG_POLLING,
+                    webhookPath = "/",
+                    webhookSecretToken = null,
+                    webAppPublicUrl = null,
+                    platformOwnerId = null,
+                    longPollingTimeoutSeconds = 25,
+                    staffChatLinkTtlSeconds = 900,
+                    staffChatLinkSecretPepper = "pepper",
+                    requireStaffChatAdmin = false,
+                ),
+            apiClient = apiClient,
+            idempotencyRepository = idempotencyRepository,
+            userRepository = userRepository,
+            tableTokenRepository = tableTokenRepository,
+            chatContextRepository = chatContextRepository,
+            dialogStateRepository = dialogStateRepository,
+            ordersRepository = ordersRepository,
+            staffCallRepository = staffCallRepository,
+            staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+            venueRepository = venueRepository,
+            venueAccessRepository = venueAccessRepository,
+            subscriptionRepository = subscriptionRepository,
+            json = Json { ignoreUnknownKeys = true },
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
 
     @BeforeEach
     fun setup() {
@@ -73,71 +75,83 @@ class TelegramBotRouterTableTokenTest {
     }
 
     @Test
-    fun `apply table token does not save context when subscription blocked`() = runBlocking {
-        val context = TableContext(
-            venueId = 10L,
-            venueName = "Venue",
-            tableId = 11L,
-            tableNumber = 5,
-            tableToken = "TOKEN",
-            staffChatId = null
-        )
-        coEvery { tableTokenRepository.resolve("TOKEN") } returns context
-        coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.SUSPENDED_BY_PLATFORM
+    fun `apply table token does not save context when subscription blocked`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery {
+                subscriptionRepository.getSubscriptionStatus(10L)
+            } returns SubscriptionStatus.SUSPENDED_BY_PLATFORM
 
-        val update = TelegramUpdate(
-            updateId = 1,
-            message = Message(
-                messageId = 11,
-                chat = Chat(id = 100, type = "private"),
-                fromUser = User(id = 200),
-                text = "/start TOKEN"
-            )
-        )
+            val update =
+                TelegramUpdate(
+                    updateId = 1,
+                    message =
+                        Message(
+                            messageId = 11,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "/start TOKEN",
+                        ),
+                )
 
-        router.process(update)
+            router.process(update)
 
-        coVerify { apiClient.sendMessage(100, "Подписка заведения заблокирована. Заказы недоступны.") }
-        coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
-    }
-
-    @Test
-    fun `apply table token reports database unavailable when resolve fails`() = runBlocking {
-        coEvery { tableTokenRepository.resolve("TOKEN") } throws DatabaseUnavailableException()
-
-        val update = TelegramUpdate(
-            updateId = 2,
-            message = Message(
-                messageId = 12,
-                chat = Chat(id = 101, type = "private"),
-                fromUser = User(id = 201),
-                text = "/start TOKEN"
-            )
-        )
-
-        router.process(update)
-
-        coVerify { apiClient.sendMessage(101, "База недоступна, попробуйте позже.") }
-        coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
-    }
+            coVerify { apiClient.sendMessage(100, "Подписка заведения заблокирована. Заказы недоступны.") }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+        }
 
     @Test
-    fun `resolve guest context reports database unavailable when context load fails`() = runBlocking {
-        coEvery { chatContextRepository.get(102) } throws DatabaseUnavailableException()
+    fun `apply table token reports database unavailable when resolve fails`() =
+        runBlocking {
+            coEvery { tableTokenRepository.resolve("TOKEN") } throws DatabaseUnavailableException()
 
-        val update = TelegramUpdate(
-            updateId = 3,
-            message = Message(
-                messageId = 13,
-                chat = Chat(id = 102, type = "private"),
-                fromUser = User(id = 202),
-                text = "🧾 Активный заказ"
-            )
-        )
+            val update =
+                TelegramUpdate(
+                    updateId = 2,
+                    message =
+                        Message(
+                            messageId = 12,
+                            chat = Chat(id = 101, type = "private"),
+                            fromUser = User(id = 201),
+                            text = "/start TOKEN",
+                        ),
+                )
 
-        router.process(update)
+            router.process(update)
 
-        coVerify { apiClient.sendMessage(102, "База недоступна, попробуйте позже.") }
-        coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
-    }
+            coVerify { apiClient.sendMessage(101, "База недоступна, попробуйте позже.") }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+        }
+
+    @Test
+    fun `resolve guest context reports database unavailable when context load fails`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(102) } throws DatabaseUnavailableException()
+
+            val update =
+                TelegramUpdate(
+                    updateId = 3,
+                    message =
+                        Message(
+                            messageId = 13,
+                            chat = Chat(id = 102, type = "private"),
+                            fromUser = User(id = 202),
+                            text = "🧾 Активный заказ",
+                        ),
+                )
+
+            router.process(update)
+
+            coVerify { apiClient.sendMessage(102, "База недоступна, попробуйте позже.") }
+            coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
+        }
 }

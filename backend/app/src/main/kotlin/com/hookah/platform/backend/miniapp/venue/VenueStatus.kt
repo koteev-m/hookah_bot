@@ -9,7 +9,8 @@ enum class VenueStatus(val dbValue: String) {
     PAUSED("PAUSED"),
     SUSPENDED("SUSPENDED"),
     ARCHIVED("ARCHIVED"),
-    DELETED("DELETED");
+    DELETED("DELETED"),
+    ;
 
     companion object {
         fun fromDb(value: String?): VenueStatus? {

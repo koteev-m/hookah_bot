@@ -1,11 +1,11 @@
 package com.hookah.platform.backend.telegram
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 
 class TelegramLogUtilTest {
     @Test
@@ -56,12 +56,13 @@ class TelegramLogUtilTest {
         val longKey = "bot123456:ABCdef_-123" + "x".repeat(10_000)
         val keys = (1..30).associate { "key$it$longKey" to JsonPrimitive("v") }
         val obj = JsonObject(keys)
-        val summary = summarizeJsonKeysForLog(
-            obj = obj,
-            maxKeys = 20,
-            maxKeyLen = 40,
-            maxTotalLen = 200
-        )
+        val summary =
+            summarizeJsonKeysForLog(
+                obj = obj,
+                maxKeys = 20,
+                maxKeyLen = 40,
+                maxTotalLen = 200,
+            )
         assertTrue(summary.length <= 200)
         assertTrue(summary.isNotEmpty())
         assertFalse(summary.contains("\n") || summary.contains("\t"))
@@ -120,12 +121,13 @@ class TelegramLogUtilTest {
 
     @Test
     fun `summarizeJsonKeysForLog skips empty sanitized keys`() {
-        val obj = JsonObject(
-            mapOf(
-                "\n\t" to JsonPrimitive("v"),
-                "ok" to JsonPrimitive("v2")
+        val obj =
+            JsonObject(
+                mapOf(
+                    "\n\t" to JsonPrimitive("v"),
+                    "ok" to JsonPrimitive("v2"),
+                ),
             )
-        )
         val summary = summarizeJsonKeysForLog(obj, maxKeys = 5, maxKeyLen = 5, maxTotalLen = 10)
         assertFalse(summary.contains("\n") || summary.contains("\t"))
         assertFalse(summary.endsWith(","))

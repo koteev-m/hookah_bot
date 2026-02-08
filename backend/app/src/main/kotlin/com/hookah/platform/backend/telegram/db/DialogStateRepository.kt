@@ -12,7 +12,7 @@ import javax.sql.DataSource
 
 class DialogStateRepository(
     private val dataSource: DataSource?,
-    private val json: Json
+    private val json: Json,
 ) {
     suspend fun get(chatId: Long): DialogState {
         val ds = dataSource ?: return DialogState(DialogStateType.NONE)
@@ -36,18 +36,22 @@ class DialogStateRepository(
         }
     }
 
-    suspend fun set(chatId: Long, state: DialogState) {
+    suspend fun set(
+        chatId: Long,
+        state: DialogState,
+    ) {
         val ds = dataSource ?: return
         withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
-                val sql = """
+                val sql =
+                    """
                     INSERT INTO telegram_dialog_state (chat_id, state, payload, updated_at)
                     VALUES (?, ?, ?::jsonb, now())
                     ON CONFLICT (chat_id) DO UPDATE SET
                         state = EXCLUDED.state,
                         payload = EXCLUDED.payload,
                         updated_at = now()
-                """.trimIndent()
+                    """.trimIndent()
                 connection.prepareStatement(sql).use { statement ->
                     statement.setLong(1, chatId)
                     statement.setString(2, state.state.name)

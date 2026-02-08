@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class OrdersQueueResponse(
     val items: List<OrderQueueItemDto>,
-    val nextCursor: String?
+    val nextCursor: String?,
 )
 
 @Serializable
@@ -17,12 +17,12 @@ data class OrderQueueItemDto(
     val createdAt: String,
     val comment: String?,
     val itemsCount: Int,
-    val status: String
+    val status: String,
 )
 
 @Serializable
 data class OrderDetailResponse(
-    val order: OrderDetailDto
+    val order: OrderDetailDto,
 )
 
 @Serializable
@@ -35,7 +35,7 @@ data class OrderDetailDto(
     val status: String,
     val createdAt: String,
     val updatedAt: String,
-    val batches: List<OrderBatchDto>
+    val batches: List<OrderBatchDto>,
 )
 
 @Serializable
@@ -48,37 +48,37 @@ data class OrderBatchDto(
     val updatedAt: String,
     val rejectedReasonCode: String? = null,
     val rejectedReasonText: String? = null,
-    val items: List<OrderBatchItemDto>
+    val items: List<OrderBatchItemDto>,
 )
 
 @Serializable
 data class OrderBatchItemDto(
     val itemId: Long,
     val name: String,
-    val qty: Int
+    val qty: Int,
 )
 
 @Serializable
 data class OrderStatusRequest(
-    val nextStatus: String
+    val nextStatus: String,
 )
 
 @Serializable
 data class OrderStatusResponse(
     val orderId: Long,
     val status: String,
-    val updatedAt: String
+    val updatedAt: String,
 )
 
 @Serializable
 data class OrderRejectRequest(
     val reasonCode: String,
-    val reasonText: String? = null
+    val reasonText: String? = null,
 )
 
 @Serializable
 data class OrderAuditResponse(
-    val items: List<OrderAuditEntryDto>
+    val items: List<OrderAuditEntryDto>,
 )
 
 @Serializable
@@ -91,5 +91,5 @@ data class OrderAuditEntryDto(
     val toStatus: String,
     val reasonCode: String? = null,
     val reasonText: String? = null,
-    val createdAt: String
+    val createdAt: String,
 )

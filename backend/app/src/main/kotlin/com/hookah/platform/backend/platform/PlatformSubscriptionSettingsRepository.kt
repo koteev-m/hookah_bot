@@ -1,6 +1,9 @@
 package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -8,9 +11,6 @@ import java.sql.Types
 import java.time.LocalDate
 import java.util.Locale
 import javax.sql.DataSource
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 data class PlatformSubscriptionSettings(
     val venueId: Long,
@@ -18,25 +18,25 @@ data class PlatformSubscriptionSettings(
     val paidStartDate: LocalDate?,
     val basePriceMinor: Int?,
     val priceOverrideMinor: Int?,
-    val currency: String
+    val currency: String,
 )
 
 data class PlatformPriceScheduleItem(
     val venueId: Long,
     val effectiveFrom: LocalDate,
     val priceMinor: Int,
-    val currency: String
+    val currency: String,
 )
 
 data class PlatformEffectivePrice(
     val priceMinor: Int,
-    val currency: String
+    val currency: String,
 )
 
 data class PlatformSubscriptionSnapshot(
     val settings: PlatformSubscriptionSettings,
     val schedule: List<PlatformPriceScheduleItem>,
-    val effectivePriceToday: PlatformEffectivePrice?
+    val effectivePriceToday: PlatformEffectivePrice?,
 )
 
 class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?) {
@@ -48,21 +48,22 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                     if (!venueExists(connection, venueId)) {
                         return@use null
                     }
-                    val settings = loadSettings(connection, venueId)
-                        ?: PlatformSubscriptionSettings(
-                            venueId = venueId,
-                            trialEndDate = null,
-                            paidStartDate = null,
-                            basePriceMinor = null,
-                            priceOverrideMinor = null,
-                            currency = DEFAULT_CURRENCY
-                        )
+                    val settings =
+                        loadSettings(connection, venueId)
+                            ?: PlatformSubscriptionSettings(
+                                venueId = venueId,
+                                trialEndDate = null,
+                                paidStartDate = null,
+                                basePriceMinor = null,
+                                priceOverrideMinor = null,
+                                currency = DEFAULT_CURRENCY,
+                            )
                     val schedule = loadSchedule(connection, venueId)
                     val effectivePriceToday = resolveEffectivePrice(settings, schedule, LocalDate.now())
                     PlatformSubscriptionSnapshot(
                         settings = settings,
                         schedule = schedule,
-                        effectivePriceToday = effectivePriceToday
+                        effectivePriceToday = effectivePriceToday,
                     )
                 }
             } catch (e: SQLException) {
@@ -74,7 +75,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
     suspend fun updateSettings(
         venueId: Long,
         update: PlatformSubscriptionSettingsUpdate,
-        actorUserId: Long
+        actorUserId: Long,
     ): PlatformSubscriptionSettings? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -97,7 +98,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
     suspend fun replaceSchedule(
         venueId: Long,
         items: List<PlatformPriceScheduleItem>,
-        actorUserId: Long
+        actorUserId: Long,
     ): List<PlatformPriceScheduleItem>? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -112,9 +113,9 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                         }
                         connection.prepareStatement(
                             """
-                                DELETE FROM venue_price_schedule
-                                WHERE venue_id = ?
-                            """.trimIndent()
+                            DELETE FROM venue_price_schedule
+                            WHERE venue_id = ?
+                            """.trimIndent(),
                         ).use { statement ->
                             statement.setLong(1, venueId)
                             statement.executeUpdate()
@@ -122,16 +123,16 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                         if (items.isNotEmpty()) {
                             connection.prepareStatement(
                                 """
-                                    INSERT INTO venue_price_schedule (
-                                        venue_id,
-                                        effective_from,
-                                        price_minor,
-                                        currency,
-                                        updated_at,
-                                        updated_by_user_id
-                                    )
-                                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-                                """.trimIndent()
+                                INSERT INTO venue_price_schedule (
+                                    venue_id,
+                                    effective_from,
+                                    price_minor,
+                                    currency,
+                                    updated_at,
+                                    updated_by_user_id
+                                )
+                                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                                """.trimIndent(),
                             ).use { statement ->
                                 items.forEach { item ->
                                     statement.setLong(1, venueId)
@@ -165,7 +166,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
     private fun resolveSettingsUpdate(
         venueId: Long,
         existing: PlatformSubscriptionSettings?,
-        update: PlatformSubscriptionSettingsUpdate
+        update: PlatformSubscriptionSettingsUpdate,
     ): PlatformSubscriptionSettings {
         val existingCurrency = existing?.currency ?: DEFAULT_CURRENCY
         val currency = update.currency?.trim()?.uppercase(Locale.ROOT) ?: existingCurrency
@@ -175,14 +176,14 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
             paidStartDate = update.paidStartDate ?: existing?.paidStartDate,
             basePriceMinor = update.basePriceMinor ?: existing?.basePriceMinor,
             priceOverrideMinor = update.priceOverrideMinor ?: existing?.priceOverrideMinor,
-            currency = currency
+            currency = currency,
         )
     }
 
     fun resolveEffectivePrice(
         settings: PlatformSubscriptionSettings,
         schedule: List<PlatformPriceScheduleItem>,
-        today: LocalDate
+        today: LocalDate,
     ): PlatformEffectivePrice? {
         settings.priceOverrideMinor?.let { override ->
             return PlatformEffectivePrice(priceMinor = override, currency = settings.currency)
@@ -195,17 +196,20 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         return PlatformEffectivePrice(priceMinor = base, currency = settings.currency)
     }
 
-    private fun loadSettings(connection: Connection, venueId: Long): PlatformSubscriptionSettings? {
+    private fun loadSettings(
+        connection: Connection,
+        venueId: Long,
+    ): PlatformSubscriptionSettings? {
         connection.prepareStatement(
             """
-                SELECT trial_end_date,
-                       paid_start_date,
-                       base_price_minor,
-                       price_override_minor,
-                       currency
-                FROM venue_subscription_settings
-                WHERE venue_id = ?
-            """.trimIndent()
+            SELECT trial_end_date,
+                   paid_start_date,
+                   base_price_minor,
+                   price_override_minor,
+                   currency
+            FROM venue_subscription_settings
+            WHERE venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
@@ -218,20 +222,23 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                     paidStartDate = rs.getDate("paid_start_date")?.toLocalDate(),
                     basePriceMinor = rs.getNullableInt("base_price_minor"),
                     priceOverrideMinor = rs.getNullableInt("price_override_minor"),
-                    currency = rs.getString("currency")
+                    currency = rs.getString("currency"),
                 )
             }
         }
     }
 
-    private fun loadSchedule(connection: Connection, venueId: Long): List<PlatformPriceScheduleItem> {
+    private fun loadSchedule(
+        connection: Connection,
+        venueId: Long,
+    ): List<PlatformPriceScheduleItem> {
         connection.prepareStatement(
             """
-                SELECT effective_from, price_minor, currency
-                FROM venue_price_schedule
-                WHERE venue_id = ?
-                ORDER BY effective_from ASC
-            """.trimIndent()
+            SELECT effective_from, price_minor, currency
+            FROM venue_price_schedule
+            WHERE venue_id = ?
+            ORDER BY effective_from ASC
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
@@ -242,8 +249,8 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                             venueId = venueId,
                             effectiveFrom = rs.getDate("effective_from").toLocalDate(),
                             priceMinor = rs.getInt("price_minor"),
-                            currency = rs.getString("currency")
-                        )
+                            currency = rs.getString("currency"),
+                        ),
                     )
                 }
                 return items
@@ -254,20 +261,20 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
     private fun upsertSettings(
         connection: Connection,
         settings: PlatformSubscriptionSettings,
-        actorUserId: Long
+        actorUserId: Long,
     ) {
         connection.prepareStatement(
             """
-                UPDATE venue_subscription_settings
-                SET trial_end_date = ?,
-                    paid_start_date = ?,
-                    base_price_minor = ?,
-                    price_override_minor = ?,
-                    currency = ?,
-                    updated_at = CURRENT_TIMESTAMP,
-                    updated_by_user_id = ?
-                WHERE venue_id = ?
-            """.trimIndent()
+            UPDATE venue_subscription_settings
+            SET trial_end_date = ?,
+                paid_start_date = ?,
+                base_price_minor = ?,
+                price_override_minor = ?,
+                currency = ?,
+                updated_at = CURRENT_TIMESTAMP,
+                updated_by_user_id = ?
+            WHERE venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             setDateOrNull(statement, 1, settings.trialEndDate)
             setDateOrNull(statement, 2, settings.paidStartDate)
@@ -284,18 +291,18 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         try {
             connection.prepareStatement(
                 """
-                    INSERT INTO venue_subscription_settings (
-                        venue_id,
-                        trial_end_date,
-                        paid_start_date,
-                        base_price_minor,
-                        price_override_minor,
-                        currency,
-                        updated_at,
-                        updated_by_user_id
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-                """.trimIndent()
+                INSERT INTO venue_subscription_settings (
+                    venue_id,
+                    trial_end_date,
+                    paid_start_date,
+                    base_price_minor,
+                    price_override_minor,
+                    currency,
+                    updated_at,
+                    updated_by_user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, settings.venueId)
                 setDateOrNull(statement, 2, settings.trialEndDate)
@@ -309,16 +316,16 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         } catch (e: SQLException) {
             connection.prepareStatement(
                 """
-                    UPDATE venue_subscription_settings
-                    SET trial_end_date = ?,
-                        paid_start_date = ?,
-                        base_price_minor = ?,
-                        price_override_minor = ?,
-                        currency = ?,
-                        updated_at = CURRENT_TIMESTAMP,
-                        updated_by_user_id = ?
-                    WHERE venue_id = ?
-                """.trimIndent()
+                UPDATE venue_subscription_settings
+                SET trial_end_date = ?,
+                    paid_start_date = ?,
+                    base_price_minor = ?,
+                    price_override_minor = ?,
+                    currency = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    updated_by_user_id = ?
+                WHERE venue_id = ?
+                """.trimIndent(),
             ).use { statement ->
                 setDateOrNull(statement, 1, settings.trialEndDate)
                 setDateOrNull(statement, 2, settings.paidStartDate)
@@ -332,9 +339,12 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         }
     }
 
-    private fun venueExists(connection: Connection, venueId: Long): Boolean {
+    private fun venueExists(
+        connection: Connection,
+        venueId: Long,
+    ): Boolean {
         connection.prepareStatement(
-            "SELECT 1 FROM venues WHERE id = ?"
+            "SELECT 1 FROM venues WHERE id = ?",
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
@@ -351,7 +361,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
     private fun setDateOrNull(
         statement: java.sql.PreparedStatement,
         index: Int,
-        value: LocalDate?
+        value: LocalDate?,
     ) {
         if (value == null) {
             statement.setNull(index, Types.DATE)
@@ -360,7 +370,11 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         }
     }
 
-    private fun setIntOrNull(statement: java.sql.PreparedStatement, index: Int, value: Int?) {
+    private fun setIntOrNull(
+        statement: java.sql.PreparedStatement,
+        index: Int,
+        value: Int?,
+    ) {
         if (value == null) {
             statement.setNull(index, Types.INTEGER)
         } else {
@@ -377,7 +391,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         val paidStartDate: LocalDate?,
         val basePriceMinor: Int?,
         val priceOverrideMinor: Int?,
-        val currency: String?
+        val currency: String?,
     )
 
     companion object {

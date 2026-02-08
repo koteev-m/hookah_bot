@@ -11,14 +11,15 @@ import kotlin.test.assertTrue
 
 class DbHealthTest {
     @Test
-    fun `db health endpoint returns disabled when db is not configured`() = testApplication {
-        environment {
-            config = MapApplicationConfig("db.jdbcUrl" to "")
-        }
-        application { module() }
+    fun `db health endpoint returns disabled when db is not configured`() =
+        testApplication {
+            environment {
+                config = MapApplicationConfig("db.jdbcUrl" to "")
+            }
+            application { module() }
 
-        val response = client.get("/db/health")
-        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
-        assertTrue(response.bodyAsText().contains("disabled"))
-    }
+            val response = client.get("/db/health")
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertTrue(response.bodyAsText().contains("disabled"))
+        }
 }

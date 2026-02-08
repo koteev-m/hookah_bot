@@ -23,7 +23,7 @@ import io.ktor.server.routing.get
 fun Route.guestVenueRoutes(
     guestVenueRepository: GuestVenueRepository,
     guestMenuRepository: GuestMenuRepository,
-    subscriptionRepository: SubscriptionRepository
+    subscriptionRepository: SubscriptionRepository,
 ) {
     get("/catalog") {
         val venues = guestVenueRepository.listCatalogVenues()
@@ -46,36 +46,41 @@ fun Route.guestVenueRoutes(
     }
 }
 
-private fun VenueShort.toCatalogDto(): CatalogVenueDto = CatalogVenueDto(
-    id = id,
-    name = name,
-    city = city,
-    address = address
-)
+private fun VenueShort.toCatalogDto(): CatalogVenueDto =
+    CatalogVenueDto(
+        id = id,
+        name = name,
+        city = city,
+        address = address,
+    )
 
-private fun VenueShort.toVenueDto(): VenueDto = VenueDto(
-    id = id,
-    name = name,
-    city = city,
-    address = address,
-    status = status.dbValue
-)
+private fun VenueShort.toVenueDto(): VenueDto =
+    VenueDto(
+        id = id,
+        name = name,
+        city = city,
+        address = address,
+        status = status.dbValue,
+    )
 
-private fun MenuModel.toResponse(): MenuResponse = MenuResponse(
-    venueId = venueId,
-    categories = categories.map { it.toDto() }
-)
+private fun MenuModel.toResponse(): MenuResponse =
+    MenuResponse(
+        venueId = venueId,
+        categories = categories.map { it.toDto() },
+    )
 
-private fun MenuCategoryModel.toDto(): MenuCategoryDto = MenuCategoryDto(
-    id = id,
-    name = name,
-    items = items.map { it.toDto() }
-)
+private fun MenuCategoryModel.toDto(): MenuCategoryDto =
+    MenuCategoryDto(
+        id = id,
+        name = name,
+        items = items.map { it.toDto() },
+    )
 
-private fun MenuItemModel.toDto(): MenuItemDto = MenuItemDto(
-    id = id,
-    name = name,
-    priceMinor = priceMinor,
-    currency = currency,
-    isAvailable = isAvailable
-)
+private fun MenuItemModel.toDto(): MenuItemDto =
+    MenuItemDto(
+        id = id,
+        name = name,
+        priceMinor = priceMinor,
+        currency = currency,
+        isAvailable = isAvailable,
+    )

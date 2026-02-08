@@ -3,32 +3,43 @@ package com.hookah.platform.backend.telegram.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.sql.SQLException
-import kotlinx.coroutines.CancellationException
-import javax.sql.DataSource
 import org.slf4j.LoggerFactory
+import java.sql.SQLException
+import javax.sql.DataSource
 
 class IdempotencyRepository(private val dataSource: DataSource?) {
     private val logger = LoggerFactory.getLogger(IdempotencyRepository::class.java)
 
-    suspend fun tryAcquire(updateId: Long, chatId: Long?, messageId: Long?): Boolean {
+    suspend fun tryAcquire(
+        updateId: Long,
+        chatId: Long?,
+        messageId: Long?,
+    ): Boolean {
         val ds = dataSource ?: return true
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val sql = """
+                    val sql =
+                        """
                         INSERT INTO telegram_processed_updates (update_id, chat_id, message_id)
                         VALUES (?, ?, ?)
                         ON CONFLICT DO NOTHING
-                    """.trimIndent()
+                        """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, updateId)
-                        if (chatId != null) statement.setLong(2, chatId)
-                        else statement.setNull(2, java.sql.Types.BIGINT)
-                        if (messageId != null) statement.setLong(3, messageId)
-                        else statement.setNull(3, java.sql.Types.BIGINT)
+                        if (chatId != null) {
+                            statement.setLong(2, chatId)
+                        } else {
+                            statement.setNull(2, java.sql.Types.BIGINT)
+                        }
+                        if (messageId != null) {
+                            statement.setLong(3, messageId)
+                        } else {
+                            statement.setNull(3, java.sql.Types.BIGINT)
+                        }
                         val inserted = statement.executeUpdate()
                         inserted > 0
                     }
@@ -62,10 +73,11 @@ class IdempotencyRepository(private val dataSource: DataSource?) {
             if (sqlException?.sqlState == UNIQUE_VIOLATION_SQL_STATE) {
                 return true
             }
-            current = when (current) {
-                is SQLException -> current.nextException ?: current.cause
-                else -> current.cause
-            }
+            current =
+                when (current) {
+                    is SQLException -> current.nextException ?: current.cause
+                    else -> current.cause
+                }
         }
         return false
     }

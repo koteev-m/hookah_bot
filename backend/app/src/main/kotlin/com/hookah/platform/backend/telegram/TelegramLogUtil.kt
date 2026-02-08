@@ -1,18 +1,25 @@
 package com.hookah.platform.backend.telegram
 
-import org.slf4j.Logger
 import kotlinx.serialization.json.JsonObject
+import org.slf4j.Logger
 
-fun sanitizeForLog(text: String?, maxLen: Int = 200): String {
+fun sanitizeForLog(
+    text: String?,
+    maxLen: Int = 200,
+): String {
     return (text ?: "")
         .replace(CONTROL_CHARS_REGEX, " ")
         .trim()
         .take(maxLen)
 }
 
-fun sanitizeTelegramForLog(text: String?, maxLen: Int = 200): String {
-    val normalized = (text ?: "")
-        .replace(CONTROL_CHARS_REGEX, " ")
+fun sanitizeTelegramForLog(
+    text: String?,
+    maxLen: Int = 200,
+): String {
+    val normalized =
+        (text ?: "")
+            .replace(CONTROL_CHARS_REGEX, " ")
     val redacted = redactTelegramTokens(normalized)
     return redacted.trim().take(maxLen)
 }
@@ -23,7 +30,10 @@ fun redactTelegramTokens(text: String): String {
         .replace(BOT_TOKEN_REGEX, "bot<redacted>")
 }
 
-fun telegramStackTraceForLog(t: Throwable, maxLen: Int = 8000): String {
+fun telegramStackTraceForLog(
+    t: Throwable,
+    maxLen: Int = 8000,
+): String {
     val writer = java.io.StringWriter()
     java.io.PrintWriter(writer).use { pw ->
         t.printStackTrace(pw)
@@ -35,7 +45,7 @@ fun telegramStackTraceForLog(t: Throwable, maxLen: Int = 8000): String {
 inline fun Logger.debugTelegramException(
     t: Throwable,
     maxMessageLen: Int = 500,
-    message: () -> String
+    message: () -> String,
 ) {
     if (!isDebugEnabled) return
     val safeMessage = sanitizeTelegramForLog(message(), maxLen = maxMessageLen)
@@ -57,7 +67,7 @@ fun summarizeJsonKeysForLog(
     obj: JsonObject,
     maxKeys: Int = 20,
     maxKeyLen: Int = 40,
-    maxTotalLen: Int = 200
+    maxTotalLen: Int = 200,
 ): String {
     val builder = StringBuilder()
     var appended = 0

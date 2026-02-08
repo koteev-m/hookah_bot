@@ -15,7 +15,7 @@ import javax.sql.DataSource
 class StaffInviteRepository(
     private val dataSource: DataSource?,
     private val pepper: String,
-    private val now: () -> Instant = { Instant.now() }
+    private val now: () -> Instant = { Instant.now() },
 ) {
     private val logger = LoggerFactory.getLogger(StaffInviteRepository::class.java)
     private val random = SecureRandom()
@@ -28,7 +28,7 @@ class StaffInviteRepository(
         venueId: Long,
         createdByUserId: Long,
         role: String,
-        ttlSeconds: Long
+        ttlSeconds: Long,
     ): StaffInviteCodeResult? {
         val ds = dataSource ?: return null
         val code = generateCode()
@@ -41,11 +41,11 @@ class StaffInviteRepository(
                 try {
                     connection.prepareStatement(
                         """
-                            INSERT INTO venue_staff_invites (
-                                code_hash, code_hint, venue_id, role, created_by_user_id, created_at, expires_at
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """.trimIndent()
+                        INSERT INTO venue_staff_invites (
+                            code_hash, code_hint, venue_id, role, created_by_user_id, created_at, expires_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, codeHash)
                         statement.setString(2, codeHint)
@@ -62,7 +62,7 @@ class StaffInviteRepository(
                         "Failed to create staff invite venueId={} createdByUserId={}: {}",
                         venueId,
                         createdByUserId,
-                        sanitizeTelegramForLog(e.message)
+                        sanitizeTelegramForLog(e.message),
                     )
                     logger.debugTelegramException(e) { "createInvite exception venueId=$venueId" }
                     null
@@ -74,19 +74,21 @@ class StaffInviteRepository(
     suspend fun acceptInvite(
         code: String,
         userId: Long,
-        createMember: suspend (Connection, Long, String, Long?) -> VenueStaffMember?
+        createMember: suspend (Connection, Long, String, Long?) -> VenueStaffMember?,
     ): StaffInviteAcceptResult {
         val ds = dataSource ?: return StaffInviteAcceptResult.DatabaseError
-        val normalizedCode = StaffInviteCodeFormat.normalizeCode(code) ?: return StaffInviteAcceptResult.InvalidOrExpired
+        val normalizedCode =
+            StaffInviteCodeFormat.normalizeCode(code) ?: return StaffInviteAcceptResult.InvalidOrExpired
         val codeHash = hashCode(normalizedCode)
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 try {
-                    val invite = loadInvite(connection, codeHash) ?: return@use rollbackAndReturn(connection) {
-                        StaffInviteAcceptResult.InvalidOrExpired
-                    }
+                    val invite =
+                        loadInvite(connection, codeHash) ?: return@use rollbackAndReturn(connection) {
+                            StaffInviteAcceptResult.InvalidOrExpired
+                        }
                     val nowTs = now()
                     if (invite.usedAt != null || !invite.expiresAt.isAfter(nowTs)) {
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.InvalidOrExpired }
@@ -115,7 +117,7 @@ class StaffInviteRepository(
                     logger.warn(
                         "Failed to accept staff invite userId={}: {}",
                         userId,
-                        sanitizeTelegramForLog(e.message)
+                        sanitizeTelegramForLog(e.message),
                     )
                     logger.debugTelegramException(e) { "acceptInvite exception userId=$userId" }
                     StaffInviteAcceptResult.DatabaseError
@@ -126,14 +128,17 @@ class StaffInviteRepository(
         }
     }
 
-    private fun loadInvite(connection: Connection, codeHash: String): StaffInviteRow? {
+    private fun loadInvite(
+        connection: Connection,
+        codeHash: String,
+    ): StaffInviteRow? {
         return connection.prepareStatement(
             """
-                SELECT venue_id, role, created_by_user_id, expires_at, used_at
-                FROM venue_staff_invites
-                WHERE code_hash = ?
-                FOR UPDATE
-            """.trimIndent()
+            SELECT venue_id, role, created_by_user_id, expires_at, used_at
+            FROM venue_staff_invites
+            WHERE code_hash = ?
+            FOR UPDATE
+            """.trimIndent(),
         ).use { statement ->
             statement.setString(1, codeHash)
             statement.executeQuery().use { rs ->
@@ -143,20 +148,26 @@ class StaffInviteRepository(
                         role = rs.getString("role"),
                         createdByUserId = rs.getLong("created_by_user_id"),
                         expiresAt = rs.getTimestamp("expires_at").toInstant(),
-                        usedAt = rs.getTimestamp("used_at")?.toInstant()
+                        usedAt = rs.getTimestamp("used_at")?.toInstant(),
                     )
-                } else null
+                } else {
+                    null
+                }
             }
         }
     }
 
-    private fun loadMember(connection: Connection, venueId: Long, userId: Long): VenueStaffMember? {
+    private fun loadMember(
+        connection: Connection,
+        venueId: Long,
+        userId: Long,
+    ): VenueStaffMember? {
         return connection.prepareStatement(
             """
-                SELECT role, created_at, invited_by_user_id
-                FROM venue_members
-                WHERE venue_id = ? AND user_id = ?
-            """.trimIndent()
+            SELECT role, created_at, invited_by_user_id
+            FROM venue_members
+            WHERE venue_id = ? AND user_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, userId)
@@ -167,20 +178,27 @@ class StaffInviteRepository(
                         userId = userId,
                         role = rs.getString("role"),
                         createdAt = rs.getTimestamp("created_at").toInstant(),
-                        invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() }
+                        invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() },
                     )
-                } else null
+                } else {
+                    null
+                }
             }
         }
     }
 
-    private fun markInviteUsed(connection: Connection, codeHash: String, nowTs: Instant, userId: Long) {
+    private fun markInviteUsed(
+        connection: Connection,
+        codeHash: String,
+        nowTs: Instant,
+        userId: Long,
+    ) {
         connection.prepareStatement(
             """
-                UPDATE venue_staff_invites
-                SET used_at = ?, used_by_user_id = ?
-                WHERE code_hash = ?
-            """.trimIndent()
+            UPDATE venue_staff_invites
+            SET used_at = ?, used_by_user_id = ?
+            WHERE code_hash = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setTimestamp(1, java.sql.Timestamp.from(nowTs))
             statement.setLong(2, userId)
@@ -210,7 +228,10 @@ class StaffInviteRepository(
         runCatching { connection.rollback() }
     }
 
-    private fun <T> rollbackAndReturn(connection: Connection, block: () -> T): T {
+    private fun <T> rollbackAndReturn(
+        connection: Connection,
+        block: () -> T,
+    ): T {
         runCatching { connection.rollback() }
         return block()
     }
@@ -219,12 +240,14 @@ class StaffInviteRepository(
 data class StaffInviteCodeResult(
     val code: String,
     val expiresAt: Instant,
-    val ttlSeconds: Long
+    val ttlSeconds: Long,
 )
 
 sealed interface StaffInviteAcceptResult {
     data class Success(val member: VenueStaffMember, val alreadyMember: Boolean) : StaffInviteAcceptResult
+
     data object InvalidOrExpired : StaffInviteAcceptResult
+
     data object DatabaseError : StaffInviteAcceptResult
 }
 
@@ -233,5 +256,5 @@ private data class StaffInviteRow(
     val role: String,
     val createdByUserId: Long,
     val expiresAt: Instant,
-    val usedAt: Instant?
+    val usedAt: Instant?,
 )

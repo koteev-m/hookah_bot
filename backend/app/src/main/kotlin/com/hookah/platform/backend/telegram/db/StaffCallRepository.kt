@@ -1,12 +1,12 @@
 package com.hookah.platform.backend.telegram.db
 
-import java.time.Instant
-import java.sql.SQLException
-import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.StaffCallReason
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.sql.SQLException
+import java.time.Instant
+import javax.sql.DataSource
 
 class StaffCallRepository(private val dataSource: DataSource?) {
     suspend fun createStaffCall(
@@ -14,21 +14,25 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         tableId: Long,
         createdByUserId: Long?,
         reason: StaffCallReason,
-        comment: String?
+        comment: String?,
     ): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
-                val sql = """
+                val sql =
+                    """
                     INSERT INTO staff_calls (venue_id, table_id, created_by_user_id, reason, comment, status)
                     VALUES (?, ?, ?, ?, ?, 'NEW')
                     RETURNING id
-                """.trimIndent()
+                    """.trimIndent()
                 connection.prepareStatement(sql).use { statement ->
                     statement.setLong(1, venueId)
                     statement.setLong(2, tableId)
-                    if (createdByUserId != null) statement.setLong(3, createdByUserId)
-                    else statement.setNull(3, java.sql.Types.BIGINT)
+                    if (createdByUserId != null) {
+                        statement.setLong(3, createdByUserId)
+                    } else {
+                        statement.setNull(3, java.sql.Types.BIGINT)
+                    }
                     statement.setString(4, reason.name)
                     statement.setString(5, comment)
                     statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
@@ -41,17 +45,18 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         venueId: Long,
         tableId: Long,
         reason: StaffCallReason,
-        comment: String?
+        comment: String?,
     ): CreatedStaffCall {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     if (connection.metaData.databaseProductName.contains("H2", ignoreCase = true)) {
-                        val sql = """
+                        val sql =
+                            """
                             INSERT INTO staff_calls (venue_id, table_id, created_by_user_id, reason, comment, status)
                             VALUES (?, ?, NULL, ?, ?, 'NEW')
-                        """.trimIndent()
+                            """.trimIndent()
                         connection.prepareStatement(sql, java.sql.Statement.RETURN_GENERATED_KEYS).use { statement ->
                             statement.setLong(1, venueId)
                             statement.setLong(2, tableId)
@@ -61,18 +66,19 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                             statement.generatedKeys.use { keys ->
                                 if (keys.next()) {
                                     val id = keys.getLong(1)
-                                    val createdAt = connection.prepareStatement(
-                                        "SELECT created_at FROM staff_calls WHERE id = ?"
-                                    ).use { select ->
-                                        select.setLong(1, id)
-                                        select.executeQuery().use { rs ->
-                                            if (rs.next()) {
-                                                rs.getTimestamp("created_at")?.toInstant() ?: Instant.now()
-                                            } else {
-                                                Instant.now()
+                                    val createdAt =
+                                        connection.prepareStatement(
+                                            "SELECT created_at FROM staff_calls WHERE id = ?",
+                                        ).use { select ->
+                                            select.setLong(1, id)
+                                            select.executeQuery().use { rs ->
+                                                if (rs.next()) {
+                                                    rs.getTimestamp("created_at")?.toInstant() ?: Instant.now()
+                                                } else {
+                                                    Instant.now()
+                                                }
                                             }
                                         }
-                                    }
                                     return@withContext CreatedStaffCall(id = id, createdAt = createdAt)
                                 }
                             }
@@ -80,11 +86,12 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                         throw DatabaseUnavailableException()
                     }
 
-                    val sql = """
+                    val sql =
+                        """
                         INSERT INTO staff_calls (venue_id, table_id, created_by_user_id, reason, comment, status)
                         VALUES (?, ?, NULL, ?, ?, 'NEW')
                         RETURNING id, created_at
-                    """.trimIndent()
+                        """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, venueId)
                         statement.setLong(2, tableId)
@@ -108,5 +115,5 @@ class StaffCallRepository(private val dataSource: DataSource?) {
 
 data class CreatedStaffCall(
     val id: Long,
-    val createdAt: Instant
+    val createdAt: Instant,
 )

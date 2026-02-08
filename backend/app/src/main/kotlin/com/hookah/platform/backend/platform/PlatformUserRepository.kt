@@ -1,35 +1,39 @@
 package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.SQLException
 import java.time.Instant
 import java.util.Locale
 import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class PlatformUserRepository(private val dataSource: DataSource?) {
-    suspend fun listUsers(query: String?, limit: Int): List<PlatformTelegramUser> {
+    suspend fun listUsers(
+        query: String?,
+        limit: Int,
+    ): List<PlatformTelegramUser> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val sql = StringBuilder(
-                        """
+                    val sql =
+                        StringBuilder(
+                            """
                             SELECT telegram_user_id, username, first_name, last_name,
                                    COALESCE(updated_at, created_at) AS last_seen_at
                             FROM users
-                        """.trimIndent()
-                    )
+                            """.trimIndent(),
+                        )
                     val params = mutableListOf<Any>()
                     val search = query?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotBlank() }
                     if (search != null) {
                         sql.append(
                             """
-                                WHERE LOWER(username) LIKE ?
-                                   OR LOWER(first_name) LIKE ?
-                                   OR LOWER(last_name) LIKE ?
-                            """.trimIndent()
+                            WHERE LOWER(username) LIKE ?
+                               OR LOWER(first_name) LIKE ?
+                               OR LOWER(last_name) LIKE ?
+                            """.trimIndent(),
                         )
                         val like = "%$search%"
                         params.add(like)
@@ -57,8 +61,8 @@ class PlatformUserRepository(private val dataSource: DataSource?) {
                                         username = rs.getString("username"),
                                         firstName = rs.getString("first_name"),
                                         lastName = rs.getString("last_name"),
-                                        lastSeenAt = rs.getTimestamp("last_seen_at")?.toInstant() ?: Instant.EPOCH
-                                    )
+                                        lastSeenAt = rs.getTimestamp("last_seen_at")?.toInstant() ?: Instant.EPOCH,
+                                    ),
                                 )
                             }
                             result
@@ -77,5 +81,5 @@ data class PlatformTelegramUser(
     val username: String?,
     val firstName: String?,
     val lastName: String?,
-    val lastSeenAt: Instant
+    val lastSeenAt: Instant,
 )

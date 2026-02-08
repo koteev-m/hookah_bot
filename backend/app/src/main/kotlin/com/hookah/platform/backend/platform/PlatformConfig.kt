@@ -5,7 +5,7 @@ import io.ktor.server.config.ApplicationConfig
 import org.slf4j.LoggerFactory
 
 data class PlatformConfig(
-    val ownerUserId: Long?
+    val ownerUserId: Long?,
 ) {
     companion object {
         fun from(config: ApplicationConfig): PlatformConfig {

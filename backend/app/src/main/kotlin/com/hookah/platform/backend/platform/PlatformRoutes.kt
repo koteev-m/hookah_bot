@@ -14,12 +14,12 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class PlatformMeResponse(
     val ok: Boolean,
-    val ownerUserId: Long
+    val ownerUserId: Long,
 )
 
 @Serializable
 data class PlatformUserListResponse(
-    val users: List<PlatformUserDto>
+    val users: List<PlatformUserDto>,
 )
 
 @Serializable
@@ -27,7 +27,7 @@ data class PlatformUserDto(
     val userId: Long,
     val username: String? = null,
     val displayName: String,
-    val lastSeenAt: String
+    val lastSeenAt: String,
 )
 
 fun ApplicationCall.requirePlatformOwner(platformConfig: PlatformConfig): Long {
@@ -49,7 +49,7 @@ fun Route.platformRoutes(
     subscriptionSettingsRepository: PlatformSubscriptionSettingsRepository,
     platformVenueMemberRepository: PlatformVenueMemberRepository,
     staffInviteRepository: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository,
-    staffInviteConfig: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
+    staffInviteConfig: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig,
 ) {
     route("/platform") {
         get("/me") {
@@ -63,8 +63,8 @@ fun Route.platformRoutes(
             val users = platformUserRepository.listUsers(query = query, limit = limit)
             call.respond(
                 PlatformUserListResponse(
-                    users = users.map { it.toDto() }
-                )
+                    users = users.map { it.toDto() },
+                ),
             )
         }
     }
@@ -75,28 +75,30 @@ fun Route.platformRoutes(
         subscriptionSettingsRepository = subscriptionSettingsRepository,
         platformVenueMemberRepository = platformVenueMemberRepository,
         staffInviteRepository = staffInviteRepository,
-        staffInviteConfig = staffInviteConfig
+        staffInviteConfig = staffInviteConfig,
     )
     platformBillingRoutes(
         platformConfig = platformConfig,
         billingInvoiceRepository = billingInvoiceRepository,
         billingService = billingService,
-        auditLogRepository = auditLogRepository
+        auditLogRepository = auditLogRepository,
     )
 }
 
 private fun PlatformTelegramUser.toDto(): PlatformUserDto {
-    val nameParts = listOfNotNull(firstName?.trim(), lastName?.trim())
-        .filter { it.isNotBlank() }
-    val displayName = when {
-        nameParts.isNotEmpty() -> nameParts.joinToString(" ")
-        !username.isNullOrBlank() -> username
-        else -> "User ${userId}"
-    }
+    val nameParts =
+        listOfNotNull(firstName?.trim(), lastName?.trim())
+            .filter { it.isNotBlank() }
+    val displayName =
+        when {
+            nameParts.isNotEmpty() -> nameParts.joinToString(" ")
+            !username.isNullOrBlank() -> username
+            else -> "User $userId"
+        }
     return PlatformUserDto(
         userId = userId,
         username = username?.takeIf { it.isNotBlank() },
         displayName = displayName,
-        lastSeenAt = lastSeenAt.toString()
+        lastSeenAt = lastSeenAt.toString(),
     )
 }

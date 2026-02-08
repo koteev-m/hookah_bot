@@ -14,10 +14,10 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
-import java.time.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.time.Instant
 
 @Serializable
 data class PlatformInvoiceDto(
@@ -29,53 +29,59 @@ data class PlatformInvoiceDto(
     val currency: String,
     val status: String,
     val paymentUrl: String? = null,
-    val paidAt: String? = null
+    val paidAt: String? = null,
 )
 
 @Serializable
 data class PlatformInvoiceListResponse(
-    val invoices: List<PlatformInvoiceDto>
+    val invoices: List<PlatformInvoiceDto>,
 )
 
 @Serializable
 data class PlatformMarkInvoicePaidRequest(
-    val occurredAt: String? = null
+    val occurredAt: String? = null,
 )
 
 @Serializable
 data class PlatformMarkInvoicePaidResponse(
     val ok: Boolean,
-    val alreadyPaid: Boolean
+    val alreadyPaid: Boolean,
 )
 
 fun Route.platformBillingRoutes(
     platformConfig: PlatformConfig,
     billingInvoiceRepository: BillingInvoiceRepository,
     billingService: BillingService,
-    auditLogRepository: AuditLogRepository
+    auditLogRepository: AuditLogRepository,
 ) {
     route("/platform/venues") {
         get("/{venueId}/invoices") {
             call.requirePlatformOwner(platformConfig)
-            val venueId = call.parameters["venueId"]?.toLongOrNull()
-                ?: throw InvalidInputException("venueId must be a number")
+            val venueId =
+                call.parameters["venueId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("venueId must be a number")
             val statusRaw = call.request.queryParameters["status"]
             val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 200) ?: 50
             val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
 
             val statusNormalized = statusRaw?.trim()
-            val status = when (statusNormalized?.lowercase()) {
-                null, "", "any" -> null
-                else -> InvoiceStatus.fromDb(statusNormalized)
-                    ?: throw InvalidInputException("status must be one of: DRAFT, OPEN, PAID, PAST_DUE, VOID, any")
-            }
+            val status =
+                when (statusNormalized?.lowercase()) {
+                    null, "", "any" -> null
+                    else ->
+                        InvoiceStatus.fromDb(statusNormalized)
+                            ?: throw InvalidInputException(
+                                "status must be one of: DRAFT, OPEN, PAID, PAST_DUE, VOID, any",
+                            )
+                }
 
-            val invoices = billingInvoiceRepository.listInvoicesByVenue(
-                venueId = venueId,
-                status = status,
-                limit = limit,
-                offset = offset
-            )
+            val invoices =
+                billingInvoiceRepository.listInvoicesByVenue(
+                    venueId = venueId,
+                    status = status,
+                    limit = limit,
+                    offset = offset,
+                )
             call.respond(PlatformInvoiceListResponse(invoices = invoices.map { it.toDto() }))
         }
     }
@@ -83,11 +89,13 @@ fun Route.platformBillingRoutes(
     route("/platform/invoices") {
         post("/{invoiceId}/mark-paid") {
             val actorUserId = call.requirePlatformOwner(platformConfig)
-            val invoiceId = call.parameters["invoiceId"]?.toLongOrNull()
-                ?: throw InvalidInputException("invoiceId must be a number")
+            val invoiceId =
+                call.parameters["invoiceId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("invoiceId must be a number")
             val request = call.receive<PlatformMarkInvoicePaidRequest>()
-            val invoice = billingInvoiceRepository.getInvoiceById(invoiceId)
-                ?: throw NotFoundException()
+            val invoice =
+                billingInvoiceRepository.getInvoiceById(invoiceId)
+                    ?: throw NotFoundException()
 
             if (invoice.status == InvoiceStatus.PAID) {
                 auditLogRepository.appendJson(
@@ -95,11 +103,12 @@ fun Route.platformBillingRoutes(
                     action = "BILLING_MARK_PAID",
                     entityType = "billing_invoice",
                     entityId = invoice.id,
-                    payload = buildJsonObject {
-                        put("invoiceId", invoice.id)
-                        put("venueId", invoice.venueId)
-                        put("alreadyPaid", true)
-                    }
+                    payload =
+                        buildJsonObject {
+                            put("invoiceId", invoice.id)
+                            put("venueId", invoice.venueId)
+                            put("alreadyPaid", true)
+                        },
                 )
                 call.respond(PlatformMarkInvoicePaidResponse(ok = true, alreadyPaid = true))
                 return@post
@@ -109,30 +118,33 @@ fun Route.platformBillingRoutes(
                 throw InvalidInputException("invoice must be OPEN or PAST_DUE to mark paid")
             }
 
-            val providerInvoiceId = invoice.providerInvoiceId?.takeIf { it.isNotBlank() }
-                ?: throw InvalidInputException("invoice providerInvoiceId is missing")
+            val providerInvoiceId =
+                invoice.providerInvoiceId?.takeIf { it.isNotBlank() }
+                    ?: throw InvalidInputException("invoice providerInvoiceId is missing")
             val occurredAt = request.occurredAt?.let { parseInstant(it, "occurredAt") } ?: Instant.now()
-            val event = PaymentEvent.Paid(
-                provider = "FAKE",
-                providerEventId = "manual:$invoiceId",
-                providerInvoiceId = providerInvoiceId,
-                amountMinor = invoice.amountMinor,
-                currency = invoice.currency,
-                occurredAt = occurredAt,
-                rawPayload = null
-            )
+            val event =
+                PaymentEvent.Paid(
+                    provider = "FAKE",
+                    providerEventId = "manual:$invoiceId",
+                    providerInvoiceId = providerInvoiceId,
+                    amountMinor = invoice.amountMinor,
+                    currency = invoice.currency,
+                    occurredAt = occurredAt,
+                    rawPayload = null,
+                )
             billingService.applyPaymentEvent(event)
             auditLogRepository.appendJson(
                 actorUserId = actorUserId,
                 action = "BILLING_MARK_PAID",
                 entityType = "billing_invoice",
                 entityId = invoice.id,
-                payload = buildJsonObject {
-                    put("invoiceId", invoice.id)
-                    put("venueId", invoice.venueId)
-                    put("alreadyPaid", false)
-                    put("occurredAt", occurredAt.toString())
-                }
+                payload =
+                    buildJsonObject {
+                        put("invoiceId", invoice.id)
+                        put("venueId", invoice.venueId)
+                        put("alreadyPaid", false)
+                        put("occurredAt", occurredAt.toString())
+                    },
             )
             call.respond(PlatformMarkInvoicePaidResponse(ok = true, alreadyPaid = false))
         }
@@ -149,10 +161,13 @@ private fun com.hookah.platform.backend.billing.BillingInvoice.toDto(): Platform
         currency = currency,
         status = status.dbValue,
         paymentUrl = paymentUrl,
-        paidAt = paidAt?.toString()
+        paidAt = paidAt?.toString(),
     )
 
-private fun parseInstant(value: String, field: String): Instant {
+private fun parseInstant(
+    value: String,
+    field: String,
+): Instant {
     val trimmed = value.trim()
     if (trimmed.isEmpty()) {
         throw InvalidInputException("$field must not be blank")

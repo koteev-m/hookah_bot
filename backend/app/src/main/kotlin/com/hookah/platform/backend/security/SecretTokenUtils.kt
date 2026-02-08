@@ -4,11 +4,14 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.security.MessageDigest
 
-fun constantTimeEquals(expected: String, provided: String?): Boolean {
+fun constantTimeEquals(
+    expected: String,
+    provided: String?,
+): Boolean {
     if (provided == null) return false
     return MessageDigest.isEqual(
         expected.toByteArray(Charsets.UTF_8),
-        provided.toByteArray(Charsets.UTF_8)
+        provided.toByteArray(Charsets.UTF_8),
     )
 }
 
@@ -21,16 +24,18 @@ class IpAllowlist private constructor(private val entries: List<IpRange>) {
 
     companion object {
         fun parse(raw: String?): IpAllowlist? {
-            val items = raw
-                ?.split(',')
-                ?.map { it.trim() }
-                ?.filter { it.isNotEmpty() }
-                .orEmpty()
+            val items =
+                raw
+                    ?.split(',')
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() }
+                    .orEmpty()
             if (items.isEmpty()) return null
 
-            val entries = items.map { value ->
-                IpRange.parse(value) ?: error("Invalid IP allowlist entry: $value")
-            }
+            val entries =
+                items.map { value ->
+                    IpRange.parse(value) ?: error("Invalid IP allowlist entry: $value")
+                }
             return IpAllowlist(entries)
         }
     }
@@ -38,7 +43,7 @@ class IpAllowlist private constructor(private val entries: List<IpRange>) {
 
 private data class IpRange(
     val networkBytes: ByteArray,
-    val prefixLength: Int
+    val prefixLength: Int,
 ) {
     fun matches(address: InetAddress): Boolean {
         val bytes = address.address
@@ -55,11 +60,12 @@ private data class IpRange(
             val parts = trimmed.split('/', limit = 2)
             val address = parseAddress(parts[0]) ?: return null
             val maxBits = address.address.size * 8
-            val prefix = if (parts.size == 2) {
-                parts[1].toIntOrNull()?.takeIf { it in 0..maxBits } ?: return null
-            } else {
-                maxBits
-            }
+            val prefix =
+                if (parts.size == 2) {
+                    parts[1].toIntOrNull()?.takeIf { it in 0..maxBits } ?: return null
+                } else {
+                    maxBits
+                }
 
             val networkBytes = applyMask(address.address, prefix)
             return IpRange(networkBytes = networkBytes, prefixLength = prefix)
@@ -67,17 +73,21 @@ private data class IpRange(
     }
 }
 
-private fun applyMask(bytes: ByteArray, prefixLength: Int): ByteArray {
+private fun applyMask(
+    bytes: ByteArray,
+    prefixLength: Int,
+): ByteArray {
     val result = bytes.copyOf()
     val fullBytes = prefixLength / 8
     val remainder = prefixLength % 8
     for (i in fullBytes until result.size) {
-        result[i] = if (i == fullBytes && remainder > 0) {
-            val mask = (0xFF shl (8 - remainder)) and 0xFF
-            (result[i].toInt() and mask).toByte()
-        } else {
-            0
-        }
+        result[i] =
+            if (i == fullBytes && remainder > 0) {
+                val mask = (0xFF shl (8 - remainder)) and 0xFF
+                (result[i].toInt() and mask).toByte()
+            } else {
+                0
+            }
     }
     return result
 }

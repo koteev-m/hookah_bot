@@ -2,6 +2,8 @@ package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -10,14 +12,12 @@ import java.sql.Timestamp
 import java.time.Instant
 import java.util.Locale
 import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class PlatformVenueRepository(private val dataSource: DataSource?) {
     suspend fun createVenue(
         name: String,
         city: String?,
-        address: String?
+        address: String?,
     ): PlatformVenueDetail {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -37,8 +37,9 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val query = StringBuilder(
-                        """
+                    val query =
+                        StringBuilder(
+                            """
                             SELECT v.id,
                                    v.name,
                                    v.status,
@@ -54,8 +55,8 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                                    vs.paid_start
                             FROM venues v
                             LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
-                        """.trimIndent()
-                    )
+                            """.trimIndent(),
+                        )
                     val conditions = mutableListOf<String>()
                     val params = mutableListOf<Any>()
 
@@ -133,17 +134,17 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT vm.user_id,
-                                   vm.role,
-                                   u.username,
-                                   u.first_name,
-                                   u.last_name
-                            FROM venue_members vm
-                            LEFT JOIN users u ON u.telegram_user_id = vm.user_id
-                            WHERE vm.venue_id = ?
-                              AND UPPER(vm.role) IN ('OWNER','ADMIN')
-                            ORDER BY vm.created_at, vm.user_id
-                        """.trimIndent()
+                        SELECT vm.user_id,
+                               vm.role,
+                               u.username,
+                               u.first_name,
+                               u.last_name
+                        FROM venue_members vm
+                        LEFT JOIN users u ON u.telegram_user_id = vm.user_id
+                        WHERE vm.venue_id = ?
+                          AND UPPER(vm.role) IN ('OWNER','ADMIN')
+                        ORDER BY vm.created_at, vm.user_id
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.executeQuery().use { rs ->
@@ -155,8 +156,8 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                                         role = rs.getString("role"),
                                         username = rs.getString("username"),
                                         firstName = rs.getString("first_name"),
-                                        lastName = rs.getString("last_name")
-                                    )
+                                        lastName = rs.getString("last_name"),
+                                    ),
                                 )
                             }
                             owners
@@ -176,10 +177,10 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT status, trial_end, paid_start
-                            FROM venue_subscriptions
-                            WHERE venue_id = ?
-                        """.trimIndent()
+                        SELECT status, trial_end, paid_start
+                        FROM venue_subscriptions
+                        WHERE venue_id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.executeQuery().use { rs ->
@@ -187,7 +188,7 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                                 PlatformSubscriptionSummary(
                                     trialEndDate = rs.getTimestamp("trial_end")?.toInstant(),
                                     paidStartDate = rs.getTimestamp("paid_start")?.toInstant(),
-                                    isPaid = isPaidStatus(rs.getString("status"))
+                                    isPaid = isPaidStatus(rs.getString("status")),
                                 )
                             } else {
                                 null
@@ -203,7 +204,7 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
 
     suspend fun updateStatus(
         venueId: Long,
-        action: VenueStatusAction
+        action: VenueStatusAction,
     ): VenueStatusChangeResult {
         val ds = dataSource ?: return VenueStatusChangeResult.DatabaseError
         return withContext(Dispatchers.IO) {
@@ -212,25 +213,29 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val current = selectVenueStatus(connection, venueId)
-                            ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.NotFound }
+                        val current =
+                            selectVenueStatus(connection, venueId)
+                                ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.NotFound }
                         if (current == VenueStatus.DELETED && action == VenueStatusAction.DELETE) {
                             return@use rollbackAndReturn(connection) { VenueStatusChangeResult.AlreadyDeleted }
                         }
                         if (action == VenueStatusAction.PUBLISH && countOwnerLike(connection, venueId) == 0) {
                             return@use rollbackAndReturn(connection) { VenueStatusChangeResult.MissingOwner }
                         }
-                        val targetStatus = resolveTransition(current, action)
-                            ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.InvalidTransition }
+                        val targetStatus =
+                            resolveTransition(current, action)
+                                ?: return@use rollbackAndReturn(connection) {
+                                    VenueStatusChangeResult.InvalidTransition
+                                }
                         val now = Timestamp.from(Instant.now())
                         connection.prepareStatement(
                             """
-                                UPDATE venues
-                                SET status = ?,
-                                    deleted_at = ?,
-                                    updated_at = CURRENT_TIMESTAMP
-                                WHERE id = ?
-                            """.trimIndent()
+                            UPDATE venues
+                            SET status = ?,
+                                deleted_at = ?,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                            """.trimIndent(),
                         ).use { statement ->
                             statement.setString(1, targetStatus.dbValue)
                             if (action == VenueStatusAction.DELETE) {
@@ -243,8 +248,9 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                                 return@use rollbackAndReturn(connection) { VenueStatusChangeResult.NotFound }
                             }
                         }
-                        val updated = loadVenueDetail(connection, venueId)
-                            ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.DatabaseError }
+                        val updated =
+                            loadVenueDetail(connection, venueId)
+                                ?: return@use rollbackAndReturn(connection) { VenueStatusChangeResult.DatabaseError }
                         connection.commit()
                         VenueStatusChangeResult.Success(updated, current, targetStatus)
                     } catch (e: SQLException) {
@@ -260,13 +266,18 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun insertVenue(connection: Connection, name: String, city: String?, address: String?): Long {
+    private fun insertVenue(
+        connection: Connection,
+        name: String,
+        city: String?,
+        address: String?,
+    ): Long {
         connection.prepareStatement(
             """
-                INSERT INTO venues (name, city, address, status)
-                VALUES (?, ?, ?, ?)
+            INSERT INTO venues (name, city, address, status)
+            VALUES (?, ?, ?, ?)
             """.trimIndent(),
-            Statement.RETURN_GENERATED_KEYS
+            Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             statement.setString(1, name)
             statement.setString(2, city)
@@ -282,19 +293,24 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         throw SQLException("Failed to insert venue")
     }
 
-    private fun loadVenueDetail(connection: Connection, venueId: Long): PlatformVenueDetail? {
+    private fun loadVenueDetail(
+        connection: Connection,
+        venueId: Long,
+    ): PlatformVenueDetail? {
         return connection.prepareStatement(
             """
-                SELECT id, name, city, address, status, created_at, deleted_at
-                FROM venues
-                WHERE id = ?
-            """.trimIndent()
+            SELECT id, name, city, address, status, created_at, deleted_at
+            FROM venues
+            WHERE id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
                 if (rs.next()) {
                     mapVenueDetail(rs)
-                } else null
+                } else {
+                    null
+                }
             }
         }
     }
@@ -308,35 +324,39 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
             address = rs.getString("address"),
             status = status,
             createdAt = rs.getTimestamp("created_at")?.toInstant() ?: Instant.EPOCH,
-            deletedAt = rs.getTimestamp("deleted_at")?.toInstant()
+            deletedAt = rs.getTimestamp("deleted_at")?.toInstant(),
         )
     }
 
     private fun mapVenueSummary(rs: ResultSet): PlatformVenueSummary? {
         val status = VenueStatus.fromDb(rs.getString("status")) ?: return null
-        val subscription = PlatformSubscriptionSummary(
-            trialEndDate = rs.getTimestamp("trial_end")?.toInstant(),
-            paidStartDate = rs.getTimestamp("paid_start")?.toInstant(),
-            isPaid = isPaidStatus(rs.getString("subscription_status"))
-        )
+        val subscription =
+            PlatformSubscriptionSummary(
+                trialEndDate = rs.getTimestamp("trial_end")?.toInstant(),
+                paidStartDate = rs.getTimestamp("paid_start")?.toInstant(),
+                isPaid = isPaidStatus(rs.getString("subscription_status")),
+            )
         return PlatformVenueSummary(
             id = rs.getLong("id"),
             name = rs.getString("name"),
             status = status,
             createdAt = rs.getTimestamp("created_at")?.toInstant() ?: Instant.EPOCH,
             ownersCount = rs.getInt("owners_count"),
-            subscriptionSummary = subscription
+            subscriptionSummary = subscription,
         )
     }
 
-    private fun selectVenueStatus(connection: Connection, venueId: Long): VenueStatus? {
+    private fun selectVenueStatus(
+        connection: Connection,
+        venueId: Long,
+    ): VenueStatus? {
         return connection.prepareStatement(
             """
-                SELECT status
-                FROM venues
-                WHERE id = ?
-                FOR UPDATE
-            """.trimIndent()
+            SELECT status
+            FROM venues
+            WHERE id = ?
+            FOR UPDATE
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
@@ -345,13 +365,16 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun countOwnerLike(connection: Connection, venueId: Long): Int {
+    private fun countOwnerLike(
+        connection: Connection,
+        venueId: Long,
+    ): Int {
         return connection.prepareStatement(
             """
-                SELECT COUNT(*)
-                FROM venue_members
-                WHERE venue_id = ? AND UPPER(role) IN ('OWNER','ADMIN')
-            """.trimIndent()
+            SELECT COUNT(*)
+            FROM venue_members
+            WHERE venue_id = ? AND UPPER(role) IN ('OWNER','ADMIN')
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
@@ -360,19 +383,32 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun resolveTransition(current: VenueStatus, action: VenueStatusAction): VenueStatus? {
+    private fun resolveTransition(
+        current: VenueStatus,
+        action: VenueStatusAction,
+    ): VenueStatus? {
         return when (action) {
-            VenueStatusAction.PUBLISH -> when (current) {
-                VenueStatus.DRAFT, VenueStatus.HIDDEN, VenueStatus.PAUSED, VenueStatus.SUSPENDED -> VenueStatus.PUBLISHED
-                else -> null
-            }
+            VenueStatusAction.PUBLISH ->
+                when (current) {
+                    VenueStatus.DRAFT,
+                    VenueStatus.HIDDEN,
+                    VenueStatus.PAUSED,
+                    VenueStatus.SUSPENDED,
+                    -> VenueStatus.PUBLISHED
+                    else -> null
+                }
             VenueStatusAction.HIDE -> if (current == VenueStatus.PUBLISHED) VenueStatus.HIDDEN else null
             VenueStatusAction.PAUSE -> if (current == VenueStatus.PUBLISHED) VenueStatus.PAUSED else null
             VenueStatusAction.SUSPEND -> if (current != VenueStatus.DELETED) VenueStatus.SUSPENDED else null
-            VenueStatusAction.ARCHIVE -> when (current) {
-                VenueStatus.HIDDEN, VenueStatus.PAUSED, VenueStatus.SUSPENDED, VenueStatus.DRAFT -> VenueStatus.ARCHIVED
-                else -> null
-            }
+            VenueStatusAction.ARCHIVE ->
+                when (current) {
+                    VenueStatus.HIDDEN,
+                    VenueStatus.PAUSED,
+                    VenueStatus.SUSPENDED,
+                    VenueStatus.DRAFT,
+                    -> VenueStatus.ARCHIVED
+                    else -> null
+                }
             VenueStatusAction.DELETE -> if (current != VenueStatus.DELETED) VenueStatus.DELETED else null
         }
     }
@@ -385,7 +421,10 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         runCatching { connection.rollback() }
     }
 
-    private fun <T> rollbackAndReturn(connection: Connection, block: () -> T): T {
+    private fun <T> rollbackAndReturn(
+        connection: Connection,
+        block: () -> T,
+    ): T {
         runCatching { connection.rollback() }
         return block()
     }
@@ -396,7 +435,7 @@ data class PlatformVenueFilter(
     val subscriptionFilter: SubscriptionFilter?,
     val query: String?,
     val limit: Int,
-    val offset: Int
+    val offset: Int,
 )
 
 data class PlatformVenueSummary(
@@ -405,7 +444,7 @@ data class PlatformVenueSummary(
     val status: VenueStatus,
     val createdAt: Instant,
     val ownersCount: Int,
-    val subscriptionSummary: PlatformSubscriptionSummary
+    val subscriptionSummary: PlatformSubscriptionSummary,
 )
 
 data class PlatformVenueDetail(
@@ -415,7 +454,7 @@ data class PlatformVenueDetail(
     val address: String?,
     val status: VenueStatus,
     val createdAt: Instant,
-    val deletedAt: Instant?
+    val deletedAt: Instant?,
 )
 
 data class PlatformVenueOwner(
@@ -423,19 +462,19 @@ data class PlatformVenueOwner(
     val role: String,
     val username: String?,
     val firstName: String?,
-    val lastName: String?
+    val lastName: String?,
 )
 
 data class PlatformSubscriptionSummary(
     val trialEndDate: Instant?,
     val paidStartDate: Instant?,
-    val isPaid: Boolean?
+    val isPaid: Boolean?,
 )
 
 enum class SubscriptionFilter {
     TRIAL_ACTIVE,
     PAID,
-    NONE
+    NONE,
 }
 
 enum class VenueStatusAction(val wire: String) {
@@ -444,7 +483,8 @@ enum class VenueStatusAction(val wire: String) {
     PAUSE("pause"),
     SUSPEND("suspend"),
     ARCHIVE("archive"),
-    DELETE("delete");
+    DELETE("delete"),
+    ;
 
     companion object {
         fun fromWire(value: String?): VenueStatusAction? {
@@ -458,12 +498,16 @@ sealed interface VenueStatusChangeResult {
     data class Success(
         val venue: PlatformVenueDetail,
         val fromStatus: VenueStatus,
-        val toStatus: VenueStatus
+        val toStatus: VenueStatus,
     ) : VenueStatusChangeResult
 
     data object NotFound : VenueStatusChangeResult
+
     data object InvalidTransition : VenueStatusChangeResult
+
     data object MissingOwner : VenueStatusChangeResult
+
     data object AlreadyDeleted : VenueStatusChangeResult
+
     data object DatabaseError : VenueStatusChangeResult
 }

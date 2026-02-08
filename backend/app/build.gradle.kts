@@ -52,7 +52,7 @@ dependencies {
 
 tasks.withType<KotlinCompile>().configureEach {
     compilerOptions.freeCompilerArgs.addAll(
-        listOf("-Xjsr305=strict")
+        listOf("-Xjsr305=strict"),
     )
 }
 

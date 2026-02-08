@@ -3,14 +3,14 @@ package com.hookah.platform.backend.miniapp.venue
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
-import java.sql.SQLException
-import java.sql.Types
-import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
+import java.sql.SQLException
+import java.sql.Types
+import javax.sql.DataSource
 
 class AuditLogRepository(private val dataSource: DataSource?, private val json: Json = Json) {
     private val logger = LoggerFactory.getLogger(AuditLogRepository::class.java)
@@ -20,7 +20,7 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
         action: String,
         entityType: String,
         entityId: Long?,
-        payloadJson: String
+        payloadJson: String,
     ) {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val payloadSize = payloadJson.length
@@ -29,9 +29,9 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            INSERT INTO audit_log (actor_user_id, action, entity_type, entity_id, payload_json)
-                            VALUES (?, ?, ?, ?, ?)
-                        """.trimIndent()
+                        INSERT INTO audit_log (actor_user_id, action, entity_type, entity_id, payload_json)
+                        VALUES (?, ?, ?, ?, ?)
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, actorUserId)
                         statement.setString(2, action)
@@ -53,10 +53,11 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
                     entityType,
                     entityId,
                     payloadSize,
-                    sanitizeTelegramForLog(e.message)
+                    sanitizeTelegramForLog(e.message),
                 )
                 logger.debugTelegramException(e) {
-                    "appendAuditLog exception actorUserId=$actorUserId action=$action entityType=$entityType entityId=$entityId"
+                    "appendAuditLog exception actorUserId=$actorUserId action=$action " +
+                        "entityType=$entityType entityId=$entityId"
                 }
                 throw DatabaseUnavailableException()
             }
@@ -68,7 +69,7 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
         action: String,
         entityType: String,
         entityId: Long?,
-        payload: JsonObject
+        payload: JsonObject,
     ) {
         val payloadJson = json.encodeToString(JsonObject.serializer(), payload)
         append(actorUserId, action, entityType, entityId, payloadJson)

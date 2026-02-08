@@ -11,11 +11,12 @@ class UserRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 if (isH2(connection.metaData.databaseProductName)) {
-                    val sql = """
+                    val sql =
+                        """
                         MERGE INTO users (telegram_user_id, username, first_name, last_name, updated_at)
                         KEY (telegram_user_id)
                         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    """.trimIndent()
+                        """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, user.id)
                         statement.setString(2, user.username)
@@ -25,7 +26,8 @@ class UserRepository(private val dataSource: DataSource?) {
                         user.id
                     }
                 } else {
-                    val sql = """
+                    val sql =
+                        """
                         INSERT INTO users (telegram_user_id, username, first_name, last_name, updated_at)
                         VALUES (?, ?, ?, ?, now())
                         ON CONFLICT (telegram_user_id) DO UPDATE SET
@@ -34,7 +36,7 @@ class UserRepository(private val dataSource: DataSource?) {
                             last_name = EXCLUDED.last_name,
                             updated_at = now()
                         RETURNING telegram_user_id
-                    """.trimIndent()
+                        """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, user.id)
                         statement.setString(2, user.username)
@@ -50,5 +52,4 @@ class UserRepository(private val dataSource: DataSource?) {
     }
 }
 
-private fun isH2(databaseProductName: String?): Boolean =
-    databaseProductName?.equals("H2", ignoreCase = true) == true
+private fun isH2(databaseProductName: String?): Boolean = databaseProductName?.equals("H2", ignoreCase = true) == true

@@ -6,34 +6,34 @@ data class TableContext(
     val tableId: Long,
     val tableNumber: Int,
     val tableToken: String,
-    val staffChatId: Long?
+    val staffChatId: Long?,
 )
 
 enum class StaffCallReason {
     COALS,
     BILL,
     COME,
-    OTHER
+    OTHER,
 }
 
 enum class DialogStateType {
     NONE,
     QUICK_ORDER_WAIT_TEXT,
     QUICK_ORDER_WAIT_CONFIRM,
-    STAFF_CALL_WAIT_COMMENT
+    STAFF_CALL_WAIT_COMMENT,
 }
 
 data class DialogState(
     val state: DialogStateType,
-    val payload: Map<String, String> = emptyMap()
+    val payload: Map<String, String> = emptyMap(),
 )
 
 data class ResolvedChatContext(
     val table: TableContext,
-    val userId: Long
+    val userId: Long,
 )
 
 data class ActiveOrderSummary(
     val id: Long,
-    val status: String
+    val status: String,
 )

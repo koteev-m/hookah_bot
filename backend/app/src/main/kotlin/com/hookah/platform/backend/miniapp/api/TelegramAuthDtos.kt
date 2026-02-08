@@ -9,7 +9,7 @@ data class TelegramAuthRequest(val initData: String)
 data class TelegramAuthResponse(
     val token: String,
     val expiresAtEpochSeconds: Long,
-    val user: MiniAppUserDto
+    val user: MiniAppUserDto,
 )
 
 @Serializable
@@ -17,5 +17,5 @@ data class MiniAppUserDto(
     val telegramUserId: Long,
     val username: String? = null,
     val firstName: String? = null,
-    val lastName: String? = null
+    val lastName: String? = null,
 )

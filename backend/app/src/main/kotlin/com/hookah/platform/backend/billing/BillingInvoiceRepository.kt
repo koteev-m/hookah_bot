@@ -1,6 +1,9 @@
 package com.hookah.platform.backend.billing
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -10,9 +13,6 @@ import java.sql.Types
 import java.time.Instant
 import java.time.LocalDate
 import javax.sql.DataSource
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class BillingInvoiceRepository(private val dataSource: DataSource?) {
     suspend fun createInvoice(
@@ -29,7 +29,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         providerRawPayload: String?,
         status: InvoiceStatus,
         paidAt: Instant?,
-        actorUserId: Long?
+        actorUserId: Long?,
     ): BillingInvoice {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -38,28 +38,30 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val insertedId = insertInvoice(
-                            connection = connection,
-                            venueId = venueId,
-                            periodStart = periodStart,
-                            periodEnd = periodEnd,
-                            dueAt = dueAt,
-                            amountMinor = amountMinor,
-                            currency = currency,
-                            description = description,
-                            provider = provider,
-                            providerInvoiceId = providerInvoiceId,
-                            paymentUrl = paymentUrl,
-                            providerRawPayload = providerRawPayload,
-                            status = status,
-                            paidAt = paidAt,
-                            actorUserId = actorUserId
-                        )
-                        val invoice = if (insertedId != null) {
-                            loadInvoiceById(connection, insertedId)
-                        } else {
-                            loadInvoiceByPeriod(connection, venueId, periodStart, periodEnd)
-                        } ?: throw SQLException("Invoice not found after upsert")
+                        val insertedId =
+                            insertInvoice(
+                                connection = connection,
+                                venueId = venueId,
+                                periodStart = periodStart,
+                                periodEnd = periodEnd,
+                                dueAt = dueAt,
+                                amountMinor = amountMinor,
+                                currency = currency,
+                                description = description,
+                                provider = provider,
+                                providerInvoiceId = providerInvoiceId,
+                                paymentUrl = paymentUrl,
+                                providerRawPayload = providerRawPayload,
+                                status = status,
+                                paidAt = paidAt,
+                                actorUserId = actorUserId,
+                            )
+                        val invoice =
+                            if (insertedId != null) {
+                                loadInvoiceById(connection, insertedId)
+                            } else {
+                                loadInvoiceByPeriod(connection, venueId, periodStart, periodEnd)
+                            } ?: throw SQLException("Invoice not found after upsert")
                         connection.commit()
                         invoice
                     } catch (e: CancellationException) {
@@ -85,12 +87,12 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            UPDATE billing_invoices
-                            SET status = ?,
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ?
-                              AND status = ?
-                        """.trimIndent()
+                        UPDATE billing_invoices
+                        SET status = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                          AND status = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, InvoiceStatus.PAST_DUE.dbValue)
                         statement.setLong(2, invoiceId)
@@ -106,21 +108,25 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun markInvoicePaid(invoiceId: Long, paidAt: Instant, actorUserId: Long?): Boolean {
+    suspend fun markInvoicePaid(
+        invoiceId: Long,
+        paidAt: Instant,
+        actorUserId: Long?,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            UPDATE billing_invoices
-                            SET status = ?,
-                                paid_at = ?,
-                                updated_at = CURRENT_TIMESTAMP,
-                                updated_by_user_id = ?
-                            WHERE id = ?
-                              AND status IN (?, ?)
-                        """.trimIndent()
+                        UPDATE billing_invoices
+                        SET status = ?,
+                            paid_at = ?,
+                            updated_at = CURRENT_TIMESTAMP,
+                            updated_by_user_id = ?
+                        WHERE id = ?
+                          AND status IN (?, ?)
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, InvoiceStatus.PAID.dbValue)
                         statement.setTimestamp(2, Timestamp.from(paidAt))
@@ -143,7 +149,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         invoiceId: Long,
         providerInvoiceId: String?,
         paymentUrl: String?,
-        providerRawPayload: String?
+        providerRawPayload: String?,
     ): BillingInvoice {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -151,13 +157,13 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            UPDATE billing_invoices
-                            SET provider_invoice_id = ?,
-                                payment_url = ?,
-                                provider_raw_payload = ?,
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ?
-                        """.trimIndent()
+                        UPDATE billing_invoices
+                        SET provider_invoice_id = ?,
+                            payment_url = ?,
+                            provider_raw_payload = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         setStringOrNull(statement, 1, providerInvoiceId)
                         setStringOrNull(statement, 2, paymentUrl)
@@ -177,7 +183,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
 
     suspend fun findInvoiceByProviderInvoiceId(
         provider: String,
-        providerInvoiceId: String
+        providerInvoiceId: String,
     ): BillingInvoice? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -185,13 +191,13 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT *
-                            FROM billing_invoices
-                            WHERE provider = ?
-                              AND provider_invoice_id = ?
-                            ORDER BY id DESC
-                            LIMIT 1
-                        """.trimIndent()
+                        SELECT *
+                        FROM billing_invoices
+                        WHERE provider = ?
+                          AND provider_invoice_id = ?
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, provider)
                         statement.setString(2, providerInvoiceId)
@@ -218,12 +224,12 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT *
-                            FROM billing_invoices
-                            WHERE status = ?
-                              AND due_at < ?
-                            ORDER BY due_at ASC, id ASC
-                        """.trimIndent()
+                        SELECT *
+                        FROM billing_invoices
+                        WHERE status = ?
+                          AND due_at < ?
+                        ORDER BY due_at ASC, id ASC
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, InvoiceStatus.OPEN.dbValue)
                         statement.setTimestamp(2, Timestamp.from(now))
@@ -242,20 +248,23 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun listOpenInvoicesDueBetween(start: Instant, end: Instant): List<BillingInvoice> {
+    suspend fun listOpenInvoicesDueBetween(
+        start: Instant,
+        end: Instant,
+    ): List<BillingInvoice> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT *
-                            FROM billing_invoices
-                            WHERE status = ?
-                              AND due_at >= ?
-                              AND due_at <= ?
-                            ORDER BY due_at ASC, id ASC
-                        """.trimIndent()
+                        SELECT *
+                        FROM billing_invoices
+                        WHERE status = ?
+                          AND due_at >= ?
+                          AND due_at <= ?
+                        ORDER BY due_at ASC, id ASC
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, InvoiceStatus.OPEN.dbValue)
                         statement.setTimestamp(2, Timestamp.from(start))
@@ -294,23 +303,24 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         venueId: Long,
         status: InvoiceStatus?,
         limit: Int,
-        offset: Int
+        offset: Int,
     ): List<BillingInvoice> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val sql = if (status == null) {
-                        """
+                    val sql =
+                        if (status == null) {
+                            """
                             SELECT *
                             FROM billing_invoices
                             WHERE venue_id = ?
                             ORDER BY period_start DESC, id DESC
                             LIMIT ?
                             OFFSET ?
-                        """.trimIndent()
-                    } else {
-                        """
+                            """.trimIndent()
+                        } else {
+                            """
                             SELECT *
                             FROM billing_invoices
                             WHERE venue_id = ?
@@ -318,8 +328,8 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                             ORDER BY period_start DESC, id DESC
                             LIMIT ?
                             OFFSET ?
-                        """.trimIndent()
-                    }
+                            """.trimIndent()
+                        }
                     connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, venueId)
                         if (status == null) {
@@ -360,11 +370,12 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         providerRawPayload: String?,
         status: InvoiceStatus,
         paidAt: Instant?,
-        actorUserId: Long?
+        actorUserId: Long?,
     ): Long? {
         val isH2 = connection.metaData.databaseProductName.equals("H2", ignoreCase = true)
-        val sql = if (isH2) {
-            """
+        val sql =
+            if (isH2) {
+                """
                 INSERT INTO billing_invoices (
                     venue_id,
                     period_start,
@@ -389,9 +400,9 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                       AND period_start = ?
                       AND period_end = ?
                 )
-            """.trimIndent()
-        } else {
-            """
+                """.trimIndent()
+            } else {
+                """
                 INSERT INTO billing_invoices (
                     venue_id,
                     period_start,
@@ -410,8 +421,8 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (venue_id, period_start, period_end) DO NOTHING
-            """.trimIndent()
-        }
+                """.trimIndent()
+            }
         connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setLong(1, venueId)
             statement.setDate(2, java.sql.Date.valueOf(periodStart))
@@ -442,13 +453,16 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun loadInvoiceById(connection: Connection, invoiceId: Long): BillingInvoice? {
+    private fun loadInvoiceById(
+        connection: Connection,
+        invoiceId: Long,
+    ): BillingInvoice? {
         connection.prepareStatement(
             """
-                SELECT *
-                FROM billing_invoices
-                WHERE id = ?
-            """.trimIndent()
+            SELECT *
+            FROM billing_invoices
+            WHERE id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, invoiceId)
             statement.executeQuery().use { rs ->
@@ -464,16 +478,16 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         connection: Connection,
         venueId: Long,
         periodStart: LocalDate,
-        periodEnd: LocalDate
+        periodEnd: LocalDate,
     ): BillingInvoice? {
         connection.prepareStatement(
             """
-                SELECT *
-                FROM billing_invoices
-                WHERE venue_id = ?
-                  AND period_start = ?
-                  AND period_end = ?
-            """.trimIndent()
+            SELECT *
+            FROM billing_invoices
+            WHERE venue_id = ?
+              AND period_start = ?
+              AND period_end = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setDate(2, java.sql.Date.valueOf(periodStart))
@@ -488,8 +502,9 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
     }
 
     private fun mapInvoice(rs: ResultSet): BillingInvoice {
-        val status = InvoiceStatus.fromDb(rs.getString("status"))
-            ?: throw SQLException("Unknown invoice status")
+        val status =
+            InvoiceStatus.fromDb(rs.getString("status"))
+                ?: throw SQLException("Unknown invoice status")
         return BillingInvoice(
             id = rs.getLong("id"),
             venueId = rs.getLong("venue_id"),
@@ -507,7 +522,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
             createdAt = rs.getTimestamp("created_at").toInstant(),
             updatedAt = rs.getTimestamp("updated_at").toInstant(),
             paidAt = rs.getTimestamp("paid_at")?.toInstant(),
-            updatedByUserId = rs.getLongOrNull("updated_by_user_id")
+            updatedByUserId = rs.getLongOrNull("updated_by_user_id"),
         )
     }
 
@@ -516,7 +531,11 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         return if (wasNull()) null else value
     }
 
-    private fun setStringOrNull(statement: java.sql.PreparedStatement, index: Int, value: String?) {
+    private fun setStringOrNull(
+        statement: java.sql.PreparedStatement,
+        index: Int,
+        value: String?,
+    ) {
         if (value == null) {
             statement.setNull(index, Types.VARCHAR)
         } else {
@@ -524,7 +543,11 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun setLongOrNull(statement: java.sql.PreparedStatement, index: Int, value: Long?) {
+    private fun setLongOrNull(
+        statement: java.sql.PreparedStatement,
+        index: Int,
+        value: Long?,
+    ) {
         if (value == null) {
             statement.setNull(index, Types.BIGINT)
         } else {
@@ -532,7 +555,11 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun setTimestampOrNull(statement: java.sql.PreparedStatement, index: Int, value: Instant?) {
+    private fun setTimestampOrNull(
+        statement: java.sql.PreparedStatement,
+        index: Int,
+        value: Instant?,
+    ) {
         if (value == null) {
             statement.setNull(index, Types.TIMESTAMP)
         } else {
