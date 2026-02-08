@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.sql.SQLException
 import java.sql.Timestamp
+import java.time.Duration
 import java.time.Instant
 import javax.sql.DataSource
 
@@ -65,6 +66,7 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
     suspend fun claimBatch(
         limit: Int,
         now: Instant,
+        visibilityTimeout: Duration,
     ): List<TelegramInboundUpdate> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -76,7 +78,7 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
                             """
                             SELECT id, update_id, payload_json, attempts
                             FROM telegram_inbound_updates
-                            WHERE status IN (?, ?)
+                            WHERE status IN (?, ?, ?)
                               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                             ORDER BY received_at
                             LIMIT ?
@@ -86,8 +88,9 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
                         connection.prepareStatement(selectSql).use { statement ->
                             statement.setString(1, TelegramInboundUpdateStatus.PENDING.name)
                             statement.setString(2, TelegramInboundUpdateStatus.RETRY.name)
-                            statement.setTimestamp(3, Timestamp.from(now))
-                            statement.setInt(4, limit)
+                            statement.setString(3, TelegramInboundUpdateStatus.PROCESSING.name)
+                            statement.setTimestamp(4, Timestamp.from(now))
+                            statement.setInt(5, limit)
                             statement.executeQuery().use { resultSet ->
                                 while (resultSet.next()) {
                                     val id = resultSet.getLong("id")
@@ -109,14 +112,16 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
                         val updateSql =
                             """
                             UPDATE telegram_inbound_updates
-                            SET status = ?, attempts = ?, last_error = NULL, next_attempt_at = NULL
+                            SET status = ?, attempts = ?, last_error = NULL, next_attempt_at = ?
                             WHERE id = ?
                             """.trimIndent()
+                        val lockUntil = now.plus(visibilityTimeout)
                         connection.prepareStatement(updateSql).use { statement ->
                             for (update in updates) {
                                 statement.setString(1, TelegramInboundUpdateStatus.PROCESSING.name)
                                 statement.setInt(2, update.attempts)
-                                statement.setLong(3, update.id)
+                                statement.setTimestamp(3, Timestamp.from(lockUntil))
+                                statement.setLong(4, update.id)
                                 statement.addBatch()
                             }
                             if (updates.isNotEmpty()) {

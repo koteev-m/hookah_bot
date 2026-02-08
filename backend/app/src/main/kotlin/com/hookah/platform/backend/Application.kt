@@ -132,6 +132,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
@@ -297,6 +298,15 @@ internal fun Application.module(overrides: ModuleOverrides) {
     }
 
     val telegramConfig = TelegramBotConfig.from(appConfig, appEnv)
+    if (
+        (appEnv == "prod" || appEnv == "production") &&
+        telegramConfig.enabled &&
+        telegramConfig.mode == TelegramBotConfig.Mode.WEBHOOK &&
+        dataSource == null
+    ) {
+        logger.error("Webhook mode requires database configuration in production")
+        throw IllegalStateException("Webhook mode requires database configuration in production")
+    }
     val staffInviteConfig = StaffInviteConfig.from(appConfig, appEnv)
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
@@ -751,16 +761,24 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         val update = telegramJson.decodeFromString(TelegramUpdate.serializer(), payload)
                         telegramInboundUpdateQueueRepository.enqueue(update.updateId, payload)
                         call.respond(HttpStatusCode.OK)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: SerializationException) {
+                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
+                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                        call.respond(HttpStatusCode.BadRequest)
+                    } catch (e: ContentTransformationException) {
+                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
+                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                        call.respond(HttpStatusCode.BadRequest)
+                    } catch (e: DatabaseUnavailableException) {
+                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
+                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                        call.respond(HttpStatusCode.ServiceUnavailable)
                     } catch (e: Exception) {
                         logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
                         logger.debugTelegramException(e) { "Webhook enqueue exception" }
-                        val status =
-                            if (e is DatabaseUnavailableException) {
-                                HttpStatusCode.ServiceUnavailable
-                            } else {
-                                HttpStatusCode.BadRequest
-                            }
-                        call.respond(status)
+                        call.respond(HttpStatusCode.InternalServerError)
                     }
                 }
             }

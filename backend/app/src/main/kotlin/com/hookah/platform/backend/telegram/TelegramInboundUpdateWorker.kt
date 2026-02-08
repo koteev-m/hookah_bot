@@ -24,6 +24,7 @@ class TelegramInboundUpdateWorker(
     private val pollInterval: Duration = Duration.ofMillis(500),
     private val batchSize: Int = 10,
     private val maxAttempts: Int = 5,
+    private val visibilityTimeout: Duration = Duration.ofMinutes(2),
 ) {
     private val logger = LoggerFactory.getLogger(TelegramInboundUpdateWorker::class.java)
 
@@ -51,7 +52,7 @@ class TelegramInboundUpdateWorker(
     }
 
     suspend fun processOnce(now: Instant = Instant.now()): Boolean {
-        val batch = repository.claimBatch(batchSize, now)
+        val batch = repository.claimBatch(batchSize, now, visibilityTimeout)
         if (batch.isEmpty()) {
             return false
         }
