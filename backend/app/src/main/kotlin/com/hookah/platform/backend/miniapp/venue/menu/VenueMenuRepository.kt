@@ -1,19 +1,19 @@
 package com.hookah.platform.backend.miniapp.venue.menu
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
 import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 data class VenueMenuCategory(
     val id: Long,
     val venueId: Long,
     val name: String,
     val sortOrder: Int,
-    val items: List<VenueMenuItem>
+    val items: List<VenueMenuItem>,
 )
 
 data class VenueMenuItem(
@@ -25,7 +25,7 @@ data class VenueMenuItem(
     val currency: String,
     val isAvailable: Boolean,
     val sortOrder: Int,
-    val options: List<VenueMenuOption>
+    val options: List<VenueMenuOption>,
 )
 
 data class VenueMenuOption(
@@ -35,7 +35,7 @@ data class VenueMenuOption(
     val name: String,
     val priceDeltaMinor: Long,
     val isAvailable: Boolean,
-    val sortOrder: Int
+    val sortOrder: Int,
 )
 
 class VenueMenuRepository(private val dataSource: DataSource?) {
@@ -44,68 +44,72 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val categories = connection.prepareStatement(
-                        """
+                    val categories =
+                        connection.prepareStatement(
+                            """
                             SELECT id, venue_id, name, sort_order
                             FROM menu_categories
                             WHERE venue_id = ?
                             ORDER BY sort_order, id
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.executeQuery().use { rs ->
-                            val result = mutableListOf<VenueMenuCategory>()
-                            while (rs.next()) {
-                                result.add(mapCategory(rs))
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.executeQuery().use { rs ->
+                                val result = mutableListOf<VenueMenuCategory>()
+                                while (rs.next()) {
+                                    result.add(mapCategory(rs))
+                                }
+                                result
                             }
-                            result
                         }
-                    }
 
-                    val itemsByCategory = connection.prepareStatement(
-                        """
+                    val itemsByCategory =
+                        connection.prepareStatement(
+                            """
                             SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order
                             FROM menu_items
                             WHERE venue_id = ?
                             ORDER BY sort_order, id
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.executeQuery().use { rs ->
-                            val result = mutableMapOf<Long, MutableList<VenueMenuItem>>()
-                            while (rs.next()) {
-                                val categoryId = rs.getLong("category_id")
-                                val items = result.getOrPut(categoryId) { mutableListOf() }
-                                items.add(mapItem(rs))
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.executeQuery().use { rs ->
+                                val result = mutableMapOf<Long, MutableList<VenueMenuItem>>()
+                                while (rs.next()) {
+                                    val categoryId = rs.getLong("category_id")
+                                    val items = result.getOrPut(categoryId) { mutableListOf() }
+                                    items.add(mapItem(rs))
+                                }
+                                result
                             }
-                            result
                         }
-                    }
 
-                    val optionsByItem = connection.prepareStatement(
-                        """
+                    val optionsByItem =
+                        connection.prepareStatement(
+                            """
                             SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
                             FROM menu_item_options
                             WHERE venue_id = ?
                             ORDER BY sort_order, id
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.executeQuery().use { rs ->
-                            val result = mutableMapOf<Long, MutableList<VenueMenuOption>>()
-                            while (rs.next()) {
-                                val itemId = rs.getLong("item_id")
-                                val options = result.getOrPut(itemId) { mutableListOf() }
-                                options.add(mapOption(rs))
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.executeQuery().use { rs ->
+                                val result = mutableMapOf<Long, MutableList<VenueMenuOption>>()
+                                while (rs.next()) {
+                                    val itemId = rs.getLong("item_id")
+                                    val options = result.getOrPut(itemId) { mutableListOf() }
+                                    options.add(mapOption(rs))
+                                }
+                                result
                             }
-                            result
                         }
-                    }
 
                     categories.map { category ->
-                        val items = itemsByCategory[category.id].orEmpty().map { item ->
-                            item.copy(options = optionsByItem[item.id].orEmpty())
-                        }
+                        val items =
+                            itemsByCategory[category.id].orEmpty().map { item ->
+                                item.copy(options = optionsByItem[item.id].orEmpty())
+                            }
                         category.copy(items = items)
                     }
                 }
@@ -115,33 +119,37 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun createCategory(venueId: Long, name: String): VenueMenuCategory {
+    suspend fun createCategory(
+        venueId: Long,
+        name: String,
+    ): VenueMenuCategory {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     val sortOrder = nextCategorySortOrder(connection, venueId)
-                    val categoryId = connection.prepareStatement(
-                        """
+                    val categoryId =
+                        connection.prepareStatement(
+                            """
                             INSERT INTO menu_categories (venue_id, name, sort_order, updated_at)
                             VALUES (?, ?, ?, now())
-                        """.trimIndent(),
-                        java.sql.Statement.RETURN_GENERATED_KEYS
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setString(2, name)
-                        statement.setInt(3, sortOrder)
-                        statement.executeUpdate()
-                        statement.generatedKeys.use { rs ->
-                            if (rs.next()) rs.getLong(1) else error("Failed to insert category")
+                            """.trimIndent(),
+                            java.sql.Statement.RETURN_GENERATED_KEYS,
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setString(2, name)
+                            statement.setInt(3, sortOrder)
+                            statement.executeUpdate()
+                            statement.generatedKeys.use { rs ->
+                                if (rs.next()) rs.getLong(1) else error("Failed to insert category")
+                            }
                         }
-                    }
                     VenueMenuCategory(
                         id = categoryId,
                         venueId = venueId,
                         name = name,
                         sortOrder = sortOrder,
-                        items = emptyList()
+                        items = emptyList(),
                     )
                 }
             } catch (e: SQLException) {
@@ -150,23 +158,28 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun updateCategory(venueId: Long, categoryId: Long, name: String): VenueMenuCategory? {
+    suspend fun updateCategory(
+        venueId: Long,
+        categoryId: Long,
+        name: String,
+    ): VenueMenuCategory? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated = connection.prepareStatement(
-                        """
+                    val updated =
+                        connection.prepareStatement(
+                            """
                             UPDATE menu_categories
                             SET name = ?, updated_at = now()
                             WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setString(1, name)
-                        statement.setLong(2, categoryId)
-                        statement.setLong(3, venueId)
-                        statement.executeUpdate()
-                    }
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setString(1, name)
+                            statement.setLong(2, categoryId)
+                            statement.setLong(3, venueId)
+                            statement.executeUpdate()
+                        }
                     if (updated == 0) {
                         return@use null
                     }
@@ -178,36 +191,41 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun deleteCategory(venueId: Long, categoryId: Long): Boolean {
+    suspend fun deleteCategory(
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val hasItems = connection.prepareStatement(
-                        """
+                    val hasItems =
+                        connection.prepareStatement(
+                            """
                             SELECT 1
                             FROM menu_items
                             WHERE venue_id = ? AND category_id = ?
                             LIMIT 1
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, categoryId)
-                        statement.executeQuery().use { rs -> rs.next() }
-                    }
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, categoryId)
+                            statement.executeQuery().use { rs -> rs.next() }
+                        }
                     if (hasItems) {
                         return@use false
                     }
-                    val deleted = connection.prepareStatement(
-                        """
+                    val deleted =
+                        connection.prepareStatement(
+                            """
                             DELETE FROM menu_categories
                             WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, categoryId)
-                        statement.setLong(2, venueId)
-                        statement.executeUpdate()
-                    }
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, categoryId)
+                            statement.setLong(2, venueId)
+                            statement.executeUpdate()
+                        }
                     deleted > 0
                 }
             } catch (e: SQLException) {
@@ -222,7 +240,7 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         name: String,
         priceMinor: Long,
         currency: String,
-        isAvailable: Boolean
+        isAvailable: Boolean,
     ): VenueMenuItem? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -232,27 +250,28 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                         return@use null
                     }
                     val sortOrder = nextItemSortOrder(connection, venueId, categoryId)
-                    val itemId = connection.prepareStatement(
-                        """
+                    val itemId =
+                        connection.prepareStatement(
+                            """
                             INSERT INTO menu_items (
                                 venue_id, category_id, name, price_minor, currency, is_available, sort_order, updated_at
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?, now())
-                        """.trimIndent(),
-                        java.sql.Statement.RETURN_GENERATED_KEYS
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, categoryId)
-                        statement.setString(3, name)
-                        statement.setLong(4, priceMinor)
-                        statement.setString(5, currency)
-                        statement.setBoolean(6, isAvailable)
-                        statement.setInt(7, sortOrder)
-                        statement.executeUpdate()
-                        statement.generatedKeys.use { rs ->
-                            if (rs.next()) rs.getLong(1) else error("Failed to insert item")
+                            """.trimIndent(),
+                            java.sql.Statement.RETURN_GENERATED_KEYS,
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, categoryId)
+                            statement.setString(3, name)
+                            statement.setLong(4, priceMinor)
+                            statement.setString(5, currency)
+                            statement.setBoolean(6, isAvailable)
+                            statement.setInt(7, sortOrder)
+                            statement.executeUpdate()
+                            statement.generatedKeys.use { rs ->
+                                if (rs.next()) rs.getLong(1) else error("Failed to insert item")
+                            }
                         }
-                    }
                     VenueMenuItem(
                         id = itemId,
                         venueId = venueId,
@@ -262,7 +281,7 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                         currency = currency,
                         isAvailable = isAvailable,
                         sortOrder = sortOrder,
-                        options = emptyList()
+                        options = emptyList(),
                     )
                 }
             } catch (e: SQLException) {
@@ -278,7 +297,7 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         name: String?,
         priceMinor: Long?,
         currency: String?,
-        isAvailable: Boolean?
+        isAvailable: Boolean?,
     ): VenueMenuItem? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -291,10 +310,10 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                     }
                     connection.prepareStatement(
                         """
-                            UPDATE menu_items
-                            SET category_id = ?, name = ?, price_minor = ?, currency = ?, is_available = ?, updated_at = now()
-                            WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
+                        UPDATE menu_items
+                        SET category_id = ?, name = ?, price_minor = ?, currency = ?, is_available = ?, updated_at = now()
+                        WHERE id = ? AND venue_id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, newCategoryId)
                         statement.setString(2, name ?: existing.name)
@@ -313,21 +332,25 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun deleteItem(venueId: Long, itemId: Long): Boolean {
+    suspend fun deleteItem(
+        venueId: Long,
+        itemId: Long,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val deleted = connection.prepareStatement(
-                        """
+                    val deleted =
+                        connection.prepareStatement(
+                            """
                             DELETE FROM menu_items
                             WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, itemId)
-                        statement.setLong(2, venueId)
-                        statement.executeUpdate()
-                    }
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, itemId)
+                            statement.setLong(2, venueId)
+                            statement.executeUpdate()
+                        }
                     deleted > 0
                 }
             } catch (e: SQLException) {
@@ -336,23 +359,28 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun setItemAvailability(venueId: Long, itemId: Long, isAvailable: Boolean): VenueMenuItem? {
+    suspend fun setItemAvailability(
+        venueId: Long,
+        itemId: Long,
+        isAvailable: Boolean,
+    ): VenueMenuItem? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated = connection.prepareStatement(
-                        """
+                    val updated =
+                        connection.prepareStatement(
+                            """
                             UPDATE menu_items
                             SET is_available = ?, updated_at = now()
                             WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setBoolean(1, isAvailable)
-                        statement.setLong(2, itemId)
-                        statement.setLong(3, venueId)
-                        statement.executeUpdate()
-                    }
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setBoolean(1, isAvailable)
+                            statement.setLong(2, itemId)
+                            statement.setLong(3, venueId)
+                            statement.executeUpdate()
+                        }
                     if (updated == 0) {
                         return@use null
                     }
@@ -364,7 +392,10 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun reorderCategories(venueId: Long, categoryIds: List<Long>): Boolean {
+    suspend fun reorderCategories(
+        venueId: Long,
+        categoryIds: List<Long>,
+    ): Boolean {
         if (categoryIds.isEmpty()) {
             return false
         }
@@ -395,7 +426,11 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun reorderItems(venueId: Long, categoryId: Long, itemIds: List<Long>): Boolean {
+    suspend fun reorderItems(
+        venueId: Long,
+        categoryId: Long,
+        itemIds: List<Long>,
+    ): Boolean {
         if (itemIds.isEmpty()) {
             return false
         }
@@ -430,7 +465,10 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun categoryExists(venueId: Long, categoryId: Long): Boolean {
+    suspend fun categoryExists(
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -443,18 +481,21 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun categoryHasItems(venueId: Long, categoryId: Long): Boolean {
+    suspend fun categoryHasItems(
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT 1
-                            FROM menu_items
-                            WHERE venue_id = ? AND category_id = ?
-                            LIMIT 1
-                        """.trimIndent()
+                        SELECT 1
+                        FROM menu_items
+                        WHERE venue_id = ? AND category_id = ?
+                        LIMIT 1
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
                         statement.setLong(2, categoryId)
@@ -467,7 +508,10 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun itemExists(venueId: Long, itemId: Long): Boolean {
+    suspend fun itemExists(
+        venueId: Long,
+        itemId: Long,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -480,17 +524,20 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun optionExists(venueId: Long, optionId: Long): Boolean {
+    suspend fun optionExists(
+        venueId: Long,
+        optionId: Long,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT 1
-                            FROM menu_item_options
-                            WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
+                        SELECT 1
+                        FROM menu_item_options
+                        WHERE id = ? AND venue_id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, optionId)
                         statement.setLong(2, venueId)
@@ -508,7 +555,7 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         itemId: Long,
         name: String,
         priceDeltaMinor: Long,
-        isAvailable: Boolean
+        isAvailable: Boolean,
     ): VenueMenuOption? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -518,26 +565,27 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                         return@use null
                     }
                     val sortOrder = nextOptionSortOrder(connection, venueId, itemId)
-                    val optionId = connection.prepareStatement(
-                        """
+                    val optionId =
+                        connection.prepareStatement(
+                            """
                             INSERT INTO menu_item_options (
                                 venue_id, item_id, name, price_delta_minor, is_available, sort_order, updated_at
                             )
                             VALUES (?, ?, ?, ?, ?, ?, now())
-                        """.trimIndent(),
-                        java.sql.Statement.RETURN_GENERATED_KEYS
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, itemId)
-                        statement.setString(3, name)
-                        statement.setLong(4, priceDeltaMinor)
-                        statement.setBoolean(5, isAvailable)
-                        statement.setInt(6, sortOrder)
-                        statement.executeUpdate()
-                        statement.generatedKeys.use { rs ->
-                            if (rs.next()) rs.getLong(1) else error("Failed to insert option")
+                            """.trimIndent(),
+                            java.sql.Statement.RETURN_GENERATED_KEYS,
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, itemId)
+                            statement.setString(3, name)
+                            statement.setLong(4, priceDeltaMinor)
+                            statement.setBoolean(5, isAvailable)
+                            statement.setInt(6, sortOrder)
+                            statement.executeUpdate()
+                            statement.generatedKeys.use { rs ->
+                                if (rs.next()) rs.getLong(1) else error("Failed to insert option")
+                            }
                         }
-                    }
                     VenueMenuOption(
                         id = optionId,
                         venueId = venueId,
@@ -545,7 +593,7 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                         name = name,
                         priceDeltaMinor = priceDeltaMinor,
                         isAvailable = isAvailable,
-                        sortOrder = sortOrder
+                        sortOrder = sortOrder,
                     )
                 }
             } catch (e: SQLException) {
@@ -559,7 +607,7 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         optionId: Long,
         name: String?,
         priceDeltaMinor: Long?,
-        isAvailable: Boolean?
+        isAvailable: Boolean?,
     ): VenueMenuOption? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -568,10 +616,10 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                     val existing = loadOption(connection, optionId, venueId) ?: return@use null
                     connection.prepareStatement(
                         """
-                            UPDATE menu_item_options
-                            SET name = ?, price_delta_minor = ?, is_available = ?, updated_at = now()
-                            WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
+                        UPDATE menu_item_options
+                        SET name = ?, price_delta_minor = ?, is_available = ?, updated_at = now()
+                        WHERE id = ? AND venue_id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, name ?: existing.name)
                         statement.setLong(2, priceDeltaMinor ?: existing.priceDeltaMinor)
@@ -588,23 +636,28 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun setOptionAvailability(venueId: Long, optionId: Long, isAvailable: Boolean): VenueMenuOption? {
+    suspend fun setOptionAvailability(
+        venueId: Long,
+        optionId: Long,
+        isAvailable: Boolean,
+    ): VenueMenuOption? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated = connection.prepareStatement(
-                        """
+                    val updated =
+                        connection.prepareStatement(
+                            """
                             UPDATE menu_item_options
                             SET is_available = ?, updated_at = now()
                             WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setBoolean(1, isAvailable)
-                        statement.setLong(2, optionId)
-                        statement.setLong(3, venueId)
-                        statement.executeUpdate()
-                    }
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setBoolean(1, isAvailable)
+                            statement.setLong(2, optionId)
+                            statement.setLong(3, venueId)
+                            statement.executeUpdate()
+                        }
                     if (updated == 0) {
                         return@use null
                     }
@@ -616,21 +669,25 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun deleteOption(venueId: Long, optionId: Long): Boolean {
+    suspend fun deleteOption(
+        venueId: Long,
+        optionId: Long,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val deleted = connection.prepareStatement(
-                        """
+                    val deleted =
+                        connection.prepareStatement(
+                            """
                             DELETE FROM menu_item_options
                             WHERE id = ? AND venue_id = ?
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, optionId)
-                        statement.setLong(2, venueId)
-                        statement.executeUpdate()
-                    }
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, optionId)
+                            statement.setLong(2, venueId)
+                            statement.executeUpdate()
+                        }
                     deleted > 0
                 }
             } catch (e: SQLException) {
@@ -639,43 +696,50 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun mapCategory(rs: ResultSet): VenueMenuCategory = VenueMenuCategory(
-        id = rs.getLong("id"),
-        venueId = rs.getLong("venue_id"),
-        name = rs.getString("name"),
-        sortOrder = rs.getInt("sort_order"),
-        items = emptyList()
-    )
+    private fun mapCategory(rs: ResultSet): VenueMenuCategory =
+        VenueMenuCategory(
+            id = rs.getLong("id"),
+            venueId = rs.getLong("venue_id"),
+            name = rs.getString("name"),
+            sortOrder = rs.getInt("sort_order"),
+            items = emptyList(),
+        )
 
-    private fun mapItem(rs: ResultSet): VenueMenuItem = VenueMenuItem(
-        id = rs.getLong("id"),
-        venueId = rs.getLong("venue_id"),
-        categoryId = rs.getLong("category_id"),
-        name = rs.getString("name"),
-        priceMinor = rs.getLong("price_minor"),
-        currency = rs.getString("currency"),
-        isAvailable = rs.getBoolean("is_available"),
-        sortOrder = rs.getInt("sort_order"),
-        options = emptyList()
-    )
+    private fun mapItem(rs: ResultSet): VenueMenuItem =
+        VenueMenuItem(
+            id = rs.getLong("id"),
+            venueId = rs.getLong("venue_id"),
+            categoryId = rs.getLong("category_id"),
+            name = rs.getString("name"),
+            priceMinor = rs.getLong("price_minor"),
+            currency = rs.getString("currency"),
+            isAvailable = rs.getBoolean("is_available"),
+            sortOrder = rs.getInt("sort_order"),
+            options = emptyList(),
+        )
 
-    private fun mapOption(rs: ResultSet): VenueMenuOption = VenueMenuOption(
-        id = rs.getLong("id"),
-        venueId = rs.getLong("venue_id"),
-        itemId = rs.getLong("item_id"),
-        name = rs.getString("name"),
-        priceDeltaMinor = rs.getLong("price_delta_minor"),
-        isAvailable = rs.getBoolean("is_available"),
-        sortOrder = rs.getInt("sort_order")
-    )
+    private fun mapOption(rs: ResultSet): VenueMenuOption =
+        VenueMenuOption(
+            id = rs.getLong("id"),
+            venueId = rs.getLong("venue_id"),
+            itemId = rs.getLong("item_id"),
+            name = rs.getString("name"),
+            priceDeltaMinor = rs.getLong("price_delta_minor"),
+            isAvailable = rs.getBoolean("is_available"),
+            sortOrder = rs.getInt("sort_order"),
+        )
 
-    private fun loadCategory(connection: Connection, categoryId: Long, venueId: Long): VenueMenuCategory? {
+    private fun loadCategory(
+        connection: Connection,
+        categoryId: Long,
+        venueId: Long,
+    ): VenueMenuCategory? {
         return connection.prepareStatement(
             """
-                SELECT id, venue_id, name, sort_order
-                FROM menu_categories
-                WHERE id = ? AND venue_id = ?
-            """.trimIndent()
+            SELECT id, venue_id, name, sort_order
+            FROM menu_categories
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, categoryId)
             statement.setLong(2, venueId)
@@ -685,13 +749,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun loadItem(connection: Connection, itemId: Long, venueId: Long): VenueMenuItem? {
+    private fun loadItem(
+        connection: Connection,
+        itemId: Long,
+        venueId: Long,
+    ): VenueMenuItem? {
         return connection.prepareStatement(
             """
-                SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order
-                FROM menu_items
-                WHERE id = ? AND venue_id = ?
-            """.trimIndent()
+            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order
+            FROM menu_items
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, itemId)
             statement.setLong(2, venueId)
@@ -701,13 +769,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun loadOption(connection: Connection, optionId: Long, venueId: Long): VenueMenuOption? {
+    private fun loadOption(
+        connection: Connection,
+        optionId: Long,
+        venueId: Long,
+    ): VenueMenuOption? {
         return connection.prepareStatement(
             """
-                SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
-                FROM menu_item_options
-                WHERE id = ? AND venue_id = ?
-            """.trimIndent()
+            SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
+            FROM menu_item_options
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, optionId)
             statement.setLong(2, venueId)
@@ -717,13 +789,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun categoryExists(connection: Connection, venueId: Long, categoryId: Long): Boolean {
+    private fun categoryExists(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean {
         return connection.prepareStatement(
             """
-                SELECT 1
-                FROM menu_categories
-                WHERE id = ? AND venue_id = ?
-            """.trimIndent()
+            SELECT 1
+            FROM menu_categories
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, categoryId)
             statement.setLong(2, venueId)
@@ -731,13 +807,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun itemExists(connection: Connection, venueId: Long, itemId: Long): Boolean {
+    private fun itemExists(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): Boolean {
         return connection.prepareStatement(
             """
-                SELECT 1
-                FROM menu_items
-                WHERE id = ? AND venue_id = ?
-            """.trimIndent()
+            SELECT 1
+            FROM menu_items
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, itemId)
             statement.setLong(2, venueId)
@@ -745,13 +825,16 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun nextCategorySortOrder(connection: Connection, venueId: Long): Int {
+    private fun nextCategorySortOrder(
+        connection: Connection,
+        venueId: Long,
+    ): Int {
         return connection.prepareStatement(
             """
-                SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
-                FROM menu_categories
-                WHERE venue_id = ?
-            """.trimIndent()
+            SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+            FROM menu_categories
+            WHERE venue_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
@@ -760,13 +843,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun nextItemSortOrder(connection: Connection, venueId: Long, categoryId: Long): Int {
+    private fun nextItemSortOrder(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): Int {
         return connection.prepareStatement(
             """
-                SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
-                FROM menu_items
-                WHERE venue_id = ? AND category_id = ?
-            """.trimIndent()
+            SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+            FROM menu_items
+            WHERE venue_id = ? AND category_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, categoryId)
@@ -776,13 +863,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun nextOptionSortOrder(connection: Connection, venueId: Long, itemId: Long): Int {
+    private fun nextOptionSortOrder(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): Int {
         return connection.prepareStatement(
             """
-                SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
-                FROM menu_item_options
-                WHERE venue_id = ? AND item_id = ?
-            """.trimIndent()
+            SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+            FROM menu_item_options
+            WHERE venue_id = ? AND item_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, itemId)
@@ -792,14 +883,18 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun countCategories(connection: Connection, venueId: Long, categoryIds: List<Long>): Int {
+    private fun countCategories(
+        connection: Connection,
+        venueId: Long,
+        categoryIds: List<Long>,
+    ): Int {
         val placeholders = categoryIds.joinToString(",") { "?" }
         return connection.prepareStatement(
             """
-                SELECT COUNT(*) AS total
-                FROM menu_categories
-                WHERE venue_id = ? AND id IN ($placeholders)
-            """.trimIndent()
+            SELECT COUNT(*) AS total
+            FROM menu_categories
+            WHERE venue_id = ? AND id IN ($placeholders)
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             categoryIds.forEachIndexed { index, id ->
@@ -811,14 +906,19 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun countItems(connection: Connection, venueId: Long, categoryId: Long, itemIds: List<Long>): Int {
+    private fun countItems(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+        itemIds: List<Long>,
+    ): Int {
         val placeholders = itemIds.joinToString(",") { "?" }
         return connection.prepareStatement(
             """
-                SELECT COUNT(*) AS total
-                FROM menu_items
-                WHERE venue_id = ? AND category_id = ? AND id IN ($placeholders)
-            """.trimIndent()
+            SELECT COUNT(*) AS total
+            FROM menu_items
+            WHERE venue_id = ? AND category_id = ? AND id IN ($placeholders)
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, categoryId)
@@ -831,13 +931,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun updateCategoryOrder(connection: Connection, venueId: Long, categoryIds: List<Long>) {
+    private fun updateCategoryOrder(
+        connection: Connection,
+        venueId: Long,
+        categoryIds: List<Long>,
+    ) {
         connection.prepareStatement(
             """
-                UPDATE menu_categories
-                SET sort_order = ?, updated_at = now()
-                WHERE venue_id = ? AND id = ?
-            """.trimIndent()
+            UPDATE menu_categories
+            SET sort_order = ?, updated_at = now()
+            WHERE venue_id = ? AND id = ?
+            """.trimIndent(),
         ).use { statement ->
             categoryIds.forEachIndexed { index, id ->
                 statement.setInt(1, index)
@@ -849,13 +953,17 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun updateItemOrder(connection: Connection, venueId: Long, itemIds: List<Long>) {
+    private fun updateItemOrder(
+        connection: Connection,
+        venueId: Long,
+        itemIds: List<Long>,
+    ) {
         connection.prepareStatement(
             """
-                UPDATE menu_items
-                SET sort_order = ?, updated_at = now()
-                WHERE venue_id = ? AND id = ?
-            """.trimIndent()
+            UPDATE menu_items
+            SET sort_order = ?, updated_at = now()
+            WHERE venue_id = ? AND id = ?
+            """.trimIndent(),
         ).use { statement ->
             itemIds.forEachIndexed { index, id ->
                 statement.setInt(1, index)

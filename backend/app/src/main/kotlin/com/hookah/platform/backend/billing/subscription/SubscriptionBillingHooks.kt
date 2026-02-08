@@ -8,17 +8,23 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 import java.time.Instant
 
 class SubscriptionBillingHooks(
-    private val subscriptionRepository: SubscriptionRepository
+    private val subscriptionRepository: SubscriptionRepository,
 ) : BillingHooks {
-    override suspend fun onInvoicePaid(invoice: BillingInvoice, event: PaymentEvent.Paid) {
+    override suspend fun onInvoicePaid(
+        invoice: BillingInvoice,
+        event: PaymentEvent.Paid,
+    ) {
         subscriptionRepository.updateStatus(
             venueId = invoice.venueId,
             status = SubscriptionStatus.ACTIVE,
-            paidStart = resolvePaidStart(invoice.paidAt, event.occurredAt)
+            paidStart = resolvePaidStart(invoice.paidAt, event.occurredAt),
         )
     }
 
-    private fun resolvePaidStart(paidAt: Instant?, eventAt: Instant): Instant {
+    private fun resolvePaidStart(
+        paidAt: Instant?,
+        eventAt: Instant,
+    ): Instant {
         return paidAt ?: eventAt
     }
 }

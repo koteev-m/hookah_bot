@@ -16,10 +16,11 @@ internal object StaffChatLinkCodeFormat {
         if (trimmed.isEmpty() || trimmed.length > MAX_CODE_LEN) return null
         val builder = StringBuilder(trimmed.length)
         for (ch in trimmed) {
-            val upper = when (ch) {
-                in 'a'..'z' -> (ch.code - 32).toChar()
-                else -> ch
-            }
+            val upper =
+                when (ch) {
+                    in 'a'..'z' -> (ch.code - 32).toChar()
+                    else -> ch
+                }
             if (upper !in codeAlphabetSet) {
                 return null
             }

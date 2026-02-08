@@ -1,9 +1,9 @@
 package com.hookah.platform.backend.tools
 
-import kotlin.math.min
-import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlin.math.min
+import kotlin.random.Random
 
 suspend fun <T> retryWithBackoff(
     maxAttempts: Int,
@@ -11,7 +11,7 @@ suspend fun <T> retryWithBackoff(
     jitterRatio: Double = 0.2,
     baseDelayMillis: Long = 100,
     shouldRetry: (Throwable) -> Boolean,
-    block: suspend (attempt: Int) -> T
+    block: suspend (attempt: Int) -> T,
 ): T {
     require(maxAttempts >= 1) { "maxAttempts must be >= 1" }
     require(maxDelayMillis >= 0) { "maxDelayMillis must be >= 0" }
@@ -32,9 +32,12 @@ suspend fun <T> retryWithBackoff(
                 throw e
             }
             val cappedDelay = min(maxDelayMillis, delayMillis)
-            val jitterMultiplier = if (jitterRatio == 0.0) 1.0 else {
-                1.0 + Random.nextDouble(-jitterRatio, jitterRatio)
-            }
+            val jitterMultiplier =
+                if (jitterRatio == 0.0) {
+                    1.0
+                } else {
+                    1.0 + Random.nextDouble(-jitterRatio, jitterRatio)
+                }
             val sleepMillis = (cappedDelay * jitterMultiplier).toLong().coerceAtLeast(0L)
             if (sleepMillis > 0) {
                 delay(sleepMillis)

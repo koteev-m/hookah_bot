@@ -1,5 +1,7 @@
 package com.hookah.platform.backend
 
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import com.hookah.platform.backend.api.ApiError
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.ApiErrorEnvelope
@@ -18,21 +20,19 @@ import com.hookah.platform.backend.billing.subscription.SubscriptionBillingEngin
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingHooks
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingJob
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingVenueRepository
-import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.db.DatabaseFactory
+import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
+import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
-import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
-import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
-import com.hookah.platform.backend.miniapp.venue.venueRoutes
-import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
@@ -42,49 +42,45 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
+import com.hookah.platform.backend.miniapp.venue.venueRoutes
+import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
 import com.hookah.platform.backend.platform.PlatformConfig
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformUserRepository
 import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.platformRoutes
+import com.hookah.platform.backend.security.constantTimeEquals
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
 import com.hookah.platform.backend.telegram.TelegramUpdate
-import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
-import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
-import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.VenueRepository
+import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import com.hookah.platform.backend.tools.retryWithBackoff
-import com.hookah.platform.backend.security.constantTimeEquals
-import com.auth0.jwt.JWT
-import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.java.Java
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.request
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
-import io.ktor.server.auth.Authentication
-import io.ktor.server.auth.authenticate
-import io.ktor.server.auth.jwt.JWTPrincipal
-import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationStarted
@@ -92,21 +88,24 @@ import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.application.call
 import io.ktor.server.application.install
+import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.config.ApplicationConfig
 import io.ktor.server.http.content.staticFiles
+import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.callid.CallId
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
-import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
-import io.ktor.server.plugins.BadRequestException
-import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.plugins.statuspages.exception
-import io.ktor.server.request.receive
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
 import io.ktor.server.request.queryString
+import io.ktor.server.request.receive
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
@@ -123,11 +122,11 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -137,6 +136,7 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
 
 private val logger = LoggerFactory.getLogger("Application")
 
@@ -151,11 +151,11 @@ private data class VersionResponse(
     val service: String,
     val env: String,
     val version: String,
-    val time: String
+    val time: String,
 )
 
 internal data class ModuleOverrides(
-    val tableTokenResolver: (suspend (String) -> TableContext?)? = null
+    val tableTokenResolver: (suspend (String) -> TableContext?)? = null,
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean {
@@ -167,14 +167,14 @@ private suspend fun ApplicationCall.respondApiError(
     status: HttpStatusCode,
     code: String,
     message: String,
-    details: JsonObject? = null
+    details: JsonObject? = null,
 ) {
     respond(
         status,
         ApiErrorEnvelope(
             error = ApiError(code = code, message = message, details = details),
-            requestId = callId
-        )
+            requestId = callId,
+        ),
     )
 }
 
@@ -182,7 +182,7 @@ private suspend fun ApplicationCall.respondInvalidRequestBody() {
     respondApiError(
         status = HttpStatusCode.BadRequest,
         code = ApiErrorCodes.INVALID_INPUT,
-        message = "Invalid request body"
+        message = "Invalid request body",
     )
 }
 
@@ -191,20 +191,25 @@ fun Application.module() {
 }
 
 internal fun Application.module(overrides: ModuleOverrides) {
-    val json = Json {
-        ignoreUnknownKeys = true
-        prettyPrint = false
-    }
+    val json =
+        Json {
+            ignoreUnknownKeys = true
+            prettyPrint = false
+        }
 
-    val telegramJson = Json {
-        ignoreUnknownKeys = true
-        prettyPrint = false
-    }
+    val telegramJson =
+        Json {
+            ignoreUnknownKeys = true
+            prettyPrint = false
+        }
 
     val appConfig = environment.config
-    val appEnv = (appConfig.optionalString("app.env")
-        ?: System.getenv("APP_ENV")
-        ?: "dev").trim().lowercase(Locale.ROOT)
+    val appEnv =
+        (
+            appConfig.optionalString("app.env")
+                ?: System.getenv("APP_ENV")
+                ?: "dev"
+        ).trim().lowercase(Locale.ROOT)
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }
@@ -215,11 +220,12 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
     val platformConfig = PlatformConfig.from(appConfig)
 
-    val httpClient = HttpClient(Java) {
-        install(ContentNegotiation) {
-            json(json)
+    val httpClient =
+        HttpClient(Java) {
+            install(ContentNegotiation) {
+                json(json)
+            }
         }
-    }
 
     val dataSource = DatabaseFactory.init(dbConfig)
     val venueRepository = VenueRepository(dataSource)
@@ -251,29 +257,32 @@ internal fun Application.module(overrides: ModuleOverrides) {
     }
     val billingProvider = resolvedBillingProvider ?: FakeBillingProvider()
     val subscriptionBillingHooks = SubscriptionBillingHooks(subscriptionRepository)
-    val billingService = BillingService(
-        provider = billingProvider,
-        invoiceRepository = billingInvoiceRepository,
-        paymentRepository = billingPaymentRepository,
-        hooks = subscriptionBillingHooks
-    )
-    val subscriptionBillingEngine = SubscriptionBillingEngine(
-        dataSource = dataSource,
-        venueRepository = SubscriptionBillingVenueRepository(dataSource),
-        settingsRepository = subscriptionSettingsRepository,
-        billingService = billingService,
-        invoiceRepository = billingInvoiceRepository,
-        notificationRepository = billingNotificationRepository,
-        subscriptionRepository = subscriptionRepository,
-        auditLogRepository = auditLogRepository,
-        config = subscriptionBillingConfig,
-        platformOwnerUserId = platformConfig.ownerUserId,
-        json = json
-    )
-    val subscriptionBillingJob = SubscriptionBillingJob(
-        engine = subscriptionBillingEngine,
-        intervalSeconds = subscriptionBillingConfig.intervalSeconds
-    )
+    val billingService =
+        BillingService(
+            provider = billingProvider,
+            invoiceRepository = billingInvoiceRepository,
+            paymentRepository = billingPaymentRepository,
+            hooks = subscriptionBillingHooks,
+        )
+    val subscriptionBillingEngine =
+        SubscriptionBillingEngine(
+            dataSource = dataSource,
+            venueRepository = SubscriptionBillingVenueRepository(dataSource),
+            settingsRepository = subscriptionSettingsRepository,
+            billingService = billingService,
+            invoiceRepository = billingInvoiceRepository,
+            notificationRepository = billingNotificationRepository,
+            subscriptionRepository = subscriptionRepository,
+            auditLogRepository = auditLogRepository,
+            config = subscriptionBillingConfig,
+            platformOwnerUserId = platformConfig.ownerUserId,
+            json = json,
+        )
+    val subscriptionBillingJob =
+        SubscriptionBillingJob(
+            engine = subscriptionBillingEngine,
+            intervalSeconds = subscriptionBillingConfig.intervalSeconds,
+        )
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
     if (dataSource != null) {
@@ -285,66 +294,75 @@ internal fun Application.module(overrides: ModuleOverrides) {
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
-    val staffChatNotifierScope = CoroutineScope(
-        SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier")
-    )
-    val subscriptionBillingScope = CoroutineScope(
-        SupervisorJob() + Dispatchers.IO + CoroutineName("subscription-billing")
-    )
-    val staffChatLinkCodeRepository = StaffChatLinkCodeRepository(
-        dataSource = dataSource,
-        pepper = telegramConfig.staffChatLinkSecretPepper,
-        ttlSeconds = telegramConfig.staffChatLinkTtlSeconds
-    )
+    val staffChatNotifierScope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier"),
+        )
+    val subscriptionBillingScope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO + CoroutineName("subscription-billing"),
+        )
+    val staffChatLinkCodeRepository =
+        StaffChatLinkCodeRepository(
+            dataSource = dataSource,
+            pepper = telegramConfig.staffChatLinkSecretPepper,
+            ttlSeconds = telegramConfig.staffChatLinkTtlSeconds,
+        )
     val venueAccessRepository = VenueAccessRepository(dataSource)
     val venueStaffRepository = VenueStaffRepository(dataSource)
-    val staffInviteRepository = StaffInviteRepository(
-        dataSource = dataSource,
-        pepper = staffInviteConfig.secretPepper
-    )
-    val staffChatNotificationRepository = StaffChatNotificationRepository(dataSource)
-    val staffChatNotifier = StaffChatNotifier(
-        venueRepository = venueRepository,
-        notificationRepository = staffChatNotificationRepository,
-        apiClientProvider = { telegramApiClient },
-        scope = staffChatNotifierScope
-    )
-    if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
-        telegramScope = CoroutineScope(
-            SupervisorJob() + Dispatchers.Default + CoroutineName("telegram-bot")
+    val staffInviteRepository =
+        StaffInviteRepository(
+            dataSource = dataSource,
+            pepper = staffInviteConfig.secretPepper,
         )
+    val staffChatNotificationRepository = StaffChatNotificationRepository(dataSource)
+    val staffChatNotifier =
+        StaffChatNotifier(
+            venueRepository = venueRepository,
+            notificationRepository = staffChatNotificationRepository,
+            apiClientProvider = { telegramApiClient },
+            scope = staffChatNotifierScope,
+        )
+    if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
+        telegramScope =
+            CoroutineScope(
+                SupervisorJob() + Dispatchers.Default + CoroutineName("telegram-bot"),
+            )
         val botScope = telegramScope!!
         val requestTimeoutMs = (telegramConfig.longPollingTimeoutSeconds + 15L) * 1000
         val socketTimeoutMs = (telegramConfig.longPollingTimeoutSeconds + 10L) * 1000
-        telegramApiClient = TelegramApiClient(
-            token = telegramConfig.token!!,
-            client = HttpClient(Java) {
-                install(ContentNegotiation) { json(telegramJson) }
-                install(HttpTimeout) {
-                    connectTimeoutMillis = 10_000
-                    socketTimeoutMillis = socketTimeoutMs
-                    requestTimeoutMillis = requestTimeoutMs
-                }
-            },
-            json = telegramJson
-        )
-        telegramRouter = TelegramBotRouter(
-            config = telegramConfig,
-            apiClient = telegramApiClient,
-            idempotencyRepository = IdempotencyRepository(dataSource),
-            userRepository = userRepository,
-            tableTokenRepository = tableTokenRepository,
-            chatContextRepository = ChatContextRepository(dataSource),
-            dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
-            ordersRepository = ordersRepository,
-            staffCallRepository = staffCallRepository,
-            staffChatLinkCodeRepository = staffChatLinkCodeRepository,
-            venueRepository = venueRepository,
-            venueAccessRepository = venueAccessRepository,
-            subscriptionRepository = subscriptionRepository,
-            json = telegramJson,
-            scope = botScope
-        )
+        telegramApiClient =
+            TelegramApiClient(
+                token = telegramConfig.token!!,
+                client =
+                    HttpClient(Java) {
+                        install(ContentNegotiation) { json(telegramJson) }
+                        install(HttpTimeout) {
+                            connectTimeoutMillis = 10_000
+                            socketTimeoutMillis = socketTimeoutMs
+                            requestTimeoutMillis = requestTimeoutMs
+                        }
+                    },
+                json = telegramJson,
+            )
+        telegramRouter =
+            TelegramBotRouter(
+                config = telegramConfig,
+                apiClient = telegramApiClient,
+                idempotencyRepository = IdempotencyRepository(dataSource),
+                userRepository = userRepository,
+                tableTokenRepository = tableTokenRepository,
+                chatContextRepository = ChatContextRepository(dataSource),
+                dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
+                ordersRepository = ordersRepository,
+                staffCallRepository = staffCallRepository,
+                staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+                venueRepository = venueRepository,
+                venueAccessRepository = venueAccessRepository,
+                subscriptionRepository = subscriptionRepository,
+                json = telegramJson,
+                scope = botScope,
+            )
 
         when (telegramConfig.mode) {
             TelegramBotConfig.Mode.LONG_POLLING -> {
@@ -353,26 +371,27 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     botScope.launch {
                         var offset: Long? = null
                         while (isActive) {
-                            val updates: List<TelegramUpdate> = try {
-                                retryWithBackoff(
-                                    maxAttempts = 3,
-                                    maxDelayMillis = 2000,
-                                    jitterRatio = 0.2,
-                                    shouldRetry = { e -> e !is CancellationException }
-                                ) {
-                                    telegramApiClient.getUpdates(
-                                        offset,
-                                        telegramConfig.longPollingTimeoutSeconds
-                                    )
+                            val updates: List<TelegramUpdate> =
+                                try {
+                                    retryWithBackoff(
+                                        maxAttempts = 3,
+                                        maxDelayMillis = 2000,
+                                        jitterRatio = 0.2,
+                                        shouldRetry = { e -> e !is CancellationException },
+                                    ) {
+                                        telegramApiClient.getUpdates(
+                                            offset,
+                                            telegramConfig.longPollingTimeoutSeconds,
+                                        )
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    logger.warn("Telegram long polling error: {}", sanitizeTelegramForLog(e.message))
+                                    logger.debugTelegramException(e) { "Telegram long polling exception" }
+                                    delay(1000)
+                                    continue
                                 }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                logger.warn("Telegram long polling error: {}", sanitizeTelegramForLog(e.message))
-                                logger.debugTelegramException(e) { "Telegram long polling exception" }
-                                delay(1000)
-                                continue
-                            }
 
                             val sortedUpdates = updates.sortedBy { it.updateId }
                             for (update in sortedUpdates) {
@@ -384,7 +403,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                                     logger.warn(
                                         "Telegram update processing failed id={}: {}",
                                         update.updateId,
-                                        sanitizeTelegramForLog(e.message)
+                                        sanitizeTelegramForLog(e.message),
                                     )
                                     logger.debugTelegramException(e) {
                                         "Telegram update processing exception id=${update.updateId}"
@@ -461,7 +480,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 status = cause.httpStatus,
                 code = cause.code,
                 message = cause.message,
-                details = cause.details
+                details = cause.details,
             )
         }
         exception<Throwable> { call, cause ->
@@ -471,22 +490,23 @@ internal fun Application.module(overrides: ModuleOverrides) {
             if (cause is CancellationException) {
                 throw cause
             }
-            val safeMessage = (cause.message ?: "unknown error")
-                .replace(Regex("[\\r\\n\\t]"), " ")
-                .take(200)
+            val safeMessage =
+                (cause.message ?: "unknown error")
+                    .replace(Regex("[\\r\\n\\t]"), " ")
+                    .take(200)
             logger.warn(
                 "Unhandled API error requestId={} method={} path={} error={} message={}",
                 call.callId,
                 call.request.httpMethod.value,
                 call.request.path(),
                 cause::class.qualifiedName ?: cause::class.simpleName,
-                safeMessage
+                safeMessage,
             )
             logger.debug("Unhandled API error", cause)
             call.respondApiError(
                 status = HttpStatusCode.InternalServerError,
                 code = ApiErrorCodes.INTERNAL_ERROR,
-                message = "Internal error"
+                message = "Internal error",
             )
         }
         status(HttpStatusCode.NotFound) { call, _ ->
@@ -494,7 +514,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 call.respondApiError(
                     status = HttpStatusCode.NotFound,
                     code = ApiErrorCodes.NOT_FOUND,
-                    message = "Not found"
+                    message = "Not found",
                 )
             }
         }
@@ -503,7 +523,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 call.respondApiError(
                     status = HttpStatusCode.MethodNotAllowed,
                     code = ApiErrorCodes.INVALID_INPUT,
-                    message = "Method not allowed"
+                    message = "Method not allowed",
                 )
             }
         }
@@ -517,7 +537,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     .require(algorithm)
                     .withIssuer(sessionTokenConfig.issuer)
                     .withAudience(sessionTokenConfig.audience)
-                    .build()
+                    .build(),
             )
             validate { credentials ->
                 val subject = credentials.payload.subject ?: return@validate null
@@ -528,7 +548,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 call.respondApiError(
                     status = HttpStatusCode.Unauthorized,
                     code = ApiErrorCodes.UNAUTHORIZED,
-                    message = "Unauthorized"
+                    message = "Unauthorized",
                 )
             }
         }
@@ -547,33 +567,35 @@ internal fun Application.module(overrides: ModuleOverrides) {
             }
 
             try {
-                val isOk = withContext(Dispatchers.IO) {
-                    dataSourceToUse.connection.use { connection ->
-                        connection.createStatement().use { statement ->
-                            statement.executeQuery("SELECT 1").use { resultSet ->
-                                resultSet.next()
+                val isOk =
+                    withContext(Dispatchers.IO) {
+                        dataSourceToUse.connection.use { connection ->
+                            connection.createStatement().use { statement ->
+                                statement.executeQuery("SELECT 1").use { resultSet ->
+                                    resultSet.next()
+                                }
                             }
                         }
                     }
-                }
 
                 if (isOk) {
                     call.respond(DbHealthResponse(status = "ok"))
                 } else {
                     call.respond(
                         HttpStatusCode.ServiceUnavailable,
-                        DbHealthResponse(status = "error", message = "db_unavailable")
+                        DbHealthResponse(status = "error", message = "db_unavailable"),
                     )
                 }
             } catch (e: Exception) {
-                val safeMessage = (e.message ?: "unknown error")
-                    .replace(Regex("[\\r\\n\\t]"), " ")
-                    .take(200)
+                val safeMessage =
+                    (e.message ?: "unknown error")
+                        .replace(Regex("[\\r\\n\\t]"), " ")
+                        .take(200)
                 logger.warn("DB health check failed: {} {}", e::class.simpleName, safeMessage)
                 logger.debug("DB health check failed", e)
                 call.respond(
                     HttpStatusCode.ServiceUnavailable,
-                    DbHealthResponse(status = "error", message = "db_unavailable")
+                    DbHealthResponse(status = "error", message = "db_unavailable"),
                 )
             }
         }
@@ -585,15 +607,15 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     service = "backend",
                     env = appEnv,
                     version = appVersion,
-                    time = time
-                )
+                    time = time,
+                ),
             )
         }
 
         billingWebhookRoutes(
             config = billingConfig,
             providerRegistry = billingProviderRegistry,
-            billingService = billingService
+            billingService = billingService,
         )
 
         miniAppAuthRoutes(appConfig, sessionTokenService, userRepository)
@@ -604,12 +626,12 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
                         guestMenuRepository = guestMenuRepository,
-                        subscriptionRepository = subscriptionRepository
+                        subscriptionRepository = subscriptionRepository,
                     )
                     guestTableResolveRoutes(
                         tableTokenResolver = tableTokenResolver,
                         guestVenueRepository = guestVenueRepository,
-                        subscriptionRepository = subscriptionRepository
+                        subscriptionRepository = subscriptionRepository,
                     )
                     guestOrderRoutes(
                         tableTokenResolver = tableTokenResolver,
@@ -617,13 +639,13 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         guestMenuRepository = guestMenuRepository,
                         subscriptionRepository = subscriptionRepository,
                         ordersRepository = ordersRepository,
-                        staffChatNotifier = staffChatNotifier
+                        staffChatNotifier = staffChatNotifier,
                     )
                     guestStaffCallRoutes(
                         tableTokenResolver = tableTokenResolver,
                         guestVenueRepository = guestVenueRepository,
                         subscriptionRepository = subscriptionRepository,
-                        staffCallRepository = staffCallRepository
+                        staffCallRepository = staffCallRepository,
                     )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))
@@ -632,27 +654,27 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 venueRoutes(
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
-                    venueRepository = venueRepository
+                    venueRepository = venueRepository,
                 )
                 venueStaffRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStaffRepository = venueStaffRepository,
                     staffInviteRepository = staffInviteRepository,
-                    staffInviteConfig = staffInviteConfig
+                    staffInviteConfig = staffInviteConfig,
                 )
                 venueTableRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueTableRepository = venueTableRepository,
                     auditLogRepository = auditLogRepository,
-                    webAppPublicUrl = telegramConfig.webAppPublicUrl
+                    webAppPublicUrl = telegramConfig.webAppPublicUrl,
                 )
                 venueMenuRoutes(
                     venueAccessRepository = venueAccessRepository,
-                    venueMenuRepository = venueMenuRepository
+                    venueMenuRepository = venueMenuRepository,
                 )
                 venueOrderRoutes(
                     venueAccessRepository = venueAccessRepository,
-                    venueOrdersRepository = venueOrdersRepository
+                    venueOrdersRepository = venueOrdersRepository,
                 )
                 platformRoutes(
                     platformConfig = platformConfig,
@@ -664,7 +686,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     subscriptionSettingsRepository = subscriptionSettingsRepository,
                     platformVenueMemberRepository = platformVenueMemberRepository,
                     staffInviteRepository = staffInviteRepository,
-                    staffInviteConfig = staffInviteConfig
+                    staffInviteConfig = staffInviteConfig,
                 )
             }
         }
@@ -701,7 +723,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
 private fun Route.miniAppRoutes(
     devServerUrl: String?,
     staticDir: String?,
-    httpClient: HttpClient
+    httpClient: HttpClient,
 ) {
     route("/miniapp") {
         get {
@@ -748,7 +770,7 @@ private fun Route.miniAppRoutes(
         get {
             call.respondText(
                 text = "Mini app dev server is not configured. Set MINIAPP_DEV_SERVER_URL or MINIAPP_STATIC_DIR.",
-                contentType = ContentType.Text.Plain
+                contentType = ContentType.Text.Plain,
             )
         }
         head {
@@ -764,7 +786,7 @@ private suspend fun ApplicationCall.proxyToDevServer(
     requestUri: String,
     method: HttpMethod,
     devServerUrl: String,
-    httpClient: HttpClient
+    httpClient: HttpClient,
 ) {
     if (method != HttpMethod.Get && method != HttpMethod.Head) {
         respond(HttpStatusCode.MethodNotAllowed)
@@ -772,9 +794,10 @@ private suspend fun ApplicationCall.proxyToDevServer(
     }
 
     val targetUrl = devServerUrl.trimEnd('/') + requestUri
-    val response = httpClient.request(targetUrl) {
-        this.method = method
-    }
+    val response =
+        httpClient.request(targetUrl) {
+            this.method = method
+        }
 
     val contentType = response.headers["Content-Type"]?.let { ContentType.parse(it) }
 
@@ -782,7 +805,7 @@ private suspend fun ApplicationCall.proxyToDevServer(
         respondBytes(
             bytes = ByteArray(0),
             contentType = contentType,
-            status = response.status
+            status = response.status,
         )
         return
     }
@@ -791,7 +814,7 @@ private suspend fun ApplicationCall.proxyToDevServer(
     respondBytes(
         bytes = bytes,
         contentType = contentType,
-        status = response.status
+        status = response.status,
     )
 }
 
@@ -804,5 +827,4 @@ private suspend fun ApplicationCall.redirectToMiniAppRoot() {
 private fun ApplicationConfig.optionalString(path: String): String? =
     if (propertyOrNull(path) != null) property(path).getString() else null
 
-private fun redactJdbcUrl(jdbcUrl: String): String =
-    jdbcUrl.replace(Regex("(?i)(password)=([^&;]+)"), "$1=***")
+private fun redactJdbcUrl(jdbcUrl: String): String = jdbcUrl.replace(Regex("(?i)(password)=([^&;]+)"), "$1=***")

@@ -2,14 +2,14 @@ package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
-import java.sql.Connection
-import java.sql.SQLException
-import java.time.Instant
-import javax.sql.DataSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.sql.Connection
+import java.sql.SQLException
+import java.time.Instant
+import javax.sql.DataSource
 
 class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
     private val logger = LoggerFactory.getLogger(PlatformVenueMemberRepository::class.java)
@@ -18,7 +18,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         venueId: Long,
         userId: Long,
         role: String,
-        invitedByUserId: Long?
+        invitedByUserId: Long?,
     ): PlatformOwnerAssignmentResult {
         val ds = dataSource ?: return PlatformOwnerAssignmentResult.DatabaseError
         return withContext(Dispatchers.IO) {
@@ -36,7 +36,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                             connection.commit()
                             return@use PlatformOwnerAssignmentResult.Success(
                                 member = existing.copy(role = updatedRole),
-                                alreadyMember = true
+                                alreadyMember = true,
                             )
                         }
                         val createdAt = Instant.now()
@@ -48,7 +48,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                                 connection.commit()
                                 return@use PlatformOwnerAssignmentResult.Success(
                                     member = after.copy(role = updatedRole),
-                                    alreadyMember = true
+                                    alreadyMember = true,
                                 )
                             }
                             return@use rollbackAndReturn(connection) { PlatformOwnerAssignmentResult.DatabaseError }
@@ -64,7 +64,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                             "Failed to assign venue owner venueId={} userId={}: {}",
                             venueId,
                             userId,
-                            sanitizeTelegramForLog(e.message)
+                            sanitizeTelegramForLog(e.message),
                         )
                         logger.debugTelegramException(e) { "assignOwner exception venueId=$venueId userId=$userId" }
                         PlatformOwnerAssignmentResult.DatabaseError
@@ -80,20 +80,27 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun venueExists(connection: Connection, venueId: Long): Boolean {
+    private fun venueExists(
+        connection: Connection,
+        venueId: Long,
+    ): Boolean {
         return connection.prepareStatement("SELECT 1 FROM venues WHERE id = ?").use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs -> rs.next() }
         }
     }
 
-    private fun loadMember(connection: Connection, venueId: Long, userId: Long): PlatformVenueMember? {
+    private fun loadMember(
+        connection: Connection,
+        venueId: Long,
+        userId: Long,
+    ): PlatformVenueMember? {
         return connection.prepareStatement(
             """
-                SELECT role, created_at, invited_by_user_id
-                FROM venue_members
-                WHERE venue_id = ? AND user_id = ?
-            """.trimIndent()
+            SELECT role, created_at, invited_by_user_id
+            FROM venue_members
+            WHERE venue_id = ? AND user_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, userId)
@@ -104,9 +111,11 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                         userId = userId,
                         role = rs.getString("role"),
                         createdAt = rs.getTimestamp("created_at").toInstant(),
-                        invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() }
+                        invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() },
                     )
-                } else null
+                } else {
+                    null
+                }
             }
         }
     }
@@ -116,20 +125,25 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         venueId: Long,
         userId: Long,
         targetRole: String,
-        currentRole: String
+        currentRole: String,
     ): String {
         if (currentRole.equals(targetRole, ignoreCase = true)) return currentRole
         updateRole(connection, venueId, userId, targetRole)
         return targetRole
     }
 
-    private fun updateRole(connection: Connection, venueId: Long, userId: Long, role: String) {
+    private fun updateRole(
+        connection: Connection,
+        venueId: Long,
+        userId: Long,
+        role: String,
+    ) {
         connection.prepareStatement(
             """
-                UPDATE venue_members
-                SET role = ?
-                WHERE venue_id = ? AND user_id = ?
-            """.trimIndent()
+            UPDATE venue_members
+            SET role = ?
+            WHERE venue_id = ? AND user_id = ?
+            """.trimIndent(),
         ).use { statement ->
             statement.setString(1, role)
             statement.setLong(2, venueId)
@@ -144,14 +158,14 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         userId: Long,
         role: String,
         invitedByUserId: Long?,
-        createdAt: Instant
+        createdAt: Instant,
     ): PlatformVenueMember? {
         return try {
             connection.prepareStatement(
                 """
-                    INSERT INTO venue_members (venue_id, user_id, role, created_at, invited_by_user_id)
-                    VALUES (?, ?, ?, ?, ?)
-                """.trimIndent()
+                INSERT INTO venue_members (venue_id, user_id, role, created_at, invited_by_user_id)
+                VALUES (?, ?, ?, ?, ?)
+                """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, venueId)
                 statement.setLong(2, userId)
@@ -169,7 +183,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                 userId = userId,
                 role = role,
                 createdAt = createdAt,
-                invitedByUserId = invitedByUserId
+                invitedByUserId = invitedByUserId,
             )
         } catch (e: SQLException) {
             logger.debugTelegramException(e) { "insertMember exception venueId=$venueId userId=$userId" }
@@ -181,7 +195,10 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         runCatching { connection.rollback() }
     }
 
-    private fun <T> rollbackAndReturn(connection: Connection, block: () -> T): T {
+    private fun <T> rollbackAndReturn(
+        connection: Connection,
+        block: () -> T,
+    ): T {
         runCatching { connection.rollback() }
         return block()
     }
@@ -192,11 +209,13 @@ data class PlatformVenueMember(
     val userId: Long,
     val role: String,
     val createdAt: Instant,
-    val invitedByUserId: Long?
+    val invitedByUserId: Long?,
 )
 
 sealed interface PlatformOwnerAssignmentResult {
     data class Success(val member: PlatformVenueMember, val alreadyMember: Boolean) : PlatformOwnerAssignmentResult
+
     data object NotFound : PlatformOwnerAssignmentResult
+
     data object DatabaseError : PlatformOwnerAssignmentResult
 }

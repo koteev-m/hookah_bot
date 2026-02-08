@@ -3,11 +3,11 @@ package com.hookah.platform.backend.miniapp.guest.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.ResultSet
 import java.sql.SQLException
 import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class GuestVenueRepository(private val dataSource: DataSource?) {
     suspend fun listCatalogVenues(): List<VenueShort> {
@@ -19,13 +19,13 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT v.id, v.name, v.city, v.address, v.status
-                            FROM venues v
-                            LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
-                            WHERE v.status = ?
-                              AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
-                            ORDER BY v.id ASC
-                        """.trimIndent()
+                        SELECT v.id, v.name, v.city, v.address, v.status
+                        FROM venues v
+                        LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
+                        WHERE v.status = ?
+                          AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
+                        ORDER BY v.id ASC
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, VenueStatus.PUBLISHED.dbValue)
                         blockedStatuses.forEachIndexed { index, status ->
@@ -53,10 +53,10 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                            SELECT id, name, city, address, status
-                            FROM venues
-                            WHERE id = ?
-                        """.trimIndent()
+                        SELECT id, name, city, address, status
+                        FROM venues
+                        WHERE id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, id)
                         statement.executeQuery().use { rs ->
@@ -81,7 +81,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
             name = rs.getString("name"),
             city = rs.getString("city"),
             address = rs.getString("address"),
-            status = status
+            status = status,
         )
     }
 }
@@ -91,5 +91,5 @@ data class VenueShort(
     val name: String,
     val city: String?,
     val address: String?,
-    val status: VenueStatus
+    val status: VenueStatus,
 )

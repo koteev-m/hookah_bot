@@ -22,13 +22,16 @@ class SubscriptionRepositoryTest {
         @JvmStatic
         fun setup() {
             val dbName = "subscription_repo_${UUID.randomUUID()}"
-            dataSource = HikariDataSource(
-                HikariConfig().apply {
-                    driverClassName = "org.h2.Driver"
-                    jdbcUrl = "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
-                    maximumPoolSize = 3
-                }
-            )
+            dataSource =
+                HikariDataSource(
+                    HikariConfig().apply {
+                        driverClassName = "org.h2.Driver"
+                        jdbcUrl =
+                            "jdbc:h2:mem:$dbName;MODE=PostgreSQL;" +
+                            "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+                        maximumPoolSize = 3
+                    },
+                )
             Flyway.configure()
                 .dataSource(dataSource)
                 .locations("classpath:db/migration/h2")
@@ -45,10 +48,10 @@ class SubscriptionRepositoryTest {
         private fun insertVenue(connection: Connection): Long {
             return connection.prepareStatement(
                 """
-                    INSERT INTO venues (name, status)
-                    VALUES ('Test Venue', ?)
+                INSERT INTO venues (name, status)
+                VALUES ('Test Venue', ?)
                 """.trimIndent(),
-                java.sql.Statement.RETURN_GENERATED_KEYS
+                java.sql.Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
                 statement.setString(1, VenueStatus.PUBLISHED.dbValue)
                 statement.executeUpdate()
@@ -61,30 +64,32 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `getSubscriptionStatus backfills trial subscription`() = runBlocking {
-        val venueId = dataSource.connection.use { connection ->
-            insertVenue(connection)
-        }
+    fun `getSubscriptionStatus backfills trial subscription`() =
+        runBlocking {
+            val venueId =
+                dataSource.connection.use { connection ->
+                    insertVenue(connection)
+                }
 
-        val repository = SubscriptionRepository(dataSource)
-        val status = repository.getSubscriptionStatus(venueId)
+            val repository = SubscriptionRepository(dataSource)
+            val status = repository.getSubscriptionStatus(venueId)
 
-        assertEquals(SubscriptionStatus.TRIAL, status)
+            assertEquals(SubscriptionStatus.TRIAL, status)
 
-        dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
                     SELECT COUNT(*)
                     FROM venue_subscriptions
                     WHERE venue_id = ?
-                """.trimIndent()
-            ).use { statement ->
-                statement.setLong(1, venueId)
-                statement.executeQuery().use { rs ->
-                    rs.next()
-                    assertTrue(rs.getInt(1) == 1)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        assertTrue(rs.getInt(1) == 1)
+                    }
                 }
             }
         }
-    }
 }

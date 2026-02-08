@@ -7,11 +7,12 @@ import kotlin.test.assertEquals
 class SubscriptionBillingConfigTest {
     @Test
     fun `negative lead and reminder days are clamped to zero`() {
-        val config = MapApplicationConfig(
-            "billing.subscription.leadDays" to "-2",
-            "billing.subscription.reminderDays" to "-5",
-            "billing.subscription.intervalSeconds" to "60"
-        )
+        val config =
+            MapApplicationConfig(
+                "billing.subscription.leadDays" to "-2",
+                "billing.subscription.reminderDays" to "-5",
+                "billing.subscription.intervalSeconds" to "60",
+            )
 
         val result = SubscriptionBillingConfig.from(config)
 

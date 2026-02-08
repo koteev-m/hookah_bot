@@ -5,16 +5,17 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.UnauthorizedException
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.ApplicationCall
-import io.ktor.server.auth.principal
 import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.principal
 
 suspend fun resolveVenueRole(
     venueAccessRepository: VenueAccessRepository,
     userId: Long,
-    venueId: Long
+    venueId: Long,
 ): VenueRole {
-    val membership = venueAccessRepository.findVenueMembership(userId, venueId)
-        ?: throw ForbiddenException()
+    val membership =
+        venueAccessRepository.findVenueMembership(userId, venueId)
+            ?: throw ForbiddenException()
     return VenueRoleMapping.fromDb(membership.role) ?: throw ForbiddenException()
 }
 
@@ -25,9 +26,10 @@ fun ApplicationCall.requireUserId(): Long {
 }
 
 fun ApplicationCall.requireVenueId(): Long {
-    val rawId = parameters["venueId"]
-        ?: request.queryParameters["venueId"]
-        ?: parameters["id"]
-        ?: request.queryParameters["id"]
+    val rawId =
+        parameters["venueId"]
+            ?: request.queryParameters["venueId"]
+            ?: parameters["id"]
+            ?: request.queryParameters["id"]
     return rawId?.toLongOrNull() ?: throw InvalidInputException("venueId must be a number")
 }

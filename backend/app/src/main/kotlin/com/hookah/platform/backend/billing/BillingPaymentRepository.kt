@@ -1,12 +1,12 @@
 package com.hookah.platform.backend.billing
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Timestamp
 import javax.sql.DataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class BillingPaymentRepository(private val dataSource: DataSource?) {
     suspend fun insertPaymentEventIdempotent(
@@ -17,15 +17,16 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
         currency: String,
         status: PaymentStatus,
         occurredAt: java.time.Instant,
-        rawPayload: String?
+        rawPayload: String?,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     val isH2 = connection.metaData.databaseProductName.equals("H2", ignoreCase = true)
-                    val sql = if (isH2) {
-                        """
+                    val sql =
+                        if (isH2) {
+                            """
                             INSERT INTO billing_payments (
                                 invoice_id,
                                 provider,
@@ -43,9 +44,9 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
                                 WHERE provider = ?
                                   AND provider_event_id = ?
                             )
-                        """.trimIndent()
-                    } else {
-                        """
+                            """.trimIndent()
+                        } else {
+                            """
                             INSERT INTO billing_payments (
                                 invoice_id,
                                 provider,
@@ -58,10 +59,10 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT (provider, provider_event_id) DO NOTHING
-                        """.trimIndent()
-                    }
+                            """.trimIndent()
+                        }
                     connection.prepareStatement(
-                        sql
+                        sql,
                     ).use { statement ->
                         statement.setLong(1, invoiceId)
                         statement.setString(2, provider)
@@ -92,8 +93,9 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
     }
 
     private fun mapPayment(rs: ResultSet): BillingPayment {
-        val status = PaymentStatus.fromDb(rs.getString("status"))
-            ?: throw SQLException("Unknown payment status")
+        val status =
+            PaymentStatus.fromDb(rs.getString("status"))
+                ?: throw SQLException("Unknown payment status")
         return BillingPayment(
             id = rs.getLong("id"),
             invoiceId = rs.getLong("invoice_id"),
@@ -104,7 +106,7 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
             status = status,
             occurredAt = rs.getTimestamp("occurred_at").toInstant(),
             createdAt = rs.getTimestamp("created_at").toInstant(),
-            rawPayload = rs.getString("raw_payload")
+            rawPayload = rs.getString("raw_payload"),
         )
     }
 }

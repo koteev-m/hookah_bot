@@ -8,7 +8,8 @@ enum class OrderWorkflowStatus {
     COOKING,
     DELIVERING,
     DELIVERED,
-    CLOSED;
+    CLOSED,
+    ;
 
     fun toApi(): String = name.lowercase(Locale.ROOT)
 
@@ -31,23 +32,25 @@ enum class OrderWorkflowStatus {
 }
 
 enum class OrderBatchStatus(
-    val dbValue: String
+    val dbValue: String,
 ) {
     NEW("NEW"),
     ACCEPTED("ACCEPTED"),
     PREPARING("PREPARING"),
     DELIVERING("DELIVERING"),
     DELIVERED("DELIVERED"),
-    REJECTED("REJECTED");
+    REJECTED("REJECTED"),
+    ;
 
-    fun toWorkflow(): OrderWorkflowStatus = when (this) {
-        NEW -> OrderWorkflowStatus.NEW
-        ACCEPTED -> OrderWorkflowStatus.ACCEPTED
-        PREPARING -> OrderWorkflowStatus.COOKING
-        DELIVERING -> OrderWorkflowStatus.DELIVERING
-        DELIVERED -> OrderWorkflowStatus.DELIVERED
-        REJECTED -> OrderWorkflowStatus.CLOSED
-    }
+    fun toWorkflow(): OrderWorkflowStatus =
+        when (this) {
+            NEW -> OrderWorkflowStatus.NEW
+            ACCEPTED -> OrderWorkflowStatus.ACCEPTED
+            PREPARING -> OrderWorkflowStatus.COOKING
+            DELIVERING -> OrderWorkflowStatus.DELIVERING
+            DELIVERED -> OrderWorkflowStatus.DELIVERED
+            REJECTED -> OrderWorkflowStatus.CLOSED
+        }
 
     companion object {
         fun fromDb(raw: String?): OrderBatchStatus? {

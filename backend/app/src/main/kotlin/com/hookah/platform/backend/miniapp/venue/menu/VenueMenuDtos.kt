@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class VenueMenuResponse(
     val venueId: Long,
-    val categories: List<VenueMenuCategoryDto>
+    val categories: List<VenueMenuCategoryDto>,
 )
 
 @Serializable
@@ -13,7 +13,7 @@ data class VenueMenuCategoryDto(
     val id: Long,
     val name: String,
     val sortOrder: Int,
-    val items: List<VenueMenuItemDto>
+    val items: List<VenueMenuItemDto>,
 )
 
 @Serializable
@@ -25,7 +25,7 @@ data class VenueMenuItemDto(
     val currency: String,
     val isAvailable: Boolean,
     val sortOrder: Int,
-    val options: List<VenueMenuOptionDto>
+    val options: List<VenueMenuOptionDto>,
 )
 
 @Serializable
@@ -35,17 +35,17 @@ data class VenueMenuOptionDto(
     val name: String,
     val priceDeltaMinor: Long,
     val isAvailable: Boolean,
-    val sortOrder: Int
+    val sortOrder: Int,
 )
 
 @Serializable
 data class CreateCategoryRequest(
-    val name: String
+    val name: String,
 )
 
 @Serializable
 data class UpdateCategoryRequest(
-    val name: String? = null
+    val name: String? = null,
 )
 
 @Serializable
@@ -54,7 +54,7 @@ data class CreateItemRequest(
     val name: String,
     val priceMinor: Long,
     val currency: String = "RUB",
-    val isAvailable: Boolean = true
+    val isAvailable: Boolean = true,
 )
 
 @Serializable
@@ -63,23 +63,23 @@ data class UpdateItemRequest(
     val name: String? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
-    val isAvailable: Boolean? = null
+    val isAvailable: Boolean? = null,
 )
 
 @Serializable
 data class AvailabilityRequest(
-    val isAvailable: Boolean
+    val isAvailable: Boolean,
 )
 
 @Serializable
 data class ReorderCategoriesRequest(
-    val categoryIds: List<Long>
+    val categoryIds: List<Long>,
 )
 
 @Serializable
 data class ReorderItemsRequest(
     val categoryId: Long,
-    val itemIds: List<Long>
+    val itemIds: List<Long>,
 )
 
 @Serializable
@@ -87,12 +87,12 @@ data class CreateOptionRequest(
     val itemId: Long,
     val name: String,
     val priceDeltaMinor: Long = 0,
-    val isAvailable: Boolean = true
+    val isAvailable: Boolean = true,
 )
 
 @Serializable
 data class UpdateOptionRequest(
     val name: String? = null,
     val priceDeltaMinor: Long? = null,
-    val isAvailable: Boolean? = null
+    val isAvailable: Boolean? = null,
 )

@@ -2,11 +2,11 @@ package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
-import java.sql.Connection
-import java.sql.SQLException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.sql.Connection
+import java.sql.SQLException
 import java.time.Instant
 import javax.sql.DataSource
 
@@ -19,10 +19,10 @@ open class VenueRepository(private val dataSource: DataSource?) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                        SELECT id, name, staff_chat_id
-                        FROM venues
-                        WHERE id = ?
-                    """.trimIndent()
+                    SELECT id, name, staff_chat_id
+                    FROM venues
+                    WHERE id = ?
+                    """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, venueId)
                     statement.executeQuery().use { rs ->
@@ -30,9 +30,11 @@ open class VenueRepository(private val dataSource: DataSource?) {
                             VenueShort(
                                 id = rs.getLong("id"),
                                 name = rs.getString("name"),
-                                staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() }
+                                staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() },
                             )
-                        } else null
+                        } else {
+                            null
+                        }
                     }
                 }
             }
@@ -45,11 +47,11 @@ open class VenueRepository(private val dataSource: DataSource?) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                        SELECT id, staff_chat_id, staff_chat_linked_at, staff_chat_linked_by_user_id,
-                               staff_chat_unlinked_at, staff_chat_unlinked_by_user_id
-                        FROM venues
-                        WHERE id = ?
-                    """.trimIndent()
+                    SELECT id, staff_chat_id, staff_chat_linked_at, staff_chat_linked_by_user_id,
+                           staff_chat_unlinked_at, staff_chat_unlinked_by_user_id
+                    FROM venues
+                    WHERE id = ?
+                    """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, venueId)
                     statement.executeQuery().use { rs ->
@@ -60,9 +62,14 @@ open class VenueRepository(private val dataSource: DataSource?) {
                                 linkedAt = rs.getTimestamp("staff_chat_linked_at")?.toInstant(),
                                 linkedByUserId = rs.getLong("staff_chat_linked_by_user_id").takeIf { !rs.wasNull() },
                                 unlinkedAt = rs.getTimestamp("staff_chat_unlinked_at")?.toInstant(),
-                                unlinkedByUserId = rs.getLong("staff_chat_unlinked_by_user_id").takeIf { !rs.wasNull() }
+                                unlinkedByUserId =
+                                    rs.getLong(
+                                        "staff_chat_unlinked_by_user_id",
+                                    ).takeIf { !rs.wasNull() },
                             )
-                        } else null
+                        } else {
+                            null
+                        }
                     }
                 }
             }
@@ -75,10 +82,10 @@ open class VenueRepository(private val dataSource: DataSource?) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                        SELECT id, name, staff_chat_id
-                        FROM venues
-                        WHERE staff_chat_id = ?
-                    """.trimIndent()
+                    SELECT id, name, staff_chat_id
+                    FROM venues
+                    WHERE staff_chat_id = ?
+                    """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, chatId)
                     statement.executeQuery().use { rs ->
@@ -86,16 +93,22 @@ open class VenueRepository(private val dataSource: DataSource?) {
                             VenueShort(
                                 id = rs.getLong("id"),
                                 name = rs.getString("name"),
-                                staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() }
+                                staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() },
                             )
-                        } else null
+                        } else {
+                            null
+                        }
                     }
                 }
             }
         }
     }
 
-    suspend fun bindStaffChat(venueId: Long, chatId: Long, userId: Long): BindResult {
+    suspend fun bindStaffChat(
+        venueId: Long,
+        chatId: Long,
+        userId: Long,
+    ): BindResult {
         val ds = dataSource ?: return BindResult.DatabaseError
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -104,38 +117,47 @@ open class VenueRepository(private val dataSource: DataSource?) {
         }
     }
 
-    fun bindStaffChatInTransaction(connection: Connection, venueId: Long, chatId: Long, userId: Long): BindResult {
+    fun bindStaffChatInTransaction(
+        connection: Connection,
+        venueId: Long,
+        chatId: Long,
+        userId: Long,
+    ): BindResult {
         return bindStaffChatInternal(connection, venueId, chatId, userId, manageTransaction = false)
     }
 
-    suspend fun unlinkStaffChatByChatId(chatId: Long, userId: Long): UnlinkResult {
+    suspend fun unlinkStaffChatByChatId(
+        chatId: Long,
+        userId: Long,
+    ): UnlinkResult {
         val ds = dataSource ?: return UnlinkResult.DatabaseError
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
-                    val venue = connection.prepareStatement(
-                        """
+                    val venue =
+                        connection.prepareStatement(
+                            """
                             SELECT id, name FROM venues WHERE staff_chat_id = ? FOR UPDATE
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, chatId)
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) VenueShort(rs.getLong("id"), rs.getString("name"), chatId) else null
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, chatId)
+                            statement.executeQuery().use { rs ->
+                                if (rs.next()) VenueShort(rs.getLong("id"), rs.getString("name"), chatId) else null
+                            }
+                        } ?: run {
+                            connection.rollback()
+                            return@withContext UnlinkResult.NotLinked
                         }
-                    } ?: run {
-                        connection.rollback()
-                        return@withContext UnlinkResult.NotLinked
-                    }
                     connection.prepareStatement(
                         """
-                            UPDATE venues
-                            SET staff_chat_id = NULL,
-                                staff_chat_unlinked_at = now(),
-                                staff_chat_unlinked_by_user_id = ?,
-                                updated_at = now()
-                            WHERE id = ?
-                        """.trimIndent()
+                        UPDATE venues
+                        SET staff_chat_id = NULL,
+                            staff_chat_unlinked_at = now(),
+                            staff_chat_unlinked_by_user_id = ?,
+                            updated_at = now()
+                        WHERE id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
                         statement.setLong(2, venue.id)
@@ -148,7 +170,7 @@ open class VenueRepository(private val dataSource: DataSource?) {
                     logger.warn(
                         "Failed to unlink staff chat chatId={}: {}",
                         chatId,
-                        sanitizeTelegramForLog(e.message)
+                        sanitizeTelegramForLog(e.message),
                     )
                     logger.debugTelegramException(e) { "unlinkStaffChat exception chatId=$chatId" }
                     UnlinkResult.DatabaseError
@@ -159,47 +181,53 @@ open class VenueRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun unlinkStaffChatByVenueId(venueId: Long, userId: Long): UnlinkResult {
+    suspend fun unlinkStaffChatByVenueId(
+        venueId: Long,
+        userId: Long,
+    ): UnlinkResult {
         val ds = dataSource ?: return UnlinkResult.DatabaseError
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
-                    val venue = connection.prepareStatement(
-                        """
+                    val venue =
+                        connection.prepareStatement(
+                            """
                             SELECT id, name, staff_chat_id
                             FROM venues
                             WHERE id = ?
                             FOR UPDATE
-                        """.trimIndent()
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                VenueShort(
-                                    id = rs.getLong("id"),
-                                    name = rs.getString("name"),
-                                    staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() }
-                                )
-                            } else null
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.executeQuery().use { rs ->
+                                if (rs.next()) {
+                                    VenueShort(
+                                        id = rs.getLong("id"),
+                                        name = rs.getString("name"),
+                                        staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() },
+                                    )
+                                } else {
+                                    null
+                                }
+                            }
+                        } ?: run {
+                            connection.rollback()
+                            return@withContext UnlinkResult.NotLinked
                         }
-                    } ?: run {
-                        connection.rollback()
-                        return@withContext UnlinkResult.NotLinked
-                    }
                     if (venue.staffChatId == null) {
                         connection.rollback()
                         return@withContext UnlinkResult.NotLinked
                     }
                     connection.prepareStatement(
                         """
-                            UPDATE venues
-                            SET staff_chat_id = NULL,
-                                staff_chat_unlinked_at = now(),
-                                staff_chat_unlinked_by_user_id = ?,
-                                updated_at = now()
-                            WHERE id = ?
-                        """.trimIndent()
+                        UPDATE venues
+                        SET staff_chat_id = NULL,
+                            staff_chat_unlinked_at = now(),
+                            staff_chat_unlinked_by_user_id = ?,
+                            updated_at = now()
+                        WHERE id = ?
+                        """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
                         statement.setLong(2, venue.id)
@@ -212,7 +240,7 @@ open class VenueRepository(private val dataSource: DataSource?) {
                     logger.warn(
                         "Failed to unlink staff chat venueId={}: {}",
                         venueId,
-                        sanitizeTelegramForLog(e.message)
+                        sanitizeTelegramForLog(e.message),
                     )
                     logger.debugTelegramException(e) { "unlinkStaffChatByVenueId exception venueId=$venueId" }
                     UnlinkResult.DatabaseError
@@ -223,9 +251,12 @@ open class VenueRepository(private val dataSource: DataSource?) {
         }
     }
 
-    protected open fun findVenueIdByChatId(connection: Connection, chatId: Long): Long? {
+    protected open fun findVenueIdByChatId(
+        connection: Connection,
+        chatId: Long,
+    ): Long? {
         return connection.prepareStatement(
-            "SELECT id FROM venues WHERE staff_chat_id = ?"
+            "SELECT id FROM venues WHERE staff_chat_id = ?",
         ).use { statement ->
             statement.setLong(1, chatId)
             statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
@@ -237,32 +268,35 @@ open class VenueRepository(private val dataSource: DataSource?) {
         venueId: Long,
         chatId: Long,
         userId: Long,
-        manageTransaction: Boolean
+        manageTransaction: Boolean,
     ): BindResult {
         val initialAutoCommit = connection.autoCommit
         if (manageTransaction) {
             connection.autoCommit = false
         }
         try {
-            val venueRow = connection.prepareStatement(
-                """
+            val venueRow =
+                connection.prepareStatement(
+                    """
                     SELECT id, name, staff_chat_id
                     FROM venues
                     WHERE id = ?
                     FOR UPDATE
-                """.trimIndent()
-            ).use { statement ->
-                statement.setLong(1, venueId)
-                statement.executeQuery().use { rs ->
-                    if (rs.next()) {
-                        VenueShort(
-                            id = rs.getLong("id"),
-                            name = rs.getString("name"),
-                            staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() }
-                        )
-                    } else null
-                }
-            } ?: return rollbackAndReturn(manageTransaction, connection) { BindResult.NotFound }
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            VenueShort(
+                                id = rs.getLong("id"),
+                                name = rs.getString("name"),
+                                staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() },
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                } ?: return rollbackAndReturn(manageTransaction, connection) { BindResult.NotFound }
 
             if (venueRow.staffChatId == chatId) {
                 return rollbackAndReturn(manageTransaction, connection) {
@@ -277,20 +311,21 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 }
             }
 
-            val updated = connection.prepareStatement(
-                """
+            val updated =
+                connection.prepareStatement(
+                    """
                     UPDATE venues
                     SET staff_chat_id = ?, staff_chat_linked_at = now(),
                         staff_chat_linked_by_user_id = ?, staff_chat_unlinked_at = NULL,
                         staff_chat_unlinked_by_user_id = NULL, updated_at = now()
                     WHERE id = ?
-                """.trimIndent()
-            ).use { statement ->
-                statement.setLong(1, chatId)
-                statement.setLong(2, userId)
-                statement.setLong(3, venueId)
-                statement.executeUpdate()
-            }
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, chatId)
+                    statement.setLong(2, userId)
+                    statement.setLong(3, venueId)
+                    statement.executeUpdate()
+                }
             if (updated == 0) {
                 return rollbackAndReturn(manageTransaction, connection) { BindResult.NotFound }
             }
@@ -303,15 +338,18 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 runCatching { connection.rollback() }
             }
             val isUniqueViolation = e.hasSqlState("23505")
-            val conflictVenueId = if (isUniqueViolation && manageTransaction) {
-                runCatching { findVenueIdByChatId(connection, chatId) }.getOrNull()
-            } else null
+            val conflictVenueId =
+                if (isUniqueViolation && manageTransaction) {
+                    runCatching { findVenueIdByChatId(connection, chatId) }.getOrNull()
+                } else {
+                    null
+                }
             if (isUniqueViolation) {
                 logger.info(
                     "Staff chat bind conflict chatId={} venueId={} existingVenueId={}",
                     chatId,
                     venueId,
-                    conflictVenueId
+                    conflictVenueId,
                 )
                 return BindResult.ChatAlreadyLinked(conflictVenueId)
             }
@@ -319,7 +357,7 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 "Failed to bind staff chat venueId={} chatId={}: {}",
                 venueId,
                 chatId,
-                sanitizeTelegramForLog(e.message)
+                sanitizeTelegramForLog(e.message),
             )
             logger.debugTelegramException(e) { "bindStaffChat exception venueId=$venueId chatId=$chatId" }
             return BindResult.DatabaseError
@@ -333,7 +371,7 @@ open class VenueRepository(private val dataSource: DataSource?) {
     private fun rollbackAndReturn(
         manageTransaction: Boolean,
         connection: Connection,
-        block: () -> BindResult
+        block: () -> BindResult,
     ): BindResult {
         if (manageTransaction) {
             runCatching { connection.rollback() }
@@ -377,7 +415,7 @@ internal fun Throwable.hasSqlState(sqlState: String): Boolean {
 data class VenueShort(
     val id: Long,
     val name: String,
-    val staffChatId: Long?
+    val staffChatId: Long?,
 )
 
 data class StaffChatStatus(
@@ -386,19 +424,25 @@ data class StaffChatStatus(
     val linkedAt: Instant?,
     val linkedByUserId: Long?,
     val unlinkedAt: Instant?,
-    val unlinkedByUserId: Long?
+    val unlinkedByUserId: Long?,
 )
 
 sealed interface BindResult {
     data class Success(val venueId: Long, val venueName: String) : BindResult
+
     data class AlreadyBoundSameChat(val venueId: Long, val venueName: String) : BindResult
+
     data class ChatAlreadyLinked(val venueId: Long?) : BindResult
+
     data object NotFound : BindResult
+
     data object DatabaseError : BindResult
 }
 
 sealed interface UnlinkResult {
     data class Success(val venueId: Long, val venueName: String) : UnlinkResult
+
     data object NotLinked : UnlinkResult
+
     data object DatabaseError : UnlinkResult
 }

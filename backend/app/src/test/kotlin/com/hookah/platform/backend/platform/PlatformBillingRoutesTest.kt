@@ -17,6 +17,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.Json
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
@@ -26,146 +27,158 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlinx.serialization.json.Json
 
 class PlatformBillingRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val appEnv = "test"
 
     @Test
-    fun `non owner cannot access billing endpoints`() = testApplication {
-        val jdbcUrl = buildJdbcUrl("platform-billing-rbac")
-        val ownerId = 1201L
-        val config = buildConfig(jdbcUrl, ownerId)
+    fun `non owner cannot access billing endpoints`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-rbac")
+            val ownerId = 1201L
+            val config = buildConfig(jdbcUrl, ownerId)
 
-        environment { this.config = config }
-        application { module() }
+            environment { this.config = config }
+            application { module() }
 
-        client.get("/health")
+            client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl)
-        val invoiceId = seedInvoice(jdbcUrl, venueId)
-        val token = issueToken(config, userId = 2202L)
+            val venueId = seedVenue(jdbcUrl)
+            val invoiceId = seedInvoice(jdbcUrl, venueId)
+            val token = issueToken(config, userId = 2202L)
 
-        val listResponse = client.get("/api/platform/venues/$venueId/invoices?limit=10&offset=0") {
-            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            val listResponse =
+                client.get("/api/platform/venues/$venueId/invoices?limit=10&offset=0") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, listResponse.status)
+            assertApiErrorEnvelope(listResponse, ApiErrorCodes.FORBIDDEN)
+
+            val markResponse =
+                client.post("/api/platform/invoices/$invoiceId/mark-paid") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformMarkInvoicePaidRequest.serializer(),
+                            PlatformMarkInvoicePaidRequest(),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, markResponse.status)
+            assertApiErrorEnvelope(markResponse, ApiErrorCodes.FORBIDDEN)
         }
-        assertEquals(HttpStatusCode.Forbidden, listResponse.status)
-        assertApiErrorEnvelope(listResponse, ApiErrorCodes.FORBIDDEN)
-
-        val markResponse = client.post("/api/platform/invoices/$invoiceId/mark-paid") {
-            headers { append(HttpHeaders.Authorization, "Bearer $token") }
-            contentType(ContentType.Application.Json)
-            setBody(
-                json.encodeToString(
-                    PlatformMarkInvoicePaidRequest.serializer(),
-                    PlatformMarkInvoicePaidRequest()
-                )
-            )
-        }
-        assertEquals(HttpStatusCode.Forbidden, markResponse.status)
-        assertApiErrorEnvelope(markResponse, ApiErrorCodes.FORBIDDEN)
-    }
 
     @Test
-    fun `mark paid is idempotent and stores payment once`() = testApplication {
-        val jdbcUrl = buildJdbcUrl("platform-billing-idempotent")
-        val ownerId = 3303L
-        val config = buildConfig(jdbcUrl, ownerId)
+    fun `mark paid is idempotent and stores payment once`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-idempotent")
+            val ownerId = 3303L
+            val config = buildConfig(jdbcUrl, ownerId)
 
-        environment { this.config = config }
-        application { module() }
+            environment { this.config = config }
+            application { module() }
 
-        client.get("/health")
+            client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl)
-        val invoiceId = seedInvoice(jdbcUrl, venueId)
-        val token = issueToken(config, userId = ownerId)
+            val venueId = seedVenue(jdbcUrl)
+            val invoiceId = seedInvoice(jdbcUrl, venueId)
+            val token = issueToken(config, userId = ownerId)
 
-        val firstResponse = client.post("/api/platform/invoices/$invoiceId/mark-paid") {
-            headers { append(HttpHeaders.Authorization, "Bearer $token") }
-            contentType(ContentType.Application.Json)
-            setBody(
-                json.encodeToString(
-                    PlatformMarkInvoicePaidRequest.serializer(),
-                    PlatformMarkInvoicePaidRequest()
+            val firstResponse =
+                client.post("/api/platform/invoices/$invoiceId/mark-paid") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformMarkInvoicePaidRequest.serializer(),
+                            PlatformMarkInvoicePaidRequest(),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            val firstBody =
+                json.decodeFromString(
+                    PlatformMarkInvoicePaidResponse.serializer(),
+                    firstResponse.bodyAsText(),
                 )
-            )
-        }
-        assertEquals(HttpStatusCode.OK, firstResponse.status)
-        val firstBody = json.decodeFromString(
-            PlatformMarkInvoicePaidResponse.serializer(),
-            firstResponse.bodyAsText()
-        )
-        assertEquals(true, firstBody.ok)
-        assertEquals(false, firstBody.alreadyPaid)
-        assertEquals(1, countPayments(jdbcUrl, "manual:$invoiceId"))
+            assertEquals(true, firstBody.ok)
+            assertEquals(false, firstBody.alreadyPaid)
+            assertEquals(1, countPayments(jdbcUrl, "manual:$invoiceId"))
 
-        val invoiceAfterFirst = invoiceStatus(jdbcUrl, invoiceId)
-        assertEquals("PAID", invoiceAfterFirst.first)
-        assertNotNull(invoiceAfterFirst.second)
+            val invoiceAfterFirst = invoiceStatus(jdbcUrl, invoiceId)
+            assertEquals("PAID", invoiceAfterFirst.first)
+            assertNotNull(invoiceAfterFirst.second)
 
-        val secondResponse = client.post("/api/platform/invoices/$invoiceId/mark-paid") {
-            headers { append(HttpHeaders.Authorization, "Bearer $token") }
-            contentType(ContentType.Application.Json)
-            setBody(
-                json.encodeToString(
-                    PlatformMarkInvoicePaidRequest.serializer(),
-                    PlatformMarkInvoicePaidRequest()
+            val secondResponse =
+                client.post("/api/platform/invoices/$invoiceId/mark-paid") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformMarkInvoicePaidRequest.serializer(),
+                            PlatformMarkInvoicePaidRequest(),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, secondResponse.status)
+            val secondBody =
+                json.decodeFromString(
+                    PlatformMarkInvoicePaidResponse.serializer(),
+                    secondResponse.bodyAsText(),
                 )
-            )
+            assertEquals(true, secondBody.ok)
+            assertEquals(true, secondBody.alreadyPaid)
+            assertEquals(1, countPayments(jdbcUrl, "manual:$invoiceId"))
         }
-        assertEquals(HttpStatusCode.OK, secondResponse.status)
-        val secondBody = json.decodeFromString(
-            PlatformMarkInvoicePaidResponse.serializer(),
-            secondResponse.bodyAsText()
-        )
-        assertEquals(true, secondBody.ok)
-        assertEquals(true, secondBody.alreadyPaid)
-        assertEquals(1, countPayments(jdbcUrl, "manual:$invoiceId"))
-    }
 
     @Test
-    fun `mark paid rejects non payable invoices`() = testApplication {
-        val jdbcUrl = buildJdbcUrl("platform-billing-invalid-status")
-        val ownerId = 4404L
-        val config = buildConfig(jdbcUrl, ownerId)
+    fun `mark paid rejects non payable invoices`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-invalid-status")
+            val ownerId = 4404L
+            val config = buildConfig(jdbcUrl, ownerId)
 
-        environment { this.config = config }
-        application { module() }
+            environment { this.config = config }
+            application { module() }
 
-        client.get("/health")
+            client.get("/health")
 
-        val venueId = seedVenue(jdbcUrl)
-        val invoiceId = seedInvoice(jdbcUrl, venueId, status = "VOID")
-        val token = issueToken(config, userId = ownerId)
+            val venueId = seedVenue(jdbcUrl)
+            val invoiceId = seedInvoice(jdbcUrl, venueId, status = "VOID")
+            val token = issueToken(config, userId = ownerId)
 
-        val response = client.post("/api/platform/invoices/$invoiceId/mark-paid") {
-            headers { append(HttpHeaders.Authorization, "Bearer $token") }
-            contentType(ContentType.Application.Json)
-            setBody(
-                json.encodeToString(
-                    PlatformMarkInvoicePaidRequest.serializer(),
-                    PlatformMarkInvoicePaidRequest()
-                )
-            )
+            val response =
+                client.post("/api/platform/invoices/$invoiceId/mark-paid") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformMarkInvoicePaidRequest.serializer(),
+                            PlatformMarkInvoicePaidRequest(),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(0, countPayments(jdbcUrl, "manual:$invoiceId"))
+
+            val invoiceAfter = invoiceStatus(jdbcUrl, invoiceId)
+            assertEquals("VOID", invoiceAfter.first)
+            assertEquals(null, invoiceAfter.second)
         }
-
-        assertEquals(HttpStatusCode.BadRequest, response.status)
-        assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
-        assertEquals(0, countPayments(jdbcUrl, "manual:$invoiceId"))
-
-        val invoiceAfter = invoiceStatus(jdbcUrl, invoiceId)
-        assertEquals("VOID", invoiceAfter.first)
-        assertEquals(null, invoiceAfter.second)
-    }
 
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String, ownerId: Long): MapApplicationConfig {
+    private fun buildConfig(
+        jdbcUrl: String,
+        ownerId: Long,
+    ): MapApplicationConfig {
         return MapApplicationConfig(
             "app.env" to appEnv,
             "api.session.jwtSecret" to "test-secret",
@@ -173,11 +186,14 @@ class PlatformBillingRoutesTest {
             "db.user" to "sa",
             "db.password" to "",
             "platform.ownerUserId" to ownerId.toString(),
-            "venue.staffInviteSecretPepper" to "invite-pepper"
+            "venue.staffInviteSecretPepper" to "invite-pepper",
         )
     }
 
-    private fun issueToken(config: MapApplicationConfig, userId: Long): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long,
+    ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
         return service.issueToken(userId).token
     }
@@ -186,10 +202,10 @@ class PlatformBillingRoutesTest {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                    INSERT INTO venues (name, city, address, status)
-                    VALUES ('Seed', 'City', 'Address', ?)
+                INSERT INTO venues (name, city, address, status)
+                VALUES ('Seed', 'City', 'Address', ?)
                 """.trimIndent(),
-                Statement.RETURN_GENERATED_KEYS
+                Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
                 statement.setString(1, VenueStatus.DRAFT.dbValue)
                 statement.executeUpdate()
@@ -201,26 +217,30 @@ class PlatformBillingRoutesTest {
         error("Failed to insert venue")
     }
 
-    private fun seedInvoice(jdbcUrl: String, venueId: Long, status: String = "OPEN"): Long {
+    private fun seedInvoice(
+        jdbcUrl: String,
+        venueId: Long,
+        status: String = "OPEN",
+    ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                    INSERT INTO billing_invoices (
-                        venue_id,
-                        period_start,
-                        period_end,
-                        due_at,
-                        amount_minor,
-                        currency,
-                        description,
-                        provider,
-                        provider_invoice_id,
-                        payment_url,
-                        status
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO billing_invoices (
+                    venue_id,
+                    period_start,
+                    period_end,
+                    due_at,
+                    amount_minor,
+                    currency,
+                    description,
+                    provider,
+                    provider_invoice_id,
+                    payment_url,
+                    status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
-                Statement.RETURN_GENERATED_KEYS
+                Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
                 val today = LocalDate.now()
                 statement.setLong(1, venueId)
@@ -243,14 +263,17 @@ class PlatformBillingRoutesTest {
         error("Failed to insert invoice")
     }
 
-    private fun countPayments(jdbcUrl: String, providerEventId: String): Int {
+    private fun countPayments(
+        jdbcUrl: String,
+        providerEventId: String,
+    ): Int {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                    SELECT COUNT(*)
-                    FROM billing_payments
-                    WHERE provider_event_id = ?
-                """.trimIndent()
+                SELECT COUNT(*)
+                FROM billing_payments
+                WHERE provider_event_id = ?
+                """.trimIndent(),
             ).use { statement ->
                 statement.setString(1, providerEventId)
                 statement.executeQuery().use { rs ->
@@ -261,14 +284,17 @@ class PlatformBillingRoutesTest {
         return 0
     }
 
-    private fun invoiceStatus(jdbcUrl: String, invoiceId: Long): Pair<String, Instant?> {
+    private fun invoiceStatus(
+        jdbcUrl: String,
+        invoiceId: Long,
+    ): Pair<String, Instant?> {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                    SELECT status, paid_at
-                    FROM billing_invoices
-                    WHERE id = ?
-                """.trimIndent()
+                SELECT status, paid_at
+                FROM billing_invoices
+                WHERE id = ?
+                """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, invoiceId)
                 statement.executeQuery().use { rs ->

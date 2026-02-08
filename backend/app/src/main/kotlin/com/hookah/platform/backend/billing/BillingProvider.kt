@@ -16,7 +16,7 @@ interface BillingProvider {
         description: String,
         periodStart: LocalDate,
         periodEnd: LocalDate,
-        dueAt: Instant
+        dueAt: Instant,
     ): ProviderInvoiceResult
 
     suspend fun handleWebhook(call: ApplicationCall): PaymentEvent?
@@ -25,7 +25,7 @@ interface BillingProvider {
 data class ProviderInvoiceResult(
     val providerInvoiceId: String?,
     val paymentUrl: String?,
-    val rawPayload: String?
+    val rawPayload: String?,
 )
 
 sealed interface PaymentEvent {
@@ -44,7 +44,7 @@ sealed interface PaymentEvent {
         override val amountMinor: Int,
         override val currency: String,
         override val occurredAt: Instant,
-        override val rawPayload: String?
+        override val rawPayload: String?,
     ) : PaymentEvent
 
     data class Failed(
@@ -54,7 +54,7 @@ sealed interface PaymentEvent {
         override val amountMinor: Int,
         override val currency: String,
         override val occurredAt: Instant,
-        override val rawPayload: String?
+        override val rawPayload: String?,
     ) : PaymentEvent
 
     data class Refunded(
@@ -64,11 +64,11 @@ sealed interface PaymentEvent {
         override val amountMinor: Int,
         override val currency: String,
         override val occurredAt: Instant,
-        override val rawPayload: String?
+        override val rawPayload: String?,
     ) : PaymentEvent
 }
 
 class BillingWebhookRejectedException(
     val status: HttpStatusCode,
-    message: String? = null
+    message: String? = null,
 ) : RuntimeException(message)

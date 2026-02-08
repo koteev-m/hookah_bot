@@ -15,14 +15,14 @@ class FakeBillingProvider : BillingProvider {
         description: String,
         periodStart: LocalDate,
         periodEnd: LocalDate,
-        dueAt: Instant
+        dueAt: Instant,
     ): ProviderInvoiceResult {
         val providerInvoiceId = "fake-$invoiceId"
         val paymentUrl = "fake://invoice/$providerInvoiceId"
         return ProviderInvoiceResult(
             providerInvoiceId = providerInvoiceId,
             paymentUrl = paymentUrl,
-            rawPayload = null
+            rawPayload = null,
         )
     }
 

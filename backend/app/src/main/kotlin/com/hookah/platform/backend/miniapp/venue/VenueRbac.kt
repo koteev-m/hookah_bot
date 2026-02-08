@@ -5,7 +5,7 @@ import java.util.Locale
 enum class VenueRole {
     OWNER,
     MANAGER,
-    STAFF
+    STAFF,
 }
 
 enum class VenuePermission {
@@ -19,7 +19,7 @@ enum class VenuePermission {
     TABLE_MANAGE,
     TABLE_TOKEN_ROTATE,
     TABLE_TOKEN_ROTATE_ALL,
-    TABLE_QR_EXPORT
+    TABLE_QR_EXPORT,
 }
 
 object VenueRoleMapping {
@@ -45,34 +45,37 @@ object VenueRoleMapping {
 object VenuePermissions {
     fun forRole(role: VenueRole): Set<VenuePermission> {
         return when (role) {
-            VenueRole.OWNER -> setOf(
-                VenuePermission.STAFF_CHAT_LINK,
-                VenuePermission.VENUE_SETTINGS,
-                VenuePermission.ORDER_STATUS_UPDATE,
-                VenuePermission.ORDER_QUEUE_VIEW,
-                VenuePermission.MENU_VIEW,
-                VenuePermission.MENU_MANAGE,
-                VenuePermission.TABLE_VIEW,
-                VenuePermission.TABLE_MANAGE,
-                VenuePermission.TABLE_TOKEN_ROTATE,
-                VenuePermission.TABLE_TOKEN_ROTATE_ALL,
-                VenuePermission.TABLE_QR_EXPORT
-            )
-            VenueRole.MANAGER -> setOf(
-                VenuePermission.ORDER_STATUS_UPDATE,
-                VenuePermission.ORDER_QUEUE_VIEW,
-                VenuePermission.MENU_VIEW,
-                VenuePermission.MENU_MANAGE,
-                VenuePermission.TABLE_VIEW,
-                VenuePermission.TABLE_MANAGE,
-                VenuePermission.TABLE_QR_EXPORT
-            )
-            VenueRole.STAFF -> setOf(
-                VenuePermission.ORDER_QUEUE_VIEW,
-                VenuePermission.ORDER_STATUS_UPDATE,
-                VenuePermission.MENU_VIEW,
-                VenuePermission.TABLE_VIEW
-            )
+            VenueRole.OWNER ->
+                setOf(
+                    VenuePermission.STAFF_CHAT_LINK,
+                    VenuePermission.VENUE_SETTINGS,
+                    VenuePermission.ORDER_STATUS_UPDATE,
+                    VenuePermission.ORDER_QUEUE_VIEW,
+                    VenuePermission.MENU_VIEW,
+                    VenuePermission.MENU_MANAGE,
+                    VenuePermission.TABLE_VIEW,
+                    VenuePermission.TABLE_MANAGE,
+                    VenuePermission.TABLE_TOKEN_ROTATE,
+                    VenuePermission.TABLE_TOKEN_ROTATE_ALL,
+                    VenuePermission.TABLE_QR_EXPORT,
+                )
+            VenueRole.MANAGER ->
+                setOf(
+                    VenuePermission.ORDER_STATUS_UPDATE,
+                    VenuePermission.ORDER_QUEUE_VIEW,
+                    VenuePermission.MENU_VIEW,
+                    VenuePermission.MENU_MANAGE,
+                    VenuePermission.TABLE_VIEW,
+                    VenuePermission.TABLE_MANAGE,
+                    VenuePermission.TABLE_QR_EXPORT,
+                )
+            VenueRole.STAFF ->
+                setOf(
+                    VenuePermission.ORDER_QUEUE_VIEW,
+                    VenuePermission.ORDER_STATUS_UPDATE,
+                    VenuePermission.MENU_VIEW,
+                    VenuePermission.TABLE_VIEW,
+                )
         }
     }
 }

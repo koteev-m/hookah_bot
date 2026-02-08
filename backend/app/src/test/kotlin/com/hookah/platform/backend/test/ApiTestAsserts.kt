@@ -13,7 +13,10 @@ import kotlin.test.assertTrue
 
 private val json = Json { ignoreUnknownKeys = true }
 
-suspend fun assertApiErrorEnvelope(response: HttpResponse, expectedCode: String): ApiErrorEnvelope {
+suspend fun assertApiErrorEnvelope(
+    response: HttpResponse,
+    expectedCode: String,
+): ApiErrorEnvelope {
     val body = response.bodyAsText()
     val envelope = json.decodeFromString<ApiErrorEnvelope>(body)
 
@@ -24,20 +27,20 @@ suspend fun assertApiErrorEnvelope(response: HttpResponse, expectedCode: String)
     val headerRequestId = response.headers[ApiHeaders.REQUEST_ID]
     assertTrue(
         !headerRequestId.isNullOrBlank(),
-        "${ApiHeaders.REQUEST_ID} header must be present in API error envelope"
+        "${ApiHeaders.REQUEST_ID} header must be present in API error envelope",
     )
     assertEquals(envelope.requestId, headerRequestId)
 
     val contentTypeHeader = response.headers[HttpHeaders.ContentType]
     assertTrue(
         !contentTypeHeader.isNullOrBlank(),
-        "${HttpHeaders.ContentType} header must be present in API error envelope"
+        "${HttpHeaders.ContentType} header must be present in API error envelope",
     )
 
     val parsed = runCatching { ContentType.parse(contentTypeHeader) }.getOrNull()
     assertTrue(
         parsed?.match(ContentType.Application.Json) == true,
-        "Content-Type must be application/json (got: $contentTypeHeader)"
+        "Content-Type must be application/json (got: $contentTypeHeader)",
     )
 
     return envelope

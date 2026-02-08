@@ -19,21 +19,21 @@ private val logger = LoggerFactory.getLogger("VenueRoutes")
 @Serializable
 data class VenueMeResponse(
     val userId: Long,
-    val venues: List<VenueAccessDto>
+    val venues: List<VenueAccessDto>,
 )
 
 @Serializable
 data class VenueAccessDto(
     val venueId: Long,
     val role: String,
-    val permissions: List<String>
+    val permissions: List<String>,
 )
 
 @Serializable
 data class StaffChatLinkCodeResponse(
     val code: String,
     val expiresAt: String,
-    val ttlSeconds: Long
+    val ttlSeconds: Long,
 )
 
 @Serializable
@@ -44,31 +44,37 @@ data class StaffChatStatusResponse(
     val linkedAt: String? = null,
     val linkedByUserId: Long? = null,
     val activeCodeHint: String? = null,
-    val activeCodeExpiresAt: String? = null
+    val activeCodeExpiresAt: String? = null,
 )
 
 fun Route.venueRoutes(
     venueAccessRepository: VenueAccessRepository,
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
-    venueRepository: VenueRepository
+    venueRepository: VenueRepository,
 ) {
     route("/venue") {
         get("/me") {
             val userId = call.requireUserId()
             val memberships = venueAccessRepository.listVenueMemberships(userId)
-            val venues = memberships.mapNotNull { membership ->
-                val role = VenueRoleMapping.fromDb(membership.role)
-                if (role == null) {
-                    logger.warn("Unknown venue role {} for userId={} venueId={}", membership.role, userId, membership.venueId)
-                    return@mapNotNull null
+            val venues =
+                memberships.mapNotNull { membership ->
+                    val role = VenueRoleMapping.fromDb(membership.role)
+                    if (role == null) {
+                        logger.warn(
+                            "Unknown venue role {} for userId={} venueId={}",
+                            membership.role,
+                            userId,
+                            membership.venueId,
+                        )
+                        return@mapNotNull null
+                    }
+                    val permissions = VenuePermissions.forRole(role)
+                    VenueAccessDto(
+                        venueId = membership.venueId,
+                        role = role.name,
+                        permissions = permissions.map { it.name },
+                    )
                 }
-                val permissions = VenuePermissions.forRole(role)
-                VenueAccessDto(
-                    venueId = membership.venueId,
-                    role = role.name,
-                    permissions = permissions.map { it.name }
-                )
-            }
             if (venues.isEmpty()) {
                 throw ForbiddenException()
             }
@@ -78,11 +84,12 @@ fun Route.venueRoutes(
         post("/{venueId}/staff-chat/link-code") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            val role = resolveVenueRole(
-                venueAccessRepository = venueAccessRepository,
-                userId = userId,
-                venueId = venueId
-            )
+            val role =
+                resolveVenueRole(
+                    venueAccessRepository = venueAccessRepository,
+                    userId = userId,
+                    venueId = venueId,
+                )
             val permissions = VenuePermissions.forRole(role)
             if (!permissions.contains(VenuePermission.STAFF_CHAT_LINK)) {
                 throw ForbiddenException()
@@ -91,20 +98,21 @@ fun Route.venueRoutes(
             if (!venueExists) {
                 throw NotFoundException()
             }
-            val created = staffChatLinkCodeRepository.createLinkCode(venueId, userId)
-                ?: throw DatabaseUnavailableException()
+            val created =
+                staffChatLinkCodeRepository.createLinkCode(venueId, userId)
+                    ?: throw DatabaseUnavailableException()
             logger.info(
                 "Generated staff chat link code venueId={} by userId={} expiresAt={}",
                 venueId,
                 userId,
-                created.expiresAt
+                created.expiresAt,
             )
             call.respond(
                 StaffChatLinkCodeResponse(
                     code = created.code,
                     expiresAt = created.expiresAt.toString(),
-                    ttlSeconds = created.ttlSeconds
-                )
+                    ttlSeconds = created.ttlSeconds,
+                ),
             )
         }
 
@@ -114,7 +122,7 @@ fun Route.venueRoutes(
             resolveVenueRole(
                 venueAccessRepository = venueAccessRepository,
                 userId = userId,
-                venueId = venueId
+                venueId = venueId,
             )
             val status = venueRepository.findStaffChatStatus(venueId) ?: throw NotFoundException()
             val activeCode = staffChatLinkCodeRepository.findActiveCodeForVenue(venueId)
@@ -126,19 +134,20 @@ fun Route.venueRoutes(
                     linkedAt = status.linkedAt?.toString(),
                     linkedByUserId = status.linkedByUserId,
                     activeCodeHint = activeCode?.codeHint,
-                    activeCodeExpiresAt = activeCode?.expiresAt?.toString()
-                )
+                    activeCodeExpiresAt = activeCode?.expiresAt?.toString(),
+                ),
             )
         }
 
         post("/{venueId}/staff-chat/unlink") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            val role = resolveVenueRole(
-                venueAccessRepository = venueAccessRepository,
-                userId = userId,
-                venueId = venueId
-            )
+            val role =
+                resolveVenueRole(
+                    venueAccessRepository = venueAccessRepository,
+                    userId = userId,
+                    venueId = venueId,
+                )
             val permissions = VenuePermissions.forRole(role)
             if (!permissions.contains(VenuePermission.STAFF_CHAT_LINK)) {
                 throw ForbiddenException()

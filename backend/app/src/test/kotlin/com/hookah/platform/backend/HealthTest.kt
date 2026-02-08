@@ -11,14 +11,15 @@ import kotlin.test.assertTrue
 
 class HealthTest {
     @Test
-    fun `health endpoint returns ok`() = testApplication {
-        environment {
-            config = MapApplicationConfig("db.jdbcUrl" to "")
-        }
-        application { module() }
+    fun `health endpoint returns ok`() =
+        testApplication {
+            environment {
+                config = MapApplicationConfig("db.jdbcUrl" to "")
+            }
+            application { module() }
 
-        val response = client.get("/health")
-        assertEquals(HttpStatusCode.OK, response.status)
-        assertTrue(response.bodyAsText().contains("ok"))
-    }
+            val response = client.get("/health")
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(response.bodyAsText().contains("ok"))
+        }
 }

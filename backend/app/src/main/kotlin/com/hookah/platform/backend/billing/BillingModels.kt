@@ -9,7 +9,8 @@ enum class InvoiceStatus(val dbValue: String) {
     OPEN("OPEN"),
     PAID("PAID"),
     PAST_DUE("PAST_DUE"),
-    VOID("VOID");
+    VOID("VOID"),
+    ;
 
     companion object {
         fun fromDb(value: String?): InvoiceStatus? {
@@ -22,7 +23,8 @@ enum class InvoiceStatus(val dbValue: String) {
 enum class PaymentStatus(val dbValue: String) {
     SUCCEEDED("SUCCEEDED"),
     FAILED("FAILED"),
-    REFUNDED("REFUNDED");
+    REFUNDED("REFUNDED"),
+    ;
 
     companion object {
         fun fromDb(value: String?): PaymentStatus? {
@@ -49,7 +51,7 @@ data class BillingInvoice(
     val createdAt: Instant,
     val updatedAt: Instant,
     val paidAt: Instant?,
-    val updatedByUserId: Long?
+    val updatedByUserId: Long?,
 )
 
 data class BillingPayment(
@@ -62,5 +64,5 @@ data class BillingPayment(
     val status: PaymentStatus,
     val occurredAt: Instant,
     val createdAt: Instant,
-    val rawPayload: String?
+    val rawPayload: String?,
 )

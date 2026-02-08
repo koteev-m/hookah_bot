@@ -12,19 +12,21 @@ class TelegramWebAppUrlTest {
 
     @Test
     fun `build url with existing query`() {
-        val url = buildWebAppUrl(
-            "https://example.com/miniapp/?screen=menu",
-            mapOf("table_token" to "abc")
-        )
+        val url =
+            buildWebAppUrl(
+                "https://example.com/miniapp/?screen=menu",
+                mapOf("table_token" to "abc"),
+            )
         assertEquals("https://example.com/miniapp/?screen=menu&table_token=abc", url)
     }
 
     @Test
     fun `build url with fragment`() {
-        val url = buildWebAppUrl(
-            "https://example.com/miniapp/#/route",
-            mapOf("table_token" to "abc", "screen" to "order")
-        )
+        val url =
+            buildWebAppUrl(
+                "https://example.com/miniapp/#/route",
+                mapOf("table_token" to "abc", "screen" to "order"),
+            )
         assertEquals("https://example.com/miniapp/?table_token=abc&screen=order#/route", url)
     }
 

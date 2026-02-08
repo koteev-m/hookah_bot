@@ -25,7 +25,7 @@ private val allowedCurrencies = setOf("RUB")
 
 fun Route.venueMenuRoutes(
     venueAccessRepository: VenueAccessRepository,
-    venueMenuRepository: VenueMenuRepository
+    venueMenuRepository: VenueMenuRepository,
 ) {
     route("/venue") {
         get("/menu") {
@@ -40,8 +40,8 @@ fun Route.venueMenuRoutes(
             call.respond(
                 VenueMenuResponse(
                     venueId = venueId,
-                    categories = categories.map { it.toDto() }
-                )
+                    categories = categories.map { it.toDto() },
+                ),
             )
         }
 
@@ -60,13 +60,15 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val categoryId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("categoryId must be a number")
+            val categoryId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("categoryId must be a number")
             val payload = call.receive<UpdateCategoryRequest>()
             val name = payload.name?.trim() ?: throw InvalidInputException("name is required")
             validateName(name)
-            val updated = venueMenuRepository.updateCategory(venueId, categoryId, name)
-                ?: throw NotFoundException()
+            val updated =
+                venueMenuRepository.updateCategory(venueId, categoryId, name)
+                    ?: throw NotFoundException()
             call.respond(updated.toDto())
         }
 
@@ -74,8 +76,9 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val categoryId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("categoryId must be a number")
+            val categoryId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("categoryId must be a number")
             if (!venueMenuRepository.categoryExists(venueId, categoryId)) {
                 throw NotFoundException()
             }
@@ -99,14 +102,15 @@ fun Route.venueMenuRoutes(
             validatePrice(payload.priceMinor)
             val currency = payload.currency.trim().uppercase(Locale.ROOT)
             validateCurrency(currency)
-            val created = venueMenuRepository.createItem(
-                venueId = venueId,
-                categoryId = payload.categoryId,
-                name = name,
-                priceMinor = payload.priceMinor,
-                currency = currency,
-                isAvailable = payload.isAvailable
-            ) ?: throw InvalidInputException("categoryId is invalid")
+            val created =
+                venueMenuRepository.createItem(
+                    venueId = venueId,
+                    categoryId = payload.categoryId,
+                    name = name,
+                    priceMinor = payload.priceMinor,
+                    currency = currency,
+                    isAvailable = payload.isAvailable,
+                ) ?: throw InvalidInputException("categoryId is invalid")
             call.respond(created.toDto())
         }
 
@@ -114,8 +118,9 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val itemId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("itemId must be a number")
+            val itemId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("itemId must be a number")
             val payload = call.receive<UpdateItemRequest>()
             if (!venueMenuRepository.itemExists(venueId, itemId)) {
                 throw NotFoundException()
@@ -132,15 +137,16 @@ fun Route.venueMenuRoutes(
             if (payload.categoryId != null && !venueMenuRepository.categoryExists(venueId, payload.categoryId)) {
                 throw InvalidInputException("categoryId is invalid")
             }
-            val updated = venueMenuRepository.updateItem(
-                venueId = venueId,
-                itemId = itemId,
-                categoryId = payload.categoryId,
-                name = name,
-                priceMinor = payload.priceMinor,
-                currency = currency,
-                isAvailable = payload.isAvailable
-            ) ?: throw NotFoundException()
+            val updated =
+                venueMenuRepository.updateItem(
+                    venueId = venueId,
+                    itemId = itemId,
+                    categoryId = payload.categoryId,
+                    name = name,
+                    priceMinor = payload.priceMinor,
+                    currency = currency,
+                    isAvailable = payload.isAvailable,
+                ) ?: throw NotFoundException()
             call.respond(updated.toDto())
         }
 
@@ -148,8 +154,9 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val itemId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("itemId must be a number")
+            val itemId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("itemId must be a number")
             val deleted = venueMenuRepository.deleteItem(venueId, itemId)
             if (!deleted) {
                 throw NotFoundException()
@@ -161,11 +168,13 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val itemId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("itemId must be a number")
+            val itemId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("itemId must be a number")
             val payload = call.receive<AvailabilityRequest>()
-            val updated = venueMenuRepository.setItemAvailability(venueId, itemId, payload.isAvailable)
-                ?: throw NotFoundException()
+            val updated =
+                venueMenuRepository.setItemAvailability(venueId, itemId, payload.isAvailable)
+                    ?: throw NotFoundException()
             call.respond(updated.toDto())
         }
 
@@ -203,13 +212,14 @@ fun Route.venueMenuRoutes(
             val name = payload.name.trim()
             validateName(name)
             validatePrice(payload.priceDeltaMinor)
-            val created = venueMenuRepository.createOption(
-                venueId = venueId,
-                itemId = payload.itemId,
-                name = name,
-                priceDeltaMinor = payload.priceDeltaMinor,
-                isAvailable = payload.isAvailable
-            ) ?: throw InvalidInputException("itemId is invalid")
+            val created =
+                venueMenuRepository.createOption(
+                    venueId = venueId,
+                    itemId = payload.itemId,
+                    name = name,
+                    priceDeltaMinor = payload.priceDeltaMinor,
+                    isAvailable = payload.isAvailable,
+                ) ?: throw InvalidInputException("itemId is invalid")
             call.respond(created.toDto())
         }
 
@@ -217,8 +227,9 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val optionId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("optionId must be a number")
+            val optionId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("optionId must be a number")
             if (!venueMenuRepository.optionExists(venueId, optionId)) {
                 throw NotFoundException()
             }
@@ -228,13 +239,14 @@ fun Route.venueMenuRoutes(
                 validateName(name)
             }
             payload.priceDeltaMinor?.let { validatePrice(it) }
-            val updated = venueMenuRepository.updateOption(
-                venueId = venueId,
-                optionId = optionId,
-                name = name,
-                priceDeltaMinor = payload.priceDeltaMinor,
-                isAvailable = payload.isAvailable
-            ) ?: throw NotFoundException()
+            val updated =
+                venueMenuRepository.updateOption(
+                    venueId = venueId,
+                    optionId = optionId,
+                    name = name,
+                    priceDeltaMinor = payload.priceDeltaMinor,
+                    isAvailable = payload.isAvailable,
+                ) ?: throw NotFoundException()
             call.respond(updated.toDto())
         }
 
@@ -242,11 +254,13 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val optionId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("optionId must be a number")
+            val optionId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("optionId must be a number")
             val payload = call.receive<AvailabilityRequest>()
-            val updated = venueMenuRepository.setOptionAvailability(venueId, optionId, payload.isAvailable)
-                ?: throw NotFoundException()
+            val updated =
+                venueMenuRepository.setOptionAvailability(venueId, optionId, payload.isAvailable)
+                    ?: throw NotFoundException()
             call.respond(updated.toDto())
         }
 
@@ -254,8 +268,9 @@ fun Route.venueMenuRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             ensureMenuManage(venueAccessRepository, userId, venueId)
-            val optionId = call.parameters["id"]?.toLongOrNull()
-                ?: throw InvalidInputException("optionId must be a number")
+            val optionId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("optionId must be a number")
             val deleted = venueMenuRepository.deleteOption(venueId, optionId)
             if (!deleted) {
                 throw NotFoundException()
@@ -268,7 +283,7 @@ fun Route.venueMenuRoutes(
 private suspend fun ensureMenuManage(
     venueAccessRepository: VenueAccessRepository,
     userId: Long,
-    venueId: Long
+    venueId: Long,
 ) {
     val role = resolveVenueRole(venueAccessRepository, userId, venueId)
     val permissions = VenuePermissions.forRole(role)
@@ -301,7 +316,10 @@ private fun validateCurrency(currency: String) {
     }
 }
 
-private fun validateUniqueIds(ids: List<Long>, fieldName: String) {
+private fun validateUniqueIds(
+    ids: List<Long>,
+    fieldName: String,
+) {
     if (ids.isEmpty()) {
         throw InvalidInputException("$fieldName must not be empty")
     }
@@ -313,29 +331,32 @@ private fun validateUniqueIds(ids: List<Long>, fieldName: String) {
     }
 }
 
-private fun VenueMenuCategory.toDto(): VenueMenuCategoryDto = VenueMenuCategoryDto(
-    id = id,
-    name = name,
-    sortOrder = sortOrder,
-    items = items.map { it.toDto() }
-)
+private fun VenueMenuCategory.toDto(): VenueMenuCategoryDto =
+    VenueMenuCategoryDto(
+        id = id,
+        name = name,
+        sortOrder = sortOrder,
+        items = items.map { it.toDto() },
+    )
 
-private fun VenueMenuItem.toDto(): VenueMenuItemDto = VenueMenuItemDto(
-    id = id,
-    categoryId = categoryId,
-    name = name,
-    priceMinor = priceMinor,
-    currency = currency,
-    isAvailable = isAvailable,
-    sortOrder = sortOrder,
-    options = options.map { it.toDto() }
-)
+private fun VenueMenuItem.toDto(): VenueMenuItemDto =
+    VenueMenuItemDto(
+        id = id,
+        categoryId = categoryId,
+        name = name,
+        priceMinor = priceMinor,
+        currency = currency,
+        isAvailable = isAvailable,
+        sortOrder = sortOrder,
+        options = options.map { it.toDto() },
+    )
 
-private fun VenueMenuOption.toDto(): VenueMenuOptionDto = VenueMenuOptionDto(
-    id = id,
-    itemId = itemId,
-    name = name,
-    priceDeltaMinor = priceDeltaMinor,
-    isAvailable = isAvailable,
-    sortOrder = sortOrder
-)
+private fun VenueMenuOption.toDto(): VenueMenuOptionDto =
+    VenueMenuOptionDto(
+        id = id,
+        itemId = itemId,
+        name = name,
+        priceDeltaMinor = priceDeltaMinor,
+        isAvailable = isAvailable,
+        sortOrder = sortOrder,
+    )
