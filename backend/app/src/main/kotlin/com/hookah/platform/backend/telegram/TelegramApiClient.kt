@@ -13,9 +13,20 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import org.slf4j.LoggerFactory
 import java.lang.RuntimeException
+
+sealed class TelegramCallResult {
+    data class Success(val responseJson: JsonElement?) : TelegramCallResult()
+
+    data class Failure(
+        val errorCode: Int?,
+        val description: String?,
+        val retryAfterSeconds: Int?,
+    ) : TelegramCallResult()
+}
 
 class TelegramApiClient(
     private val token: String,
@@ -47,23 +58,31 @@ class TelegramApiClient(
         text: String,
         replyMarkup: ReplyMarkup? = null,
     ): MessageId? {
-        val payload = buildPayload(chatId, text, replyMarkup)
+        val payload = buildSendMessagePayload(json, chatId, text, replyMarkup)
+        val payloadJson = json.encodeToJsonElement(payload)
         return runCatching {
-            val response: TelegramResponse<MessageId> =
-                client.post("$baseUrl/sendMessage") {
-                    contentType(ContentType.Application.Json)
-                    setBody(payload)
-                }.safeBody()
-            if (response.ok.not()) {
-                val safeDescription = sanitizeTelegramForLog(response.description)
-                logger.warn(
-                    "Telegram sendMessage failed: {}{}",
-                    safeDescription,
-                    response.errorCode?.let { " (code=$it)" } ?: "",
-                )
-                null
-            } else {
-                response.result
+            when (val result = callMethod("sendMessage", payloadJson)) {
+                is TelegramCallResult.Success ->
+                    result.responseJson?.let { responseJson ->
+                        runCatching { json.decodeFromJsonElement(MessageId.serializer(), responseJson) }
+                            .onFailure { throwable ->
+                                logger.warn(
+                                    "Telegram sendMessage failed: {}",
+                                    sanitizeTelegramForLog(throwable.message),
+                                )
+                                logger.debugTelegramException(throwable) { "Telegram sendMessage decode exception" }
+                            }
+                            .getOrNull()
+                    }
+                is TelegramCallResult.Failure -> {
+                    val safeDescription = sanitizeTelegramForLog(result.description)
+                    logger.warn(
+                        "Telegram sendMessage failed: {}{}",
+                        safeDescription,
+                        result.errorCode?.let { " (code=$it)" } ?: "",
+                    )
+                    null
+                }
             }
         }.onFailure { throwable ->
             logger.warn("Telegram sendMessage failed: {}", sanitizeTelegramForLog(throwable.message))
@@ -90,6 +109,25 @@ class TelegramApiClient(
             logger.warn("answerCallbackQuery failed: {}", sanitizeTelegramForLog(throwable.message))
             logger.debugTelegramException(throwable) { "answerCallbackQuery exception" }
         }
+    }
+
+    suspend fun callMethod(
+        method: String,
+        payload: JsonElement,
+    ): TelegramCallResult {
+        val response: TelegramResponse<JsonElement> =
+            client.post("$baseUrl/$method") {
+                contentType(ContentType.Application.Json)
+                setBody(payload)
+            }.safeBody()
+        if (response.ok.not()) {
+            return TelegramCallResult.Failure(
+                errorCode = response.errorCode,
+                description = response.description,
+                retryAfterSeconds = response.parameters?.retryAfterSeconds,
+            )
+        }
+        return TelegramCallResult.Success(response.result)
     }
 
     fun close() {
@@ -123,20 +161,6 @@ class TelegramApiClient(
         }.getOrNull()
     }
 
-    private fun buildPayload(
-        chatId: Long,
-        text: String,
-        replyMarkup: ReplyMarkup?,
-    ): SendMessagePayload {
-        val markup: JsonElement? =
-            when (replyMarkup) {
-                is ReplyKeyboardMarkup -> json.encodeToJsonElement(ReplyKeyboardMarkup.serializer(), replyMarkup)
-                is InlineKeyboardMarkup -> json.encodeToJsonElement(InlineKeyboardMarkup.serializer(), replyMarkup)
-                null -> null
-            }
-        return SendMessagePayload(chatId = chatId, text = text, replyMarkup = markup)
-    }
-
     private suspend inline fun <reified T> HttpResponse.safeBody(): T = body()
 }
 
@@ -148,11 +172,10 @@ private data class TelegramResponse<T>(
     val result: T? = null,
     val description: String? = null,
     @SerialName("error_code") val errorCode: Int? = null,
+    val parameters: TelegramResponseParameters? = null,
 )
 
 @Serializable
-private data class SendMessagePayload(
-    @SerialName("chat_id") val chatId: Long,
-    val text: String,
-    @SerialName("reply_markup") val replyMarkup: JsonElement? = null,
+private data class TelegramResponseParameters(
+    @SerialName("retry_after") val retryAfterSeconds: Int? = null,
 )

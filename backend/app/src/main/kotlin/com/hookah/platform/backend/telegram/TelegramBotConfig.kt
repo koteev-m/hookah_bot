@@ -16,6 +16,7 @@ data class TelegramBotConfig(
     val staffChatLinkTtlSeconds: Long,
     val staffChatLinkSecretPepper: String,
     val requireStaffChatAdmin: Boolean,
+    val outbox: TelegramOutboxConfig = TelegramOutboxConfig(),
 ) {
     enum class Mode { LONG_POLLING, WEBHOOK }
 
@@ -64,6 +65,34 @@ data class TelegramBotConfig(
                 }
             val requireStaffChatAdmin =
                 section.propertyOrNull("requireStaffChatAdmin")?.getString()?.toBooleanStrictOrNull() ?: true
+            val outboxSection = runCatching { section.config("outbox") }.getOrNull()
+            val outbox =
+                TelegramOutboxConfig(
+                    pollIntervalMillis =
+                        outboxSection?.propertyOrNull("pollIntervalMillis")?.getString()?.toLongOrNull()
+                            ?: TelegramOutboxConfig().pollIntervalMillis,
+                    batchSize =
+                        outboxSection?.propertyOrNull("batchSize")?.getString()?.toIntOrNull()
+                            ?: TelegramOutboxConfig().batchSize,
+                    visibilityTimeoutSeconds =
+                        outboxSection?.propertyOrNull("visibilityTimeoutSeconds")?.getString()?.toLongOrNull()
+                            ?: TelegramOutboxConfig().visibilityTimeoutSeconds,
+                    maxAttempts =
+                        outboxSection?.propertyOrNull("maxAttempts")?.getString()?.toIntOrNull()
+                            ?: TelegramOutboxConfig().maxAttempts,
+                    maxConcurrency =
+                        outboxSection?.propertyOrNull("maxConcurrency")?.getString()?.toIntOrNull()
+                            ?: TelegramOutboxConfig().maxConcurrency,
+                    perChatMinIntervalMillis =
+                        outboxSection?.propertyOrNull("perChatMinIntervalMillis")?.getString()?.toLongOrNull()
+                            ?: TelegramOutboxConfig().perChatMinIntervalMillis,
+                    minBackoffSeconds =
+                        outboxSection?.propertyOrNull("minBackoffSeconds")?.getString()?.toLongOrNull()
+                            ?: TelegramOutboxConfig().minBackoffSeconds,
+                    maxBackoffSeconds =
+                        outboxSection?.propertyOrNull("maxBackoffSeconds")?.getString()?.toLongOrNull()
+                            ?: TelegramOutboxConfig().maxBackoffSeconds,
+                ).normalized()
 
             return TelegramBotConfig(
                 enabled = enabled,
@@ -77,6 +106,7 @@ data class TelegramBotConfig(
                 staffChatLinkTtlSeconds = staffChatLinkTtlSeconds,
                 staffChatLinkSecretPepper = staffChatLinkSecretPepper,
                 requireStaffChatAdmin = requireStaffChatAdmin,
+                outbox = outbox,
             )
         }
     }

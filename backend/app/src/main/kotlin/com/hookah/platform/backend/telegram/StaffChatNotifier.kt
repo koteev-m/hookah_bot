@@ -19,14 +19,13 @@ data class NewBatchNotification(
 class StaffChatNotifier(
     private val venueRepository: VenueRepository,
     private val notificationRepository: StaffChatNotificationRepository,
-    private val apiClientProvider: () -> TelegramApiClient?,
+    private val outboxEnqueuer: TelegramOutboxEnqueuer,
     private val scope: CoroutineScope,
 ) {
     private val logger = LoggerFactory.getLogger(StaffChatNotifier::class.java)
 
     fun notifyNewBatch(event: NewBatchNotification) {
         scope.launch {
-            val apiClient = apiClientProvider() ?: return@launch
             try {
                 val venue = venueRepository.findVenueById(event.venueId) ?: return@launch
                 val chatId = venue.staffChatId ?: return@launch
@@ -54,7 +53,7 @@ class StaffChatNotifier(
                         }
                     }
                 try {
-                    apiClient.sendMessage(chatId, message)
+                    outboxEnqueuer.enqueueSendMessage(chatId, message)
                 } catch (e: Exception) {
                     if (claimResult == StaffChatNotificationClaim.CLAIMED) {
                         notificationRepository.releaseClaim(event.batchId)

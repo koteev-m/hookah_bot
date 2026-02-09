@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test
 
 class TelegramBotRouterTableTokenTest {
     private val apiClient: TelegramApiClient = mockk(relaxed = true)
+    private val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
     private val idempotencyRepository: IdempotencyRepository = mockk()
     private val userRepository: UserRepository = mockk(relaxed = true)
     private val tableTokenRepository: TableTokenRepository = mockk()
@@ -53,6 +54,7 @@ class TelegramBotRouterTableTokenTest {
                     requireStaffChatAdmin = false,
                 ),
             apiClient = apiClient,
+            outboxEnqueuer = outboxEnqueuer,
             idempotencyRepository = idempotencyRepository,
             userRepository = userRepository,
             tableTokenRepository = tableTokenRepository,
@@ -105,7 +107,13 @@ class TelegramBotRouterTableTokenTest {
 
             router.process(update)
 
-            coVerify { apiClient.sendMessage(100, "Подписка заведения заблокирована. Заказы недоступны.") }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Подписка заведения заблокирована. Заказы недоступны.",
+                    any(),
+                )
+            }
             coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
         }
 
@@ -128,7 +136,9 @@ class TelegramBotRouterTableTokenTest {
 
             router.process(update)
 
-            coVerify { apiClient.sendMessage(101, "База недоступна, попробуйте позже.") }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(101, "База недоступна, попробуйте позже.", any())
+            }
             coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
         }
 
@@ -151,7 +161,9 @@ class TelegramBotRouterTableTokenTest {
 
             router.process(update)
 
-            coVerify { apiClient.sendMessage(102, "База недоступна, попробуйте позже.") }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(102, "База недоступна, попробуйте позже.", any())
+            }
             coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
         }
 }

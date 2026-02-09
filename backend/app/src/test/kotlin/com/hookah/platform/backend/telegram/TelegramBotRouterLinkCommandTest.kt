@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test
 
 class TelegramBotRouterLinkCommandTest {
     private val apiClient: TelegramApiClient = mockk(relaxed = true)
+    private val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
     private val idempotencyRepository: IdempotencyRepository = mockk()
     private val userRepository: UserRepository = mockk(relaxed = true)
     private val tableTokenRepository: TableTokenRepository = mockk()
@@ -52,6 +53,7 @@ class TelegramBotRouterLinkCommandTest {
                     requireStaffChatAdmin = false,
                 ),
             apiClient = apiClient,
+            outboxEnqueuer = outboxEnqueuer,
             idempotencyRepository = idempotencyRepository,
             userRepository = userRepository,
             tableTokenRepository = tableTokenRepository,
@@ -90,7 +92,7 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                apiClient.sendMessage(200, "Эту команду нужно отправить в групповом чате персонала.")
+                outboxEnqueuer.enqueueSendMessage(200, "Эту команду нужно отправить в групповом чате персонала.", any())
             }
         }
 
@@ -112,7 +114,11 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                apiClient.sendMessage(-500, "Использование: /link <код>. Код генерируется в режиме заведения.")
+                outboxEnqueuer.enqueueSendMessage(
+                    -500,
+                    "Использование: /link <код>. Код генерируется в режиме заведения.",
+                    any(),
+                )
             }
         }
 
@@ -145,7 +151,11 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                apiClient.sendMessage(-700, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
+                outboxEnqueuer.enqueueSendMessage(
+                    -700,
+                    "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
+                    any(),
+                )
             }
             coVerify { staffChatLinkCodeRepository.linkAndBindWithCode("GHJK234", any(), any(), any(), any(), any()) }
         }
@@ -171,7 +181,7 @@ class TelegramBotRouterLinkCommandTest {
 
             router.process(update)
 
-            coVerify { apiClient.sendMessage(-700, "Этот чат уже привязан к заведению Venue.") }
+            coVerify { outboxEnqueuer.enqueueSendMessage(-700, "Этот чат уже привязан к заведению Venue.", any()) }
         }
 
     @Test
@@ -196,9 +206,10 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                apiClient.sendMessage(
+                outboxEnqueuer.enqueueSendMessage(
                     -700,
                     "✅ Чат привязан к заведению Venue. Уведомления о заказах будут приходить сюда.",
+                    any(),
                 )
             }
         }
@@ -222,9 +233,10 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                apiClient.sendMessage(
+                outboxEnqueuer.enqueueSendMessage(
                     -700,
                     "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
+                    any(),
                 )
             }
             coVerify(
@@ -250,9 +262,10 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                apiClient.sendMessage(
+                outboxEnqueuer.enqueueSendMessage(
                     -701,
                     "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
+                    any(),
                 )
             }
             coVerify(
@@ -278,9 +291,10 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                apiClient.sendMessage(
+                outboxEnqueuer.enqueueSendMessage(
                     -702,
                     "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
+                    any(),
                 )
             }
             coVerify(
