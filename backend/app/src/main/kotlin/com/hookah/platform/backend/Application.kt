@@ -52,12 +52,15 @@ import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.platformRoutes
 import com.hookah.platform.backend.security.constantTimeEquals
+import com.hookah.platform.backend.telegram.InMemoryTelegramRateLimiter
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
 import com.hookah.platform.backend.telegram.TelegramInboundUpdateWorker
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
+import com.hookah.platform.backend.telegram.TelegramOutboxWorker
 import com.hookah.platform.backend.telegram.TelegramUpdate
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
@@ -68,6 +71,7 @@ import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateQueueRepository
+import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
@@ -137,6 +141,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -313,7 +318,11 @@ internal fun Application.module(overrides: ModuleOverrides) {
     var telegramRouter: TelegramBotRouter? = null
     var telegramWebhookWorkerScope: CoroutineScope? = null
     var telegramWebhookWorkerJob: Job? = null
+    var telegramOutboxWorkerScope: CoroutineScope? = null
+    var telegramOutboxWorkerJob: Job? = null
     val telegramInboundUpdateQueueRepository = TelegramInboundUpdateQueueRepository(dataSource)
+    val telegramOutboxRepository = TelegramOutboxRepository(dataSource)
+    val telegramOutboxEnqueuer = TelegramOutboxEnqueuer(telegramOutboxRepository, telegramJson)
     val staffChatNotifierScope =
         CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier"),
@@ -340,7 +349,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
         StaffChatNotifier(
             venueRepository = venueRepository,
             notificationRepository = staffChatNotificationRepository,
-            apiClientProvider = { telegramApiClient },
+            outboxEnqueuer = telegramOutboxEnqueuer,
             scope = staffChatNotifierScope,
         )
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
@@ -369,6 +378,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
             TelegramBotRouter(
                 config = telegramConfig,
                 apiClient = telegramApiClient,
+                outboxEnqueuer = telegramOutboxEnqueuer,
                 idempotencyRepository = IdempotencyRepository(dataSource),
                 userRepository = userRepository,
                 tableTokenRepository = tableTokenRepository,
@@ -383,6 +393,29 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 json = telegramJson,
                 scope = botScope,
             )
+
+        if (dataSource != null) {
+            telegramOutboxWorkerScope =
+                CoroutineScope(
+                    SupervisorJob() + Dispatchers.IO + CoroutineName("telegram-outbox-worker"),
+                )
+            val outboxRateLimiter =
+                InMemoryTelegramRateLimiter(
+                    minInterval = Duration.ofMillis(telegramConfig.outbox.perChatMinIntervalMillis),
+                )
+            val outboxWorker =
+                TelegramOutboxWorker(
+                    repository = telegramOutboxRepository,
+                    apiClientProvider = { telegramApiClient },
+                    json = telegramJson,
+                    rateLimiter = outboxRateLimiter,
+                    config = telegramConfig.outbox,
+                    scope = telegramOutboxWorkerScope!!,
+                )
+            telegramOutboxWorkerJob = outboxWorker.start()
+        } else {
+            logger.warn("Telegram outbox worker disabled: database is not configured")
+        }
 
         when (telegramConfig.mode) {
             TelegramBotConfig.Mode.LONG_POLLING -> {
@@ -474,6 +507,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
         telegramScope?.cancel()
         telegramWebhookWorkerJob?.cancel()
         telegramWebhookWorkerScope?.cancel()
+        telegramOutboxWorkerJob?.cancel()
+        telegramOutboxWorkerScope?.cancel()
         staffChatNotifierScope.cancel()
         subscriptionBillingScope.cancel()
         DatabaseFactory.close(dataSource)

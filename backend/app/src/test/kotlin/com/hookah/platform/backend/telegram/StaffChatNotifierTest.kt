@@ -16,12 +16,12 @@ import org.junit.jupiter.api.Test
 class StaffChatNotifierTest {
     private val venueRepository: VenueRepository = mockk()
     private val notificationRepository: StaffChatNotificationRepository = mockk()
-    private val apiClient: TelegramApiClient = mockk(relaxed = true)
+    private val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
     private val notifier =
         StaffChatNotifier(
             venueRepository = venueRepository,
             notificationRepository = notificationRepository,
-            apiClientProvider = { apiClient },
+            outboxEnqueuer = outboxEnqueuer,
             scope = CoroutineScope(Dispatchers.Unconfined),
         )
 
@@ -54,7 +54,7 @@ class StaffChatNotifierTest {
             notifier.notifyNewBatch(event)
             yield()
 
-            coVerify(exactly = 1) { apiClient.sendMessage(777L, any()) }
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(777L, any(), any()) }
             coVerify(exactly = 2) { notificationRepository.tryClaim(10L, 777L) }
         }
 }

@@ -26,6 +26,7 @@ class TelegramBotRouterIdempotencyTest {
     fun `duplicate update id does not repeat side effects`() =
         runBlocking {
             val apiClient: TelegramApiClient = mockk(relaxed = true)
+            val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
             val idempotencyRepository: IdempotencyRepository = mockk()
             val userRepository: UserRepository = mockk(relaxed = true)
             val tableTokenRepository: TableTokenRepository = mockk()
@@ -57,6 +58,7 @@ class TelegramBotRouterIdempotencyTest {
                             requireStaffChatAdmin = false,
                         ),
                     apiClient = apiClient,
+                    outboxEnqueuer = outboxEnqueuer,
                     idempotencyRepository = idempotencyRepository,
                     userRepository = userRepository,
                     tableTokenRepository = tableTokenRepository,
@@ -88,7 +90,7 @@ class TelegramBotRouterIdempotencyTest {
             router.process(update)
 
             coVerify(exactly = 1) {
-                apiClient.sendMessage(200, "Эту команду нужно отправить в групповом чате персонала.")
+                outboxEnqueuer.enqueueSendMessage(200, "Эту команду нужно отправить в групповом чате персонала.", any())
             }
         }
 
@@ -96,6 +98,7 @@ class TelegramBotRouterIdempotencyTest {
     fun `database unavailable during idempotency acquire sends safe message`() =
         runBlocking {
             val apiClient: TelegramApiClient = mockk(relaxed = true)
+            val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
             val idempotencyRepository: IdempotencyRepository = mockk()
             val userRepository: UserRepository = mockk(relaxed = true)
             val tableTokenRepository: TableTokenRepository = mockk()
@@ -127,6 +130,7 @@ class TelegramBotRouterIdempotencyTest {
                             requireStaffChatAdmin = false,
                         ),
                     apiClient = apiClient,
+                    outboxEnqueuer = outboxEnqueuer,
                     idempotencyRepository = idempotencyRepository,
                     userRepository = userRepository,
                     tableTokenRepository = tableTokenRepository,
@@ -156,7 +160,7 @@ class TelegramBotRouterIdempotencyTest {
 
             router.process(update)
 
-            coVerify { apiClient.sendMessage(201, "База недоступна, попробуйте позже.") }
+            coVerify { outboxEnqueuer.enqueueSendMessage(201, "База недоступна, попробуйте позже.", any()) }
             coVerify(exactly = 0) { userRepository.upsert(any()) }
         }
 }

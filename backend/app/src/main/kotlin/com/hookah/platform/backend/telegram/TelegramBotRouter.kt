@@ -30,6 +30,7 @@ import java.util.Locale
 class TelegramBotRouter(
     private val config: TelegramBotConfig,
     private val apiClient: TelegramApiClient,
+    private val outboxEnqueuer: TelegramOutboxEnqueuer,
     private val idempotencyRepository: IdempotencyRepository,
     private val userRepository: UserRepository,
     private val tableTokenRepository: TableTokenRepository,
@@ -57,7 +58,7 @@ class TelegramBotRouter(
                 throw e
             } catch (e: DatabaseUnavailableException) {
                 if (chatId != null) {
-                    apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 }
                 return
             }
@@ -130,11 +131,11 @@ class TelegramBotRouter(
                     return
                 }
                 ApplyTableTokenResult.Blocked -> {
-                    apiClient.sendMessage(chatId, subscriptionBlockedMessage)
+                    enqueueMessage(chatId, subscriptionBlockedMessage)
                     return
                 }
                 ApplyTableTokenResult.DatabaseUnavailable -> {
-                    apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
                 }
             }
@@ -168,7 +169,7 @@ class TelegramBotRouter(
     private suspend fun handleCallback(callbackQuery: CallbackQuery) {
         val chatId = callbackQuery.message?.chat?.id
         if (chatId == null) {
-            apiClient.answerCallbackQuery(callbackQuery.id)
+            enqueueCallbackAnswer(null, callbackQuery.id)
             return
         }
         safeUpsertUser(callbackQuery.from)
@@ -179,16 +180,16 @@ class TelegramBotRouter(
                     chatId,
                     DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT),
                 )
-                apiClient.sendMessage(chatId, "Напишите детали заказа.")
+                enqueueMessage(chatId, "Напишите детали заказа.")
             }
             "quick_order_cancel" -> {
                 dialogStateRepository.clear(chatId)
-                apiClient.sendMessage(chatId, "Быстрый заказ отменён.")
+                enqueueMessage(chatId, "Быстрый заказ отменён.")
             }
             null -> Unit
             else -> handleStaffCallCallback(chatId, callbackQuery.data)
         }
-        apiClient.answerCallbackQuery(callbackQuery.id)
+        enqueueCallbackAnswer(chatId, callbackQuery.id)
     }
 
     private suspend fun handleStaffCallCallback(
@@ -199,7 +200,7 @@ class TelegramBotRouter(
         val reason = parseStaffCallReason(data.removePrefix("staff_call_reason:"))
         if (reason == StaffCallReason.OTHER) {
             dialogStateRepository.set(chatId, DialogState(DialogStateType.STAFF_CALL_WAIT_COMMENT))
-            apiClient.sendMessage(chatId, "Опишите, что нужно сделать.")
+            enqueueMessage(chatId, "Опишите, что нужно сделать.")
         } else {
             createStaffCall(chatId, reason, null)
         }
@@ -225,9 +226,9 @@ class TelegramBotRouter(
                     from,
                     "QR недействителен или база недоступна. Используйте меню ниже.",
                 )
-            ApplyTableTokenResult.Blocked -> apiClient.sendMessage(chatId, subscriptionBlockedMessage)
+            ApplyTableTokenResult.Blocked -> enqueueMessage(chatId, subscriptionBlockedMessage)
             ApplyTableTokenResult.DatabaseUnavailable ->
-                apiClient.sendMessage(
+                enqueueMessage(
                     chatId,
                     "База недоступна, попробуйте позже.",
                 )
@@ -261,7 +262,7 @@ class TelegramBotRouter(
             return ApplyTableTokenResult.DatabaseUnavailable
         }
         dialogStateRepository.clear(chatId)
-        apiClient.sendMessage(
+        enqueueMessage(
             chatId,
             "Вы за столом №${context.tableNumber} в ${context.venueName}",
             TelegramKeyboards.tableContext(context, config.webAppPublicUrl),
@@ -276,7 +277,7 @@ class TelegramBotRouter(
         val userId = from?.id
         val hasVenueRole = userId?.let { venueAccessRepository.hasVenueRole(it) } ?: false
         val isOwner = config.platformOwnerId?.let { owner -> owner == userId } ?: false
-        apiClient.sendMessage(
+        enqueueMessage(
             chatId,
             "Добро пожаловать! Выберите действие.",
             TelegramKeyboards.mainMenu(hasVenueRole, isOwner, config.webAppPublicUrl),
@@ -288,7 +289,7 @@ class TelegramBotRouter(
         val context = resolveGuestContext(chatId) ?: return
         val summary = ordersRepository.findActiveOrderSummary(context.table.tableId)
         if (summary != null) {
-            apiClient.sendMessage(
+            enqueueMessage(
                 chatId,
                 "Активный заказ №${summary.id} (${summary.status}).",
                 TelegramKeyboards.inlineOpenActiveOrder(
@@ -298,14 +299,14 @@ class TelegramBotRouter(
             )
         } else {
             val replyMarkup = TelegramKeyboards.inlineOpenMenu(config.webAppPublicUrl, context.table.tableToken)
-            apiClient.sendMessage(chatId, "Активных заказов нет.", replyMarkup)
+            enqueueMessage(chatId, "Активных заказов нет.", replyMarkup)
         }
     }
 
     private suspend fun startQuickOrder(chatId: Long) {
         val context = resolveGuestContext(chatId) ?: return
         dialogStateRepository.set(chatId, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
-        apiClient.sendMessage(chatId, "Опишите, что хотите заказать.")
+        enqueueMessage(chatId, "Опишите, что хотите заказать.")
     }
 
     private suspend fun proceedQuickOrderText(
@@ -316,7 +317,7 @@ class TelegramBotRouter(
             chatId,
             DialogState(DialogStateType.QUICK_ORDER_WAIT_CONFIRM, mapOf("text" to text)),
         )
-        apiClient.sendMessage(
+        enqueueMessage(
             chatId,
             "Отправить запрос в заведение?\n\n$text",
             TelegramKeyboards.inlineConfirmQuickOrder(),
@@ -328,7 +329,7 @@ class TelegramBotRouter(
         val state = dialogStateRepository.get(chatId)
         val text = state.payload["text"]
         if (text.isNullOrBlank()) {
-            apiClient.sendMessage(chatId, "Нет текста заказа, отправьте заново.")
+            enqueueMessage(chatId, "Нет текста заказа, отправьте заново.")
             dialogStateRepository.set(chatId, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
             return
         }
@@ -338,12 +339,12 @@ class TelegramBotRouter(
                 context.table.venueId,
             )
         if (orderId == null) {
-            apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             return
         }
         ordersRepository.createOrderBatch(orderId, context.userId, text)
         dialogStateRepository.clear(chatId)
-        apiClient.sendMessage(chatId, "Запрос отправлен, ожидайте подтверждения.")
+        enqueueMessage(chatId, "Запрос отправлен, ожидайте подтверждения.")
         notifyStaffChat(
             context,
             "🆕 Быстрый заказ (чат)\n${context.table.venueName}\n" +
@@ -354,7 +355,7 @@ class TelegramBotRouter(
     private suspend fun showStaffCallReasons(chatId: Long) {
         val context = resolveGuestContext(chatId) ?: return
         dialogStateRepository.clear(chatId)
-        apiClient.sendMessage(chatId, "Выберите причину:", TelegramKeyboards.inlineStaffCallReasons())
+        enqueueMessage(chatId, "Выберите причину:", TelegramKeyboards.inlineStaffCallReasons())
     }
 
     private suspend fun proceedStaffCallComment(
@@ -372,7 +373,7 @@ class TelegramBotRouter(
         val context = resolveGuestContext(chatId) ?: return
         if (reason == StaffCallReason.OTHER && comment.isNullOrBlank()) {
             dialogStateRepository.set(chatId, DialogState(DialogStateType.STAFF_CALL_WAIT_COMMENT))
-            apiClient.sendMessage(chatId, "Опишите, что нужно сделать.")
+            enqueueMessage(chatId, "Опишите, что нужно сделать.")
             return
         }
         staffCallRepository.createStaffCall(
@@ -382,11 +383,11 @@ class TelegramBotRouter(
             reason,
             comment,
         ) ?: run {
-            apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             return
         }
         dialogStateRepository.clear(chatId)
-        apiClient.sendMessage(chatId, "Персонал уведомлён, ожидайте.")
+        enqueueMessage(chatId, "Персонал уведомлён, ожидайте.")
         val commentPart = comment?.takeIf { it.isNotBlank() }?.let { "\nКомментарий: $it" } ?: ""
         notifyStaffChat(
             context,
@@ -400,7 +401,7 @@ class TelegramBotRouter(
         message: String,
     ) {
         val chatId = context.table.staffChatId ?: return
-        scope.launch { apiClient.sendMessage(chatId, message) }
+        scope.launch { enqueueMessage(chatId, message) }
     }
 
     private suspend fun clearContextAndAskRescan(chatId: Long) {
@@ -410,7 +411,7 @@ class TelegramBotRouter(
         val userId = storedContext?.userId
         val hasVenueRole = userId?.let { venueAccessRepository.hasVenueRole(it) } ?: false
         val isOwner = config.platformOwnerId?.let { owner -> owner == userId } ?: false
-        apiClient.sendMessage(
+        enqueueMessage(
             chatId,
             "Контекст сброшен. Отсканируйте QR на столе или откройте каталог.",
             TelegramKeyboards.mainMenu(hasVenueRole, isOwner, config.webAppPublicUrl),
@@ -424,7 +425,7 @@ class TelegramBotRouter(
     ) {
         when (val contextResult = loadContext(chatId)) {
             is LoadContextResult.Loaded -> {
-                apiClient.sendMessage(
+                enqueueMessage(
                     chatId,
                     text,
                     TelegramKeyboards.tableContext(contextResult.context.table, config.webAppPublicUrl),
@@ -432,7 +433,7 @@ class TelegramBotRouter(
                 return
             }
             LoadContextResult.DatabaseUnavailable -> {
-                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
             LoadContextResult.Missing -> Unit
@@ -443,13 +444,13 @@ class TelegramBotRouter(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DatabaseUnavailableException) {
-                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
         val userId = from?.id ?: stored?.userId
         val hasVenueRole = userId?.let { venueAccessRepository.hasVenueRole(it) } ?: false
         val isOwner = config.platformOwnerId?.let { owner -> owner == userId } ?: false
-        apiClient.sendMessage(
+        enqueueMessage(
             chatId,
             text,
             TelegramKeyboards.mainMenu(hasVenueRole, isOwner, config.webAppPublicUrl),
@@ -482,7 +483,7 @@ class TelegramBotRouter(
             when (contextResult) {
                 is LoadContextResult.Loaded -> contextResult.context
                 LoadContextResult.DatabaseUnavailable -> {
-                    apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return null
                 }
                 LoadContextResult.Missing -> {
@@ -493,18 +494,18 @@ class TelegramBotRouter(
         return when (checkSubscription(context.table.venueId)) {
             SubscriptionCheckResult.Available -> context
             SubscriptionCheckResult.Blocked -> {
-                apiClient.sendMessage(chatId, subscriptionBlockedMessage)
+                enqueueMessage(chatId, subscriptionBlockedMessage)
                 null
             }
             SubscriptionCheckResult.DatabaseUnavailable -> {
-                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 null
             }
         }
     }
 
     private suspend fun askScanQr(chatId: Long) {
-        apiClient.sendMessage(chatId, "Сначала отсканируйте QR на столе.")
+        enqueueMessage(chatId, "Сначала отсканируйте QR на столе.")
     }
 
     private fun parseCommand(text: String?): ParsedCommand? {
@@ -523,12 +524,12 @@ class TelegramBotRouter(
         val chatId = context.chatId
         val userId = context.userId
         if (code.isNullOrBlank()) {
-            apiClient.sendMessage(chatId, "Использование: /link <код>. Код генерируется в режиме заведения.")
+            enqueueMessage(chatId, "Использование: /link <код>. Код генерируется в режиме заведения.")
             return
         }
         val normalizedCode = StaffChatLinkCodeFormat.normalizeCode(code)
         if (normalizedCode == null) {
-            apiClient.sendMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
+            enqueueMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
             return
         }
         val consumeResult =
@@ -546,7 +547,7 @@ class TelegramBotRouter(
             )
         when (consumeResult) {
             is LinkAndBindResult.Success -> {
-                apiClient.sendMessage(
+                enqueueMessage(
                     chatId,
                     "✅ Чат привязан к заведению ${consumeResult.venueName}. " +
                         "Уведомления о заказах будут приходить сюда.",
@@ -554,29 +555,29 @@ class TelegramBotRouter(
             }
 
             is LinkAndBindResult.AlreadyBoundSameChat -> {
-                apiClient.sendMessage(
+                enqueueMessage(
                     chatId,
                     "Этот чат уже привязан к заведению ${consumeResult.venueName}.",
                 )
             }
 
             is LinkAndBindResult.ChatAlreadyLinked -> {
-                apiClient.sendMessage(
+                enqueueMessage(
                     chatId,
                     "Этот чат уже привязан к другому заведению. Сначала выполните /unlink в этом чате.",
                 )
             }
 
             is LinkAndBindResult.Unauthorized -> {
-                apiClient.sendMessage(chatId, "Недостаточно прав.")
+                enqueueMessage(chatId, "Недостаточно прав.")
             }
 
             LinkAndBindResult.InvalidOrExpired -> {
-                apiClient.sendMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
+                enqueueMessage(chatId, "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.")
             }
 
             LinkAndBindResult.DatabaseError -> {
-                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             }
         }
     }
@@ -586,24 +587,24 @@ class TelegramBotRouter(
         val chatId = context.chatId
         val venue = venueRepository.findVenueByStaffChatId(chatId)
         if (venue == null) {
-            apiClient.sendMessage(chatId, "Этот чат не привязан.")
+            enqueueMessage(chatId, "Этот чат не привязан.")
             return
         }
         val userId = context.userId
         val hasRole = venueAccessRepository.hasVenueAdminOrOwner(userId, venue.id)
         if (!hasRole) {
-            apiClient.sendMessage(chatId, "Недостаточно прав.")
+            enqueueMessage(chatId, "Недостаточно прав.")
             return
         }
         when (val result = venueRepository.unlinkStaffChatByChatId(chatId, userId)) {
             is UnlinkResult.Success -> {
-                apiClient.sendMessage(chatId, "✅ Чат отвязан.")
+                enqueueMessage(chatId, "✅ Чат отвязан.")
             }
             UnlinkResult.NotLinked -> {
-                apiClient.sendMessage(chatId, "Этот чат не привязан.")
+                enqueueMessage(chatId, "Этот чат не привязан.")
             }
             UnlinkResult.DatabaseError -> {
-                apiClient.sendMessage(chatId, "База недоступна, попробуйте позже.")
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             }
         }
     }
@@ -613,18 +614,18 @@ class TelegramBotRouter(
         val chatId = context.chatId
         val venue = venueRepository.findVenueByStaffChatId(chatId)
         if (venue == null) {
-            apiClient.sendMessage(chatId, "Этот чат не привязан. Сгенерируйте код и выполните /link <код>.")
+            enqueueMessage(chatId, "Этот чат не привязан. Сгенерируйте код и выполните /link <код>.")
             return
         }
         val userId = context.userId
         val hasRole = venueAccessRepository.hasVenueAdminOrOwner(userId, venue.id)
         if (!hasRole) {
-            apiClient.sendMessage(chatId, "Недостаточно прав.")
+            enqueueMessage(chatId, "Недостаточно прав.")
             return
         }
         val ts = Instant.now().toString()
         val text = "✅ Тестовое уведомление. Чат привязан к ${venue.name}. (ts=$ts)"
-        apiClient.sendMessage(chatId, text)
+        enqueueMessage(chatId, text)
     }
 
     private suspend fun ensureChatAdmin(
@@ -642,21 +643,21 @@ class TelegramBotRouter(
     private suspend fun resolveGroupCommandContext(message: Message): GroupCommandContext? {
         val chatId = message.chat.id
         if (!isGroupChat(message.chat.type)) {
-            apiClient.sendMessage(chatId, "Эту команду нужно отправить в групповом чате персонала.")
+            enqueueMessage(chatId, "Эту команду нужно отправить в групповом чате персонала.")
             return null
         }
         val userId = message.fromUser?.id
         if (userId == null) {
-            apiClient.sendMessage(chatId, "Недостаточно прав.")
+            enqueueMessage(chatId, "Недостаточно прав.")
             return null
         }
         return when (val chatAdminCheck = ensureChatAdmin(chatId, userId)) {
             ChatAdminCheckResult.Failed -> {
-                apiClient.sendMessage(chatId, "Не удалось проверить права в чате, попробуйте позже.")
+                enqueueMessage(chatId, "Не удалось проверить права в чате, попробуйте позже.")
                 null
             }
             ChatAdminCheckResult.NotAllowed -> {
-                apiClient.sendMessage(chatId, "Недостаточно прав.")
+                enqueueMessage(chatId, "Недостаточно прав.")
                 null
             }
             ChatAdminCheckResult.Allowed -> GroupCommandContext(chatId, userId)
@@ -713,6 +714,26 @@ class TelegramBotRouter(
     private suspend fun safeUpsertUser(user: User) {
         runCatching { userRepository.upsert(user) }
             .onFailure { logBestEffort("user upsert", it) }
+    }
+
+    private suspend fun enqueueMessage(
+        chatId: Long,
+        text: String,
+        replyMarkup: ReplyMarkup? = null,
+    ) {
+        runCatching {
+            outboxEnqueuer.enqueueSendMessage(chatId, text, replyMarkup)
+        }.onFailure { logBestEffort("outbox enqueue", it) }
+    }
+
+    private suspend fun enqueueCallbackAnswer(
+        chatId: Long?,
+        callbackQueryId: String,
+    ) {
+        val outboxChatId = chatId ?: 0L
+        runCatching {
+            outboxEnqueuer.enqueueAnswerCallbackQuery(outboxChatId, callbackQueryId)
+        }.onFailure { logBestEffort("outbox enqueue callback", it) }
     }
 
     private fun logBestEffort(
