@@ -68,6 +68,22 @@ class TelegramInboundUpdateWorkerTest {
             assertEquals(1, firstClaim.size)
             assertEquals(1, firstClaim.first().attempts)
 
+            val firstLockUntil = now.plus(visibilityTimeout)
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT status, attempts, next_attempt_at FROM telegram_inbound_updates WHERE update_id = 101",
+                ).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        resultSet.next()
+                        assertEquals(TelegramInboundUpdateStatus.PROCESSING.name, resultSet.getString("status"))
+                        assertEquals(1, resultSet.getInt("attempts"))
+                        val nextAttemptAt = resultSet.getTimestamp("next_attempt_at")
+                        assertNotNull(nextAttemptAt)
+                        assertEquals(Timestamp.from(firstLockUntil), nextAttemptAt)
+                    }
+                }
+            }
+
             val later = now.plus(visibilityTimeout).plusSeconds(1)
             val secondClaim = repository.claimBatch(1, later, visibilityTimeout)
             assertEquals(1, secondClaim.size)
