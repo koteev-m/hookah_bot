@@ -17,6 +17,7 @@ import java.sql.Timestamp
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class TelegramOutboxWorkerTest {
     @Test
@@ -105,6 +106,94 @@ class TelegramOutboxWorkerTest {
                         val nextAttempt = resultSet.getTimestamp("next_attempt_at")
                         assertNotNull(nextAttempt)
                         assertEquals(Timestamp.from(fixedNow.plusSeconds(5)), nextAttempt)
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
+    fun `sendMessage permanent failure is marked failed without retry`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val repository = TelegramOutboxRepository(dataSource)
+            val json = Json { ignoreUnknownKeys = true }
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+            val apiClient: TelegramApiClient = mockk(relaxed = true)
+            val worker =
+                TelegramOutboxWorker(
+                    repository = repository,
+                    apiClientProvider = { apiClient },
+                    json = json,
+                    rateLimiter = TelegramRateLimiter { },
+                    config = TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1),
+                    scope = CoroutineScope(Dispatchers.IO),
+                )
+
+            outboxEnqueuer.enqueueSendMessage(456L, "hello")
+            coEvery { apiClient.callMethod("sendMessage", any()) } returns
+                TelegramCallResult.Failure(
+                    errorCode = 403,
+                    description = "Forbidden",
+                    retryAfterSeconds = null,
+                )
+
+            worker.processOnce()
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT status, next_attempt_at FROM telegram_outbox WHERE chat_id = 456",
+                ).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        resultSet.next()
+                        assertEquals(TelegramOutboxStatus.FAILED.name, resultSet.getString("status"))
+                        assertNull(resultSet.getTimestamp("next_attempt_at"))
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
+    fun `answerCallbackQuery failure is marked failed without retry`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val repository = TelegramOutboxRepository(dataSource)
+            val json = Json { ignoreUnknownKeys = true }
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+            val apiClient: TelegramApiClient = mockk(relaxed = true)
+            val worker =
+                TelegramOutboxWorker(
+                    repository = repository,
+                    apiClientProvider = { apiClient },
+                    json = json,
+                    rateLimiter = TelegramRateLimiter { },
+                    config = TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1),
+                    scope = CoroutineScope(Dispatchers.IO),
+                )
+
+            outboxEnqueuer.enqueueAnswerCallbackQuery(321L, "callback-id")
+            coEvery { apiClient.callMethod("answerCallbackQuery", any()) } returns
+                TelegramCallResult.Failure(
+                    errorCode = 429,
+                    description = "Too Many Requests",
+                    retryAfterSeconds = 3,
+                )
+
+            worker.processOnce()
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT status, next_attempt_at FROM telegram_outbox WHERE method = 'answerCallbackQuery'",
+                ).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        resultSet.next()
+                        assertEquals(TelegramOutboxStatus.FAILED.name, resultSet.getString("status"))
+                        assertNull(resultSet.getTimestamp("next_attempt_at"))
                     }
                 }
             }

@@ -350,6 +350,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
             venueRepository = venueRepository,
             notificationRepository = staffChatNotificationRepository,
             outboxEnqueuer = telegramOutboxEnqueuer,
+            isTelegramActive = { telegramConfig.enabled && !telegramConfig.token.isNullOrBlank() },
             scope = staffChatNotifierScope,
         )
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {

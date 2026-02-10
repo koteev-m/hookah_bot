@@ -12,8 +12,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -35,7 +35,14 @@ class TelegramOutboxWorker(
     fun start(): Job =
         scope.launch {
             while (isActive) {
-                processOnce()
+                try {
+                    processOnce()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.warn("Telegram outbox worker tick failed: {}", sanitizeTelegramForLog(e.message))
+                    logger.debugTelegramException(e) { "Telegram outbox worker tick exception" }
+                }
                 delay(config.pollIntervalMillis)
             }
         }
@@ -62,8 +69,14 @@ class TelegramOutboxWorker(
         coroutineScope {
             batch.forEach { message ->
                 launch {
-                    semaphore.withPermit {
-                        processMessage(message)
+                    try {
+                        semaphore.withPermit {
+                            processMessage(message)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        scheduleRetry(message, e.message, null)
                     }
                 }
             }
@@ -82,7 +95,9 @@ class TelegramOutboxWorker(
                     markFailed(message, "Invalid payload: ${sanitizeTelegramForLog(error.message)}")
                     return
                 }
-        rateLimiter.awaitPermit(message.chatId)
+        if (message.method == "sendMessage") {
+            rateLimiter.awaitPermit(message.chatId)
+        }
 
         val result =
             try {
@@ -96,14 +111,34 @@ class TelegramOutboxWorker(
 
         when (result) {
             is TelegramCallResult.Success -> markSent(message)
-            is TelegramCallResult.Failure ->
-                scheduleRetry(
-                    message,
-                    result.description,
-                    result.retryAfterSeconds,
-                    result.errorCode,
-                )
+            is TelegramCallResult.Failure -> handleFailure(message, result)
         }
+    }
+
+    private suspend fun handleFailure(
+        message: TelegramOutboxMessage,
+        result: TelegramCallResult.Failure,
+    ) {
+        if (message.method == "answerCallbackQuery") {
+            markFailed(message, result.description)
+            return
+        }
+        if (shouldRetry(result.errorCode)) {
+            scheduleRetry(
+                message,
+                result.description,
+                result.retryAfterSeconds,
+                result.errorCode,
+            )
+            return
+        }
+        markFailed(message, result.description)
+    }
+
+    private fun shouldRetry(errorCode: Int?): Boolean {
+        if (errorCode == null) return true
+        if (errorCode == 429) return true
+        return errorCode >= 500
     }
 
     private suspend fun markSent(message: TelegramOutboxMessage) {
