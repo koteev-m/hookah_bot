@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
@@ -20,12 +21,16 @@ class StaffChatNotifier(
     private val venueRepository: VenueRepository,
     private val notificationRepository: StaffChatNotificationRepository,
     private val outboxEnqueuer: TelegramOutboxEnqueuer,
+    private val isTelegramActive: () -> Boolean,
     private val scope: CoroutineScope,
 ) {
     private val logger = LoggerFactory.getLogger(StaffChatNotifier::class.java)
 
     fun notifyNewBatch(event: NewBatchNotification) {
         scope.launch {
+            if (!isTelegramActive()) {
+                return@launch
+            }
             try {
                 val venue = venueRepository.findVenueById(event.venueId) ?: return@launch
                 val chatId = venue.staffChatId ?: return@launch
@@ -54,12 +59,19 @@ class StaffChatNotifier(
                     }
                 try {
                     outboxEnqueuer.enqueueSendMessage(chatId, message)
+                } catch (e: CancellationException) {
+                    if (claimResult == StaffChatNotificationClaim.CLAIMED) {
+                        notificationRepository.releaseClaim(event.batchId)
+                    }
+                    throw e
                 } catch (e: Exception) {
                     if (claimResult == StaffChatNotificationClaim.CLAIMED) {
                         notificationRepository.releaseClaim(event.batchId)
                     }
                     throw e
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 val safeMessage = sanitizeTelegramForLog(e.message)
                 logger.warn("Failed to notify staff chat for new batch: {}", safeMessage)

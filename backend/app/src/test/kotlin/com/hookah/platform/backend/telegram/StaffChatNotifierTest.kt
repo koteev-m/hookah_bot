@@ -22,6 +22,7 @@ class StaffChatNotifierTest {
             venueRepository = venueRepository,
             notificationRepository = notificationRepository,
             outboxEnqueuer = outboxEnqueuer,
+            isTelegramActive = { true },
             scope = CoroutineScope(Dispatchers.Unconfined),
         )
 
@@ -56,5 +57,33 @@ class StaffChatNotifierTest {
 
             coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(777L, any(), any()) }
             coVerify(exactly = 2) { notificationRepository.tryClaim(10L, 777L) }
+        }
+
+    @Test
+    fun `notifyNewBatch returns early when telegram inactive`() =
+        runBlocking {
+            val inactiveNotifier =
+                StaffChatNotifier(
+                    venueRepository = venueRepository,
+                    notificationRepository = notificationRepository,
+                    outboxEnqueuer = outboxEnqueuer,
+                    isTelegramActive = { false },
+                    scope = CoroutineScope(Dispatchers.Unconfined),
+                )
+
+            inactiveNotifier.notifyNewBatch(
+                NewBatchNotification(
+                    venueId = 1L,
+                    orderId = 2L,
+                    batchId = 10L,
+                    tableLabel = "1",
+                    itemsSummary = "Tea x1",
+                    comment = null,
+                ),
+            )
+            yield()
+
+            coVerify(exactly = 0) { notificationRepository.tryClaim(any(), any()) }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(any(), any(), any()) }
         }
 }
