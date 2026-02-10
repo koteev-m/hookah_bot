@@ -12,7 +12,9 @@ import io.ktor.server.config.ApplicationConfig
 import io.ktor.util.AttributeKey
 import java.time.Duration
 import java.time.Instant
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 interface RateLimiter {
     fun tryAcquire(
@@ -30,8 +32,22 @@ data class GuestRateLimitKey(
     val endpoint: String,
 )
 
-class InMemoryRateLimiter : RateLimiter {
-    private val buckets = ConcurrentHashMap<GuestRateLimitKey, MutableList<Instant>>()
+class InMemoryRateLimiter(
+    private val cleanupEvery: Int = DEFAULT_CLEANUP_EVERY,
+    private val maxBuckets: Int = DEFAULT_MAX_BUCKETS,
+) : RateLimiter {
+    private data class Bucket(
+        val requests: ArrayDeque<Instant> = ArrayDeque(),
+        var expiresAt: Instant = Instant.EPOCH,
+    )
+
+    private val buckets = ConcurrentHashMap<GuestRateLimitKey, Bucket>()
+    private val tryAcquireCalls = AtomicLong(0)
+
+    init {
+        require(cleanupEvery > 0) { "cleanupEvery must be positive" }
+        require(maxBuckets > 0) { "maxBuckets must be positive" }
+    }
 
     override fun tryAcquire(
         key: GuestRateLimitKey,
@@ -42,26 +58,64 @@ class InMemoryRateLimiter : RateLimiter {
         require(limit > 0) { "limit must be positive" }
         require(!window.isZero && !window.isNegative) { "window must be positive" }
 
-        val bucket = buckets.computeIfAbsent(key) { mutableListOf() }
-        val allowed =
+        var allowed = false
+        buckets.compute(key) { _, existingBucket ->
+            val bucket = existingBucket ?: Bucket()
             synchronized(bucket) {
-                val threshold = now.minus(window)
-                bucket.removeIf { it.isBefore(threshold) }
-                if (bucket.size >= limit) {
-                    false
-                } else {
-                    bucket.add(now)
-                    true
+                removeExpiredRequests(bucket = bucket, now = now, window = window)
+                if (bucket.requests.size < limit) {
+                    bucket.requests.addLast(now)
+                    allowed = true
                 }
-            }
-        if (!allowed) {
-            synchronized(bucket) {
-                if (bucket.isEmpty()) {
-                    buckets.remove(key, bucket)
-                }
+                bucket.expiresAt = now.plus(window)
+                bucket
             }
         }
+        runCleanupIfNeeded(now)
         return allowed
+    }
+
+    internal fun bucketCountForTesting(): Int = buckets.size
+
+    private fun removeExpiredRequests(
+        bucket: Bucket,
+        now: Instant,
+        window: Duration,
+    ) {
+        val threshold = now.minus(window)
+        while (bucket.requests.isNotEmpty() && bucket.requests.first().isBefore(threshold)) {
+            bucket.requests.removeFirst()
+        }
+    }
+
+    private fun runCleanupIfNeeded(now: Instant) {
+        if (!shouldCleanup()) {
+            return
+        }
+        val iterator = buckets.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val remove =
+                synchronized(entry.value) {
+                    !entry.value.expiresAt.isAfter(now)
+                }
+            if (remove) {
+                buckets.remove(entry.key, entry.value)
+            }
+        }
+    }
+
+    private fun shouldCleanup(): Boolean {
+        if (buckets.size > maxBuckets) {
+            return true
+        }
+        val calls = tryAcquireCalls.incrementAndGet()
+        return calls % cleanupEvery.toLong() == 0L
+    }
+
+    private companion object {
+        const val DEFAULT_CLEANUP_EVERY: Int = 256
+        const val DEFAULT_MAX_BUCKETS: Int = 10_000
     }
 }
 
