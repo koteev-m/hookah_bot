@@ -70,7 +70,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `add-batch twice keeps single order`() =
+    fun `add-batch with same idempotency key returns same batch`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-add")
             val config = buildConfig(jdbcUrl)
@@ -91,6 +91,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "batch-token",
+                    idempotencyKey = "idem-batch-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 2)),
                     comment = "First batch",
                 )
@@ -106,14 +107,22 @@ class GuestOrderRoutesTest {
                 client.post("/api/guest/order/add-batch") {
                     contentType(ContentType.Application.Json)
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
-                    setBody(json.encodeToString(AddBatchRequest.serializer(), request.copy(comment = "Second batch")))
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            request.copy(
+                                comment = "Second batch",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 5)),
+                            ),
+                        ),
+                    )
                 }
             val secondPayload = json.decodeFromString(AddBatchResponse.serializer(), secondResponse.bodyAsText())
 
             assertEquals(HttpStatusCode.OK, firstResponse.status)
             assertEquals(HttpStatusCode.OK, secondResponse.status)
             assertEquals(firstPayload.orderId, secondPayload.orderId)
-            assertTrue(firstPayload.batchId != secondPayload.batchId)
+            assertEquals(firstPayload.batchId, secondPayload.batchId)
 
             val activeResponse =
                 client.get("/api/guest/order/active?tableToken=batch-token") {
@@ -123,8 +132,58 @@ class GuestOrderRoutesTest {
             val activePayload = json.decodeFromString(ActiveOrderResponse.serializer(), activeResponse.bodyAsText())
             val order = activePayload.order
             assertNotNull(order)
-            assertEquals(2, order.batches.size)
+            assertEquals(1, order.batches.size)
             assertEquals(itemId, order.batches.first().items.first().itemId)
+        }
+
+    @Test
+    fun `add-batch with different idempotency keys creates two batches`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-add-idem-two")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 11)
+            seedTableToken(jdbcUrl, tableId, "batch-two-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Mocha")
+
+            val token = issueToken(config)
+            val firstRequest =
+                AddBatchRequest(
+                    tableToken = "batch-two-token",
+                    idempotencyKey = "idem-batch-two-1",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    comment = "First",
+                )
+            val secondRequest = firstRequest.copy(idempotencyKey = "idem-batch-two-2", comment = "Second")
+
+            val firstResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), firstRequest))
+                }
+            val secondResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), secondRequest))
+                }
+
+            val firstPayload = json.decodeFromString(AddBatchResponse.serializer(), firstResponse.bodyAsText())
+            val secondPayload = json.decodeFromString(AddBatchResponse.serializer(), secondResponse.bodyAsText())
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(HttpStatusCode.OK, secondResponse.status)
+            assertEquals(firstPayload.orderId, secondPayload.orderId)
+            assertTrue(firstPayload.batchId != secondPayload.batchId)
         }
 
     @Test
@@ -149,6 +208,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "source-token",
+                    idempotencyKey = "idem-source-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "Source check",
                 )
@@ -188,6 +248,7 @@ class GuestOrderRoutesTest {
                 """
                 {
                   "tableToken": "missing-comment-token",
+                  "idempotencyKey": "idem-missing-comment-token-1",
                   "items": [
                     {
                       "itemId": $itemId,
@@ -228,6 +289,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "paused-token",
+                    idempotencyKey = "idem-paused-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
                 )
@@ -264,6 +326,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "blocked-token",
+                    idempotencyKey = "idem-blocked-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
                 )
@@ -302,6 +365,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "paid-token",
+                    idempotencyKey = "idem-paid-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "test",
                 )
@@ -369,6 +433,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "rate-limit-token",
+                    idempotencyKey = "idem-rate-limit-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
                 )
@@ -383,7 +448,12 @@ class GuestOrderRoutesTest {
                 client.post("/api/guest/order/add-batch") {
                     contentType(ContentType.Application.Json)
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
-                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            request.copy(idempotencyKey = "idem-rate-limit-token-2"),
+                        ),
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, firstResponse.status)
@@ -418,6 +488,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "bad token",
+                    idempotencyKey = "idem-invalid-token-1",
                     items = listOf(AddBatchItemDto(itemId = 1, qty = 1)),
                     comment = null,
                 )

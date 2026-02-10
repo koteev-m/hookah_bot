@@ -2,7 +2,6 @@ package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.ActiveOrderSummary
-import com.hookah.platform.backend.tools.retryWithBackoff
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
@@ -36,6 +35,7 @@ data class ActiveOrderDetails(
 data class CreatedOrderBatch(
     val orderId: Long,
     val batchId: Long,
+    val idempotencyReplay: Boolean,
 )
 
 class OrdersRepository(private val dataSource: DataSource?) {
@@ -211,38 +211,78 @@ class OrdersRepository(private val dataSource: DataSource?) {
     suspend fun createGuestOrderBatch(
         tableId: Long,
         venueId: Long,
+        userId: Long,
+        idempotencyKey: String,
         comment: String?,
         items: List<OrderBatchItemInput>,
     ): CreatedOrderBatch? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                retryWithBackoff(
-                    maxAttempts = 2,
-                    maxDelayMillis = 200,
-                    jitterRatio = 0.2,
-                    shouldRetry = { e -> e is SQLException && e.sqlState == "23505" },
-                ) {
-                    ds.connection.use { connection ->
-                        connection.autoCommit = false
-                        try {
-                            if (!lockTable(connection, tableId)) {
-                                connection.rollback()
-                                return@use null
-                            }
-                            val orderId =
-                                findActiveOrderForUpdate(connection, tableId)
-                                    ?: insertActiveOrder(connection, venueId, tableId)
-                            val batchId = insertOrderBatch(connection, orderId, comment)
-                            insertBatchItems(connection, batchId, items)
-                            connection.commit()
-                            CreatedOrderBatch(orderId = orderId, batchId = batchId)
-                        } catch (e: SQLException) {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        if (!lockTable(connection, tableId)) {
                             connection.rollback()
-                            throw e
-                        } finally {
-                            connection.autoCommit = true
+                            return@use null
                         }
+                        val existing =
+                            findBatchIdempotency(
+                                connection = connection,
+                                venueId = venueId,
+                                tableSessionId = tableId,
+                                userId = userId,
+                                idempotencyKey = idempotencyKey,
+                            )
+                        if (existing != null) {
+                            connection.commit()
+                            return@use CreatedOrderBatch(
+                                orderId = existing.orderId,
+                                batchId = existing.batchId,
+                                idempotencyReplay = true,
+                            )
+                        }
+
+                        val orderId =
+                            findActiveOrderForUpdate(connection, tableId)
+                                ?: insertActiveOrder(connection, venueId, tableId)
+                        val batchId = insertOrderBatch(connection, orderId, comment)
+                        insertBatchItems(connection, batchId, items)
+                        insertBatchIdempotency(
+                            connection = connection,
+                            venueId = venueId,
+                            tableSessionId = tableId,
+                            userId = userId,
+                            idempotencyKey = idempotencyKey,
+                            orderId = orderId,
+                            batchId = batchId,
+                        )
+                        connection.commit()
+                        CreatedOrderBatch(
+                            orderId = orderId,
+                            batchId = batchId,
+                            idempotencyReplay = false,
+                        )
+                    } catch (e: SQLException) {
+                        connection.rollback()
+                        if (e.sqlState == "23505") {
+                            findBatchIdempotencyInNewConnection(
+                                ds = ds,
+                                venueId = venueId,
+                                tableSessionId = tableId,
+                                userId = userId,
+                                idempotencyKey = idempotencyKey,
+                            )?.let { existing ->
+                                return@use CreatedOrderBatch(
+                                    orderId = existing.orderId,
+                                    batchId = existing.batchId,
+                                    idempotencyReplay = true,
+                                )
+                            }
+                        }
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
                     }
                 }
             } catch (e: SQLException) {
@@ -334,6 +374,90 @@ class OrdersRepository(private val dataSource: DataSource?) {
                 statement.addBatch()
             }
             statement.executeBatch()
+        }
+    }
+
+    private data class StoredBatchIdempotency(
+        val orderId: Long,
+        val batchId: Long,
+    )
+
+    private fun findBatchIdempotency(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        idempotencyKey: String,
+    ): StoredBatchIdempotency? {
+        return connection.prepareStatement(
+            """
+            SELECT order_id, batch_id
+            FROM guest_batch_idempotency
+            WHERE venue_id = ? AND table_session_id = ? AND user_id = ? AND idempotency_key = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, userId)
+            statement.setString(4, idempotencyKey)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    StoredBatchIdempotency(orderId = rs.getLong("order_id"), batchId = rs.getLong("batch_id"))
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
+    private fun insertBatchIdempotency(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        idempotencyKey: String,
+        orderId: Long,
+        batchId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO guest_batch_idempotency (
+                venue_id,
+                table_session_id,
+                user_id,
+                idempotency_key,
+                order_id,
+                batch_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, userId)
+            statement.setString(4, idempotencyKey)
+            statement.setLong(5, orderId)
+            statement.setLong(6, batchId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun findBatchIdempotencyInNewConnection(
+        ds: DataSource,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        idempotencyKey: String,
+    ): StoredBatchIdempotency? {
+        return ds.connection.use { lookupConnection ->
+            findBatchIdempotency(
+                connection = lookupConnection,
+                venueId = venueId,
+                tableSessionId = tableSessionId,
+                userId = userId,
+                idempotencyKey = idempotencyKey,
+            )
         }
     }
 

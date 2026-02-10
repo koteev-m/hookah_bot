@@ -12,6 +12,7 @@ import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
@@ -30,6 +31,7 @@ private const val ITEMS_MAX_SIZE = 50
 private const val QTY_MIN = 1
 private const val QTY_MAX = 50
 private const val COMMENT_MAX_LENGTH = 500
+private const val IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 fun Route.guestOrderRoutes(
     guestRateLimitConfig: GuestRateLimitConfig,
@@ -67,11 +69,13 @@ fun Route.guestOrderRoutes(
         post {
             val request = call.receive<AddBatchRequest>()
             val token = validateTableToken(request.tableToken)
+            val idempotencyKey = normalizeIdempotencyKey(request.idempotencyKey)
             val normalizedItems = normalizeItems(request.items)
             val comment = normalizeComment(request.comment)
             val table =
                 call.rateLimitResolvedTableOrNull(addBatchResolvedTableAttribute)
                     ?: (tableTokenResolver(token) ?: throw NotFoundException())
+            val userId = call.requireUserId()
             ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
 
             val itemIds = normalizedItems.map { it.itemId }.toSet()
@@ -88,19 +92,23 @@ fun Route.guestOrderRoutes(
                 ordersRepository.createGuestOrderBatch(
                     tableId = table.tableId,
                     venueId = table.venueId,
+                    userId = userId,
+                    idempotencyKey = idempotencyKey,
                     comment = comment,
                     items = normalizedItems,
                 ) ?: throw NotFoundException()
 
-            notifyStaffChat(
-                notifier = staffChatNotifier,
-                table = table,
-                orderId = batch.orderId,
-                batchId = batch.batchId,
-                comment = comment,
-                items = normalizedItems,
-                guestMenuRepository = guestMenuRepository,
-            )
+            if (!batch.idempotencyReplay) {
+                notifyStaffChat(
+                    notifier = staffChatNotifier,
+                    table = table,
+                    orderId = batch.orderId,
+                    batchId = batch.batchId,
+                    comment = comment,
+                    items = normalizedItems,
+                    guestMenuRepository = guestMenuRepository,
+                )
+            }
 
             call.respond(
                 AddBatchResponse(
@@ -110,6 +118,17 @@ fun Route.guestOrderRoutes(
             )
         }
     }
+}
+
+private fun normalizeIdempotencyKey(idempotencyKey: String): String {
+    val normalized = idempotencyKey.trim()
+    if (normalized.isEmpty()) {
+        throw InvalidInputException("idempotencyKey must not be blank")
+    }
+    if (normalized.length > IDEMPOTENCY_KEY_MAX_LENGTH) {
+        throw InvalidInputException("idempotencyKey length must be <= $IDEMPOTENCY_KEY_MAX_LENGTH")
+    }
+    return normalized
 }
 
 private fun normalizeItems(items: List<AddBatchItemDto>): List<OrderBatchItemInput> {
