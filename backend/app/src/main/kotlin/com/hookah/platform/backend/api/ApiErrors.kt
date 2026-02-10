@@ -12,6 +12,7 @@ object ApiErrorCodes {
     const val SUBSCRIPTION_BLOCKED = "SUBSCRIPTION_BLOCKED"
     const val NOT_FOUND = "NOT_FOUND"
     const val DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
+    const val RATE_LIMITED = "RATE_LIMITED"
     const val INTERNAL_ERROR = "INTERNAL_ERROR"
     const val CONFIG_ERROR = "CONFIG_ERROR"
 }

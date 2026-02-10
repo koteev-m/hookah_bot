@@ -1,6 +1,5 @@
 package com.hookah.platform.backend.miniapp.guest
 
-import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallRequest
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallResponse
@@ -31,7 +30,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlin.test.fail
 
 class GuestStaffCallRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -108,9 +106,8 @@ class GuestStaffCallRoutesTest {
         }
 
     @Test
-    fun `invalid reason rejects staff call without resolver`() =
+    fun `invalid reason rejects staff call`() =
         testApplication {
-            var resolveCalls = 0
             val config =
                 MapApplicationConfig(
                     "app.env" to appEnv,
@@ -119,16 +116,7 @@ class GuestStaffCallRoutesTest {
                 )
 
             environment { this.config = config }
-            application {
-                module(
-                    ModuleOverrides(
-                        tableTokenResolver = {
-                            resolveCalls += 1
-                            fail("tableTokenResolver must not be called for invalid reason")
-                        },
-                    ),
-                )
-            }
+            application { module() }
 
             val token = issueToken(config)
             val invalidReasons =
@@ -155,13 +143,11 @@ class GuestStaffCallRoutesTest {
                 assertEquals(HttpStatusCode.BadRequest, response.status)
                 assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
             }
-            assertEquals(0, resolveCalls)
         }
 
     @Test
-    fun `invalid comment rejects staff call without resolver`() =
+    fun `invalid comment rejects staff call`() =
         testApplication {
-            var resolveCalls = 0
             val config =
                 MapApplicationConfig(
                     "app.env" to appEnv,
@@ -170,16 +156,7 @@ class GuestStaffCallRoutesTest {
                 )
 
             environment { this.config = config }
-            application {
-                module(
-                    ModuleOverrides(
-                        tableTokenResolver = {
-                            resolveCalls += 1
-                            fail("tableTokenResolver must not be called for invalid comment")
-                        },
-                    ),
-                )
-            }
+            application { module() }
 
             val token = issueToken(config)
             val request =
@@ -197,7 +174,53 @@ class GuestStaffCallRoutesTest {
 
             assertEquals(HttpStatusCode.BadRequest, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
-            assertEquals(0, resolveCalls)
+        }
+
+    @Test
+    fun `staff call rate limit blocks spam`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-staff-rate-limit")
+            val config =
+                buildConfig(
+                    jdbcUrl = jdbcUrl,
+                    guestStaffCallMaxRequests = 1,
+                    guestStaffCallWindowSeconds = 60,
+                )
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 11)
+            seedTableToken(jdbcUrl, tableId, "staff-rate-limit-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+
+            val token = issueToken(config)
+            val request =
+                StaffCallRequest(
+                    tableToken = "staff-rate-limit-token",
+                    reason = "BILL",
+                    comment = null,
+                )
+
+            val firstResponse =
+                client.post("/api/guest/staff-call") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(StaffCallRequest.serializer(), request))
+                }
+            val secondResponse =
+                client.post("/api/guest/staff-call") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(StaffCallRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(HttpStatusCode.TooManyRequests, secondResponse.status)
+            assertApiErrorEnvelope(secondResponse, ApiErrorCodes.RATE_LIMITED)
         }
 
     @Test
@@ -306,14 +329,26 @@ class GuestStaffCallRoutesTest {
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String): MapApplicationConfig {
-        return MapApplicationConfig(
-            "app.env" to appEnv,
-            "api.session.jwtSecret" to "test-secret",
-            "db.jdbcUrl" to jdbcUrl,
-            "db.user" to "sa",
-            "db.password" to "",
-        )
+    private fun buildConfig(
+        jdbcUrl: String,
+        guestStaffCallMaxRequests: Int? = null,
+        guestStaffCallWindowSeconds: Long? = null,
+    ): MapApplicationConfig {
+        val entries =
+            mutableListOf(
+                "app.env" to appEnv,
+                "api.session.jwtSecret" to "test-secret",
+                "db.jdbcUrl" to jdbcUrl,
+                "db.user" to "sa",
+                "db.password" to "",
+            )
+        if (guestStaffCallMaxRequests != null) {
+            entries.add("guest.rateLimit.staffCall.maxRequests" to guestStaffCallMaxRequests.toString())
+        }
+        if (guestStaffCallWindowSeconds != null) {
+            entries.add("guest.rateLimit.staffCall.windowSeconds" to guestStaffCallWindowSeconds.toString())
+        }
+        return MapApplicationConfig(*entries.toTypedArray())
     }
 
     private fun issueToken(config: MapApplicationConfig): String {

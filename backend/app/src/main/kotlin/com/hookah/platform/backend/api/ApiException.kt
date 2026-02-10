@@ -88,6 +88,16 @@ class InitDataInvalidException(
         details = details,
     )
 
+class TooManyRequestsException(
+    message: String = "Too many requests",
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.RATE_LIMITED,
+        httpStatus = HttpStatusCode.TooManyRequests,
+        message = message,
+        details = details,
+    )
+
 class DatabaseUnavailableException(
     details: JsonObject? = null,
 ) : ApiException(
