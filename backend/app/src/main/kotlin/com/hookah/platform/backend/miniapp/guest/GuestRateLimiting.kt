@@ -92,15 +92,15 @@ class InMemoryRateLimiter(
         if (!shouldCleanup()) {
             return
         }
-        val iterator = buckets.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val remove =
-                synchronized(entry.value) {
-                    !entry.value.expiresAt.isAfter(now)
+        for (key in buckets.keys) {
+            buckets.computeIfPresent(key) { _, bucket ->
+                synchronized(bucket) {
+                    if (!bucket.expiresAt.isAfter(now)) {
+                        null
+                    } else {
+                        bucket
+                    }
                 }
-            if (remove) {
-                buckets.remove(entry.key, entry.value)
             }
         }
     }
