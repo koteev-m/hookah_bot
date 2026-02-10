@@ -343,6 +343,55 @@ class GuestOrderRoutesTest {
         }
 
     @Test
+    fun `add-batch rate limit blocks spam`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-rate-limit")
+            val config =
+                buildConfig(
+                    jdbcUrl = jdbcUrl,
+                    guestAddBatchMaxRequests = 1,
+                    guestAddBatchWindowSeconds = 60,
+                )
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 3)
+            seedTableToken(jdbcUrl, tableId, "rate-limit-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Espresso")
+
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "rate-limit-token",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    comment = null,
+                )
+
+            val firstResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val secondResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(HttpStatusCode.TooManyRequests, secondResponse.status)
+            assertApiErrorEnvelope(secondResponse, ApiErrorCodes.RATE_LIMITED)
+        }
+
+    @Test
     fun `invalid table token rejects add-batch without resolver`() =
         testApplication {
             var resolveCalls = 0
@@ -392,6 +441,8 @@ class GuestOrderRoutesTest {
     private fun buildConfig(
         jdbcUrl: String,
         platformOwnerId: Long? = null,
+        guestAddBatchMaxRequests: Int? = null,
+        guestAddBatchWindowSeconds: Long? = null,
     ): MapApplicationConfig {
         val entries =
             mutableListOf(
@@ -403,6 +454,12 @@ class GuestOrderRoutesTest {
             )
         if (platformOwnerId != null) {
             entries.add("platform.ownerUserId" to platformOwnerId.toString())
+        }
+        if (guestAddBatchMaxRequests != null) {
+            entries.add("guest.rateLimit.addBatch.maxRequests" to guestAddBatchMaxRequests.toString())
+        }
+        if (guestAddBatchWindowSeconds != null) {
+            entries.add("guest.rateLimit.addBatch.windowSeconds" to guestAddBatchWindowSeconds.toString())
         }
         return MapApplicationConfig(*entries.toTypedArray())
     }

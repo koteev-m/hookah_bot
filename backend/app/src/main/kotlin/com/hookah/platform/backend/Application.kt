@@ -24,6 +24,8 @@ import com.hookah.platform.backend.billing.subscription.SubscriptionBillingVenue
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
+import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
+import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
@@ -231,6 +233,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val sessionTokenService = SessionTokenService(sessionTokenConfig)
     val billingConfig = BillingConfig.from(appConfig, appEnv)
     val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
+    val guestRateLimitConfig = GuestRateLimitConfig.from(appConfig)
+    val guestRateLimiter = InMemoryRateLimiter()
     val platformConfig = PlatformConfig.from(appConfig)
 
     val httpClient =
@@ -722,6 +726,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         subscriptionRepository = subscriptionRepository,
                     )
                     guestOrderRoutes(
+                        guestRateLimitConfig = guestRateLimitConfig,
+                        rateLimiter = guestRateLimiter,
                         tableTokenResolver = tableTokenResolver,
                         guestVenueRepository = guestVenueRepository,
                         guestMenuRepository = guestMenuRepository,
@@ -730,6 +736,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         staffChatNotifier = staffChatNotifier,
                     )
                     guestStaffCallRoutes(
+                        guestRateLimitConfig = guestRateLimitConfig,
+                        rateLimiter = guestRateLimiter,
                         tableTokenResolver = tableTokenResolver,
                         guestVenueRepository = guestVenueRepository,
                         subscriptionRepository = subscriptionRepository,

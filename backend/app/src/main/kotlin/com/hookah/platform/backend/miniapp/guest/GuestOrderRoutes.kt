@@ -23,6 +23,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.route
 
 private const val ITEMS_MIN_SIZE = 1
 private const val ITEMS_MAX_SIZE = 50
@@ -31,6 +32,8 @@ private const val QTY_MAX = 50
 private const val COMMENT_MAX_LENGTH = 500
 
 fun Route.guestOrderRoutes(
+    guestRateLimitConfig: GuestRateLimitConfig,
+    rateLimiter: RateLimiter,
     tableTokenResolver: suspend (String) -> TableContext?,
     guestVenueRepository: GuestVenueRepository,
     guestMenuRepository: GuestMenuRepository,
@@ -52,48 +55,60 @@ fun Route.guestOrderRoutes(
         )
     }
 
-    post("/order/add-batch") {
-        val request = call.receive<AddBatchRequest>()
-        val token = validateTableToken(request.tableToken)
-        val normalizedItems = normalizeItems(request.items)
-        val comment = normalizeComment(request.comment)
-        val table = tableTokenResolver(token) ?: throw NotFoundException()
-        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
-
-        val itemIds = normalizedItems.map { it.itemId }.toSet()
-        val availableItems =
-            guestMenuRepository.findAvailableItemIds(
-                venueId = table.venueId,
-                itemIds = itemIds,
-            )
-        if (availableItems.size != itemIds.size) {
-            throw InvalidInputException("Some items are unavailable")
-        }
-
-        val batch =
-            ordersRepository.createGuestOrderBatch(
-                tableId = table.tableId,
-                venueId = table.venueId,
-                comment = comment,
-                items = normalizedItems,
-            ) ?: throw NotFoundException()
-
-        notifyStaffChat(
-            notifier = staffChatNotifier,
-            table = table,
-            orderId = batch.orderId,
-            batchId = batch.batchId,
-            comment = comment,
-            items = normalizedItems,
-            guestMenuRepository = guestMenuRepository,
+    route("/order/add-batch") {
+        installGuestAddBatchRateLimit(
+            endpoint = "guest.order.add-batch",
+            policy = guestRateLimitConfig.addBatch,
+            rateLimiter = rateLimiter,
+            tableTokenResolver = tableTokenResolver,
+            resolvedTableAttribute = addBatchResolvedTableAttribute,
         )
 
-        call.respond(
-            AddBatchResponse(
+        post {
+            val request = call.receive<AddBatchRequest>()
+            val token = validateTableToken(request.tableToken)
+            val normalizedItems = normalizeItems(request.items)
+            val comment = normalizeComment(request.comment)
+            val table =
+                call.rateLimitResolvedTableOrNull(addBatchResolvedTableAttribute)
+                    ?: (tableTokenResolver(token) ?: throw NotFoundException())
+            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+
+            val itemIds = normalizedItems.map { it.itemId }.toSet()
+            val availableItems =
+                guestMenuRepository.findAvailableItemIds(
+                    venueId = table.venueId,
+                    itemIds = itemIds,
+                )
+            if (availableItems.size != itemIds.size) {
+                throw InvalidInputException("Some items are unavailable")
+            }
+
+            val batch =
+                ordersRepository.createGuestOrderBatch(
+                    tableId = table.tableId,
+                    venueId = table.venueId,
+                    comment = comment,
+                    items = normalizedItems,
+                ) ?: throw NotFoundException()
+
+            notifyStaffChat(
+                notifier = staffChatNotifier,
+                table = table,
                 orderId = batch.orderId,
                 batchId = batch.batchId,
-            ),
-        )
+                comment = comment,
+                items = normalizedItems,
+                guestMenuRepository = guestMenuRepository,
+            )
+
+            call.respond(
+                AddBatchResponse(
+                    orderId = batch.orderId,
+                    batchId = batch.batchId,
+                ),
+            )
+        }
     }
 }
 
