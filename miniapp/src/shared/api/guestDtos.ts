@@ -77,6 +77,7 @@ export type OrderBatchItemDto = {
 
 export type AddBatchRequest = {
   tableToken: string
+  idempotencyKey: string
   items: AddBatchItemDto[]
   comment?: string | null
 }

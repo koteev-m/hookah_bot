@@ -470,6 +470,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     const deps = buildApiDeps(isDebug)
     const payload = {
       tableToken,
+      idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       comment: validation.comment,
       items: Array.from(cartSnapshot.items.entries()).map(([itemId, qty]) => ({
         itemId,
