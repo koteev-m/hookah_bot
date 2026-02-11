@@ -87,12 +87,14 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Tea")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
                     tableToken = "batch-token",
                     tableSessionId = tableSessionId,
+                    tabId = personalTabId,
                     idempotencyKey = "idem-batch-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 2)),
                     comment = "First batch",
@@ -156,12 +158,14 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Mocha")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val firstRequest =
                 AddBatchRequest(
                     tableToken = "batch-two-token",
                     tableSessionId = tableSessionId,
+                    tabId = personalTabId,
                     idempotencyKey = "idem-batch-two-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "First",
@@ -208,12 +212,14 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Latte")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
                     tableToken = "source-token",
                     tableSessionId = tableSessionId,
+                    tabId = personalTabId,
                     idempotencyKey = "idem-source-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "Source check",
@@ -249,6 +255,7 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Matcha")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val requestBody =
@@ -256,6 +263,7 @@ class GuestOrderRoutesTest {
                 {
                   "tableToken": "missing-comment-token",
                   "tableSessionId": $tableSessionId,
+                  "tabId": $personalTabId,
                   "idempotencyKey": "idem-missing-comment-token-1",
                   "items": [
                     {
@@ -293,12 +301,14 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Herbal Tea")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
                     tableToken = "paused-token",
                     tableSessionId = tableSessionId,
+                    tabId = personalTabId,
                     idempotencyKey = "idem-paused-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
@@ -312,6 +322,47 @@ class GuestOrderRoutesTest {
 
             assertEquals(HttpStatusCode.NotFound, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
+        }
+
+    @Test
+    fun `add-batch on чужой tab returns forbidden`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-foreign-tab")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 12)
+            seedTableToken(jdbcUrl, tableId, "foreign-tab-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Soda")
+            val foreignTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, userId = 99999)
+
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "foreign-tab-token",
+                    tableSessionId = tableSessionId,
+                    tabId = foreignTabId,
+                    idempotencyKey = "idem-foreign-tab-1",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    comment = null,
+                )
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
         }
 
     @Test
@@ -332,12 +383,14 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Coffee")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
                     tableToken = "blocked-token",
                     tableSessionId = tableSessionId,
+                    tabId = personalTabId,
                     idempotencyKey = "idem-blocked-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
@@ -373,12 +426,14 @@ class GuestOrderRoutesTest {
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Cappuccino")
             val invoiceId = seedInvoice(jdbcUrl, venueId, status = "PAST_DUE")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val guestToken = issueToken(config, TELEGRAM_USER_ID)
             val request =
                 AddBatchRequest(
                     tableToken = "paid-token",
                     tableSessionId = tableSessionId,
+                    tabId = personalTabId,
                     idempotencyKey = "idem-paid-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "test",
@@ -443,12 +498,14 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Espresso")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
                     tableToken = "rate-limit-token",
                     tableSessionId = tableSessionId,
+                    tabId = personalTabId,
                     idempotencyKey = "idem-rate-limit-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
@@ -507,6 +564,7 @@ class GuestOrderRoutesTest {
                 AddBatchRequest(
                     tableToken = "expired-session-token",
                     tableSessionId = expiredSessionId,
+                    tabId = 1,
                     idempotencyKey = "idem-expired-session-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
@@ -551,6 +609,7 @@ class GuestOrderRoutesTest {
                 AddBatchRequest(
                     tableToken = "bad token",
                     tableSessionId = 1,
+                    tabId = 1,
                     idempotencyKey = "idem-invalid-token-1",
                     items = listOf(AddBatchItemDto(itemId = 1, qty = 1)),
                     comment = null,
@@ -707,6 +766,73 @@ class GuestOrderRoutesTest {
             }
         }
         error("Failed to insert table session")
+    }
+
+    private fun seedPersonalTab(
+        jdbcUrl: String,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            ensureUser(connection, userId)
+            connection.prepareStatement(
+                """
+                INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
+                VALUES (?, ?, 'PERSONAL', ?, 'ACTIVE')
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, userId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        val tabId = rs.getLong(1)
+                        connection.prepareStatement(
+                            """
+                            INSERT INTO tab_member (tab_id, user_id, role)
+                            VALUES (?, ?, 'OWNER')
+                            """.trimIndent(),
+                        ).use { membership ->
+                            membership.setLong(1, tabId)
+                            membership.setLong(2, userId)
+                            membership.executeUpdate()
+                        }
+                        return tabId
+                    }
+                }
+            }
+        }
+        error("Failed to insert personal tab")
+    }
+
+    private fun ensureUser(
+        connection: java.sql.Connection,
+        userId: Long,
+    ) {
+        val exists =
+            connection.prepareStatement(
+                """
+                SELECT 1 FROM users WHERE telegram_user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.executeQuery().use { it.next() }
+            }
+        if (exists) {
+            return
+        }
+        connection.prepareStatement(
+            """
+            INSERT INTO users (telegram_user_id)
+            VALUES (?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.executeUpdate()
+        }
     }
 
     private fun seedSubscription(

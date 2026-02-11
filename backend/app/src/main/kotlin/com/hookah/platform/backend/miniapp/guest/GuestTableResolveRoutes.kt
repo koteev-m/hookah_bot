@@ -2,10 +2,12 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.VenueAvailabilityResolver
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.TableContext
 import io.ktor.server.application.call
 import io.ktor.server.response.respond
@@ -18,6 +20,7 @@ fun Route.guestTableResolveRoutes(
     subscriptionRepository: SubscriptionRepository,
     tableSessionRepository: TableSessionRepository,
     tableSessionConfig: TableSessionConfig,
+    guestTabsRepository: GuestTabsRepository,
 ) {
     get("/table/resolve") {
         val rawToken = call.request.queryParameters["tableToken"]
@@ -33,6 +36,11 @@ fun Route.guestTableResolveRoutes(
                 tableId = table.tableId,
                 ttl = tableSessionConfig.ttl,
             )
+        guestTabsRepository.ensurePersonalTab(
+            venueId = table.venueId,
+            tableSessionId = tableSession.id,
+            userId = call.requireUserId(),
+        )
 
         call.respond(
             TableResolveResponse(
