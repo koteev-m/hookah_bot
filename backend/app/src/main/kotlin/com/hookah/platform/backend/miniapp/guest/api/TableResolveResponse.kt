@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 data class TableResolveResponse(
     val venueId: Long,
     val tableId: Long,
+    val tableSessionId: Long,
     val tableNumber: String,
     val venueStatus: String,
     val subscriptionStatus: String,

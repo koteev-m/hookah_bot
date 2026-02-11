@@ -26,8 +26,11 @@ import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
+import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
+import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
@@ -234,6 +237,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val billingConfig = BillingConfig.from(appConfig, appEnv)
     val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
     val guestRateLimitConfig = GuestRateLimitConfig.from(appConfig)
+    val tableSessionConfig = TableSessionConfig.from(appConfig)
     val guestRateLimiter = InMemoryRateLimiter()
     val platformConfig = PlatformConfig.from(appConfig)
 
@@ -255,6 +259,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val venueMenuRepository = VenueMenuRepository(dataSource)
     val venueTableRepository = VenueTableRepository(dataSource)
     val staffCallRepository = StaffCallRepository(dataSource)
+    val tableSessionRepository = TableSessionRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val auditLogRepository = AuditLogRepository(dataSource, json)
     val platformVenueRepository = PlatformVenueRepository(dataSource)
@@ -335,6 +340,17 @@ internal fun Application.module(overrides: ModuleOverrides) {
         CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineName("subscription-billing"),
         )
+    val tableSessionCleanupScope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO + CoroutineName("table-session-cleanup"),
+        )
+    val tableSessionCleanupWorker =
+        TableSessionCleanupWorker(
+            repository = tableSessionRepository,
+            intervalMillis = tableSessionConfig.cleanupInterval.toMillis(),
+            scope = tableSessionCleanupScope,
+        )
+    var tableSessionCleanupJob: Job? = null
     val staffChatLinkCodeRepository =
         StaffChatLinkCodeRepository(
             dataSource = dataSource,
@@ -500,13 +516,16 @@ internal fun Application.module(overrides: ModuleOverrides) {
     environment.monitor.subscribe(ApplicationStarted) {
         if (dataSource != null) {
             subscriptionBillingJob.start(subscriptionBillingScope)
+            tableSessionCleanupJob = tableSessionCleanupWorker.start()
         } else {
             logger.info("Subscription billing job disabled: database is not configured")
+            logger.info("Table session cleanup worker disabled: database is not configured")
         }
     }
     environment.monitor.subscribe(ApplicationStopping) {
         logger.info("Application stopping, closing resources")
         subscriptionBillingJob.stop()
+        tableSessionCleanupJob?.cancel()
         httpClient.close()
         telegramApiClient?.close()
         telegramScope?.cancel()
@@ -516,6 +535,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
         telegramOutboxWorkerScope?.cancel()
         staffChatNotifierScope.cancel()
         subscriptionBillingScope.cancel()
+        tableSessionCleanupScope.cancel()
         DatabaseFactory.close(dataSource)
     }
     environment.monitor.subscribe(ApplicationStopped) {
@@ -724,6 +744,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         tableTokenResolver = tableTokenResolver,
                         guestVenueRepository = guestVenueRepository,
                         subscriptionRepository = subscriptionRepository,
+                        tableSessionRepository = tableSessionRepository,
+                        tableSessionConfig = tableSessionConfig,
                     )
                     guestOrderRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,
@@ -733,6 +755,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         guestMenuRepository = guestMenuRepository,
                         subscriptionRepository = subscriptionRepository,
                         ordersRepository = ordersRepository,
+                        tableSessionRepository = tableSessionRepository,
+                        tableSessionConfig = tableSessionConfig,
                         staffChatNotifier = staffChatNotifier,
                     )
                     guestStaffCallRoutes(
@@ -742,6 +766,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         guestVenueRepository = guestVenueRepository,
                         subscriptionRepository = subscriptionRepository,
                         staffCallRepository = staffCallRepository,
+                        tableSessionRepository = tableSessionRepository,
+                        tableSessionConfig = tableSessionConfig,
                     )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))

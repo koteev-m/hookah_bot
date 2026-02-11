@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallRequest
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
@@ -21,6 +22,8 @@ fun Route.guestStaffCallRoutes(
     guestVenueRepository: GuestVenueRepository,
     subscriptionRepository: SubscriptionRepository,
     staffCallRepository: StaffCallRepository,
+    tableSessionRepository: TableSessionRepository,
+    tableSessionConfig: TableSessionConfig,
 ) {
     route("/staff-call") {
         installGuestStaffCallRateLimit(
@@ -40,12 +43,20 @@ fun Route.guestStaffCallRoutes(
             val table =
                 call.rateLimitResolvedTableOrNull(staffCallResolvedTableAttribute)
                     ?: (tableTokenResolver(token) ?: throw NotFoundException())
+            val tableSession =
+                tableSessionRepository.touchActiveSession(
+                    tableSessionId = request.tableSessionId,
+                    venueId = table.venueId,
+                    tableId = table.tableId,
+                    ttl = tableSessionConfig.ttl,
+                ) ?: throw NotFoundException()
             ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
 
             val created =
                 staffCallRepository.createGuestStaffCall(
                     venueId = table.venueId,
                     tableId = table.tableId,
+                    tableSessionId = tableSession.id,
                     reason = reason,
                     comment = comment,
                 )

@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.guest
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.VenueAvailabilityResolver
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.telegram.TableContext
@@ -15,6 +16,8 @@ fun Route.guestTableResolveRoutes(
     tableTokenResolver: suspend (String) -> TableContext?,
     guestVenueRepository: GuestVenueRepository,
     subscriptionRepository: SubscriptionRepository,
+    tableSessionRepository: TableSessionRepository,
+    tableSessionConfig: TableSessionConfig,
 ) {
     get("/table/resolve") {
         val rawToken = call.request.queryParameters["tableToken"]
@@ -24,11 +27,18 @@ fun Route.guestTableResolveRoutes(
         val venue = ensureVenuePublishedForGuest(table.venueId, guestVenueRepository)
         val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(table.venueId)
         val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
+        val tableSession =
+            tableSessionRepository.resolveActiveSession(
+                venueId = table.venueId,
+                tableId = table.tableId,
+                ttl = tableSessionConfig.ttl,
+            )
 
         call.respond(
             TableResolveResponse(
                 venueId = table.venueId,
                 tableId = table.tableId,
+                tableSessionId = tableSession.id,
                 tableNumber = table.tableNumber.toString(),
                 venueStatus = availability.venueStatus.dbValue,
                 subscriptionStatus = availability.subscriptionStatus,
