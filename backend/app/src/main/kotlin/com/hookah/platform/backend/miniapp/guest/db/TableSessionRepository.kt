@@ -153,8 +153,8 @@ class TableSessionRepository(private val dataSource: DataSource?) {
                         statement.executeUpdate()
                     }
                 }
-            } catch (_: SQLException) {
-                0
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
             }
         }
     }
