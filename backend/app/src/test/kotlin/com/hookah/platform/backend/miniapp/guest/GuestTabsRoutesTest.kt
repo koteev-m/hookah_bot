@@ -206,6 +206,40 @@ class GuestTabsRoutesTest {
             assertTrue(tabsPayload.tabs.any { it.id == sharedTab.id })
         }
 
+    @Test
+    fun `join tab rejects too long token`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-tabs-join-token-limit")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 32)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val guestToken = issueToken(config, userId = 40404)
+
+            val tooLongToken = "x".repeat(129)
+            val response =
+                client.post("/api/guest/tabs/join") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                    setBody(
+                        json.encodeToString(
+                            JoinTabRequest.serializer(),
+                            JoinTabRequest(tableSessionId = tableSessionId, token = tooLongToken, consent = true),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+        }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"

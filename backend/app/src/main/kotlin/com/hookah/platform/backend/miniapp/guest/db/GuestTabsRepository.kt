@@ -415,7 +415,13 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             statement.setLong(1, tabId)
             statement.setLong(2, userId)
             statement.setString(3, role)
-            statement.executeUpdate()
+            try {
+                statement.executeUpdate()
+            } catch (e: SQLException) {
+                if (!e.isDuplicateKeyViolation()) {
+                    throw e
+                }
+            }
         }
     }
 
@@ -471,8 +477,21 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, userId)
-            statement.executeUpdate()
+            try {
+                statement.executeUpdate()
+            } catch (e: SQLException) {
+                if (!e.isDuplicateKeyViolation()) {
+                    throw e
+                }
+            }
         }
+    }
+
+    private fun SQLException.isDuplicateKeyViolation(): Boolean {
+        if (sqlState == "23505") {
+            return true
+        }
+        return generateSequence(nextException) { it.nextException }.any { it.sqlState == "23505" }
     }
 
     private fun mapTab(rs: java.sql.ResultSet): GuestTabModel =
