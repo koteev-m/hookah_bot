@@ -4,6 +4,10 @@ import type {
   AddBatchRequest,
   AddBatchResponse,
   CatalogResponse,
+  CreateSharedTabRequest,
+  GuestTabResponse,
+  GuestTabsResponse,
+  JoinTabRequest,
   MenuResponse,
   StaffCallRequest,
   StaffCallResponse,
@@ -130,6 +134,58 @@ export async function guestStaffCall(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestPayload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestGetTabs(
+  backendUrl: string,
+  tableSessionId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestTabsResponse>> {
+  return requestApi<GuestTabsResponse>(
+    backendUrl,
+    `/api/guest/tabs?table_session_id=${encodeURIComponent(String(tableSessionId))}`,
+    { signal },
+    deps
+  )
+}
+
+export async function guestCreateSharedTab(
+  backendUrl: string,
+  payload: CreateSharedTabRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestTabResponse>> {
+  return requestApi<GuestTabResponse>(
+    backendUrl,
+    '/api/guest/tabs/shared',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestJoinTab(
+  backendUrl: string,
+  payload: JoinTabRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestTabResponse>> {
+  return requestApi<GuestTabResponse>(
+    backendUrl,
+    '/api/guest/tabs/join',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
       signal
     },
     deps

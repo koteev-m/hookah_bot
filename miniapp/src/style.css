@@ -433,6 +433,14 @@ input[type="number"] {
   color: #dc2626;
 }
 
+.cart-message[data-tone='success'] {
+  color: #16a34a;
+}
+
+.cart-message[data-tone='info'] {
+  color: #475569;
+}
+
 .cart-chat-message {
   margin: 0;
   color: #475569;
@@ -465,6 +473,17 @@ input[type="number"] {
 .cart-actions {
   display: grid;
   gap: 0.75rem;
+}
+
+.cart-join-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.cart-join-input {
+  width: 100%;
+  text-align: left;
 }
 
 .staff-call {

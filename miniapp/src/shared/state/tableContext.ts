@@ -19,6 +19,7 @@ export type TableContextSnapshot = {
   status: TableContextStatus
   tableToken: string | null
   tableId: number | null
+  tableSessionId: number | null
   tableNumber: string | null
   venueId: number | null
   available: boolean | null
@@ -76,6 +77,7 @@ function buildEmptySnapshot(
     status,
     tableToken,
     tableId: null,
+    tableSessionId: null,
     tableNumber: null,
     venueId: null,
     available: null,
@@ -96,6 +98,7 @@ function buildResolvedSnapshot(
     status: 'resolved',
     tableToken,
     tableId: payload.tableId,
+    tableSessionId: payload.tableSessionId,
     tableNumber: payload.tableNumber,
     venueId: payload.venueId,
     available: payload.available,

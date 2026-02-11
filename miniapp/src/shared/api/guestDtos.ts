@@ -44,6 +44,7 @@ export type MenuItemDto = {
 export type TableResolveResponse = {
   venueId: number
   tableId: number
+  tableSessionId: number
   tableNumber: string
   venueStatus: string
   subscriptionStatus: string
@@ -77,9 +78,37 @@ export type OrderBatchItemDto = {
 
 export type AddBatchRequest = {
   tableToken: string
+  tableSessionId: number
+  tabId: number
   idempotencyKey: string
   items: AddBatchItemDto[]
   comment?: string | null
+}
+
+export type GuestTabDto = {
+  id: number
+  tableSessionId: number
+  type: string
+  ownerUserId?: number | null
+  status: string
+}
+
+export type GuestTabsResponse = {
+  tabs: GuestTabDto[]
+}
+
+export type GuestTabResponse = {
+  tab: GuestTabDto
+}
+
+export type CreateSharedTabRequest = {
+  tableSessionId: number
+}
+
+export type JoinTabRequest = {
+  tableSessionId: number
+  token: string
+  consent: boolean
 }
 
 export type AddBatchItemDto = {
