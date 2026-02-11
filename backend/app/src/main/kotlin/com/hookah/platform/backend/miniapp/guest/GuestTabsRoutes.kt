@@ -126,6 +126,9 @@ fun Route.guestTabsRoutes(
         if (token.isEmpty()) {
             throw InvalidInputException("token must not be blank")
         }
+        if (token.length > 128) {
+            throw InvalidInputException("token must be <= 128 characters")
+        }
         val session = guestTabsRepository.findActiveTableSession(request.tableSessionId) ?: throw NotFoundException()
         ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
 
