@@ -28,6 +28,7 @@ class TableSessionCleanupWorker(
                     throw e
                 } catch (e: Exception) {
                     logger.warn("Table session cleanup worker failed: {}", e.message)
+                    logger.debug("Table session cleanup worker failure details", e)
                 }
                 delay(intervalMillis)
             }
