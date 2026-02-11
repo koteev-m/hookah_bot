@@ -8,6 +8,7 @@ import java.sql.SQLException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 
 class TableSessionsMigrationV28PostgresTest {
@@ -17,28 +18,35 @@ class TableSessionsMigrationV28PostgresTest {
 
         migrateToVersion27(database.jdbcUrl, database.user, database.password)
 
+        val oldTableId: Long
+        val idempotencyId: Long
+
         DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
             val venueId = insertVenue(connection)
-            val tableId = insertVenueTable(connection, venueId)
-            val orderId = insertOrder(connection, venueId, tableId)
+            insertVenueTable(connection, venueId, tableNumber = 5)
+            oldTableId = insertVenueTable(connection, venueId, tableNumber = 6)
+            val orderId = insertOrder(connection, venueId, oldTableId)
             val batchId = insertOrderBatch(connection, orderId)
-            val idempotencyId =
+            idempotencyId =
                 insertGuestBatchIdempotency(
                     connection = connection,
                     venueId = venueId,
-                    oldTableId = tableId,
+                    oldTableId = oldTableId,
                     orderId = orderId,
                     batchId = batchId,
                 )
 
-            migrateToLatest(database.jdbcUrl, database.user, database.password)
+            assertEquals(oldTableId, loadGuestBatchTableSessionId(connection, idempotencyId))
+        }
 
+        migrateToLatest(database.jdbcUrl, database.user, database.password)
+
+        DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
             connection.prepareStatement(
                 """
                 SELECT
                     gbi.table_session_id,
                     ts.id,
-                    ts.venue_id,
                     ts.table_id,
                     ts.status,
                     ts.ended_at
@@ -52,9 +60,9 @@ class TableSessionsMigrationV28PostgresTest {
                     assertEquals(true, resultSet.next())
 
                     val remappedSessionId = resultSet.getLong("table_session_id")
+                    assertNotEquals(oldTableId, remappedSessionId)
                     assertEquals(resultSet.getLong("id"), remappedSessionId)
-                    assertEquals(venueId, resultSet.getLong("venue_id"))
-                    assertEquals(tableId, resultSet.getLong("table_id"))
+                    assertEquals(oldTableId, resultSet.getLong("table_id"))
                     assertEquals("ENDED", resultSet.getString("status"))
                     assertNotNull(resultSet.getTimestamp("ended_at"))
                 }
@@ -71,6 +79,20 @@ class TableSessionsMigrationV28PostgresTest {
             }
         }
     }
+
+    private fun loadGuestBatchTableSessionId(
+        connection: Connection,
+        idempotencyId: Long,
+    ): Long =
+        connection.prepareStatement(
+            "SELECT table_session_id FROM guest_batch_idempotency WHERE id = ?",
+        ).use { statement ->
+            statement.setLong(1, idempotencyId)
+            statement.executeQuery().use { resultSet ->
+                resultSet.next()
+                resultSet.getLong("table_session_id")
+            }
+        }
 
     private fun migrateToVersion27(
         jdbcUrl: String,
@@ -112,12 +134,13 @@ class TableSessionsMigrationV28PostgresTest {
     private fun insertVenueTable(
         connection: Connection,
         venueId: Long,
+        tableNumber: Int,
     ): Long =
         connection.prepareStatement(
             "INSERT INTO venue_tables (venue_id, table_number) VALUES (?, ?) RETURNING id",
         ).use { statement ->
             statement.setLong(1, venueId)
-            statement.setInt(2, 5)
+            statement.setInt(2, tableNumber)
             statement.executeQuery().use { resultSet ->
                 resultSet.next()
                 resultSet.getLong("id")
