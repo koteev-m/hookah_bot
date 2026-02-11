@@ -84,6 +84,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 8)
             seedTableToken(jdbcUrl, tableId, "batch-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Tea")
 
@@ -91,6 +92,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "batch-token",
+                    tableSessionId = tableSessionId,
                     idempotencyKey = "idem-batch-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 2)),
                     comment = "First batch",
@@ -151,6 +153,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 11)
             seedTableToken(jdbcUrl, tableId, "batch-two-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Mocha")
 
@@ -158,6 +161,7 @@ class GuestOrderRoutesTest {
             val firstRequest =
                 AddBatchRequest(
                     tableToken = "batch-two-token",
+                    tableSessionId = tableSessionId,
                     idempotencyKey = "idem-batch-two-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "First",
@@ -201,6 +205,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 7)
             seedTableToken(jdbcUrl, tableId, "source-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Latte")
 
@@ -208,6 +213,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "source-token",
+                    tableSessionId = tableSessionId,
                     idempotencyKey = "idem-source-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "Source check",
@@ -240,6 +246,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 5)
             seedTableToken(jdbcUrl, tableId, "missing-comment-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Matcha")
 
@@ -248,6 +255,7 @@ class GuestOrderRoutesTest {
                 """
                 {
                   "tableToken": "missing-comment-token",
+                  "tableSessionId": $tableSessionId,
                   "idempotencyKey": "idem-missing-comment-token-1",
                   "items": [
                     {
@@ -282,6 +290,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 9)
             seedTableToken(jdbcUrl, tableId, "paused-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Herbal Tea")
 
@@ -289,6 +298,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "paused-token",
+                    tableSessionId = tableSessionId,
                     idempotencyKey = "idem-paused-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
@@ -319,6 +329,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 2)
             seedTableToken(jdbcUrl, tableId, "blocked-token")
             seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Coffee")
 
@@ -326,6 +337,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "blocked-token",
+                    tableSessionId = tableSessionId,
                     idempotencyKey = "idem-blocked-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
@@ -357,6 +369,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 6)
             seedTableToken(jdbcUrl, tableId, "paid-token")
             seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Cappuccino")
             val invoiceId = seedInvoice(jdbcUrl, venueId, status = "PAST_DUE")
@@ -365,6 +378,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "paid-token",
+                    tableSessionId = tableSessionId,
                     idempotencyKey = "idem-paid-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "test",
@@ -426,6 +440,7 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 3)
             seedTableToken(jdbcUrl, tableId, "rate-limit-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Espresso")
 
@@ -433,6 +448,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "rate-limit-token",
+                    tableSessionId = tableSessionId,
                     idempotencyKey = "idem-rate-limit-token-1",
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = null,
@@ -462,6 +478,52 @@ class GuestOrderRoutesTest {
         }
 
     @Test
+    fun `expired session rejects add-batch`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-expired-session")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 7)
+            seedTableToken(jdbcUrl, tableId, "expired-session-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Latte")
+            val expiredSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    expiresAt = Instant.now().minus(1, ChronoUnit.MINUTES),
+                )
+
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "expired-session-token",
+                    tableSessionId = expiredSessionId,
+                    idempotencyKey = "idem-expired-session-1",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    comment = null,
+                )
+
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.NotFound, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
+        }
+
+    @Test
     fun `invalid table token rejects add-batch without resolver`() =
         testApplication {
             var resolveCalls = 0
@@ -488,6 +550,7 @@ class GuestOrderRoutesTest {
             val request =
                 AddBatchRequest(
                     tableToken = "bad token",
+                    tableSessionId = 1,
                     idempotencyKey = "idem-invalid-token-1",
                     items = listOf(AddBatchItemDto(itemId = 1, qty = 1)),
                     comment = null,
@@ -613,6 +676,37 @@ class GuestOrderRoutesTest {
                 statement.executeUpdate()
             }
         }
+    }
+
+    private fun seedTableSession(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        expiresAt: Instant = Instant.now().plus(1, ChronoUnit.HOURS),
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO table_sessions (venue_id, table_id, started_at, last_activity_at, expires_at, status)
+                VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                val now = Instant.now()
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableId)
+                statement.setTimestamp(3, Timestamp.from(now))
+                statement.setTimestamp(4, Timestamp.from(now))
+                statement.setTimestamp(5, Timestamp.from(expiresAt))
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong(1)
+                    }
+                }
+            }
+        }
+        error("Failed to insert table session")
     }
 
     private fun seedSubscription(

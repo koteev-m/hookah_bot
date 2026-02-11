@@ -51,6 +51,7 @@ class GuestStaffCallRoutesTest {
             val request =
                 StaffCallRequest(
                     tableToken = "token",
+                    tableSessionId = 1,
                     reason = "BILL",
                     comment = null,
                 )
@@ -79,11 +80,12 @@ class GuestStaffCallRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 10)
             seedTableToken(jdbcUrl, tableId, "staff-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
-
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
                     tableToken = "staff-token",
+                    tableSessionId = tableSessionId,
                     reason = " bill ",
                     comment = "  Нужны угли  ",
                 )
@@ -130,6 +132,7 @@ class GuestStaffCallRoutesTest {
                 val request =
                     StaffCallRequest(
                         tableToken = "valid-token",
+                        tableSessionId = 1,
                         reason = reason,
                         comment = null,
                     )
@@ -162,6 +165,7 @@ class GuestStaffCallRoutesTest {
             val request =
                 StaffCallRequest(
                     tableToken = "valid-token",
+                    tableSessionId = 1,
                     reason = "BILL",
                     comment = "a".repeat(501),
                 )
@@ -196,11 +200,12 @@ class GuestStaffCallRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 11)
             seedTableToken(jdbcUrl, tableId, "staff-rate-limit-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
-
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
                     tableToken = "staff-rate-limit-token",
+                    tableSessionId = tableSessionId,
                     reason = "BILL",
                     comment = null,
                 )
@@ -237,11 +242,11 @@ class GuestStaffCallRoutesTest {
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
             seedTable(jdbcUrl, venueId, 5)
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
-
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
                     tableToken = "missing-token",
+                    tableSessionId = 1,
                     reason = "BILL",
                     comment = null,
                 )
@@ -271,11 +276,12 @@ class GuestStaffCallRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 1)
             seedTableToken(jdbcUrl, tableId, "suspended-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
-
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
                     tableToken = "suspended-token",
+                    tableSessionId = tableSessionId,
                     reason = "BILL",
                     comment = null,
                 )
@@ -305,11 +311,12 @@ class GuestStaffCallRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 3)
             seedTableToken(jdbcUrl, tableId, "blocked-token")
             seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
-
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
                     tableToken = "blocked-token",
+                    tableSessionId = tableSessionId,
                     reason = "BILL",
                     comment = null,
                 )
@@ -426,6 +433,37 @@ class GuestStaffCallRoutesTest {
                 statement.executeUpdate()
             }
         }
+    }
+
+    private fun seedTableSession(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        expiresAt: Instant = Instant.now().plus(1, ChronoUnit.HOURS),
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO table_sessions (venue_id, table_id, started_at, last_activity_at, expires_at, status)
+                VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                val now = Instant.now()
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableId)
+                statement.setTimestamp(3, Timestamp.from(now))
+                statement.setTimestamp(4, Timestamp.from(now))
+                statement.setTimestamp(5, Timestamp.from(expiresAt))
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong(1)
+                    }
+                }
+            }
+        }
+        error("Failed to insert table session")
     }
 
     private fun seedSubscription(

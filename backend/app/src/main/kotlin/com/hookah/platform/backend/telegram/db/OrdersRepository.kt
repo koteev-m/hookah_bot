@@ -211,6 +211,7 @@ class OrdersRepository(private val dataSource: DataSource?) {
     suspend fun createGuestOrderBatch(
         tableId: Long,
         venueId: Long,
+        tableSessionId: Long,
         userId: Long,
         idempotencyKey: String,
         comment: String?,
@@ -230,7 +231,7 @@ class OrdersRepository(private val dataSource: DataSource?) {
                             findBatchIdempotency(
                                 connection = connection,
                                 venueId = venueId,
-                                tableSessionId = tableId,
+                                tableSessionId = tableSessionId,
                                 userId = userId,
                                 idempotencyKey = idempotencyKey,
                             )
@@ -251,7 +252,7 @@ class OrdersRepository(private val dataSource: DataSource?) {
                         insertBatchIdempotency(
                             connection = connection,
                             venueId = venueId,
-                            tableSessionId = tableId,
+                            tableSessionId = tableSessionId,
                             userId = userId,
                             idempotencyKey = idempotencyKey,
                             orderId = orderId,
@@ -269,7 +270,7 @@ class OrdersRepository(private val dataSource: DataSource?) {
                             findBatchIdempotencyInNewConnection(
                                 ds = ds,
                                 venueId = venueId,
-                                tableSessionId = tableId,
+                                tableSessionId = tableSessionId,
                                 userId = userId,
                                 idempotencyKey = idempotencyKey,
                             )?.let { existing ->

@@ -44,6 +44,7 @@ class StaffCallRepository(private val dataSource: DataSource?) {
     suspend fun createGuestStaffCall(
         venueId: Long,
         tableId: Long,
+        tableSessionId: Long,
         reason: StaffCallReason,
         comment: String?,
     ): CreatedStaffCall {
@@ -54,14 +55,15 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                     if (connection.metaData.databaseProductName.contains("H2", ignoreCase = true)) {
                         val sql =
                             """
-                            INSERT INTO staff_calls (venue_id, table_id, created_by_user_id, reason, comment, status)
-                            VALUES (?, ?, NULL, ?, ?, 'NEW')
+                            INSERT INTO staff_calls (venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status)
+                            VALUES (?, ?, ?, NULL, ?, ?, 'NEW')
                             """.trimIndent()
                         connection.prepareStatement(sql, java.sql.Statement.RETURN_GENERATED_KEYS).use { statement ->
                             statement.setLong(1, venueId)
                             statement.setLong(2, tableId)
-                            statement.setString(3, reason.name)
-                            statement.setString(4, comment)
+                            statement.setLong(3, tableSessionId)
+                            statement.setString(4, reason.name)
+                            statement.setString(5, comment)
                             statement.executeUpdate()
                             statement.generatedKeys.use { keys ->
                                 if (keys.next()) {
@@ -88,15 +90,16 @@ class StaffCallRepository(private val dataSource: DataSource?) {
 
                     val sql =
                         """
-                        INSERT INTO staff_calls (venue_id, table_id, created_by_user_id, reason, comment, status)
-                        VALUES (?, ?, NULL, ?, ?, 'NEW')
+                        INSERT INTO staff_calls (venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status)
+                        VALUES (?, ?, ?, NULL, ?, ?, 'NEW')
                         RETURNING id, created_at
                         """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, venueId)
                         statement.setLong(2, tableId)
-                        statement.setString(3, reason.name)
-                        statement.setString(4, comment)
+                        statement.setLong(3, tableSessionId)
+                        statement.setString(4, reason.name)
+                        statement.setString(5, comment)
                         statement.executeQuery().use { rs ->
                             if (rs.next()) {
                                 val createdAt = rs.getTimestamp("created_at").toInstant()
