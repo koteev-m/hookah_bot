@@ -25,6 +25,7 @@ const MAX_ITEMS = 50
 const MAX_ITEM_QTY = 50
 const MAX_COMMENT_LENGTH = 500
 const MAX_STAFF_COMMENT_LENGTH = 500
+const MAX_TAB_TOKEN_LENGTH = 128
 
 type CartScreenOptions = {
   root: HTMLDivElement | null
@@ -321,6 +322,29 @@ export function renderCartScreen(options: CartScreenOptions) {
     ).trim()
   }
 
+  const extractJoinToken = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return ''
+    }
+    try {
+      const parsedUrl = new URL(trimmed, window.location.origin)
+      const hashQueryRaw = parsedUrl.hash.split('?')[1] ?? ''
+      const hashQuery = new URLSearchParams(hashQueryRaw)
+      const tokenFromUrl =
+        parsedUrl.searchParams.get('tabInviteToken') ??
+        parsedUrl.searchParams.get('splitToken') ??
+        hashQuery.get('tabInviteToken') ??
+        hashQuery.get('splitToken')
+      if (tokenFromUrl) {
+        return tokenFromUrl.trim()
+      }
+    } catch {
+      return trimmed
+    }
+    return trimmed
+  }
+
   const setMessage = (text: string) => {
     refs.message.textContent = text
     refs.message.hidden = !text
@@ -406,7 +430,12 @@ export function renderCartScreen(options: CartScreenOptions) {
   const findPersonalTab = () => tabState.tabs.find((tab) => tab.type === 'PERSONAL' && tab.status === 'ACTIVE') ?? null
 
   const getSelectedTab = () =>
-    tabState.tabs.find((tab) => tab.id === tabState.selectedTabId && tab.status === 'ACTIVE') ?? null
+    tabState.tabs.find(
+      (tab) =>
+        tab.id === tabState.selectedTabId &&
+        tab.status === 'ACTIVE' &&
+        tab.tableSessionId === tableSnapshot.tableSessionId
+    ) ?? null
 
   const formatTabTitle = (tab: GuestTabDto): string => {
     if (tab.type === 'PERSONAL') {
@@ -452,30 +481,47 @@ export function renderCartScreen(options: CartScreenOptions) {
     if (tableSnapshot.status !== 'resolved' || !tableSnapshot.tableSessionId) {
       tabState.tabs = []
       tabState.selectedTabId = null
-      updateTabsUi()
+      updateSubmitState()
       return
     }
+    const tableSessionId = tableSnapshot.tableSessionId
     tabState.loading = true
-    updateTabsUi()
+    updateSubmitState()
     tabsAbort?.abort()
     const controller = new AbortController()
     tabsAbort = controller
     const deps = buildApiDeps(isDebug)
-    const result = await guestGetTabs(backendUrl, tableSnapshot.tableSessionId, deps, controller.signal)
+    const result = await guestGetTabs(backendUrl, tableSessionId, deps, controller.signal)
     if (disposed || controller.signal.aborted || tabsAbort !== controller) {
       return
     }
     tabsAbort = null
     tabState.loading = false
     if (!result.ok) {
+      const code = normalizeErrorCode(result.error)
+      if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
+        clearSession()
+      }
       setTabMessage('Не удалось загрузить счета. Попробуйте снова.', 'error')
-      updateTabsUi()
+      updateSubmitState()
+      return
+    }
+    if (tableSnapshot.tableSessionId !== tableSessionId) {
+      updateSubmitState()
       return
     }
     tabState.tabs = result.data.tabs
     syncDefaultTabSelection()
     setTabMessage('')
-    updateTabsUi()
+    updateSubmitState()
+    if (pendingJoinToken && !initialTabsLoadedForSession.has(tableSessionId)) {
+      initialTabsLoadedForSession.add(tableSessionId)
+      const token = pendingJoinToken
+      pendingJoinToken = null
+      void handleJoinTab(token)
+      return
+    }
+    initialTabsLoadedForSession.add(tableSessionId)
   }
 
   const canCallStaff = () => tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken)
@@ -857,6 +903,10 @@ export function renderCartScreen(options: CartScreenOptions) {
     )
     tabState.creatingShared = false
     if (!result.ok) {
+      const code = normalizeErrorCode(result.error)
+      if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
+        clearSession()
+      }
       setTabMessage('Не удалось создать общий счёт.', 'error')
       updateSubmitState()
       return
@@ -873,9 +923,13 @@ export function renderCartScreen(options: CartScreenOptions) {
       setTabMessage('Сначала дождитесь загрузки стола.', 'error')
       return
     }
-    const token = (tokenOverride ?? refs.joinTokenInput.value).trim()
+    const token = extractJoinToken(tokenOverride ?? refs.joinTokenInput.value)
     if (!token) {
       setTabMessage('Введите код/ссылку приглашения.', 'error')
+      return
+    }
+    if (token.length > MAX_TAB_TOKEN_LENGTH) {
+      setTabMessage('Код/ссылка приглашения слишком длинный.', 'error')
       return
     }
     tabState.joining = true
@@ -889,6 +943,10 @@ export function renderCartScreen(options: CartScreenOptions) {
     )
     tabState.joining = false
     if (!result.ok) {
+      const code = normalizeErrorCode(result.error)
+      if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
+        clearSession()
+      }
       setTabMessage('Не удалось присоединиться к общему счёту.', 'error')
       updateSubmitState()
       return
@@ -902,6 +960,9 @@ export function renderCartScreen(options: CartScreenOptions) {
 
   updateSubmitState()
   renderItems()
+
+  const initialTabsLoadedForSession = new Set<number>()
+  let pendingJoinToken: string | null = parseJoinTokenFromLocation() || null
 
   disposables.push(
     on(refs.sendButton, 'click', () => {
@@ -951,6 +1012,11 @@ export function renderCartScreen(options: CartScreenOptions) {
   const tableSubscription = subscribeTable((snapshot) => {
     const previousTableSessionId = tableSnapshot.tableSessionId
     tableSnapshot = snapshot
+    if (snapshot.tableSessionId !== previousTableSessionId) {
+      tabState.tabs = []
+      tabState.selectedTabId = null
+      setTabMessage('')
+    }
     if (snapshot.status === 'resolved' && snapshot.tableSessionId && snapshot.tableSessionId !== previousTableSessionId) {
       void reloadTabs()
     }
@@ -961,13 +1027,8 @@ export function renderCartScreen(options: CartScreenOptions) {
     updateSubmitState()
   })
 
-  const initialJoinToken = parseJoinTokenFromLocation()
   if (tableSnapshot.status === 'resolved' && tableSnapshot.tableSessionId) {
-    void reloadTabs().then(() => {
-      if (initialJoinToken) {
-        void handleJoinTab(initialJoinToken)
-      }
-    })
+    void reloadTabs()
   }
 
   return () => {
