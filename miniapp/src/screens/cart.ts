@@ -294,6 +294,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   let isChatSending = false
   let submitAbort: AbortController | null = null
   let staffAbort: AbortController | null = null
+  let tabActionAbort: AbortController | null = null
   let lastSubmitFingerprint: string | null = null
   let lastSubmitIdempotencyKey: string | null = null
   let cartSnapshot = getCartSnapshot()
@@ -892,20 +893,41 @@ export function renderCartScreen(options: CartScreenOptions) {
       setTabMessage('Сначала дождитесь загрузки стола.', 'error')
       return
     }
+    const sessionId = tableSnapshot.tableSessionId
+    tabActionAbort?.abort()
+    const controller = new AbortController()
+    tabActionAbort = controller
     tabState.creatingShared = true
     setTabMessage('')
     updateSubmitState()
     const deps = buildApiDeps(isDebug)
     const result = await guestCreateSharedTab(
       backendUrl,
-      { tableSessionId: tableSnapshot.tableSessionId },
-      deps
+      { tableSessionId: sessionId },
+      deps,
+      controller.signal
     )
+    if (disposed) {
+      return
+    }
+    if (controller.signal.aborted || tabActionAbort !== controller || tableSnapshot.tableSessionId !== sessionId) {
+      if (tabActionAbort === controller) {
+        tabActionAbort = null
+      }
+      tabState.creatingShared = false
+      updateSubmitState()
+      return
+    }
     tabState.creatingShared = false
+    tabActionAbort = null
     if (!result.ok) {
       const code = normalizeErrorCode(result.error)
       if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
         clearSession()
+      }
+      if (code === ApiErrorCodes.REQUEST_ABORTED) {
+        updateSubmitState()
+        return
       }
       setTabMessage('Не удалось создать общий счёт.', 'error')
       updateSubmitState()
@@ -932,20 +954,41 @@ export function renderCartScreen(options: CartScreenOptions) {
       setTabMessage('Код/ссылка приглашения слишком длинный.', 'error')
       return
     }
+    const sessionId = tableSnapshot.tableSessionId
+    tabActionAbort?.abort()
+    const controller = new AbortController()
+    tabActionAbort = controller
     tabState.joining = true
     setTabMessage('')
     updateSubmitState()
     const deps = buildApiDeps(isDebug)
     const result = await guestJoinTab(
       backendUrl,
-      { tableSessionId: tableSnapshot.tableSessionId, token, consent: true },
-      deps
+      { tableSessionId: sessionId, token, consent: true },
+      deps,
+      controller.signal
     )
+    if (disposed) {
+      return
+    }
+    if (controller.signal.aborted || tabActionAbort !== controller || tableSnapshot.tableSessionId !== sessionId) {
+      if (tabActionAbort === controller) {
+        tabActionAbort = null
+      }
+      tabState.joining = false
+      updateSubmitState()
+      return
+    }
     tabState.joining = false
+    tabActionAbort = null
     if (!result.ok) {
       const code = normalizeErrorCode(result.error)
       if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
         clearSession()
+      }
+      if (code === ApiErrorCodes.REQUEST_ABORTED) {
+        updateSubmitState()
+        return
       }
       setTabMessage('Не удалось присоединиться к общему счёту.', 'error')
       updateSubmitState()
@@ -1013,9 +1056,14 @@ export function renderCartScreen(options: CartScreenOptions) {
     const previousTableSessionId = tableSnapshot.tableSessionId
     tableSnapshot = snapshot
     if (snapshot.tableSessionId !== previousTableSessionId) {
+      tabActionAbort?.abort()
+      tabActionAbort = null
       tabState.tabs = []
       tabState.selectedTabId = null
+      tabState.creatingShared = false
+      tabState.joining = false
       setTabMessage('')
+      updateSubmitState()
     }
     if (snapshot.status === 'resolved' && snapshot.tableSessionId && snapshot.tableSessionId !== previousTableSessionId) {
       void reloadTabs()
@@ -1036,6 +1084,8 @@ export function renderCartScreen(options: CartScreenOptions) {
     submitAbort?.abort()
     staffAbort?.abort()
     tabsAbort?.abort()
+    tabActionAbort?.abort()
+    tabActionAbort = null
     cartSubscription()
     tableSubscription()
     itemDisposables.forEach((dispose) => dispose())
