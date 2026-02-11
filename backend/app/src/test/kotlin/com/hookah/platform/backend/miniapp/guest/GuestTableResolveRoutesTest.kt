@@ -26,6 +26,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 class GuestTableResolveRoutesTest {
@@ -243,8 +244,10 @@ class GuestTableResolveRoutesTest {
             assertEquals(tableId, payload.tableId)
             assertEquals("3", payload.tableNumber)
             assertEquals(VenueStatus.PUBLISHED.dbValue, payload.venueStatus)
+            assertTrue(payload.tableSessionId > 0)
             assertEquals("trial", payload.subscriptionStatus)
             assertEquals(true, payload.available)
+            assertEquals(1, countTableSessions(jdbcUrl))
             assertNull(payload.unavailableReason)
         }
 
@@ -408,6 +411,19 @@ class GuestTableResolveRoutesTest {
                 statement.executeUpdate()
             }
         }
+    }
+
+    private fun countTableSessions(jdbcUrl: String): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM table_sessions").use { statement ->
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt(1)
+                    }
+                }
+            }
+        }
+        return 0
     }
 
     private fun seedSubscription(

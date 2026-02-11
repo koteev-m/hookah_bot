@@ -11,6 +11,7 @@ import com.hookah.platform.backend.miniapp.guest.api.OrderBatchDto
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.NewBatchNotification
@@ -41,6 +42,8 @@ fun Route.guestOrderRoutes(
     guestMenuRepository: GuestMenuRepository,
     subscriptionRepository: SubscriptionRepository,
     ordersRepository: OrdersRepository,
+    tableSessionRepository: TableSessionRepository,
+    tableSessionConfig: TableSessionConfig,
     staffChatNotifier: StaffChatNotifier?,
 ) {
     get("/order/active") {
@@ -75,6 +78,13 @@ fun Route.guestOrderRoutes(
             val table =
                 call.rateLimitResolvedTableOrNull(addBatchResolvedTableAttribute)
                     ?: (tableTokenResolver(token) ?: throw NotFoundException())
+            val tableSession =
+                tableSessionRepository.touchActiveSession(
+                    tableSessionId = request.tableSessionId,
+                    venueId = table.venueId,
+                    tableId = table.tableId,
+                    ttl = tableSessionConfig.ttl,
+                ) ?: throw NotFoundException()
             val userId = call.requireUserId()
             ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
 
@@ -92,6 +102,7 @@ fun Route.guestOrderRoutes(
                 ordersRepository.createGuestOrderBatch(
                     tableId = table.tableId,
                     venueId = table.venueId,
+                    tableSessionId = tableSession.id,
                     userId = userId,
                     idempotencyKey = idempotencyKey,
                     comment = comment,

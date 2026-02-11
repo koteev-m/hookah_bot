@@ -196,6 +196,7 @@ private val AddBatchRateLimitPlugin =
                 policy = policy,
                 rateLimiter = rateLimiter,
                 tableToken = body.tableToken,
+                tableSessionId = body.tableSessionId,
                 tableTokenResolver = tableTokenResolver,
                 resolvedTableAttribute = resolvedTableAttribute,
             )
@@ -225,6 +226,7 @@ private val StaffCallRateLimitPlugin =
                 policy = policy,
                 rateLimiter = rateLimiter,
                 tableToken = body.tableToken,
+                tableSessionId = body.tableSessionId,
                 tableTokenResolver = tableTokenResolver,
                 resolvedTableAttribute = resolvedTableAttribute,
             )
@@ -237,6 +239,7 @@ private suspend fun enforceGuestRateLimit(
     policy: GuestRateLimitPolicy,
     rateLimiter: RateLimiter,
     tableToken: String,
+    tableSessionId: Long,
     tableTokenResolver: suspend (String) -> TableContext?,
     resolvedTableAttribute: AttributeKey<TableContext>,
 ) {
@@ -249,7 +252,7 @@ private suspend fun enforceGuestRateLimit(
         GuestRateLimitKey(
             venueId = table.venueId,
             userId = userId,
-            tableSessionId = table.tableId,
+            tableSessionId = tableSessionId,
             endpoint = endpoint,
         )
     val allowed = rateLimiter.tryAcquire(key = key, limit = policy.maxRequests, window = policy.window)
