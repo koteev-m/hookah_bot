@@ -246,6 +246,8 @@ export function renderCartScreen(options: CartScreenOptions) {
   let isChatSending = false
   let submitAbort: AbortController | null = null
   let staffAbort: AbortController | null = null
+  let lastSubmitFingerprint: string | null = null
+  let lastSubmitIdempotencyKey: string | null = null
   let cartSnapshot = getCartSnapshot()
   let tableSnapshot = getTableContext()
   let itemDisposables: Array<() => void> = []
@@ -443,6 +445,36 @@ export function renderCartScreen(options: CartScreenOptions) {
     return { ok: true, comment: commentValue ? commentValue : null }
   }
 
+  const buildSubmitItems = () =>
+    Array.from(cartSnapshot.items.entries())
+      .map(([itemId, qty]) => ({ itemId, qty }))
+      .sort((left, right) => left.itemId - right.itemId)
+
+  const buildSubmitFingerprint = (tableToken: string, comment: string | null, items: Array<{ itemId: number; qty: number }>) =>
+    JSON.stringify({
+      tableToken,
+      comment,
+      items: items.map((item) => [item.itemId, item.qty])
+    })
+
+  const generateIdempotencyKey = () =>
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+  const resolveSubmitIdempotencyKey = (fingerprint: string) => {
+    if (fingerprint === lastSubmitFingerprint && lastSubmitIdempotencyKey) {
+      return lastSubmitIdempotencyKey
+    }
+    const nextIdempotencyKey = generateIdempotencyKey()
+    lastSubmitFingerprint = fingerprint
+    lastSubmitIdempotencyKey = nextIdempotencyKey
+    return nextIdempotencyKey
+  }
+
+  const resetSubmitIdempotency = () => {
+    lastSubmitFingerprint = null
+    lastSubmitIdempotencyKey = null
+  }
+
   const handleSubmit = async () => {
     if (isSubmitting) return
     setMessage('')
@@ -468,14 +500,13 @@ export function renderCartScreen(options: CartScreenOptions) {
     const controller = new AbortController()
     submitAbort = controller
     const deps = buildApiDeps(isDebug)
+    const items = buildSubmitItems()
+    const fingerprint = buildSubmitFingerprint(tableToken, validation.comment, items)
     const payload = {
       tableToken,
-      idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      idempotencyKey: resolveSubmitIdempotencyKey(fingerprint),
       comment: validation.comment,
-      items: Array.from(cartSnapshot.items.entries()).map(([itemId, qty]) => ({
-        itemId,
-        qty
-      }))
+      items
     }
     const result = await guestAddBatch(backendUrl, payload, deps, controller.signal)
     if (disposed) {
@@ -504,6 +535,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       updateSubmitState()
       return
     }
+    resetSubmitIdempotency()
     clearCart()
     refs.commentInput.value = ''
     refs.commentCounter.textContent = `0/${MAX_COMMENT_LENGTH}`
