@@ -911,11 +911,12 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     if (controller.signal.aborted || tabActionAbort !== controller || tableSnapshot.tableSessionId !== sessionId) {
-      if (tabActionAbort === controller) {
+      const isCurrent = tabActionAbort === controller
+      if (isCurrent) {
         tabActionAbort = null
+        tabState.creatingShared = false
+        updateSubmitState()
       }
-      tabState.creatingShared = false
-      updateSubmitState()
       return
     }
     tabState.creatingShared = false
@@ -972,11 +973,12 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     if (controller.signal.aborted || tabActionAbort !== controller || tableSnapshot.tableSessionId !== sessionId) {
-      if (tabActionAbort === controller) {
+      const isCurrent = tabActionAbort === controller
+      if (isCurrent) {
         tabActionAbort = null
+        tabState.joining = false
+        updateSubmitState()
       }
-      tabState.joining = false
-      updateSubmitState()
       return
     }
     tabState.joining = false
