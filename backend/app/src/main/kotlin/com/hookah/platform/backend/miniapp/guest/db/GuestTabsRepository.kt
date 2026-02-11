@@ -415,13 +415,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             statement.setLong(1, tabId)
             statement.setLong(2, userId)
             statement.setString(3, role)
-            try {
-                statement.executeUpdate()
-            } catch (e: SQLException) {
-                if (!e.isDuplicateKeyViolation()) {
-                    throw e
-                }
-            }
+            executeInsertIgnoringDuplicate(connection) { statement.executeUpdate() }
         }
     }
 
@@ -477,12 +471,42 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, userId)
+            executeInsertIgnoringDuplicate(connection) { statement.executeUpdate() }
+        }
+    }
+
+    private inline fun executeInsertIgnoringDuplicate(
+        connection: Connection,
+        crossinline execute: () -> Unit,
+    ) {
+        if (connection.autoCommit) {
             try {
-                statement.executeUpdate()
+                execute()
             } catch (e: SQLException) {
                 if (!e.isDuplicateKeyViolation()) {
                     throw e
                 }
+            }
+            return
+        }
+
+        val savepoint = connection.setSavepoint()
+        try {
+            execute()
+        } catch (e: SQLException) {
+            try {
+                connection.rollback(savepoint)
+            } catch (_: SQLException) {
+                // no-op
+            }
+            if (!e.isDuplicateKeyViolation()) {
+                throw e
+            }
+        } finally {
+            try {
+                connection.releaseSavepoint(savepoint)
+            } catch (_: SQLException) {
+                // no-op
             }
         }
     }
