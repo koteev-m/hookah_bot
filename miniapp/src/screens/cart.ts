@@ -1,7 +1,8 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestAddBatch, guestStaffCall } from '../shared/api/guestApi'
+import { guestAddBatch, guestCreateSharedTab, guestGetTabs, guestJoinTab, guestStaffCall } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
+import type { GuestTabDto } from '../shared/api/guestDtos'
 import {
   addToCart,
   clearCart,
@@ -48,6 +49,12 @@ type CartRefs = {
   chatButton: HTMLButtonElement
   chatMessage: HTMLParagraphElement
   tableHint: HTMLParagraphElement
+  tabSelector: HTMLSelectElement
+  tabSummary: HTMLParagraphElement
+  tabMessage: HTMLParagraphElement
+  createSharedButton: HTMLButtonElement
+  joinTokenInput: HTMLInputElement
+  joinButton: HTMLButtonElement
   staffReason: HTMLSelectElement
   staffComment: HTMLTextAreaElement
   staffCounter: HTMLParagraphElement
@@ -59,6 +66,14 @@ type CartRefs = {
   staffErrorActions: HTMLDivElement
   staffErrorDetails: HTMLDivElement
   staffDisabledReason: HTMLParagraphElement
+}
+
+type TabSelectionState = {
+  tabs: GuestTabDto[]
+  selectedTabId: number | null
+  loading: boolean
+  creatingShared: boolean
+  joining: boolean
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -102,6 +117,21 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   const emptyState = el('p', { className: 'cart-empty', text: 'Корзина пуста.' })
 
   const commentCard = el('div', { className: 'card' })
+  const tabLabel = el('p', { className: 'field-label', text: 'Счёт для заказа' })
+  const tabSelector = document.createElement('select')
+  tabSelector.className = 'staff-select'
+  tabSelector.disabled = true
+  const tabSummary = el('p', { className: 'cart-hint', text: 'Вы оформляете на: Personal' })
+  const tabMessage = el('p', { className: 'cart-message', text: '' })
+  tabMessage.hidden = true
+  const createSharedButton = el('button', { className: 'button-secondary', text: 'Создать общий счёт' }) as HTMLButtonElement
+  const joinRow = el('div', { className: 'cart-join-row' })
+  const joinTokenInput = document.createElement('input')
+  joinTokenInput.type = 'text'
+  joinTokenInput.placeholder = 'Код/ссылка приглашения'
+  joinTokenInput.className = 'qty-input cart-join-input'
+  const joinButton = el('button', { className: 'button-secondary', text: 'Присоединиться по коду/ссылке' }) as HTMLButtonElement
+  append(joinRow, joinTokenInput, joinButton)
   const commentLabel = el('p', { className: 'field-label', text: 'Комментарий' })
   const commentInput = document.createElement('textarea')
   commentInput.className = 'cart-comment'
@@ -109,7 +139,18 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   commentInput.rows = 3
   commentInput.placeholder = 'Комментарий к заказу'
   const commentCounter = el('p', { className: 'field-counter', text: `0/${MAX_COMMENT_LENGTH}` })
-  append(commentCard, commentLabel, commentInput, commentCounter)
+  append(
+    commentCard,
+    tabLabel,
+    tabSelector,
+    tabSummary,
+    tabMessage,
+    createSharedButton,
+    joinRow,
+    commentLabel,
+    commentInput,
+    commentCounter
+  )
 
   const actionCard = el('div', { className: 'card cart-actions' })
   const message = el('p', { className: 'cart-message', text: '' })
@@ -190,6 +231,12 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
     chatButton,
     chatMessage,
     tableHint,
+    tabSelector,
+    tabSummary,
+    tabMessage,
+    createSharedButton,
+    joinTokenInput,
+    joinButton,
     staffReason,
     staffComment,
     staffCounter,
@@ -250,8 +297,29 @@ export function renderCartScreen(options: CartScreenOptions) {
   let lastSubmitIdempotencyKey: string | null = null
   let cartSnapshot = getCartSnapshot()
   let tableSnapshot = getTableContext()
+  const tabState: TabSelectionState = {
+    tabs: [],
+    selectedTabId: null,
+    loading: false,
+    creatingShared: false,
+    joining: false
+  }
+  let tabsAbort: AbortController | null = null
   let itemDisposables: Array<() => void> = []
   const disposables: Array<() => void> = []
+
+  const parseJoinTokenFromLocation = () => {
+    const search = new URLSearchParams(window.location.search)
+    const hashQueryRaw = window.location.hash.split('?')[1] ?? ''
+    const hashQuery = new URLSearchParams(hashQueryRaw)
+    return (
+      search.get('tabInviteToken') ??
+      search.get('splitToken') ??
+      hashQuery.get('tabInviteToken') ??
+      hashQuery.get('splitToken') ??
+      ''
+    ).trim()
+  }
 
   const setMessage = (text: string) => {
     refs.message.textContent = text
@@ -268,6 +336,12 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.staffMessage.textContent = text
     refs.staffMessage.hidden = !text
     refs.staffMessage.dataset.tone = tone
+  }
+
+  const setTabMessage = (text: string, tone: 'info' | 'error' | 'success' = 'info') => {
+    refs.tabMessage.textContent = text
+    refs.tabMessage.hidden = !text
+    refs.tabMessage.dataset.tone = tone
   }
 
   const hideSubmitError = () => {
@@ -329,24 +403,103 @@ export function renderCartScreen(options: CartScreenOptions) {
   const isTableReady = () =>
     tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
 
+  const findPersonalTab = () => tabState.tabs.find((tab) => tab.type === 'PERSONAL' && tab.status === 'ACTIVE') ?? null
+
+  const getSelectedTab = () =>
+    tabState.tabs.find((tab) => tab.id === tabState.selectedTabId && tab.status === 'ACTIVE') ?? null
+
+  const formatTabTitle = (tab: GuestTabDto): string => {
+    if (tab.type === 'PERSONAL') {
+      return `Personal · #${tab.id}`
+    }
+    const owner = tab.ownerUserId ? `владелец ${tab.ownerUserId}` : 'без владельца'
+    return `Shared · ${owner}`
+  }
+
+  const updateTabsUi = () => {
+    const selectedTab = getSelectedTab()
+    refs.tabSelector.replaceChildren()
+    if (!tabState.tabs.length) {
+      refs.tabSelector.appendChild(new Option('Сначала загрузите стол', ''))
+    } else {
+      tabState.tabs
+        .filter((tab) => tab.status === 'ACTIVE')
+        .forEach((tab) => refs.tabSelector.appendChild(new Option(formatTabTitle(tab), String(tab.id))))
+    }
+    refs.tabSelector.value = selectedTab ? String(selectedTab.id) : ''
+    const summary = selectedTab ? formatTabTitle(selectedTab) : 'Personal'
+    refs.tabSummary.textContent = `Вы оформляете на: ${summary}`
+    refs.tabSelector.disabled = tabState.loading || tabState.creatingShared || tabState.joining || !tabState.tabs.length
+    refs.createSharedButton.disabled = tabState.loading || tabState.creatingShared || tabState.joining || !isTableReady()
+    refs.joinButton.disabled =
+      tabState.loading ||
+      tabState.creatingShared ||
+      tabState.joining ||
+      !isTableReady() ||
+      !refs.joinTokenInput.value.trim()
+  }
+
+  const syncDefaultTabSelection = () => {
+    const selectedTab = getSelectedTab()
+    if (selectedTab) {
+      return
+    }
+    const personal = findPersonalTab()
+    tabState.selectedTabId = personal?.id ?? tabState.tabs[0]?.id ?? null
+  }
+
+  const reloadTabs = async () => {
+    if (tableSnapshot.status !== 'resolved' || !tableSnapshot.tableSessionId) {
+      tabState.tabs = []
+      tabState.selectedTabId = null
+      updateTabsUi()
+      return
+    }
+    tabState.loading = true
+    updateTabsUi()
+    tabsAbort?.abort()
+    const controller = new AbortController()
+    tabsAbort = controller
+    const deps = buildApiDeps(isDebug)
+    const result = await guestGetTabs(backendUrl, tableSnapshot.tableSessionId, deps, controller.signal)
+    if (disposed || controller.signal.aborted || tabsAbort !== controller) {
+      return
+    }
+    tabsAbort = null
+    tabState.loading = false
+    if (!result.ok) {
+      setTabMessage('Не удалось загрузить счета. Попробуйте снова.', 'error')
+      updateTabsUi()
+      return
+    }
+    tabState.tabs = result.data.tabs
+    syncDefaultTabSelection()
+    setTabMessage('')
+    updateTabsUi()
+  }
+
   const canCallStaff = () => tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken)
 
   const updateSubmitState = () => {
     const hasItems = cartSnapshot.items.size > 0
     const tableReady = isTableReady()
+    const selectedTab = getSelectedTab()
     const tableHint = tableReady ? null : resolveTableHint(tableSnapshot)
     refs.tableHint.textContent = tableHint ?? ''
     refs.tableHint.hidden = !tableHint
-    const submitDisabledReason = !hasItems ? 'Добавьте позиции в корзину.' : tableHint
+    const submitDisabledReason = !hasItems
+      ? 'Добавьте позиции в корзину.'
+      : tableHint ?? (!selectedTab ? 'Выберите счёт (tab) для заказа.' : null)
     refs.disabledReason.textContent = submitDisabledReason ?? ''
     refs.disabledReason.hidden = !submitDisabledReason
-    refs.sendButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady
+    refs.sendButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady || !selectedTab
     refs.chatButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady
     const canStaff = canCallStaff()
     const staffDisabledReason = canStaff ? null : resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR'
     refs.staffDisabledReason.textContent = staffDisabledReason ?? ''
     refs.staffDisabledReason.hidden = !staffDisabledReason
     refs.staffButton.disabled = isSubmitting || isStaffCalling || !canStaff
+    updateTabsUi()
   }
 
   const renderItems = () => {
@@ -423,7 +576,9 @@ export function renderCartScreen(options: CartScreenOptions) {
     }
   }
 
-  const validateBeforeSubmit = (): { ok: true; comment: string | null } | { ok: false; reason: string } => {
+  const validateBeforeSubmit =
+    (): | { ok: true; comment: string | null; tabId: number; tableSessionId: number }
+      | { ok: false; reason: string } => {
     if (cartSnapshot.items.size === 0 || cartSnapshot.items.size > MAX_ITEMS) {
       return { ok: false, reason: 'Выберите от 1 до 50 позиций.' }
     }
@@ -442,7 +597,15 @@ export function renderCartScreen(options: CartScreenOptions) {
         reason: resolveTableHint(tableSnapshot) ?? 'Не удалось загрузить стол. Попробуйте позже.'
       }
     }
-    return { ok: true, comment: commentValue ? commentValue : null }
+    const tableSessionId = tableSnapshot.tableSessionId
+    if (!tableSessionId) {
+      return { ok: false, reason: 'Не удалось определить сессию стола.' }
+    }
+    const selectedTab = getSelectedTab()
+    if (!selectedTab) {
+      return { ok: false, reason: 'Выберите счёт (tab) для заказа.' }
+    }
+    return { ok: true, comment: commentValue ? commentValue : null, tabId: selectedTab.id, tableSessionId }
   }
 
   const buildSubmitItems = () =>
@@ -450,9 +613,17 @@ export function renderCartScreen(options: CartScreenOptions) {
       .map(([itemId, qty]) => ({ itemId, qty }))
       .sort((left, right) => left.itemId - right.itemId)
 
-  const buildSubmitFingerprint = (tableToken: string, comment: string | null, items: Array<{ itemId: number; qty: number }>) =>
+  const buildSubmitFingerprint = (
+    tableToken: string,
+    tableSessionId: number,
+    tabId: number,
+    comment: string | null,
+    items: Array<{ itemId: number; qty: number }>
+  ) =>
     JSON.stringify({
       tableToken,
+      tableSessionId,
+      tabId,
       comment,
       items: items.map((item) => [item.itemId, item.qty])
     })
@@ -501,9 +672,17 @@ export function renderCartScreen(options: CartScreenOptions) {
     submitAbort = controller
     const deps = buildApiDeps(isDebug)
     const items = buildSubmitItems()
-    const fingerprint = buildSubmitFingerprint(tableToken, validation.comment, items)
+    const fingerprint = buildSubmitFingerprint(
+      tableToken,
+      validation.tableSessionId,
+      validation.tabId,
+      validation.comment,
+      items
+    )
     const payload = {
       tableToken,
+      tableSessionId: validation.tableSessionId,
+      tabId: validation.tabId,
       idempotencyKey: resolveSubmitIdempotencyKey(fingerprint),
       comment: validation.comment,
       items
@@ -661,6 +840,66 @@ export function renderCartScreen(options: CartScreenOptions) {
     showToast('Вызов персонала отправлен')
   }
 
+  const handleCreateSharedTab = async () => {
+    if (tabState.loading || tabState.creatingShared || tabState.joining) return
+    if (!tableSnapshot.tableSessionId) {
+      setTabMessage('Сначала дождитесь загрузки стола.', 'error')
+      return
+    }
+    tabState.creatingShared = true
+    setTabMessage('')
+    updateSubmitState()
+    const deps = buildApiDeps(isDebug)
+    const result = await guestCreateSharedTab(
+      backendUrl,
+      { tableSessionId: tableSnapshot.tableSessionId },
+      deps
+    )
+    tabState.creatingShared = false
+    if (!result.ok) {
+      setTabMessage('Не удалось создать общий счёт.', 'error')
+      updateSubmitState()
+      return
+    }
+    tabState.selectedTabId = result.data.tab.id
+    setTabMessage('Общий счёт создан и выбран.', 'success')
+    await reloadTabs()
+    updateSubmitState()
+  }
+
+  const handleJoinTab = async (tokenOverride?: string) => {
+    if (tabState.loading || tabState.creatingShared || tabState.joining) return
+    if (!tableSnapshot.tableSessionId) {
+      setTabMessage('Сначала дождитесь загрузки стола.', 'error')
+      return
+    }
+    const token = (tokenOverride ?? refs.joinTokenInput.value).trim()
+    if (!token) {
+      setTabMessage('Введите код/ссылку приглашения.', 'error')
+      return
+    }
+    tabState.joining = true
+    setTabMessage('')
+    updateSubmitState()
+    const deps = buildApiDeps(isDebug)
+    const result = await guestJoinTab(
+      backendUrl,
+      { tableSessionId: tableSnapshot.tableSessionId, token, consent: true },
+      deps
+    )
+    tabState.joining = false
+    if (!result.ok) {
+      setTabMessage('Не удалось присоединиться к общему счёту.', 'error')
+      updateSubmitState()
+      return
+    }
+    tabState.selectedTabId = result.data.tab.id
+    refs.joinTokenInput.value = ''
+    setTabMessage('Вы присоединились к общему счёту.', 'success')
+    await reloadTabs()
+    updateSubmitState()
+  }
+
   updateSubmitState()
   renderItems()
 
@@ -670,6 +909,21 @@ export function renderCartScreen(options: CartScreenOptions) {
     }),
     on(refs.chatButton, 'click', () => {
       handleChatOrder()
+    }),
+    on(refs.tabSelector, 'change', () => {
+      const parsed = Number(refs.tabSelector.value)
+      tabState.selectedTabId = Number.isFinite(parsed) && parsed > 0 ? parsed : null
+      setTabMessage('')
+      updateSubmitState()
+    }),
+    on(refs.createSharedButton, 'click', () => {
+      void handleCreateSharedTab()
+    }),
+    on(refs.joinButton, 'click', () => {
+      void handleJoinTab()
+    }),
+    on(refs.joinTokenInput, 'input', () => {
+      updateTabsUi()
     }),
     on(refs.staffButton, 'click', () => {
       void handleStaffCall()
@@ -695,14 +949,32 @@ export function renderCartScreen(options: CartScreenOptions) {
   })
 
   const tableSubscription = subscribeTable((snapshot) => {
+    const previousTableSessionId = tableSnapshot.tableSessionId
     tableSnapshot = snapshot
+    if (snapshot.status === 'resolved' && snapshot.tableSessionId && snapshot.tableSessionId !== previousTableSessionId) {
+      void reloadTabs()
+    }
+    if (snapshot.status !== 'resolved') {
+      tabState.tabs = []
+      tabState.selectedTabId = null
+    }
     updateSubmitState()
   })
+
+  const initialJoinToken = parseJoinTokenFromLocation()
+  if (tableSnapshot.status === 'resolved' && tableSnapshot.tableSessionId) {
+    void reloadTabs().then(() => {
+      if (initialJoinToken) {
+        void handleJoinTab(initialJoinToken)
+      }
+    })
+  }
 
   return () => {
     disposed = true
     submitAbort?.abort()
     staffAbort?.abort()
+    tabsAbort?.abort()
     cartSubscription()
     tableSubscription()
     itemDisposables.forEach((dispose) => dispose())
