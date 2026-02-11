@@ -34,6 +34,7 @@ data class OrderBatchItemDto(
 data class AddBatchRequest(
     val tableToken: String,
     val tableSessionId: Long,
+    val tabId: Long,
     val idempotencyKey: String,
     val items: List<AddBatchItemDto>,
     val comment: String? = null,

@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderDto
@@ -10,6 +11,7 @@ import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchDto
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -44,6 +46,7 @@ fun Route.guestOrderRoutes(
     ordersRepository: OrdersRepository,
     tableSessionRepository: TableSessionRepository,
     tableSessionConfig: TableSessionConfig,
+    guestTabsRepository: GuestTabsRepository,
     staffChatNotifier: StaffChatNotifier?,
 ) {
     get("/order/active") {
@@ -72,6 +75,7 @@ fun Route.guestOrderRoutes(
         post {
             val request = call.receive<AddBatchRequest>()
             val token = validateTableToken(request.tableToken)
+            val tabId = normalizeTabId(request.tabId)
             val idempotencyKey = normalizeIdempotencyKey(request.idempotencyKey)
             val normalizedItems = normalizeItems(request.items)
             val comment = normalizeComment(request.comment)
@@ -87,6 +91,21 @@ fun Route.guestOrderRoutes(
                 ) ?: throw NotFoundException()
             val userId = call.requireUserId()
             ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+            guestTabsRepository.ensurePersonalTab(
+                venueId = table.venueId,
+                tableSessionId = tableSession.id,
+                userId = userId,
+            )
+            val member =
+                guestTabsRepository.isTabMember(
+                    tabId = tabId,
+                    venueId = table.venueId,
+                    tableSessionId = tableSession.id,
+                    userId = userId,
+                )
+            if (!member) {
+                throw ForbiddenException("Tab access denied")
+            }
 
             val itemIds = normalizedItems.map { it.itemId }.toSet()
             val availableItems =
@@ -105,6 +124,7 @@ fun Route.guestOrderRoutes(
                     tableSessionId = tableSession.id,
                     userId = userId,
                     idempotencyKey = idempotencyKey,
+                    tabId = tabId,
                     comment = comment,
                     items = normalizedItems,
                 ) ?: throw NotFoundException()
@@ -129,6 +149,13 @@ fun Route.guestOrderRoutes(
             )
         }
     }
+}
+
+private fun normalizeTabId(tabId: Long): Long {
+    if (tabId <= 0) {
+        throw InvalidInputException("tabId must be positive")
+    }
+    return tabId
 }
 
 private fun normalizeIdempotencyKey(idempotencyKey: String): String {

@@ -214,6 +214,7 @@ class OrdersRepository(private val dataSource: DataSource?) {
         tableSessionId: Long,
         userId: Long,
         idempotencyKey: String,
+        tabId: Long,
         comment: String?,
         items: List<OrderBatchItemInput>,
     ): CreatedOrderBatch? {
@@ -247,7 +248,7 @@ class OrdersRepository(private val dataSource: DataSource?) {
                         val orderId =
                             findActiveOrderForUpdate(connection, tableId)
                                 ?: insertActiveOrder(connection, venueId, tableId)
-                        val batchId = insertOrderBatch(connection, orderId, comment)
+                        val batchId = insertOrderBatch(connection, orderId, tabId, comment)
                         insertBatchItems(connection, batchId, items)
                         insertBatchIdempotency(
                             connection = connection,
@@ -338,19 +339,21 @@ class OrdersRepository(private val dataSource: DataSource?) {
     private fun insertOrderBatch(
         connection: Connection,
         orderId: Long,
+        tabId: Long,
         comment: String?,
     ): Long {
         val sql =
             """
-            INSERT INTO order_batches (order_id, author_user_id, source, status, guest_comment)
-            VALUES (?, NULL, 'MINIAPP', 'NEW', ?)
+            INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment)
+            VALUES (?, ?, NULL, 'MINIAPP', 'NEW', ?)
             """.trimIndent()
         return connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setLong(1, orderId)
+            statement.setLong(2, tabId)
             if (comment != null) {
-                statement.setString(2, comment)
+                statement.setString(3, comment)
             } else {
-                statement.setNull(2, Types.VARCHAR)
+                statement.setNull(3, Types.VARCHAR)
             }
             statement.executeUpdate()
             statement.generatedKeys.use { rs -> if (rs.next()) rs.getLong(1) else error("Failed to create batch") }

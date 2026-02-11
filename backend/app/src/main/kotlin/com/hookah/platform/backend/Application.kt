@@ -29,11 +29,13 @@ import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
+import com.hookah.platform.backend.miniapp.guest.guestTabsRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
@@ -253,6 +255,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val userRepository = UserRepository(dataSource)
     val guestVenueRepository = GuestVenueRepository(dataSource)
     val guestMenuRepository = GuestMenuRepository(dataSource)
+    val guestTabsRepository = GuestTabsRepository(dataSource)
     val subscriptionRepository = SubscriptionRepository(dataSource)
     val ordersRepository = OrdersRepository(dataSource)
     val venueOrdersRepository = VenueOrdersRepository(dataSource)
@@ -746,6 +749,12 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         subscriptionRepository = subscriptionRepository,
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
+                        guestTabsRepository = guestTabsRepository,
+                    )
+                    guestTabsRoutes(
+                        guestTabsRepository = guestTabsRepository,
+                        guestVenueRepository = guestVenueRepository,
+                        subscriptionRepository = subscriptionRepository,
                     )
                     guestOrderRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,
@@ -757,6 +766,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         ordersRepository = ordersRepository,
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
+                        guestTabsRepository = guestTabsRepository,
                         staffChatNotifier = staffChatNotifier,
                     )
                     guestStaffCallRoutes(
