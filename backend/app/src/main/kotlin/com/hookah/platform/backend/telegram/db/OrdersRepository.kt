@@ -285,8 +285,7 @@ class OrdersRepository(
                                     orderId = orderId,
                                     batchId = batchId,
                                     tabId = tabId,
-                                    idempotencyKey =
-                                        "batch_created:$venueId:$tableSessionId:$userId:$idempotencyKey",
+                                    idempotencyKey = "batch_created:$venueId:$batchId",
                                 ),
                         )
                         connection.commit()

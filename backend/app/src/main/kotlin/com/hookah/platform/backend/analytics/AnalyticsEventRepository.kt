@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.sql.Connection
 import java.sql.SQLException
+import java.sql.Savepoint
 import javax.sql.DataSource
 
 data class AnalyticsEventRecord(
@@ -55,6 +56,34 @@ class AnalyticsEventRepository(private val dataSource: DataSource?) {
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent()
+        if (connection.autoCommit) {
+            return tryAppend(sql, connection, event)
+        }
+
+        val savepoint = connection.setSavepoint()
+        return try {
+            tryAppend(sql, connection, event)
+        } catch (e: SQLException) {
+            try {
+                connection.rollback(savepoint)
+            } catch (_: SQLException) {
+                // no-op
+            }
+            if (e.isDuplicateKeyViolation()) {
+                false
+            } else {
+                throw e
+            }
+        } finally {
+            releaseSavepoint(connection, savepoint)
+        }
+    }
+
+    private fun tryAppend(
+        sql: String,
+        connection: Connection,
+        event: AnalyticsEventRecord,
+    ): Boolean {
         return try {
             connection.prepareStatement(sql).use { statement ->
                 statement.setString(1, event.eventType)
@@ -69,12 +98,30 @@ class AnalyticsEventRepository(private val dataSource: DataSource?) {
                 statement.executeUpdate() > 0
             }
         } catch (e: SQLException) {
-            if (e.sqlState == "23505") {
+            if (e.isDuplicateKeyViolation()) {
                 false
             } else {
                 throw e
             }
         }
+    }
+
+    private fun releaseSavepoint(
+        connection: Connection,
+        savepoint: Savepoint,
+    ) {
+        try {
+            connection.releaseSavepoint(savepoint)
+        } catch (_: SQLException) {
+            // no-op
+        }
+    }
+
+    private fun SQLException.isDuplicateKeyViolation(): Boolean {
+        if (sqlState == "23505") {
+            return true
+        }
+        return generateSequence(nextException) { it.nextException }.any { it.sqlState == "23505" }
     }
 }
 
