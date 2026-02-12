@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.analytics.AnalyticsEventRecord
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
+import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.ActiveOrderSummary
 import kotlinx.coroutines.Dispatchers
@@ -38,7 +41,10 @@ data class CreatedOrderBatch(
     val idempotencyReplay: Boolean,
 )
 
-class OrdersRepository(private val dataSource: DataSource?) {
+class OrdersRepository(
+    private val dataSource: DataSource?,
+    private val analyticsEventRepository: AnalyticsEventRepository? = null,
+) {
     suspend fun findActiveOrderId(tableId: Long): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
@@ -258,6 +264,30 @@ class OrdersRepository(private val dataSource: DataSource?) {
                             idempotencyKey = idempotencyKey,
                             orderId = orderId,
                             batchId = batchId,
+                        )
+                        analyticsEventRepository?.append(
+                            connection = connection,
+                            event =
+                                AnalyticsEventRecord(
+                                    eventType = "batch_created",
+                                    payload =
+                                        analyticsCorrelationPayload(
+                                            venueId = venueId,
+                                            tableId = tableId,
+                                            tableSessionId = tableSessionId,
+                                            orderId = orderId,
+                                            batchId = batchId,
+                                            tabId = tabId,
+                                        ),
+                                    venueId = venueId,
+                                    tableId = tableId,
+                                    tableSessionId = tableSessionId,
+                                    orderId = orderId,
+                                    batchId = batchId,
+                                    tabId = tabId,
+                                    idempotencyKey =
+                                        "batch_created:$venueId:$tableSessionId:$userId:$idempotencyKey",
+                                ),
                         )
                         connection.commit()
                         CreatedOrderBatch(

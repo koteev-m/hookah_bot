@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
+import com.hookah.platform.backend.analytics.AnalyticsEventRecord
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
+import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -27,7 +30,10 @@ data class TableSessionRecord(
     val status: TableSessionStatus,
 )
 
-class TableSessionRepository(private val dataSource: DataSource?) {
+class TableSessionRepository(
+    private val dataSource: DataSource?,
+    private val analyticsEventRepository: AnalyticsEventRepository? = null,
+) {
     suspend fun resolveActiveSession(
         venueId: Long,
         tableId: Long,
@@ -64,13 +70,32 @@ class TableSessionRepository(private val dataSource: DataSource?) {
                                 }
                                 existingId
                             } else {
-                                insertSession(
+                                val createdSessionId =
+                                    insertSession(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        tableId = tableId,
+                                        now = now,
+                                        expiresAt = nextExpiry,
+                                    )
+                                analyticsEventRepository?.append(
                                     connection = connection,
-                                    venueId = venueId,
-                                    tableId = tableId,
-                                    now = now,
-                                    expiresAt = nextExpiry,
+                                    event =
+                                        AnalyticsEventRecord(
+                                            eventType = "table_session_started",
+                                            payload =
+                                                analyticsCorrelationPayload(
+                                                    venueId = venueId,
+                                                    tableId = tableId,
+                                                    tableSessionId = createdSessionId,
+                                                ),
+                                            venueId = venueId,
+                                            tableId = tableId,
+                                            tableSessionId = createdSessionId,
+                                            idempotencyKey = "table_session_started:$createdSessionId",
+                                        ),
                                 )
+                                createdSessionId
                             }
 
                         connection.commit()

@@ -73,6 +73,7 @@ class VenueOrderRoutesTest {
             assertEquals("STATUS_CHANGE", entry.action)
             assertEquals("new", entry.fromStatus)
             assertEquals("accepted", entry.toStatus)
+            assertEquals(1, countAnalyticsEvents(jdbcUrl, "batch_status_changed", venueId))
         }
 
     @Test
@@ -246,6 +247,27 @@ class VenueOrderRoutesTest {
             val payload = json.decodeFromString(OrderAuditResponse.serializer(), response.bodyAsText())
             assertTrue(payload.items.isEmpty())
         }
+
+    private fun countAnalyticsEvents(
+        jdbcUrl: String,
+        eventType: String,
+        venueId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT COUNT(*) FROM analytics_events WHERE event_type = ? AND venue_id = ?",
+            ).use { statement ->
+                statement.setString(1, eventType)
+                statement.setLong(2, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt(1)
+                    }
+                }
+            }
+        }
+        return 0
+    }
 
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"

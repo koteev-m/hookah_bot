@@ -2,6 +2,7 @@ package com.hookah.platform.backend
 
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.api.ApiError
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.ApiErrorEnvelope
@@ -256,13 +257,14 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val guestVenueRepository = GuestVenueRepository(dataSource)
     val guestMenuRepository = GuestMenuRepository(dataSource)
     val guestTabsRepository = GuestTabsRepository(dataSource)
-    val subscriptionRepository = SubscriptionRepository(dataSource)
-    val ordersRepository = OrdersRepository(dataSource)
-    val venueOrdersRepository = VenueOrdersRepository(dataSource)
+    val analyticsEventRepository = AnalyticsEventRepository(dataSource)
+    val subscriptionRepository = SubscriptionRepository(dataSource, analyticsEventRepository)
+    val ordersRepository = OrdersRepository(dataSource, analyticsEventRepository)
+    val venueOrdersRepository = VenueOrdersRepository(dataSource, analyticsEventRepository)
     val venueMenuRepository = VenueMenuRepository(dataSource)
     val venueTableRepository = VenueTableRepository(dataSource)
     val staffCallRepository = StaffCallRepository(dataSource)
-    val tableSessionRepository = TableSessionRepository(dataSource)
+    val tableSessionRepository = TableSessionRepository(dataSource, analyticsEventRepository)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val auditLogRepository = AuditLogRepository(dataSource, json)
     val platformVenueRepository = PlatformVenueRepository(dataSource)

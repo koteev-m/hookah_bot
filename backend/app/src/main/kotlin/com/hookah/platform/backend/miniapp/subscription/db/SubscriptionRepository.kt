@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.miniapp.subscription.db
 
+import com.hookah.platform.backend.analytics.AnalyticsEventRecord
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
+import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import kotlinx.coroutines.Dispatchers
@@ -13,7 +16,10 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import javax.sql.DataSource
 
-class SubscriptionRepository(private val dataSource: DataSource?) {
+class SubscriptionRepository(
+    private val dataSource: DataSource?,
+    private val analyticsEventRepository: AnalyticsEventRepository? = null,
+) {
     suspend fun getSubscriptionStatus(venueId: Long): SubscriptionStatus {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -65,28 +71,88 @@ class SubscriptionRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    ensureRowExistsForVenue(connection, venueId)
-                    connection.prepareStatement(
-                        """
-                        UPDATE venue_subscriptions
-                        SET status = ?,
-                            paid_start = COALESCE(?, paid_start),
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE venue_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setString(1, status.name)
-                        if (paidStart == null) {
-                            statement.setNullTimestampWithTimezoneSafe(2)
-                        } else {
-                            statement.setTimestamp(2, Timestamp.from(paidStart))
+                    connection.autoCommit = false
+                    try {
+                        ensureRowExistsForVenue(connection, venueId)
+                        val previousStatus = loadStatusForUpdate(connection, venueId)
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE venue_subscriptions
+                                SET status = ?,
+                                    paid_start = COALESCE(?, paid_start),
+                                    updated_at = CURRENT_TIMESTAMP
+                                WHERE venue_id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, status.name)
+                                if (paidStart == null) {
+                                    statement.setNullTimestampWithTimezoneSafe(2)
+                                } else {
+                                    statement.setTimestamp(2, Timestamp.from(paidStart))
+                                }
+                                statement.setLong(3, venueId)
+                                statement.executeUpdate() > 0
+                            }
+                        val changed = previousStatus != null && previousStatus != status
+                        if (changed) {
+                            analyticsEventRepository?.append(
+                                connection = connection,
+                                event =
+                                    AnalyticsEventRecord(
+                                        eventType = "subscription_status_changed",
+                                        payload =
+                                            analyticsCorrelationPayload(
+                                                venueId = venueId,
+                                                extra =
+                                                    mapOf(
+                                                        "previousStatus" to previousStatus?.wire,
+                                                        "nextStatus" to status.wire,
+                                                    ),
+                                            ),
+                                        venueId = venueId,
+                                        idempotencyKey =
+                                            buildString {
+                                                append("subscription_status_changed:")
+                                                append(venueId)
+                                                append(':')
+                                                append(previousStatus?.wire)
+                                                append(':')
+                                                append(status.wire)
+                                            },
+                                    ),
+                            )
                         }
-                        statement.setLong(3, venueId)
-                        statement.executeUpdate() > 0
+                        connection.commit()
+                        updated
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
                     }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    private fun loadStatusForUpdate(
+        connection: Connection,
+        venueId: Long,
+    ): SubscriptionStatus? {
+        return connection.prepareStatement(
+            """
+            SELECT status
+            FROM venue_subscriptions
+            WHERE venue_id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) SubscriptionStatus.fromDb(rs.getString("status")) else null
             }
         }
     }

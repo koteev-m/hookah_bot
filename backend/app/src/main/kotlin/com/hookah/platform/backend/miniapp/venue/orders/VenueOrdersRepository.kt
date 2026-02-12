@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.miniapp.venue.orders
 
+import com.hookah.platform.backend.analytics.AnalyticsEventRecord
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
+import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import kotlinx.coroutines.Dispatchers
@@ -113,7 +116,10 @@ data class OrderStatusUpdateResult(
     val applied: Boolean,
 )
 
-class VenueOrdersRepository(private val dataSource: DataSource?) {
+class VenueOrdersRepository(
+    private val dataSource: DataSource?,
+    private val analyticsEventRepository: AnalyticsEventRepository? = null,
+) {
     suspend fun listQueue(
         venueId: Long,
         status: OrderBatchStatus,
@@ -401,6 +407,7 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                             )
                         }
                         val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        var changedBatchId: Long? = null
                         if (nextStatus == OrderWorkflowStatus.CLOSED) {
                             updateOrderStatusOnly(connection, orderId)
                         } else {
@@ -428,6 +435,7 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                                     applied = false,
                                 )
                             }
+                            changedBatchId = latestBatchId
                             updateOrderTimestamp(connection, orderId, now)
                         }
                         insertAudit(
@@ -440,6 +448,40 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                             reasonCode = null,
                             reasonText = null,
                         )
+                        if (changedBatchId != null) {
+                            analyticsEventRepository?.append(
+                                connection = connection,
+                                event =
+                                    AnalyticsEventRecord(
+                                        eventType = "batch_status_changed",
+                                        payload =
+                                            analyticsCorrelationPayload(
+                                                venueId = venueId,
+                                                orderId = orderId,
+                                                batchId = changedBatchId,
+                                                extra =
+                                                    mapOf(
+                                                        "fromStatus" to current.toApi(),
+                                                        "toStatus" to nextStatus.toApi(),
+                                                    ),
+                                            ),
+                                        venueId = venueId,
+                                        orderId = orderId,
+                                        batchId = changedBatchId,
+                                        idempotencyKey =
+                                            buildString {
+                                                append("batch_status_changed:")
+                                                append(venueId)
+                                                append(':')
+                                                append(orderId)
+                                                append(':')
+                                                append(changedBatchId)
+                                                append(':')
+                                                append(nextStatus.toApi())
+                                            },
+                                    ),
+                            )
+                        }
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -523,6 +565,29 @@ class VenueOrdersRepository(private val dataSource: DataSource?) {
                             toStatus = OrderWorkflowStatus.CLOSED,
                             reasonCode = reasonCode,
                             reasonText = reasonText,
+                        )
+                        analyticsEventRepository?.append(
+                            connection = connection,
+                            event =
+                                AnalyticsEventRecord(
+                                    eventType = "batch_status_changed",
+                                    payload =
+                                        analyticsCorrelationPayload(
+                                            venueId = venueId,
+                                            orderId = orderId,
+                                            batchId = latestBatchId,
+                                            extra =
+                                                mapOf(
+                                                    "fromStatus" to current.toApi(),
+                                                    "toStatus" to OrderWorkflowStatus.CLOSED.toApi(),
+                                                    "reasonCode" to reasonCode,
+                                                ),
+                                        ),
+                                    venueId = venueId,
+                                    orderId = orderId,
+                                    batchId = latestBatchId,
+                                    idempotencyKey = "batch_status_changed:$venueId:$orderId:$latestBatchId:closed",
+                                ),
                         )
                         connection.commit()
                         OrderStatusUpdateResult(

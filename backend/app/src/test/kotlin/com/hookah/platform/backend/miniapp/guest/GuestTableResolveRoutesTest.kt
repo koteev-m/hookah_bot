@@ -252,6 +252,34 @@ class GuestTableResolveRoutesTest {
         }
 
     @Test
+    fun `table session started event is emitted once for active session reuse`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-event")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val tokenValue = "event-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 15)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            val token = issueToken(config)
+
+            repeat(2) {
+                val response =
+                    client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+
+            assertEquals(1, countAnalyticsEvents(jdbcUrl, "table_session_started", venueId))
+        }
+
+    @Test
     fun `known token for past due subscription returns unavailable`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-table-past-due")
@@ -416,6 +444,27 @@ class GuestTableResolveRoutesTest {
     private fun countTableSessions(jdbcUrl: String): Int {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement("SELECT COUNT(*) FROM table_sessions").use { statement ->
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt(1)
+                    }
+                }
+            }
+        }
+        return 0
+    }
+
+    private fun countAnalyticsEvents(
+        jdbcUrl: String,
+        eventType: String,
+        venueId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT COUNT(*) FROM analytics_events WHERE event_type = ? AND venue_id = ?",
+            ).use { statement ->
+                statement.setString(1, eventType)
+                statement.setLong(2, venueId)
                 statement.executeQuery().use { rs ->
                     if (rs.next()) {
                         return rs.getInt(1)

@@ -138,6 +138,7 @@ class GuestOrderRoutesTest {
             assertNotNull(order)
             assertEquals(1, order.batches.size)
             assertEquals(itemId, order.batches.first().items.first().itemId)
+            assertEquals(1, countAnalyticsEvents(jdbcUrl, "batch_created", venueId))
         }
 
     @Test
@@ -833,6 +834,27 @@ class GuestOrderRoutesTest {
             statement.setLong(1, userId)
             statement.executeUpdate()
         }
+    }
+
+    private fun countAnalyticsEvents(
+        jdbcUrl: String,
+        eventType: String,
+        venueId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT COUNT(*) FROM analytics_events WHERE event_type = ? AND venue_id = ?",
+            ).use { statement ->
+                statement.setString(1, eventType)
+                statement.setLong(2, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt(1)
+                    }
+                }
+            }
+        }
+        return 0
     }
 
     private fun seedSubscription(
