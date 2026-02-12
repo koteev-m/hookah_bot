@@ -26,6 +26,7 @@ data class TelegramInboundUpdate(
     val updateId: Long,
     val payloadJson: String,
     val attempts: Int,
+    val receivedAt: Instant,
 )
 
 class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) {
@@ -76,7 +77,7 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
                     try {
                         val selectSql =
                             """
-                            SELECT id, update_id, payload_json, attempts
+                            SELECT id, update_id, payload_json, attempts, received_at
                             FROM telegram_inbound_updates
                             WHERE status IN (?, ?, ?)
                               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
@@ -97,12 +98,14 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
                                     val updateId = resultSet.getLong("update_id")
                                     val payloadJson = resultSet.getString("payload_json")
                                     val attempts = resultSet.getInt("attempts") + 1
+                                    val receivedAt = resultSet.getTimestamp("received_at").toInstant()
                                     updates.add(
                                         TelegramInboundUpdate(
                                             id = id,
                                             updateId = updateId,
                                             payloadJson = payloadJson,
                                             attempts = attempts,
+                                            receivedAt = receivedAt,
                                         ),
                                     )
                                 }

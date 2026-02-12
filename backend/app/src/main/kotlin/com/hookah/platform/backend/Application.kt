@@ -24,6 +24,7 @@ import com.hookah.platform.backend.billing.subscription.SubscriptionBillingJob
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingVenueRepository
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.db.DbConfig
+import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
@@ -109,6 +110,7 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.config.ApplicationConfig
 import io.ktor.server.http.content.staticFiles
+import io.ktor.server.metrics.micrometer.MicrometerMetrics
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.callid.CallId
@@ -243,6 +245,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val tableSessionConfig = TableSessionConfig.from(appConfig)
     val guestRateLimiter = InMemoryRateLimiter()
     val platformConfig = PlatformConfig.from(appConfig)
+    val appMetrics = AppMetrics()
 
     val httpClient =
         HttpClient(Java) {
@@ -437,6 +440,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     rateLimiter = outboxRateLimiter,
                     config = telegramConfig.outbox,
                     scope = telegramOutboxWorkerScope!!,
+                    metrics = appMetrics,
                 )
             telegramOutboxWorkerJob = outboxWorker.start()
         } else {
@@ -509,6 +513,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                             router = telegramRouter,
                             json = telegramJson,
                             scope = telegramWebhookWorkerScope!!,
+                            metrics = appMetrics,
                         )
                     telegramWebhookWorkerJob = worker.start()
                 } else if (dataSource == null) {
@@ -556,6 +561,10 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
     install(CallLogging) {
         callIdMdc("requestId")
+    }
+
+    install(MicrometerMetrics) {
+        registry = appMetrics.registry
     }
 
     install(ServerContentNegotiation) {
@@ -717,6 +726,18 @@ internal fun Application.module(overrides: ModuleOverrides) {
             }
         }
 
+        get("/metrics") {
+            if (dataSource != null) {
+                try {
+                    appMetrics.setInboundQueueDepth(telegramInboundUpdateQueueRepository.queueDepth())
+                    appMetrics.setOutboundQueueDepth(telegramOutboxRepository.queueDepth())
+                } catch (_: DatabaseUnavailableException) {
+                    logger.debug("Skipping queue metrics refresh: db unavailable")
+                }
+            }
+            call.respondText(appMetrics.scrape(), ContentType.parse("text/plain; version=0.0.4"))
+        }
+
         get("/version") {
             val time = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
             call.respond(
@@ -842,6 +863,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         val payload = call.receiveText()
                         val update = telegramJson.decodeFromString(TelegramUpdate.serializer(), payload)
                         telegramInboundUpdateQueueRepository.enqueue(update.updateId, payload)
+                        appMetrics.setInboundQueueDepth(telegramInboundUpdateQueueRepository.queueDepth())
                         call.respond(HttpStatusCode.OK)
                     } catch (e: CancellationException) {
                         throw e

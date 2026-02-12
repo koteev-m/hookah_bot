@@ -180,6 +180,40 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         )
     }
 
+    suspend fun queueDepth(): Long {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT COUNT(*) AS depth
+                        FROM telegram_outbox
+                        WHERE status != ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, TelegramOutboxStatus.SENT.name)
+                        statement.executeQuery().use { resultSet ->
+                            if (resultSet.next()) {
+                                resultSet.getLong("depth")
+                            } else {
+                                0L
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                logFailure("queueDepth", e)
+                throw DatabaseUnavailableException()
+            } catch (e: Throwable) {
+                logFailure("queueDepth", e)
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     private suspend fun updateStatus(
         id: Long,
         status: TelegramOutboxStatus,

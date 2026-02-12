@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.ktor.server.auth)
     implementation(libs.ktor.server.auth.jwt)
     implementation(libs.ktor.server.status.pages)
+    implementation(libs.ktor.server.metrics.micrometer)
     implementation(libs.ktor.client.java)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.client.logging)
@@ -40,6 +41,7 @@ dependencies {
     implementation(libs.zxing.core)
     implementation(libs.zxing.javase)
     implementation(libs.openpdf)
+    implementation(libs.micrometer.registry.prometheus)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit.jupiter)

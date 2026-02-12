@@ -22,4 +22,19 @@ class HealthTest {
             assertEquals(HttpStatusCode.OK, response.status)
             assertTrue(response.bodyAsText().contains("ok"))
         }
+
+    @Test
+    fun `metrics endpoint returns prometheus payload`() =
+        testApplication {
+            environment {
+                config = MapApplicationConfig("db.jdbcUrl" to "")
+            }
+            application { module() }
+
+            val response = client.get("/metrics")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = response.bodyAsText()
+            assertTrue(body.contains("inbound_queue_depth"))
+            assertTrue(body.contains("outbound_send_success_total"))
+        }
 }
