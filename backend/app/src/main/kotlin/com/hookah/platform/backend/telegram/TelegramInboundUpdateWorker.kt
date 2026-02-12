@@ -55,7 +55,6 @@ class TelegramInboundUpdateWorker(
 
     suspend fun processOnce(now: Instant = Instant.now()): Boolean {
         val batch = repository.claimBatch(batchSize, now, visibilityTimeout)
-        metrics?.setInboundQueueDepth(repository.queueDepth())
         if (batch.isEmpty()) {
             return false
         }
