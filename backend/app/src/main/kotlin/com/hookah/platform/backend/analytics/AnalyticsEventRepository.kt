@@ -57,7 +57,15 @@ class AnalyticsEventRepository(private val dataSource: DataSource?) {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent()
         if (connection.autoCommit) {
-            return tryAppend(sql, connection, event)
+            return try {
+                tryAppend(sql, connection, event)
+            } catch (e: SQLException) {
+                if (e.isDuplicateKeyViolation()) {
+                    false
+                } else {
+                    throw e
+                }
+            }
         }
 
         val savepoint = connection.setSavepoint()
@@ -84,25 +92,17 @@ class AnalyticsEventRepository(private val dataSource: DataSource?) {
         connection: Connection,
         event: AnalyticsEventRecord,
     ): Boolean {
-        return try {
-            connection.prepareStatement(sql).use { statement ->
-                statement.setString(1, event.eventType)
-                statement.setString(2, event.payload.toString())
-                statement.setObject(3, event.venueId)
-                statement.setObject(4, event.tableId)
-                statement.setObject(5, event.tableSessionId)
-                statement.setObject(6, event.orderId)
-                statement.setObject(7, event.batchId)
-                statement.setObject(8, event.tabId)
-                statement.setString(9, event.idempotencyKey)
-                statement.executeUpdate() > 0
-            }
-        } catch (e: SQLException) {
-            if (e.isDuplicateKeyViolation()) {
-                false
-            } else {
-                throw e
-            }
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setString(1, event.eventType)
+            statement.setString(2, event.payload.toString())
+            statement.setObject(3, event.venueId)
+            statement.setObject(4, event.tableId)
+            statement.setObject(5, event.tableSessionId)
+            statement.setObject(6, event.orderId)
+            statement.setObject(7, event.batchId)
+            statement.setObject(8, event.tabId)
+            statement.setString(9, event.idempotencyKey)
+            statement.executeUpdate() > 0
         }
     }
 
