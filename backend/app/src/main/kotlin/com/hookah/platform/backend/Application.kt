@@ -863,7 +863,6 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         val payload = call.receiveText()
                         val update = telegramJson.decodeFromString(TelegramUpdate.serializer(), payload)
                         telegramInboundUpdateQueueRepository.enqueue(update.updateId, payload)
-                        appMetrics.setInboundQueueDepth(telegramInboundUpdateQueueRepository.queueDepth())
                         call.respond(HttpStatusCode.OK)
                     } catch (e: CancellationException) {
                         throw e

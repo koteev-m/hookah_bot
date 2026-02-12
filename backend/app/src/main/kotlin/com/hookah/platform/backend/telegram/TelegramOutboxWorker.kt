@@ -65,7 +65,6 @@ class TelegramOutboxWorker(
                 logger.debugTelegramException(e) { "Telegram outbox claim exception" }
                 return
             }
-        metrics?.setOutboundQueueDepth(repository.queueDepth())
         if (batch.isEmpty()) return
 
         val semaphore = Semaphore(config.maxConcurrency)
