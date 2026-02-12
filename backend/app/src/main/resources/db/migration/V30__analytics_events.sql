@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_type VARCHAR(64) NOT NULL,
+    payload_json TEXT NOT NULL,
+    venue_id BIGINT,
+    table_id BIGINT,
+    table_session_id BIGINT,
+    order_id BIGINT,
+    batch_id BIGINT,
+    tab_id BIGINT,
+    idempotency_key VARCHAR(191) NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_analytics_events_event_type_idempotency
+    ON analytics_events (event_type, idempotency_key);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_events_venue_id_created_at
+    ON analytics_events (venue_id, created_at DESC);

@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.subscription.db
 
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.zaxxer.hikari.HikariConfig
@@ -64,6 +65,35 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
+    fun `subscription status changed event is idempotent for repeated status`() =
+        runBlocking {
+            val venueId =
+                dataSource.connection.use { connection ->
+                    insertVenue(connection)
+                }
+            val repository = SubscriptionRepository(dataSource, AnalyticsEventRepository(dataSource))
+
+            assertTrue(repository.updateStatus(venueId, SubscriptionStatus.ACTIVE))
+            assertTrue(repository.updateStatus(venueId, SubscriptionStatus.ACTIVE))
+
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT COUNT(*)
+                    FROM analytics_events
+                    WHERE venue_id = ? AND event_type = 'subscription_status_changed'
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        assertEquals(1, rs.getInt(1))
+                    }
+                }
+            }
+        }
+
+    @Test
     fun `getSubscriptionStatus backfills trial subscription`() =
         runBlocking {
             val venueId =
@@ -71,7 +101,7 @@ class SubscriptionRepositoryTest {
                     insertVenue(connection)
                 }
 
-            val repository = SubscriptionRepository(dataSource)
+            val repository = SubscriptionRepository(dataSource, AnalyticsEventRepository(dataSource))
             val status = repository.getSubscriptionStatus(venueId)
 
             assertEquals(SubscriptionStatus.TRIAL, status)
