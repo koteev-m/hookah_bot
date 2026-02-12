@@ -46,7 +46,7 @@ class SubscriptionBillingPostgresTest {
     }
 
     @Test
-    fun `past due invoice suspends subscription and paid invoice restores active`() =
+    fun `past due invoice transitions to past due then suspended after grace`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
@@ -97,17 +97,18 @@ class SubscriptionBillingPostgresTest {
                                 timeZone = ZoneId.of("UTC"),
                                 leadDays = 7,
                                 reminderDays = 3,
+                                graceDays = 3,
                                 intervalSeconds = 60,
                             ),
                         platformOwnerUserId = null,
                         json = Json,
-                        clock = Clock.fixed(Instant.parse("2024-05-10T12:00:00Z"), ZoneOffset.UTC),
+                        clock = Clock.fixed(Instant.parse("2024-05-02T12:00:00Z"), ZoneOffset.UTC),
                     )
 
                 engine.tick()
 
-                val suspended = subscriptionRepository.getSubscriptionStatus(venueId)
-                assertEquals(SubscriptionStatus.SUSPENDED_BY_PLATFORM, suspended)
+                val pastDue = subscriptionRepository.getSubscriptionStatus(venueId)
+                assertEquals(SubscriptionStatus.PAST_DUE, pastDue)
 
                 dataSource.connection.use { connection ->
                     connection.prepareStatement(
@@ -124,6 +125,40 @@ class SubscriptionBillingPostgresTest {
                         }
                     }
                 }
+
+                val graceExpiredEngine =
+                    SubscriptionBillingEngine(
+                        dataSource = dataSource,
+                        venueRepository = SubscriptionBillingVenueRepository(dataSource),
+                        settingsRepository = PlatformSubscriptionSettingsRepository(dataSource),
+                        billingService =
+                            BillingService(
+                                provider = FakeBillingProvider(),
+                                invoiceRepository = invoiceRepository,
+                                paymentRepository = paymentRepository,
+                                hooks = SubscriptionBillingHooks(subscriptionRepository),
+                            ),
+                        invoiceRepository = invoiceRepository,
+                        notificationRepository = BillingNotificationRepository(dataSource),
+                        subscriptionRepository = subscriptionRepository,
+                        auditLogRepository = AuditLogRepository(dataSource, Json),
+                        config =
+                            SubscriptionBillingConfig(
+                                timeZone = ZoneId.of("UTC"),
+                                leadDays = 7,
+                                reminderDays = 3,
+                                graceDays = 3,
+                                intervalSeconds = 60,
+                            ),
+                        platformOwnerUserId = null,
+                        json = Json,
+                        clock = Clock.fixed(Instant.parse("2024-05-14T12:00:00Z"), ZoneOffset.UTC),
+                    )
+
+                graceExpiredEngine.tick()
+
+                val suspended = subscriptionRepository.getSubscriptionStatus(venueId)
+                assertEquals(SubscriptionStatus.SUSPENDED_BY_PLATFORM, suspended)
 
                 val service =
                     BillingService(

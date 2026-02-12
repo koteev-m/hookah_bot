@@ -280,7 +280,7 @@ class GuestTableResolveRoutesTest {
         }
 
     @Test
-    fun `known token for past due subscription returns unavailable`() =
+    fun `known token for past due subscription returns available`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-table-past-due")
             val config = buildConfig(jdbcUrl)
@@ -310,8 +310,8 @@ class GuestTableResolveRoutesTest {
             assertEquals("12", payload.tableNumber)
             assertEquals(VenueStatus.PUBLISHED.dbValue, payload.venueStatus)
             assertEquals("past_due", payload.subscriptionStatus)
-            assertEquals(false, payload.available)
-            assertEquals("SUBSCRIPTION_BLOCKED", payload.unavailableReason)
+            assertEquals(true, payload.available)
+            assertNull(payload.unavailableReason)
         }
 
     @Test
