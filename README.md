@@ -16,6 +16,21 @@
 - `GET /health` → `{ "status": "ok" }`
 - `GET /version` → сведения о версии/окружении
 - `GET /db/health` → проверка соединения с Postgres (возвращает `disabled`, если БД не настроена)
+- `GET /metrics` → Prometheus-метрики приложения
+
+### Эксплуатационные метрики
+`/metrics` экспортирует ключевые метрики для webhook/очередей:
+- `inbound_queue_depth` — глубина очереди входящих Telegram webhook updates.
+- `outbound_queue_depth` — глубина очереди Telegram outbox.
+- `outbound_send_success_total` — количество успешных отправок outbox.
+- `outbound_send_failed_total` — количество неуспешных попыток отправки outbox.
+- `outbound_429_total` — количество ответов Telegram API с кодом `429` (rate limit).
+- `webhook_processing_lag_seconds` — lag (гистограмма) между получением webhook и началом обработки worker-ом.
+
+Быстрая проверка локально:
+```bash
+curl -s http://localhost:8080/metrics | rg "inbound_queue_depth|outbound_queue_depth|outbound_send|outbound_429|webhook_processing_lag_seconds"
+```
 
 ## Mini App API
 

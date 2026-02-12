@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.telegram.db.TelegramOutboxMessage
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.telegram.db.TelegramOutboxStatus
@@ -29,6 +30,7 @@ class TelegramOutboxWorker(
     private val config: TelegramOutboxConfig,
     private val scope: CoroutineScope,
     private val nowProvider: () -> Instant = Instant::now,
+    private val metrics: AppMetrics? = null,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramOutboxWorker::class.java)
 
@@ -63,6 +65,7 @@ class TelegramOutboxWorker(
                 logger.debugTelegramException(e) { "Telegram outbox claim exception" }
                 return
             }
+        metrics?.setOutboundQueueDepth(repository.queueDepth())
         if (batch.isEmpty()) return
 
         val semaphore = Semaphore(config.maxConcurrency)
@@ -142,6 +145,7 @@ class TelegramOutboxWorker(
     }
 
     private suspend fun markSent(message: TelegramOutboxMessage) {
+        metrics?.incrementOutboundSendSuccess()
         try {
             repository.markSent(message.id, nowProvider())
         } catch (e: CancellationException) {
@@ -155,7 +159,11 @@ class TelegramOutboxWorker(
     private suspend fun markFailed(
         message: TelegramOutboxMessage,
         reason: String?,
+        incrementMetric: Boolean = true,
     ) {
+        if (incrementMetric) {
+            metrics?.incrementOutboundSendFailed()
+        }
         val safeReason = sanitizeTelegramForLog(reason ?: "unknown error")
         try {
             repository.markFailed(
@@ -180,8 +188,12 @@ class TelegramOutboxWorker(
         errorCode: Int? = null,
     ) {
         val safeReason = sanitizeTelegramForLog(reason ?: "unknown error")
+        if (errorCode == 429) {
+            metrics?.incrementOutbound429()
+        }
+        metrics?.incrementOutboundSendFailed()
         if (message.attempts >= config.maxAttempts) {
-            markFailed(message, safeReason)
+            markFailed(message, safeReason, incrementMetric = false)
             return
         }
 

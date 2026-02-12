@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdate
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateQueueRepository
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateStatus
@@ -25,6 +26,7 @@ class TelegramInboundUpdateWorker(
     private val batchSize: Int = 10,
     private val maxAttempts: Int = 5,
     private val visibilityTimeout: Duration = Duration.ofMinutes(2),
+    private val metrics: AppMetrics? = null,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramInboundUpdateWorker::class.java)
 
@@ -53,6 +55,7 @@ class TelegramInboundUpdateWorker(
 
     suspend fun processOnce(now: Instant = Instant.now()): Boolean {
         val batch = repository.claimBatch(batchSize, now, visibilityTimeout)
+        metrics?.setInboundQueueDepth(repository.queueDepth())
         if (batch.isEmpty()) {
             return false
         }
@@ -66,6 +69,7 @@ class TelegramInboundUpdateWorker(
         update: TelegramInboundUpdate,
         now: Instant,
     ) {
+        metrics?.recordWebhookProcessingLag(Duration.between(update.receivedAt, now))
         val parsed =
             try {
                 json.decodeFromString(TelegramUpdate.serializer(), update.payloadJson)
