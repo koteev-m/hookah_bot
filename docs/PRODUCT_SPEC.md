@@ -141,7 +141,7 @@ MUST:
 - Subscription per venue with trial and per-venue price overrides.
 - Card payment: external checkout link + webhook verification + idempotency.
 - Optional Telegram Stars method (if implemented).
-- Gating: past_due/suspended affect guest actions (orders/booking) per policy.
+- Gating policy: `past_due` allows guest actions (orders/booking), while `suspended`, `suspended_by_platform`, and `canceled` block guest actions until status recovery.
 - Platform owner can set/override prices without code changes.
 SHOULD:
 - Billing events log; self-serve invoice link generation.

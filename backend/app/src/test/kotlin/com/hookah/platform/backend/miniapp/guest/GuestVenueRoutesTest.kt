@@ -179,7 +179,7 @@ class GuestVenueRoutesTest {
         }
 
     @Test
-    fun `venue by id with blocked subscription returns not found`() =
+    fun `venue by id with suspended subscription returns not found`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-venue-blocked")
             val config = buildConfig(jdbcUrl)
@@ -193,7 +193,7 @@ class GuestVenueRoutesTest {
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                     insertVenue(connection, "Blocked", "City", "Address", VenueStatus.PUBLISHED.dbValue)
                 }
-            seedSubscription(jdbcUrl, venueId, "PAST_DUE")
+            seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
             val token = issueToken(config)
 
             val response =

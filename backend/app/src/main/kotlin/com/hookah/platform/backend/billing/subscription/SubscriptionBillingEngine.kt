@@ -136,6 +136,15 @@ class SubscriptionBillingEngine(
             }
             subscriptionRepository.updateStatus(
                 venueId = invoice.venueId,
+                status = SubscriptionStatus.PAST_DUE,
+            )
+        }
+
+        val suspendBefore = now.minus(config.graceDays, ChronoUnit.DAYS)
+        val overduePastDue = invoiceRepository.listPastDueInvoicesDueBefore(suspendBefore)
+        for (invoice in overduePastDue) {
+            subscriptionRepository.updateStatus(
+                venueId = invoice.venueId,
                 status = SubscriptionStatus.SUSPENDED_BY_PLATFORM,
             )
         }

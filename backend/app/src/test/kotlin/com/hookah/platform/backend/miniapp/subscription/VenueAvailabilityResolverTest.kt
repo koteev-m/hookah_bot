@@ -22,16 +22,29 @@ class VenueAvailabilityResolverTest {
     }
 
     @Test
-    fun `past due subscription blocks active venue`() {
+    fun `past due subscription keeps active venue available`() {
         val availability =
             VenueAvailabilityResolver.resolve(
                 venueStatus = VenueStatus.PUBLISHED,
                 subscriptionStatus = SubscriptionStatus.PAST_DUE,
             )
 
+        assertTrue(availability.available)
+        assertNull(availability.reason)
+        assertEquals("past_due", availability.subscriptionStatus)
+    }
+
+    @Test
+    fun `canceled subscription blocks active venue`() {
+        val availability =
+            VenueAvailabilityResolver.resolve(
+                venueStatus = VenueStatus.PUBLISHED,
+                subscriptionStatus = SubscriptionStatus.CANCELED,
+            )
+
         assertFalse(availability.available)
         assertEquals("SUBSCRIPTION_BLOCKED", availability.reason)
-        assertEquals("past_due", availability.subscriptionStatus)
+        assertEquals("canceled", availability.subscriptionStatus)
     }
 
     @Test

@@ -7,6 +7,7 @@ enum class SubscriptionStatus(val wire: String) {
     TRIAL("trial"),
     ACTIVE("active"),
     PAST_DUE("past_due"),
+    CANCELED("canceled"),
     SUSPENDED("suspended"),
     SUSPENDED_BY_PLATFORM("suspended_by_platform"),
     UNKNOWN("unknown"),
@@ -15,7 +16,7 @@ enum class SubscriptionStatus(val wire: String) {
     companion object {
         private val blockedForGuest =
             setOf(
-                PAST_DUE,
+                CANCELED,
                 SUSPENDED,
                 SUSPENDED_BY_PLATFORM,
                 UNKNOWN,
@@ -27,6 +28,7 @@ enum class SubscriptionStatus(val wire: String) {
                 "trial" -> TRIAL
                 "active" -> ACTIVE
                 "past_due" -> PAST_DUE
+                "canceled", "cancelled" -> CANCELED
                 "suspended" -> SUSPENDED
                 "suspended_by_platform" -> SUSPENDED_BY_PLATFORM
                 else -> UNKNOWN

@@ -9,6 +9,7 @@ data class SubscriptionBillingConfig(
     val timeZone: ZoneId,
     val leadDays: Long,
     val reminderDays: Long,
+    val graceDays: Long,
     val intervalSeconds: Long,
 ) {
     companion object {
@@ -46,6 +47,18 @@ data class SubscriptionBillingConfig(
                 } else {
                     reminderDaysParsed
                 }
+            val graceDaysRaw = config.propertyOrNull("billing.subscription.graceDays")?.getString()?.trim()
+            val graceDaysParsed = graceDaysRaw?.toLongOrNull() ?: 3L
+            val graceDays =
+                if (graceDaysParsed < 0) {
+                    logger.warn(
+                        "billing.subscription.graceDays is negative ({}), clamping to 0",
+                        sanitizeTelegramForLog(graceDaysRaw),
+                    )
+                    0L
+                } else {
+                    graceDaysParsed
+                }
             val intervalSecondsRaw = config.propertyOrNull("billing.subscription.intervalSeconds")?.getString()?.trim()
             val intervalSeconds =
                 if (intervalSecondsRaw.isNullOrBlank()) {
@@ -76,6 +89,7 @@ data class SubscriptionBillingConfig(
                 timeZone = timeZone,
                 leadDays = leadDays,
                 reminderDays = reminderDays,
+                graceDays = graceDays,
                 intervalSeconds = intervalSeconds,
             )
         }
