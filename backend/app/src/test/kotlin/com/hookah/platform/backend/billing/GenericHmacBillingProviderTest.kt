@@ -137,6 +137,67 @@ class GenericHmacBillingProviderTest {
             }
         }
 
+    @Test
+    fun `webhook with non primitive event_id is rejected with bad request`() =
+        testApplication {
+            withBillingWebhookApp(this).use { fixture ->
+                val payload =
+                    """
+                    {"event_id":{},"payment_status":"paid","invoice_id":"ghbp-1000","amount_minor":3000,"currency":"RUB","occurred_at":"2024-04-10T12:00:00Z"}
+                    """.trimIndent()
+                val signature = fixture.signPayload(payload)
+
+                val response =
+                    client.post("/api/billing/webhook/generic_hmac") {
+                        header("X-Webhook-Secret-Token", fixture.routeSecret)
+                        header(fixture.providerSignatureHeader, signature)
+                        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        setBody(payload)
+                    }
+
+                assertEquals(HttpStatusCode.BadRequest, response.status)
+            }
+        }
+
+    @Test
+    fun `webhook with non primitive amount_minor is rejected with bad request`() =
+        testApplication {
+            withBillingWebhookApp(this).use { fixture ->
+                val payload =
+                    """
+                    {"event_id":"evt-1001","payment_status":"paid","invoice_id":"ghbp-1000","amount_minor":{},"currency":"RUB","occurred_at":"2024-04-10T12:00:00Z"}
+                    """.trimIndent()
+                val signature = fixture.signPayload(payload)
+
+                val response =
+                    client.post("/api/billing/webhook/generic_hmac") {
+                        header("X-Webhook-Secret-Token", fixture.routeSecret)
+                        header(fixture.providerSignatureHeader, signature)
+                        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        setBody(payload)
+                    }
+
+                assertEquals(HttpStatusCode.BadRequest, response.status)
+            }
+        }
+
+    @Test
+    fun `webhook signature header is trimmed before verification`() =
+        testApplication {
+            withBillingWebhookApp(this).use { fixture ->
+                val signature = fixture.signPayload(fixture.payload)
+                val response =
+                    client.post("/api/billing/webhook/generic_hmac") {
+                        header("X-Webhook-Secret-Token", fixture.routeSecret)
+                        header(fixture.providerSignatureHeader, "  $signature  ")
+                        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        setBody(fixture.payload)
+                    }
+
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+        }
+
     private class BillingWebhookFixture(
         val dataSource: HikariDataSource,
         val invoiceId: Long,
