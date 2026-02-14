@@ -134,18 +134,25 @@ class SubscriptionBillingEngine(
             if (!marked) {
                 continue
             }
-            subscriptionRepository.updateStatus(
+            subscriptionRepository.updateStatusIfCurrentIn(
                 venueId = invoice.venueId,
-                status = SubscriptionStatus.PAST_DUE,
+                allowedCurrentStatuses =
+                    setOf(
+                        SubscriptionStatus.TRIAL,
+                        SubscriptionStatus.ACTIVE,
+                        SubscriptionStatus.PAST_DUE,
+                    ),
+                nextStatus = SubscriptionStatus.PAST_DUE,
             )
         }
 
         val suspendBefore = now.minus(config.graceDays, ChronoUnit.DAYS)
         val overduePastDue = invoiceRepository.listPastDueInvoicesDueBefore(suspendBefore)
         for (invoice in overduePastDue) {
-            subscriptionRepository.updateStatus(
+            subscriptionRepository.updateStatusIfCurrentIn(
                 venueId = invoice.venueId,
-                status = SubscriptionStatus.SUSPENDED_BY_PLATFORM,
+                allowedCurrentStatuses = setOf(SubscriptionStatus.PAST_DUE),
+                nextStatus = SubscriptionStatus.SUSPENDED_BY_PLATFORM,
             )
         }
     }
