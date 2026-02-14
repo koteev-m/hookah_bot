@@ -117,7 +117,7 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 Минимальная схема биллинга:
 - Таблицы: `billing_invoices`, `billing_payments`, `billing_notifications`.
 - Статусы инвойсов: `DRAFT`, `OPEN`, `PAID`, `PAST_DUE`, `VOID`. Статусы платежей: `SUCCEEDED`, `FAILED`, `REFUNDED`.
-- `BillingProvider` определяет создание инвойса и обработку вебхуков; по умолчанию используется `FakeBillingProvider`.
+- `BillingProvider` определяет создание инвойса и обработку вебхуков; для dev доступен `FakeBillingProvider`, для карт можно включить `GenericHmacBillingProvider` через `BILLING_PROVIDER=generic_hmac`.
 - `BillingService` хранит инвойс/платёж и применяет события оплаты через идемпотентные provider event id.
 - `SubscriptionBillingEngine` + `SubscriptionBillingJob` периодически создают инвойсы, рассылают напоминания, переводят просроченные счета в `PAST_DUE` и замораживают подписку. При оплате через `BillingHooks` подписка возвращается в `ACTIVE`.
 
@@ -151,6 +151,16 @@ Billing webhook:
 - `BILLING_WEBHOOK_SECRET=<billing-webhook-secret>`
 - `BILLING_WEBHOOK_IP_ALLOWLIST=<cidr-or-ip-list>` (опционально, через запятую)
 - `BILLING_WEBHOOK_IP_ALLOWLIST_USE_X_FORWARDED_FOR=true|false` (включать только за доверенным прокси)
+
+Card checkout (Generic HMAC provider):
+- `BILLING_PROVIDER=generic_hmac`
+- `BILLING_GENERIC_CHECKOUT_BASE_URL=https://payments.example.com/checkout`
+- `BILLING_GENERIC_MERCHANT_ID=<merchant-id>` (опционально)
+- `BILLING_GENERIC_CHECKOUT_RETURN_URL=https://miniapp.example.com/billing/return` (опционально)
+- `BILLING_GENERIC_SIGNING_SECRET=<provider-webhook-signing-secret>`
+- `BILLING_GENERIC_SIGNATURE_HEADER=X-Billing-Signature` (опционально, по умолчанию это значение)
+
+Webhook `POST /api/billing/webhook/generic_hmac` должен содержать подпись HMAC SHA-256 в заголовке `BILLING_GENERIC_SIGNATURE_HEADER` и JSON с полями `event_id`, `payment_status`, `invoice_id`, `amount_minor`, `currency`.
 
 Telegram webhook (если используете webhook-режим бота):
 - `TELEGRAM_BOT_ENABLED=true`
