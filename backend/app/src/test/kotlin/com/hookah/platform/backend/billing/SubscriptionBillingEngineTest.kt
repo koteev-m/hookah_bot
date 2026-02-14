@@ -180,6 +180,138 @@ class SubscriptionBillingEngineTest {
         }
 
     @Test
+    fun `overdue invoice does not downgrade canceled subscription`() =
+        runBlocking {
+            val venueId =
+                dataSource.connection.use { connection ->
+                    insertVenue(connection, "Canceled Overdue Venue")
+                }
+            val subscriptionRepository = SubscriptionRepository(dataSource)
+            subscriptionRepository.updateStatus(venueId, SubscriptionStatus.CANCELED)
+            val invoiceRepository = BillingInvoiceRepository(dataSource)
+            val paymentRepository = BillingPaymentRepository(dataSource)
+            val invoice =
+                invoiceRepository.createInvoice(
+                    venueId = venueId,
+                    periodStart = LocalDate.of(2024, 5, 1),
+                    periodEnd = LocalDate.of(2024, 5, 31),
+                    dueAt = Instant.parse("2024-05-01T00:00:00Z"),
+                    amountMinor = 5000,
+                    currency = "RUB",
+                    description = "May subscription",
+                    provider = "FAKE",
+                    providerInvoiceId = "fake-invoice-canceled-overdue",
+                    paymentUrl = null,
+                    providerRawPayload = null,
+                    status = InvoiceStatus.OPEN,
+                    paidAt = null,
+                    actorUserId = null,
+                )
+            val engine =
+                SubscriptionBillingEngine(
+                    dataSource = dataSource,
+                    venueRepository = SubscriptionBillingVenueRepository(dataSource),
+                    settingsRepository = PlatformSubscriptionSettingsRepository(dataSource),
+                    billingService =
+                        BillingService(
+                            provider = FakeBillingProvider(),
+                            invoiceRepository = invoiceRepository,
+                            paymentRepository = paymentRepository,
+                            hooks = SubscriptionBillingHooks(subscriptionRepository),
+                        ),
+                    invoiceRepository = invoiceRepository,
+                    notificationRepository = BillingNotificationRepository(dataSource),
+                    subscriptionRepository = subscriptionRepository,
+                    auditLogRepository = AuditLogRepository(dataSource, Json),
+                    config =
+                        SubscriptionBillingConfig(
+                            timeZone = ZoneId.of("UTC"),
+                            leadDays = 7,
+                            reminderDays = 3,
+                            graceDays = 3,
+                            intervalSeconds = 60,
+                        ),
+                    platformOwnerUserId = null,
+                    json = Json,
+                    clock = Clock.fixed(Instant.parse("2024-05-02T12:00:00Z"), ZoneOffset.UTC),
+                )
+
+            engine.tick()
+
+            val status = subscriptionRepository.getSubscriptionStatus(venueId)
+            assertEquals(SubscriptionStatus.CANCELED, status)
+
+            val invoicePastDue = invoiceRepository.getInvoiceById(invoice.id)
+            assertEquals(InvoiceStatus.PAST_DUE, invoicePastDue?.status)
+        }
+
+    @Test
+    fun `overdue invoice does not downgrade suspended by platform subscription`() =
+        runBlocking {
+            val venueId =
+                dataSource.connection.use { connection ->
+                    insertVenue(connection, "Suspended Overdue Venue")
+                }
+            val subscriptionRepository = SubscriptionRepository(dataSource)
+            subscriptionRepository.updateStatus(venueId, SubscriptionStatus.SUSPENDED_BY_PLATFORM)
+            val invoiceRepository = BillingInvoiceRepository(dataSource)
+            val paymentRepository = BillingPaymentRepository(dataSource)
+            val invoice =
+                invoiceRepository.createInvoice(
+                    venueId = venueId,
+                    periodStart = LocalDate.of(2024, 5, 1),
+                    periodEnd = LocalDate.of(2024, 5, 31),
+                    dueAt = Instant.parse("2024-05-01T00:00:00Z"),
+                    amountMinor = 5000,
+                    currency = "RUB",
+                    description = "May subscription",
+                    provider = "FAKE",
+                    providerInvoiceId = "fake-invoice-suspended-overdue",
+                    paymentUrl = null,
+                    providerRawPayload = null,
+                    status = InvoiceStatus.OPEN,
+                    paidAt = null,
+                    actorUserId = null,
+                )
+            val engine =
+                SubscriptionBillingEngine(
+                    dataSource = dataSource,
+                    venueRepository = SubscriptionBillingVenueRepository(dataSource),
+                    settingsRepository = PlatformSubscriptionSettingsRepository(dataSource),
+                    billingService =
+                        BillingService(
+                            provider = FakeBillingProvider(),
+                            invoiceRepository = invoiceRepository,
+                            paymentRepository = paymentRepository,
+                            hooks = SubscriptionBillingHooks(subscriptionRepository),
+                        ),
+                    invoiceRepository = invoiceRepository,
+                    notificationRepository = BillingNotificationRepository(dataSource),
+                    subscriptionRepository = subscriptionRepository,
+                    auditLogRepository = AuditLogRepository(dataSource, Json),
+                    config =
+                        SubscriptionBillingConfig(
+                            timeZone = ZoneId.of("UTC"),
+                            leadDays = 7,
+                            reminderDays = 3,
+                            graceDays = 3,
+                            intervalSeconds = 60,
+                        ),
+                    platformOwnerUserId = null,
+                    json = Json,
+                    clock = Clock.fixed(Instant.parse("2024-05-02T12:00:00Z"), ZoneOffset.UTC),
+                )
+
+            engine.tick()
+
+            val status = subscriptionRepository.getSubscriptionStatus(venueId)
+            assertEquals(SubscriptionStatus.SUSPENDED_BY_PLATFORM, status)
+
+            val invoicePastDue = invoiceRepository.getInvoiceById(invoice.id)
+            assertEquals(InvoiceStatus.PAST_DUE, invoicePastDue?.status)
+        }
+
+    @Test
     fun `subscription can be canceled explicitly`() =
         runBlocking {
             val venueId =
