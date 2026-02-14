@@ -124,7 +124,7 @@ fun Route.platformBillingRoutes(
             val occurredAt = request.occurredAt?.let { parseInstant(it, "occurredAt") } ?: Instant.now()
             val event =
                 PaymentEvent.Paid(
-                    provider = "FAKE",
+                    provider = invoice.provider,
                     providerEventId = "manual:$invoiceId",
                     providerInvoiceId = providerInvoiceId,
                     amountMinor = invoice.amountMinor,

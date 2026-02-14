@@ -16,6 +16,8 @@ import com.hookah.platform.backend.billing.BillingPaymentRepository
 import com.hookah.platform.backend.billing.BillingProviderRegistry
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.billing.FakeBillingProvider
+import com.hookah.platform.backend.billing.GenericHmacBillingProvider
+import com.hookah.platform.backend.billing.GenericHmacBillingProviderConfig
 import com.hookah.platform.backend.billing.billingWebhookRoutes
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingConfig
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingEngine
@@ -240,6 +242,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
     val sessionTokenService = SessionTokenService(sessionTokenConfig)
     val billingConfig = BillingConfig.from(appConfig, appEnv)
+    val genericBillingConfig = GenericHmacBillingProviderConfig.from(appConfig)
     val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
     val guestRateLimitConfig = GuestRateLimitConfig.from(appConfig)
     val tableSessionConfig = TableSessionConfig.from(appConfig)
@@ -277,13 +280,22 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val billingInvoiceRepository = BillingInvoiceRepository(dataSource)
     val billingPaymentRepository = BillingPaymentRepository(dataSource)
     val billingNotificationRepository = BillingNotificationRepository(dataSource)
-    val billingProviderRegistry = BillingProviderRegistry(listOf(FakeBillingProvider()))
+    val billingProviderRegistry =
+        BillingProviderRegistry(
+            listOf(
+                FakeBillingProvider(),
+                GenericHmacBillingProvider(genericBillingConfig),
+            ),
+        )
     val resolvedBillingProvider = billingProviderRegistry.resolve(billingConfig.normalizedProvider)
     if (resolvedBillingProvider == null) {
         if (appEnv == "prod" || appEnv == "production") {
             throw IllegalStateException("Unknown billing provider '${billingConfig.provider}' in production")
         }
         logger.warn("Unknown billing provider '{}', falling back to FAKE", billingConfig.provider)
+    }
+    if (resolvedBillingProvider is GenericHmacBillingProvider) {
+        genericBillingConfig.validateRequired()
     }
     val billingProvider = resolvedBillingProvider ?: FakeBillingProvider()
     val subscriptionBillingHooks = SubscriptionBillingHooks(subscriptionRepository)
