@@ -161,6 +161,7 @@ Card checkout (Generic HMAC provider):
 - `BILLING_GENERIC_SIGNATURE_HEADER=X-Billing-Signature` (опционально, по умолчанию это значение)
 
 Webhook `POST /api/billing/webhook/generic_hmac` должен содержать подпись HMAC SHA-256 в заголовке `BILLING_GENERIC_SIGNATURE_HEADER` и JSON с полями `event_id`, `payment_status`, `invoice_id`, `amount_minor`, `currency`.
+Формат подписи: hex-строка в lowercase, вычисляется по **raw JSON body** (как строке, без нормализации/pretty-print) с секретом `BILLING_GENERIC_SIGNING_SECRET`.
 
 Telegram webhook (если используете webhook-режим бота):
 - `TELEGRAM_BOT_ENABLED=true`

@@ -4,15 +4,17 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveText
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.LocalDate
+import java.util.Locale
 
 class GenericHmacBillingProvider(
     private val config: GenericHmacBillingProviderConfig,
@@ -39,7 +41,7 @@ class GenericHmacBillingProvider(
                 ?: throw IllegalStateException("billing.generic.signingSecret must be configured")
 
         val providerInvoiceId = "ghbp-$invoiceId"
-        val signedPayload = "$providerInvoiceId:$amountMinor:${currency.uppercase()}"
+        val signedPayload = "$providerInvoiceId:$amountMinor:${currency.uppercase(Locale.ROOT)}"
         val signature = signatureAlgorithm.sign(signedPayload, signingSecret)
         val paymentUrl =
             buildCheckoutUrl(
@@ -75,11 +77,14 @@ class GenericHmacBillingProvider(
         val signatureHeader =
             call.request.headers[config.signatureHeader]
                 ?: throw BillingWebhookRejectedException(HttpStatusCode.Unauthorized, "Missing signature header")
+        val normalizedSignatureHeader =
+            signatureHeader.trim().takeIf { it.isNotEmpty() }
+                ?: throw BillingWebhookRejectedException(HttpStatusCode.Unauthorized, "Missing signature header")
         val signingSecret =
             config.signingSecret?.takeIf { it.isNotBlank() }
                 ?: throw BillingWebhookRejectedException(HttpStatusCode.InternalServerError, "Missing signing secret")
 
-        if (!signatureAlgorithm.verify(rawPayload, signatureHeader, signingSecret)) {
+        if (!signatureAlgorithm.verify(rawPayload, normalizedSignatureHeader, signingSecret)) {
             throw BillingWebhookRejectedException(HttpStatusCode.Forbidden, "Invalid signature")
         }
 
@@ -94,7 +99,7 @@ class GenericHmacBillingProvider(
         val providerInvoiceId = payload.requiredString("invoice_id")
         val amountMinor = payload.requiredInt("amount_minor")
         val currency = payload.requiredString("currency")
-        val paymentStatus = payload.requiredString("payment_status").lowercase()
+        val paymentStatus = payload.requiredString("payment_status").lowercase(Locale.ROOT)
         val occurredAt = payload.optionalString("occurred_at")?.let { parseOccurredAt(it) } ?: Instant.now()
 
         return when (paymentStatus) {
@@ -176,17 +181,22 @@ class GenericHmacBillingProvider(
     }
 
     private fun JsonObject.requiredString(key: String): String {
-        val value = this[key]?.jsonPrimitive?.contentOrNull?.trim()
+        val value = this[key].asPrimitive(key).contentOrNull?.trim()
         return value?.takeIf { it.isNotEmpty() }
             ?: throw BillingWebhookRejectedException(HttpStatusCode.BadRequest, "$key is required")
     }
 
     private fun JsonObject.optionalString(key: String): String? =
-        this[key]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        this[key]?.asPrimitive(key)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
 
     private fun JsonObject.requiredInt(key: String): Int {
-        return this[key]?.jsonPrimitive?.intOrNull
+        return this[key].asPrimitive(key).intOrNull
             ?: throw BillingWebhookRejectedException(HttpStatusCode.BadRequest, "$key must be integer")
+    }
+
+    private fun JsonElement?.asPrimitive(key: String): JsonPrimitive {
+        return this as? JsonPrimitive
+            ?: throw BillingWebhookRejectedException(HttpStatusCode.BadRequest, "$key must be primitive")
     }
 
     private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
