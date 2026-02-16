@@ -57,10 +57,20 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: ${{ always() }}
     needs: [backend-ktlint, backend-tests]
     steps:
       - name: Aggregate backend checks
-        run: echo "backend checks passed"
+        run: |
+          echo "backend-ktlint result: ${{ needs.backend-ktlint.result }}"
+          echo "backend-tests result: ${{ needs.backend-tests.result }}"
+
+          if [[ "${{ needs.backend-ktlint.result }}" != "success" || "${{ needs.backend-tests.result }}" != "success" ]]; then
+            echo "backend checks failed"
+            exit 1
+          fi
+
+          echo "backend checks passed"
 
   miniapp:
     runs-on: ubuntu-latest
