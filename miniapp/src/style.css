@@ -51,6 +51,13 @@ body {
   font-size: 0.9rem;
 }
 
+
+.table-fallback-button {
+  margin-top: 0.75rem;
+  width: 100%;
+  text-align: left;
+}
+
 .app-shell[data-table-severity="ok"] .table-status {
   background: #ecfdf3;
   border-color: #86efac;
