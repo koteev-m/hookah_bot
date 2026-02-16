@@ -211,13 +211,16 @@ export function mountGuestApp(options: GuestAppOptions) {
   const disposables: Array<() => void> = []
   disposables.push(
     on(refs.fallbackChatButton, 'click', () => {
+      const telegramContext = getTelegramContext()
       const tableSnapshot = getTableContext()
-      const result = openBotChat(getTelegramContext(), {
+      const result = openBotChat(telegramContext, {
         tableToken: tableSnapshot.tableToken,
         tableSessionId: tableSnapshot.tableSessionId
       })
       if (!result.ok) {
-        refs.statusDetails.textContent = 'Не удалось открыть чат автоматически. Откройте @бот вручную.'
+        refs.statusDetails.textContent = telegramContext.botUsername
+          ? `Не удалось открыть чат автоматически. Откройте @${telegramContext.botUsername} вручную.`
+          : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
       }
     })
   )
