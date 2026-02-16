@@ -21,7 +21,6 @@ import java.sql.Statement
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class GuestVenueMenuRoutesTest {
@@ -76,10 +75,9 @@ class GuestVenueMenuRoutesTest {
             assertEquals(menu.secondCategoryId, payload.categories[1].id)
 
             val firstCategoryItems = payload.categories[0].items
-            assertEquals(2, firstCategoryItems.size)
-            assertEquals(menu.firstCategoryItemIds[1], firstCategoryItems[0].id)
-            assertEquals(menu.firstCategoryItemIds[0], firstCategoryItems[1].id)
-            assertFalse(firstCategoryItems[0].isAvailable)
+            assertEquals(1, firstCategoryItems.size)
+            assertEquals(menu.firstCategoryItemIds[0], firstCategoryItems[0].id)
+            assertTrue(firstCategoryItems[0].isAvailable)
 
             val secondCategoryItems = payload.categories[1].items
             assertEquals(1, secondCategoryItems.size)
