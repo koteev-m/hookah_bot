@@ -26,7 +26,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class VenueMenuRoutesTest {
@@ -310,9 +309,7 @@ class VenueMenuRoutesTest {
             assertEquals(HttpStatusCode.OK, guestMenuResponse.status)
             val menu = json.decodeFromString(MenuResponse.serializer(), guestMenuResponse.bodyAsText())
             assertEquals(1, menu.categories.size)
-            val guestItem = menu.categories.first().items.firstOrNull()
-            assertNotNull(guestItem)
-            assertFalse(guestItem.isAvailable)
+            assertTrue(menu.categories.first().items.isEmpty())
         }
 
     private fun buildJdbcUrl(prefix: String): String {

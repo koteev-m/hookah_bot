@@ -38,6 +38,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
                             SELECT id, category_id, name, price_minor, currency, is_available, sort_order
                             FROM menu_items
                             WHERE venue_id = ?
+                              AND is_available = true
                             ORDER BY sort_order, id
                             """.trimIndent(),
                         ).use { statement ->
