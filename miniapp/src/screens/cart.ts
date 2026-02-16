@@ -807,7 +807,10 @@ export function renderCartScreen(options: CartScreenOptions) {
       setChatMessage('', 'success')
       return
     }
-    const openResult = openBotChat(telegramContext)
+    const openResult = openBotChat(telegramContext, {
+      tableToken,
+      tableSessionId: validation.tableSessionId
+    })
     if (openResult.ok) {
       setChatMessage('Откройте чат с ботом и отправьте заказ там.')
       return

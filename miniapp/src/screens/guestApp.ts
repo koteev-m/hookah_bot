@@ -1,9 +1,11 @@
 import { getBackendBaseUrl } from '../shared/api/backend'
 import { isDebugEnabled } from '../shared/debug'
-import { formatTableStatus, initTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
+import { formatTableStatus, getTableContext, initTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { getCartSnapshot, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
+import { getTelegramContext } from '../shared/telegram'
+import { openBotChat } from '../shared/telegramActions'
 import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
@@ -28,6 +30,7 @@ type GuestRefs = {
   app: HTMLDivElement
   statusTitle: HTMLParagraphElement
   statusDetails: HTMLParagraphElement
+  fallbackChatButton: HTMLButtonElement
   navButtons: NavButtonRefs
   content: HTMLDivElement
 }
@@ -71,7 +74,11 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
   const statusCard = el('div', { className: 'table-status' })
   const statusTitle = el('p', { className: 'table-status-title', text: '' })
   const statusDetails = el('p', { className: 'table-status-details', text: '' })
-  append(statusCard, statusTitle, statusDetails)
+  const fallbackChatButton = el('button', {
+    className: 'button-secondary table-fallback-button',
+    text: 'Не грузится? → Оформить в чате'
+  }) as HTMLButtonElement
+  append(statusCard, statusTitle, statusDetails, fallbackChatButton)
 
   const nav = el('nav', { className: 'app-nav' })
   const catalogButton = el('button', { className: 'nav-button', text: 'Каталог' })
@@ -88,6 +95,7 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
     app,
     statusTitle,
     statusDetails,
+    fallbackChatButton,
     navButtons: {
       catalog: catalogButton,
       cart: cartButton,
@@ -201,6 +209,18 @@ export function mountGuestApp(options: GuestAppOptions) {
   }
 
   const disposables: Array<() => void> = []
+  disposables.push(
+    on(refs.fallbackChatButton, 'click', () => {
+      const tableSnapshot = getTableContext()
+      const result = openBotChat(getTelegramContext(), {
+        tableToken: tableSnapshot.tableToken,
+        tableSessionId: tableSnapshot.tableSessionId
+      })
+      if (!result.ok) {
+        refs.statusDetails.textContent = 'Не удалось открыть чат автоматически. Откройте @бот вручную.'
+      }
+    })
+  )
   disposables.push(on(refs.navButtons.catalog, 'click', () => navigate('#/catalog')))
   disposables.push(on(refs.navButtons.cart, 'click', () => navigate('#/cart')))
   disposables.push(on(refs.navButtons.order, 'click', () => navigate('#/order')))
