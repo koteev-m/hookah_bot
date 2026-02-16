@@ -32,6 +32,11 @@
 curl -s http://localhost:8080/metrics | rg "inbound_queue_depth|outbound_queue_depth|outbound_send|outbound_429|webhook_processing_lag_seconds"
 ```
 
+
+## Runbook и migration policy
+- Минимальный эксплуатационный runbook: `docs/OPERATIONS.md`.
+- Политика миграций Flyway (CI validate + production rollout): `docs/MIGRATION_POLICY.md`.
+
 ## Mini App API
 
 ### Auth: `POST /api/auth/telegram`
