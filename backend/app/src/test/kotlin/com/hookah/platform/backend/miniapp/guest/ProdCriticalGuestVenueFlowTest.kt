@@ -33,6 +33,7 @@ import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ProdCriticalGuestVenueFlowTest {
@@ -158,6 +159,63 @@ class ProdCriticalGuestVenueFlowTest {
                 }
             assertEquals(HttpStatusCode.Forbidden, tableResponse.status)
             assertApiErrorEnvelope(tableResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `guest add-batch rejects unavailable menu item`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("prod-critical-unavailable-item")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 55)
+            seedTableToken(jdbcUrl, tableId, "unavailable-item-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val unavailableItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Unavailable", isAvailable = false)
+            val token = issueToken(config)
+
+            val resolveResponse =
+                client.get("/api/guest/table/resolve?tableToken=unavailable-item-token") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, resolveResponse.status)
+            val resolvePayload = json.decodeFromString(TableResolveResponse.serializer(), resolveResponse.bodyAsText())
+
+            val tabsResponse =
+                client.get("/api/guest/tabs?table_session_id=${resolvePayload.tableSessionId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, tabsResponse.status)
+            val tabsPayload = json.decodeFromString(GuestTabsResponse.serializer(), tabsResponse.bodyAsText())
+            val personalTabId = tabsPayload.tabs.single { it.type == "PERSONAL" }.id
+
+            val addBatchResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "unavailable-item-token",
+                                tableSessionId = resolvePayload.tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "unavailable-item-idem-1",
+                                items = listOf(AddBatchItemDto(itemId = unavailableItemId, qty = 1)),
+                                comment = "must fail",
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, addBatchResponse.status)
+            assertApiErrorEnvelope(addBatchResponse, ApiErrorCodes.INVALID_INPUT)
+            assertFalse(hasOrderForTable(jdbcUrl, tableId))
         }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -321,23 +379,42 @@ class ProdCriticalGuestVenueFlowTest {
         venueId: Long,
         categoryId: Long,
         name: String,
+        isAvailable: Boolean = true,
     ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
                 INSERT INTO menu_items (venue_id, category_id, name, price_minor, currency, is_available, sort_order)
-                VALUES (?, ?, ?, 200, 'RUB', TRUE, 0)
+                VALUES (?, ?, ?, 200, 'RUB', ?, 0)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
                 statement.setLong(1, venueId)
                 statement.setLong(2, categoryId)
                 statement.setString(3, name)
+                statement.setBoolean(4, isAvailable)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs -> if (rs.next()) return rs.getLong(1) }
             }
             error("Failed to insert menu item")
         }
+
+    private fun hasOrderForTable(
+        jdbcUrl: String,
+        tableId: Long,
+    ): Boolean {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM orders WHERE table_id = ?").use { statement ->
+                statement.setLong(1, tableId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt(1) > 0
+                    }
+                }
+            }
+        }
+        return false
+    }
 
     private fun countAnalyticsEvents(
         jdbcUrl: String,
