@@ -34,8 +34,8 @@ curl -s http://localhost:8080/metrics | rg "inbound_queue_depth|outbound_queue_d
 
 
 ## Runbook и migration policy
-- Минимальный эксплуатационный runbook: `docs/OPERATIONS.md`.
-- Политика миграций Flyway (CI validate + production rollout): `docs/MIGRATION_POLICY.md`.
+- Минимальный эксплуатационный runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md).
+- Политика миграций Flyway (CI validate + production rollout): [docs/MIGRATION_POLICY.md](docs/MIGRATION_POLICY.md).
 
 ## Mini App API
 
