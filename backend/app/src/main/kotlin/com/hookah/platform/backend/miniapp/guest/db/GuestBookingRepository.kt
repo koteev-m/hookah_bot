@@ -3,9 +3,11 @@ package com.hookah.platform.backend.miniapp.guest.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Instant
+import java.util.Locale
 import javax.sql.DataSource
 
 enum class BookingStatus {
@@ -16,7 +18,7 @@ enum class BookingStatus {
 
     ;
 
-    fun toApi(): String = name.lowercase()
+    fun toApi(): String = name.lowercase(Locale.ROOT)
 
     companion object {
         fun fromDb(value: String): BookingStatus? = entries.firstOrNull { it.name == value }
@@ -42,33 +44,37 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
         comment: String?,
     ): BookingRecord {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                val bookingId =
-                    connection.prepareStatement(
-                        """
-                        INSERT INTO bookings (venue_id, user_id, scheduled_at, party_size, comment, status)
-                        VALUES (?, ?, ?, ?, ?, 'PENDING')
-                        """.trimIndent(),
-                        Statement.RETURN_GENERATED_KEYS,
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, userId)
-                        statement.setTimestamp(3, Timestamp.from(scheduledAt))
-                        if (partySize == null) {
-                            statement.setNull(4, java.sql.Types.INTEGER)
-                        } else {
-                            statement.setInt(4, partySize)
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    val bookingId =
+                        connection.prepareStatement(
+                            """
+                            INSERT INTO bookings (venue_id, user_id, scheduled_at, party_size, comment, status)
+                            VALUES (?, ?, ?, ?, ?, 'PENDING')
+                            """.trimIndent(),
+                            Statement.RETURN_GENERATED_KEYS,
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, userId)
+                            statement.setTimestamp(3, Timestamp.from(scheduledAt))
+                            if (partySize == null) {
+                                statement.setNull(4, java.sql.Types.INTEGER)
+                            } else {
+                                statement.setInt(4, partySize)
+                            }
+                            statement.setString(5, comment)
+                            statement.executeUpdate()
+                            statement.generatedKeys.use { keys ->
+                                if (keys.next()) keys.getLong(1) else throw DatabaseUnavailableException()
+                            }
                         }
-                        statement.setString(5, comment)
-                        statement.executeUpdate()
-                        statement.generatedKeys.use { keys ->
-                            if (keys.next()) keys.getLong(1) else throw DatabaseUnavailableException()
-                        }
-                    }
-                loadById(connection, bookingId)
-                    ?: throw DatabaseUnavailableException()
+                    loadById(connection, bookingId)
+                        ?: throw DatabaseUnavailableException()
+                }
             }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
         }
     }
 
@@ -81,33 +87,37 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
         comment: String?,
     ): BookingRecord? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                val updated =
-                    connection.prepareStatement(
-                        """
-                        UPDATE bookings
-                        SET scheduled_at = ?,
-                            party_size = ?,
-                            comment = ?,
-                            status = 'PENDING',
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ? AND venue_id = ? AND user_id = ? AND status IN ('PENDING', 'CHANGED', 'CONFIRMED')
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setTimestamp(1, Timestamp.from(scheduledAt))
-                        if (partySize == null) statement.setNull(2, java.sql.Types.INTEGER) else statement.setInt(2, partySize)
-                        statement.setString(3, comment)
-                        statement.setLong(4, bookingId)
-                        statement.setLong(5, venueId)
-                        statement.setLong(6, userId)
-                        statement.executeUpdate()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    val updated =
+                        connection.prepareStatement(
+                            """
+                            UPDATE bookings
+                            SET scheduled_at = ?,
+                                party_size = ?,
+                                comment = ?,
+                                status = 'PENDING',
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ? AND venue_id = ? AND user_id = ? AND status IN ('PENDING', 'CHANGED', 'CONFIRMED')
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setTimestamp(1, Timestamp.from(scheduledAt))
+                            if (partySize == null) statement.setNull(2, java.sql.Types.INTEGER) else statement.setInt(2, partySize)
+                            statement.setString(3, comment)
+                            statement.setLong(4, bookingId)
+                            statement.setLong(5, venueId)
+                            statement.setLong(6, userId)
+                            statement.executeUpdate()
+                        }
+                    if (updated <= 0) {
+                        return@use null
                     }
-                if (updated <= 0) {
-                    return@use null
+                    loadById(connection, bookingId)
                 }
-                loadById(connection, bookingId)
             }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
         }
     }
 
@@ -124,42 +134,46 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
         scheduledAt: Instant? = null,
     ): BookingRecord? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                val updated =
-                    if (scheduledAt == null) {
-                        connection.prepareStatement(
-                            """
-                            UPDATE bookings
-                            SET status = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setString(1, nextStatus.name)
-                            statement.setLong(2, bookingId)
-                            statement.setLong(3, venueId)
-                            statement.executeUpdate()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    val updated =
+                        if (scheduledAt == null) {
+                            connection.prepareStatement(
+                                """
+                                UPDATE bookings
+                                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, nextStatus.name)
+                                statement.setLong(2, bookingId)
+                                statement.setLong(3, venueId)
+                                statement.executeUpdate()
+                            }
+                        } else {
+                            connection.prepareStatement(
+                                """
+                                UPDATE bookings
+                                SET status = ?, scheduled_at = ?, updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, nextStatus.name)
+                                statement.setTimestamp(2, Timestamp.from(scheduledAt))
+                                statement.setLong(3, bookingId)
+                                statement.setLong(4, venueId)
+                                statement.executeUpdate()
+                            }
                         }
-                    } else {
-                        connection.prepareStatement(
-                            """
-                            UPDATE bookings
-                            SET status = ?, scheduled_at = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setString(1, nextStatus.name)
-                            statement.setTimestamp(2, Timestamp.from(scheduledAt))
-                            statement.setLong(3, bookingId)
-                            statement.setLong(4, venueId)
-                            statement.executeUpdate()
-                        }
+                    if (updated <= 0) {
+                        return@use null
                     }
-                if (updated <= 0) {
-                    return@use null
+                    loadById(connection, bookingId)
                 }
-                loadById(connection, bookingId)
             }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
         }
     }
 
@@ -169,51 +183,61 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
         limit: Int = 20,
     ): List<BookingRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                    SELECT id, venue_id, user_id, scheduled_at, party_size, comment, status
-                    FROM bookings
-                    WHERE venue_id = ? AND user_id = ?
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setLong(1, venueId)
-                    statement.setLong(2, userId)
-                    statement.setInt(3, limit)
-                    statement.executeQuery().use { rs ->
-                        buildList {
-                            while (rs.next()) {
-                                add(mapBooking(rs))
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT id, venue_id, user_id, scheduled_at, party_size, comment, status
+                        FROM bookings
+                        WHERE venue_id = ? AND user_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, userId)
+                        statement.setInt(3, limit)
+                        statement.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) {
+                                    add(mapBooking(rs))
+                                }
                             }
                         }
                     }
                 }
             }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
         }
     }
 
-    private fun updateStatus(bookingId: Long, venueId: Long, userId: Long, nextStatus: BookingStatus): BookingRecord? {
+    private suspend fun updateStatus(bookingId: Long, venueId: Long, userId: Long, nextStatus: BookingStatus): BookingRecord? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        return ds.connection.use { connection ->
-            val updated =
-                connection.prepareStatement(
-                    """
-                    UPDATE bookings
-                    SET status = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND venue_id = ? AND user_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setString(1, nextStatus.name)
-                    statement.setLong(2, bookingId)
-                    statement.setLong(3, venueId)
-                    statement.setLong(4, userId)
-                    statement.executeUpdate()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    val updated =
+                        connection.prepareStatement(
+                            """
+                            UPDATE bookings
+                            SET status = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ? AND venue_id = ? AND user_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setString(1, nextStatus.name)
+                            statement.setLong(2, bookingId)
+                            statement.setLong(3, venueId)
+                            statement.setLong(4, userId)
+                            statement.executeUpdate()
+                        }
+                    if (updated <= 0) return@use null
+                    loadById(connection, bookingId)
                 }
-            if (updated <= 0) return@use null
-            loadById(connection, bookingId)
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
         }
     }
 
