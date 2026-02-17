@@ -32,10 +32,12 @@ import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
+import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.guestBookingRoutes
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
@@ -47,6 +49,7 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
+import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
@@ -261,6 +264,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val venueRepository = VenueRepository(dataSource)
     val userRepository = UserRepository(dataSource)
     val guestVenueRepository = GuestVenueRepository(dataSource)
+    val guestBookingRepository = GuestBookingRepository(dataSource)
     val guestMenuRepository = GuestMenuRepository(dataSource)
     val guestTabsRepository = GuestTabsRepository(dataSource)
     val analyticsEventRepository = AnalyticsEventRepository(dataSource)
@@ -804,6 +808,13 @@ internal fun Application.module(overrides: ModuleOverrides) {
                         guestTabsRepository = guestTabsRepository,
                         staffChatNotifier = staffChatNotifier,
                     )
+                    guestBookingRoutes(
+                        guestVenueRepository = guestVenueRepository,
+                        subscriptionRepository = subscriptionRepository,
+                        guestBookingRepository = guestBookingRepository,
+                        venueRepository = venueRepository,
+                        outboxEnqueuer = telegramOutboxEnqueuer,
+                    )
                     guestStaffCallRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,
                         rateLimiter = guestRateLimiter,
@@ -842,6 +853,11 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 venueOrderRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueOrdersRepository = venueOrdersRepository,
+                )
+                venueBookingRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    guestBookingRepository = guestBookingRepository,
+                    outboxEnqueuer = telegramOutboxEnqueuer,
                 )
                 platformRoutes(
                     platformConfig = platformConfig,
