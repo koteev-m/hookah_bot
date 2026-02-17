@@ -77,7 +77,9 @@ fun Route.guestBookingRoutes(
                 venueRepository = venueRepository,
                 outboxEnqueuer = outboxEnqueuer,
                 venueId = updated.venueId,
-                text = "📅 Обновлено бронирование #${updated.id}. Новый слот: ${formatBookingInstant(updated.scheduledAt)}",
+                text =
+                    "📅 Обновлено бронирование #${updated.id}. Новый слот: " +
+                        formatBookingInstant(updated.scheduledAt),
             )
             call.respond(updated.toResponse())
         }
@@ -106,7 +108,11 @@ fun Route.guestBookingRoutes(
             val venueId = call.requireVenueId()
             ensureGuestActionAvailable(venueId, guestVenueRepository, subscriptionRepository)
             val userId = call.requireUserId()
-            val bookings = guestBookingRepository.listByUser(venueId = venueId, userId = userId)
+            val bookings =
+                guestBookingRepository.listByUser(
+                    venueId = venueId,
+                    userId = userId,
+                )
             call.respond(GuestBookingListResponse(items = bookings.map { it.toResponse() }))
         }
     }
@@ -123,7 +129,10 @@ private suspend fun notifyVenueStaffAboutBooking(
     outboxEnqueuer.enqueueSendMessage(chatId = chatId, text = text)
 }
 
-private fun normalizePositiveLong(value: Long, fieldName: String): Long {
+private fun normalizePositiveLong(
+    value: Long,
+    fieldName: String,
+): Long {
     if (value <= 0) {
         throw InvalidInputException("$fieldName must be positive")
     }
@@ -161,7 +170,8 @@ private fun parseBookingInstant(value: String): Instant {
     }
 }
 
-private fun formatBookingInstant(value: Instant): String = bookingInstantFormatter.format(value.atOffset(ZoneOffset.UTC))
+private fun formatBookingInstant(value: Instant): String =
+    bookingInstantFormatter.format(value.atOffset(ZoneOffset.UTC))
 
 private fun com.hookah.platform.backend.miniapp.guest.db.BookingRecord.toResponse(): GuestBookingResponse =
     GuestBookingResponse(

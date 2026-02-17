@@ -103,7 +103,11 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
                             """.trimIndent(),
                         ).use { statement ->
                             statement.setTimestamp(1, Timestamp.from(scheduledAt))
-                            if (partySize == null) statement.setNull(2, java.sql.Types.INTEGER) else statement.setInt(2, partySize)
+                            if (partySize == null) {
+                                statement.setNull(2, java.sql.Types.INTEGER)
+                            } else {
+                                statement.setInt(2, partySize)
+                            }
                             statement.setString(3, comment)
                             statement.setLong(4, bookingId)
                             statement.setLong(5, venueId)
@@ -213,7 +217,12 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private suspend fun updateStatus(bookingId: Long, venueId: Long, userId: Long, nextStatus: BookingStatus): BookingRecord? {
+    private suspend fun updateStatus(
+        bookingId: Long,
+        venueId: Long,
+        userId: Long,
+        nextStatus: BookingStatus,
+    ): BookingRecord? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         try {
             return withContext(Dispatchers.IO) {

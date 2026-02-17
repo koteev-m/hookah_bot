@@ -29,7 +29,9 @@ class GuestBookingRoutesTest {
     @Test
     fun `guest and venue booking flow works`() =
         testApplication {
-            val jdbcUrl = "jdbc:h2:mem:booking-flow-${UUID.randomUUID()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val jdbcUrl =
+                "jdbc:h2:mem:booking-flow-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
             val config =
                 MapApplicationConfig(
                     "ktor.environment" to "test",
@@ -61,7 +63,9 @@ class GuestBookingRoutesTest {
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
                     setBody(
-                        """{"venueId":$venueId,"scheduledAt":"2030-01-10T18:30:00Z","partySize":4,"comment":"window"}""",
+                        """
+                        {"venueId":$venueId,"scheduledAt":"2030-01-10T18:30:00Z","partySize":4,"comment":"window"}
+                        """.trimIndent(),
                     )
                 }
             assertEquals(HttpStatusCode.OK, createResponse.status)
@@ -76,7 +80,9 @@ class GuestBookingRoutesTest {
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
                     setBody(
-                        """{"bookingId":$bookingId,"scheduledAt":"2030-01-10T19:00:00Z","partySize":5,"comment":"near stage"}""",
+                        """
+                        {"bookingId":$bookingId,"scheduledAt":"2030-01-10T19:00:00Z","partySize":5,"comment":"near stage"}
+                        """.trimIndent(),
                     )
                 }
             assertEquals(HttpStatusCode.OK, updateResponse.status)
@@ -120,7 +126,10 @@ class GuestBookingRoutesTest {
             assertEquals(2, outboxCountForChat(jdbcUrl, TELEGRAM_USER_ID))
         }
 
-    private fun issueToken(config: MapApplicationConfig, userId: Long): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long,
+    ): String {
         val tokenConfig =
             SessionTokenConfig(
                 jwtSecret = config.property("api.session.jwtSecret").getString(),
@@ -131,7 +140,10 @@ class GuestBookingRoutesTest {
         return SessionTokenService(tokenConfig).issueToken(userId).token
     }
 
-    private fun seedVenue(jdbcUrl: String, status: String): Long =
+    private fun seedVenue(
+        jdbcUrl: String,
+        status: String,
+    ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -142,11 +154,17 @@ class GuestBookingRoutesTest {
             ).use { statement ->
                 statement.setString(1, status)
                 statement.executeUpdate()
-                statement.generatedKeys.use { keys -> keys.next(); keys.getLong(1) }
+                statement.generatedKeys.use { keys ->
+                    keys.next()
+                    keys.getLong(1)
+                }
             }
         }
 
-    private fun seedUser(jdbcUrl: String, userId: Long) {
+    private fun seedUser(
+        jdbcUrl: String,
+        userId: Long,
+    ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -161,7 +179,12 @@ class GuestBookingRoutesTest {
         }
     }
 
-    private fun seedVenueMember(jdbcUrl: String, venueId: Long, userId: Long, role: String) {
+    private fun seedVenueMember(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        role: String,
+    ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -177,7 +200,10 @@ class GuestBookingRoutesTest {
         }
     }
 
-    private fun seedSubscription(jdbcUrl: String, venueId: Long) {
+    private fun seedSubscription(
+        jdbcUrl: String,
+        venueId: Long,
+    ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -191,11 +217,17 @@ class GuestBookingRoutesTest {
         }
     }
 
-    private fun outboxCountForChat(jdbcUrl: String, chatId: Long): Int =
+    private fun outboxCountForChat(
+        jdbcUrl: String,
+        chatId: Long,
+    ): Int =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement("SELECT COUNT(*) FROM telegram_outbox WHERE chat_id = ?").use { statement ->
                 statement.setLong(1, chatId)
-                statement.executeQuery().use { rs -> rs.next(); rs.getInt(1) }
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
             }
         }
 

@@ -40,7 +40,12 @@ fun Route.venueBookingRoutes(
 ) {
     route("/venue/bookings") {
         post("{bookingId}/confirm") {
-            val booking = call.performVenueStatusUpdate(venueAccessRepository, guestBookingRepository, BookingStatus.CONFIRMED)
+            val booking =
+                call.performVenueStatusUpdate(
+                    venueAccessRepository = venueAccessRepository,
+                    guestBookingRepository = guestBookingRepository,
+                    status = BookingStatus.CONFIRMED,
+                )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
                 text = "✅ Бронь #${booking.id} подтверждена заведением",
@@ -56,7 +61,9 @@ fun Route.venueBookingRoutes(
             if (!permissions.contains(VenuePermission.ORDER_STATUS_UPDATE)) {
                 throw ForbiddenException()
             }
-            val bookingId = call.parameters["bookingId"]?.toLongOrNull() ?: throw InvalidInputException("bookingId must be a number")
+            val bookingId =
+                call.parameters["bookingId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("bookingId must be a number")
             val request = call.receive<VenueBookingChangeRequest>()
             val scheduledAt = parseBookingInstant(request.scheduledAt)
             val updated =
@@ -70,11 +77,22 @@ fun Route.venueBookingRoutes(
                 chatId = updated.userId,
                 text = "🕒 Бронь #${updated.id} перенесена. Новое время: ${request.scheduledAt}",
             )
-            call.respond(VenueBookingStatusResponse(bookingId = updated.id, status = updated.status.toApi(), scheduledAt = request.scheduledAt))
+            call.respond(
+                VenueBookingStatusResponse(
+                    bookingId = updated.id,
+                    status = updated.status.toApi(),
+                    scheduledAt = request.scheduledAt,
+                ),
+            )
         }
 
         post("{bookingId}/cancel") {
-            val booking = call.performVenueStatusUpdate(venueAccessRepository, guestBookingRepository, BookingStatus.CANCELED)
+            val booking =
+                call.performVenueStatusUpdate(
+                    venueAccessRepository = venueAccessRepository,
+                    guestBookingRepository = guestBookingRepository,
+                    status = BookingStatus.CANCELED,
+                )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
                 text = "❌ Бронь #${booking.id} отменена заведением",
