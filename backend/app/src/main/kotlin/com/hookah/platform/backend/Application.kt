@@ -72,6 +72,7 @@ import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
+import com.hookah.platform.backend.telegram.TelegramCallResult
 import com.hookah.platform.backend.telegram.TelegramInboundUpdateWorker
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.TelegramOutboxWorker
@@ -88,7 +89,14 @@ import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateQueueReposit
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
+import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
+import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
+import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
+import com.hookah.platform.backend.telegram.db.VenueStatsRepository
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import com.hookah.platform.backend.tools.retryWithBackoff
@@ -122,6 +130,7 @@ import io.ktor.server.plugins.callid.CallId
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
+import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.httpMethod
@@ -139,6 +148,7 @@ import io.ktor.server.routing.head
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.http.HttpHeaders
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -154,6 +164,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Duration
@@ -215,10 +228,10 @@ private suspend fun ApplicationCall.respondInvalidRequestBody() {
 }
 
 fun Application.module() {
-    module(ModuleOverrides())
+    moduleWithOverrides(ModuleOverrides())
 }
 
-internal fun Application.module(overrides: ModuleOverrides) {
+internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val json =
         Json {
             ignoreUnknownKeys = true
@@ -262,6 +275,11 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
     val dataSource = DatabaseFactory.init(dbConfig)
     val venueRepository = VenueRepository(dataSource)
+    val venueBookingHoursRepository = VenueBookingHoursRepository(dataSource)
+    val venueInfoSectionsRepository = VenueInfoSectionsRepository(dataSource)
+    val venueInfoSectionMediaRepository = VenueInfoSectionMediaRepository(dataSource)
+    val venueMenuSectionImagesRepository = VenueMenuSectionImagesRepository(dataSource)
+    val venueConnectionRequestRepository = VenueConnectionRequestRepository(dataSource)
     val userRepository = UserRepository(dataSource)
     val guestVenueRepository = GuestVenueRepository(dataSource)
     val guestBookingRepository = GuestBookingRepository(dataSource)
@@ -271,6 +289,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
     val subscriptionRepository = SubscriptionRepository(dataSource, analyticsEventRepository)
     val ordersRepository = OrdersRepository(dataSource, analyticsEventRepository)
     val venueOrdersRepository = VenueOrdersRepository(dataSource, analyticsEventRepository)
+    val venueStatsRepository = VenueStatsRepository(dataSource)
     val venueMenuRepository = VenueMenuRepository(dataSource)
     val venueTableRepository = VenueTableRepository(dataSource)
     val staffCallRepository = StaffCallRepository(dataSource)
@@ -383,6 +402,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
         )
     val venueAccessRepository = VenueAccessRepository(dataSource)
     val venueStaffRepository = VenueStaffRepository(dataSource)
+    val venueSettingsRepository = VenueSettingsRepository(dataSource)
     val staffInviteRepository =
         StaffInviteRepository(
             dataSource = dataSource,
@@ -394,6 +414,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
             venueRepository = venueRepository,
             notificationRepository = staffChatNotificationRepository,
             outboxEnqueuer = telegramOutboxEnqueuer,
+            venueSettingsRepository = venueSettingsRepository,
             isTelegramActive = { telegramConfig.enabled && !telegramConfig.token.isNullOrBlank() },
             scope = staffChatNotifierScope,
         )
@@ -432,11 +453,31 @@ internal fun Application.module(overrides: ModuleOverrides) {
                 ordersRepository = ordersRepository,
                 staffCallRepository = staffCallRepository,
                 staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+                guestBookingRepository = guestBookingRepository,
                 venueRepository = venueRepository,
+                venueBookingHoursRepository = venueBookingHoursRepository,
+                venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
+                venueMenuRepository = venueMenuRepository,
+                venueTableRepository = venueTableRepository,
                 venueAccessRepository = venueAccessRepository,
+                venueStaffRepository = venueStaffRepository,
+                staffInviteRepository = staffInviteRepository,
+                staffInviteConfig = staffInviteConfig,
                 subscriptionRepository = subscriptionRepository,
+                guestMenuRepository = guestMenuRepository,
+                tableSessionRepository = tableSessionRepository,
+                guestTabsRepository = guestTabsRepository,
+                platformVenueRepository = platformVenueRepository,
+                platformVenueMemberRepository = platformVenueMemberRepository,
+                tableSessionTtl = tableSessionConfig.ttl,
                 json = telegramJson,
+                venueConnectionRequestRepository = venueConnectionRequestRepository,
                 scope = botScope,
+                venueInfoSectionsRepository = venueInfoSectionsRepository,
+                venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
+                venueOrdersRepository = venueOrdersRepository,
+                venueStatsRepository = venueStatsRepository,
+                venueSettingsRepository = venueSettingsRepository,
             )
 
         if (dataSource != null) {
@@ -465,51 +506,49 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
         when (telegramConfig.mode) {
             TelegramBotConfig.Mode.LONG_POLLING -> {
-                val router = telegramRouter
-                if (router != null) {
-                    botScope.launch {
-                        var offset: Long? = null
-                        while (isActive) {
-                            val updates: List<TelegramUpdate> =
-                                try {
-                                    retryWithBackoff(
-                                        maxAttempts = 3,
-                                        maxDelayMillis = 2000,
-                                        jitterRatio = 0.2,
-                                        shouldRetry = { e -> e !is CancellationException },
-                                    ) {
-                                        telegramApiClient.getUpdates(
-                                            offset,
-                                            telegramConfig.longPollingTimeoutSeconds,
-                                        )
-                                    }
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (e: Exception) {
-                                    logger.warn("Telegram long polling error: {}", sanitizeTelegramForLog(e.message))
-                                    logger.debugTelegramException(e) { "Telegram long polling exception" }
-                                    delay(1000)
-                                    continue
-                                }
-
-                            val sortedUpdates = updates.sortedBy { it.updateId }
-                            for (update in sortedUpdates) {
-                                try {
-                                    router.process(update)
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (e: Exception) {
-                                    logger.warn(
-                                        "Telegram update processing failed id={}: {}",
-                                        update.updateId,
-                                        sanitizeTelegramForLog(e.message),
+                val router = telegramRouter!!
+                botScope.launch {
+                    var offset: Long? = null
+                    while (isActive) {
+                        val updates: List<TelegramUpdate> =
+                            try {
+                                retryWithBackoff(
+                                    maxAttempts = 3,
+                                    maxDelayMillis = 2000,
+                                    jitterRatio = 0.2,
+                                    shouldRetry = { e -> e !is CancellationException },
+                                ) {
+                                    telegramApiClient.getUpdates(
+                                        offset,
+                                        telegramConfig.longPollingTimeoutSeconds,
                                     )
-                                    logger.debugTelegramException(e) {
-                                        "Telegram update processing exception id=${update.updateId}"
-                                    }
-                                } finally {
-                                    offset = update.updateId + 1
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                logger.warn("Telegram long polling error: {}", sanitizeTelegramForLog(e.message))
+                                logger.debugTelegramException(e) { "Telegram long polling exception" }
+                                delay(1000)
+                                continue
+                            }
+
+                        val sortedUpdates = updates.sortedBy { it.updateId }
+                        for (update in sortedUpdates) {
+                            try {
+                                router.process(update)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                logger.warn(
+                                    "Telegram update processing failed id={}: {}",
+                                    update.updateId,
+                                    sanitizeTelegramForLog(e.message),
+                                )
+                                logger.debugTelegramException(e) {
+                                    "Telegram update processing exception id=${update.updateId}"
+                                }
+                            } finally {
+                                offset = update.updateId + 1
                             }
                         }
                     }
@@ -518,7 +557,8 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
             TelegramBotConfig.Mode.WEBHOOK -> {
                 logger.info("Telegram webhook mode enabled at {}", telegramConfig.webhookPath)
-                if (dataSource != null && telegramRouter != null) {
+                if (dataSource != null) {
+                    val router = telegramRouter!!
                     telegramWebhookWorkerScope =
                         CoroutineScope(
                             SupervisorJob() + Dispatchers.IO + CoroutineName("telegram-webhook-worker"),
@@ -526,20 +566,20 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     val worker =
                         TelegramInboundUpdateWorker(
                             repository = telegramInboundUpdateQueueRepository,
-                            router = telegramRouter,
+                            router = router,
                             json = telegramJson,
                             scope = telegramWebhookWorkerScope!!,
                             metrics = appMetrics,
                         )
                     telegramWebhookWorkerJob = worker.start()
-                } else if (dataSource == null) {
+                } else {
                     logger.warn("Telegram webhook worker disabled: database is not configured")
                 }
             }
         }
     }
 
-    environment.monitor.subscribe(ApplicationStarted) {
+    monitor.subscribe(ApplicationStarted) {
         if (dataSource != null) {
             subscriptionBillingJob.start(subscriptionBillingScope)
             tableSessionCleanupJob = tableSessionCleanupWorker.start()
@@ -547,8 +587,17 @@ internal fun Application.module(overrides: ModuleOverrides) {
             logger.info("Subscription billing job disabled: database is not configured")
             logger.info("Table session cleanup worker disabled: database is not configured")
         }
+        if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
+            val apiClient = telegramApiClient
+            val scope = telegramScope
+            if (apiClient != null && scope != null) {
+                scope.launch {
+                    configureTelegramCommandMenu(apiClient)
+                }
+            }
+        }
     }
-    environment.monitor.subscribe(ApplicationStopping) {
+    monitor.subscribe(ApplicationStopping) {
         logger.info("Application stopping, closing resources")
         subscriptionBillingJob.stop()
         tableSessionCleanupJob?.cancel()
@@ -564,7 +613,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
         tableSessionCleanupScope.cancel()
         DatabaseFactory.close(dataSource)
     }
-    environment.monitor.subscribe(ApplicationStopped) {
+    monitor.subscribe(ApplicationStopped) {
         logger.info("Application stopped")
     }
 
@@ -577,6 +626,16 @@ internal fun Application.module(overrides: ModuleOverrides) {
 
     install(CallLogging) {
         callIdMdc("requestId")
+    }
+
+    install(CORS) {
+        allowMethod(HttpMethod.Options)
+        allowMethod(HttpMethod.Get)
+        allowMethod(HttpMethod.Post)
+        allowHeader(HttpHeaders.ContentType)
+        allowHeader(HttpHeaders.Authorization)
+        allowHost("talk-overview-honor-plains.trycloudflare.com", schemes = listOf("https"))
+        allowHost("localhost:5173", schemes = listOf("http"))
     }
 
     install(MicrometerMetrics) {
@@ -844,7 +903,7 @@ internal fun Application.module(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     venueTableRepository = venueTableRepository,
                     auditLogRepository = auditLogRepository,
-                    webAppPublicUrl = telegramConfig.webAppPublicUrl,
+                    telegramBotUsername = telegramConfig.botUsername,
                 )
                 venueMenuRoutes(
                     venueAccessRepository = venueAccessRepository,
@@ -1019,6 +1078,109 @@ private suspend fun ApplicationCall.redirectToMiniAppRoot() {
     val query = request.queryString()
     val target = if (query.isBlank()) "/miniapp/" else "/miniapp/?$query"
     respondRedirect(url = target, permanent = false)
+}
+
+private suspend fun configureTelegramCommandMenu(apiClient: TelegramApiClient) {
+    val commands =
+        buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("command", "start")
+                    put("description", "🔄 Обновить")
+                },
+            )
+            add(
+                buildJsonObject {
+                    put("command", "menu")
+                    put("description", "🏠 Главное меню")
+                },
+            )
+        }
+    val scopes =
+        listOf(
+            "default",
+            "all_private_chats",
+            "all_group_chats",
+            "all_chat_administrators",
+        )
+
+    scopes.forEach { scopeType ->
+        val deletePayload =
+            buildJsonObject {
+                put(
+                    "scope",
+                    buildJsonObject {
+                        put("type", scopeType)
+                    },
+                )
+            }
+        when (val result = apiClient.callMethod("deleteMyCommands", deletePayload)) {
+            is TelegramCallResult.Success -> logger.info("Telegram bot commands cleared for scope={}", scopeType)
+            is TelegramCallResult.Failure ->
+                logger.warn(
+                    "Failed to clear Telegram bot commands for scope={}: {}{}",
+                    scopeType,
+                    sanitizeTelegramForLog(result.description),
+                    result.errorCode?.let { " (code=$it)" } ?: "",
+                )
+        }
+    }
+
+    scopes.forEach { scopeType ->
+        val commandsPayload =
+            buildJsonObject {
+                put(
+                    "scope",
+                    buildJsonObject {
+                        put("type", scopeType)
+                    },
+                )
+                put("commands", commands)
+            }
+        when (val result = apiClient.callMethod("setMyCommands", commandsPayload)) {
+            is TelegramCallResult.Success -> logger.info("Telegram bot commands configured for scope={}", scopeType)
+            is TelegramCallResult.Failure ->
+                logger.warn(
+                    "Failed to configure Telegram bot commands for scope={}: {}{}",
+                    scopeType,
+                    sanitizeTelegramForLog(result.description),
+                    result.errorCode?.let { " (code=$it)" } ?: "",
+                )
+        }
+    }
+
+    val defaultCommandsPayload =
+        buildJsonObject {
+            put("commands", commands)
+        }
+    when (val result = apiClient.callMethod("setMyCommands", defaultCommandsPayload)) {
+        is TelegramCallResult.Success -> logger.info("Telegram bot commands configured")
+        is TelegramCallResult.Failure ->
+            logger.warn(
+                "Failed to configure Telegram bot commands: {}{}",
+                sanitizeTelegramForLog(result.description),
+                result.errorCode?.let { " (code=$it)" } ?: "",
+            )
+    }
+
+    val menuButtonPayload =
+        buildJsonObject {
+            put(
+                "menu_button",
+                buildJsonObject {
+                    put("type", "commands")
+                },
+            )
+        }
+    when (val result = apiClient.callMethod("setChatMenuButton", menuButtonPayload)) {
+        is TelegramCallResult.Success -> logger.info("Telegram menu button configured")
+        is TelegramCallResult.Failure ->
+            logger.warn(
+                "Failed to configure Telegram menu button: {}{}",
+                sanitizeTelegramForLog(result.description),
+                result.errorCode?.let { " (code=$it)" } ?: "",
+            )
+    }
 }
 
 private fun ApplicationConfig.optionalString(path: String): String? =

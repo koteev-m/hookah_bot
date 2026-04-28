@@ -7,12 +7,9 @@ import com.hookah.platform.backend.telegram.db.TelegramOutboxStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -67,20 +64,13 @@ class TelegramOutboxWorker(
             }
         if (batch.isEmpty()) return
 
-        val semaphore = Semaphore(config.maxConcurrency)
-        coroutineScope {
-            batch.forEach { message ->
-                launch {
-                    try {
-                        semaphore.withPermit {
-                            processMessage(message)
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        scheduleRetry(message, e.message, null)
-                    }
-                }
+        for (message in batch) {
+            try {
+                processMessage(message)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                scheduleRetry(message, e.message, null)
             }
         }
     }

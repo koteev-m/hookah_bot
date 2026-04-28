@@ -5,14 +5,20 @@ import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.http.Headers
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import org.slf4j.LoggerFactory
@@ -159,6 +165,56 @@ class TelegramApiClient(
             logger.warn("Telegram getChatMember failed: {}", sanitizeTelegramForLog(throwable.message))
             logger.debugTelegramException(throwable) { "Telegram getChatMember exception" }
         }.getOrNull()
+    }
+
+    suspend fun sendPhotoBytes(
+        chatId: Long,
+        photoBytes: ByteArray,
+        filename: String,
+        caption: String? = null,
+        replyMarkup: ReplyMarkup? = null,
+    ): Boolean {
+        return runCatching {
+            val replyMarkupJson = buildReplyMarkupPayload(json, replyMarkup)
+            val response: TelegramResponse<JsonObject> =
+                client.submitFormWithBinaryData(
+                    url = "$baseUrl/sendPhoto",
+                    formData =
+                        formData {
+                            append("chat_id", chatId.toString())
+                            caption?.let { append("caption", it) }
+                            replyMarkupJson?.let { replyMarkupElement ->
+                                append("reply_markup", json.encodeToString(JsonElement.serializer(), replyMarkupElement))
+                            }
+                            append(
+                                key = "photo",
+                                value = photoBytes,
+                                headers =
+                                    Headers.build {
+                                        append(HttpHeaders.ContentType, "image/png")
+                                        append(
+                                            HttpHeaders.ContentDisposition,
+                                            "form-data; name=\"photo\"; filename=\"$filename\"",
+                                        )
+                                    },
+                            )
+                        },
+                ).safeBody()
+            if (response.ok.not()) {
+                val safeDescription = sanitizeTelegramForLog(response.description)
+                logger.warn(
+                    "Telegram sendPhoto(bytes) failed: {}{}",
+                    safeDescription,
+                    response.errorCode?.let { " (code=$it)" } ?: "",
+                )
+                false
+            } else {
+                true
+            }
+        }.onFailure { throwable ->
+            logger.warn("Telegram sendPhoto(bytes) failed: {}", sanitizeTelegramForLog(throwable.message))
+            logger.debugTelegramException(throwable) { "Telegram sendPhoto(bytes) exception" }
+        }.getOrDefault(false)
     }
 
     private suspend inline fun <reified T> HttpResponse.safeBody(): T = body()

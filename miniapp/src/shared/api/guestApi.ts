@@ -5,6 +5,8 @@ import type {
   AddBatchResponse,
   CatalogResponse,
   CreateSharedTabRequest,
+  CreateTabInviteRequest,
+  CreateTabInviteResponse,
   GuestTabResponse,
   GuestTabsResponse,
   JoinTabRequest,
@@ -182,6 +184,26 @@ export async function guestJoinTab(
   return requestApi<GuestTabResponse>(
     backendUrl,
     '/api/guest/tabs/join',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestCreateTabInvite(
+  backendUrl: string,
+  tabId: number,
+  payload: CreateTabInviteRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<CreateTabInviteResponse>> {
+  return requestApi<CreateTabInviteResponse>(
+    backendUrl,
+    `/api/guest/tabs/${encodeURIComponent(String(tabId))}/invite`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

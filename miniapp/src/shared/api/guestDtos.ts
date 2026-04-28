@@ -105,6 +105,17 @@ export type CreateSharedTabRequest = {
   tableSessionId: number
 }
 
+export type CreateTabInviteRequest = {
+  tableSessionId: number
+  ttlSeconds?: number | null
+}
+
+export type CreateTabInviteResponse = {
+  tabId: number
+  token: string
+  expiresAtEpochSeconds: number
+}
+
 export type JoinTabRequest = {
   tableSessionId: number
   token: string

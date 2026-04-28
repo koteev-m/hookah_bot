@@ -136,7 +136,12 @@ class VenueTableRoutesTest {
     fun `qr package export returns zip with entries`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("tables-export")
-            val config = buildConfig(jdbcUrl, webAppUrl = "https://example.com/miniapp/")
+            val config =
+                buildConfig(
+                    jdbcUrl,
+                    webAppUrl = "https://example.com/miniapp/",
+                    botUsername = "hookah_test_bot",
+                )
 
             environment { this.config = config }
             application { module() }
@@ -161,10 +166,14 @@ class VenueTableRoutesTest {
             assertEquals("application/zip", response.headers[HttpHeaders.ContentType])
             val bytes = response.body<ByteArray>()
             val entries = mutableListOf<String>()
+            var manifestContent: String? = null
             ZipInputStream(bytes.inputStream()).use { zip ->
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     entries.add(entry.name)
+                    if (entry.name == "manifest.json") {
+                        manifestContent = zip.readBytes().toString(Charsets.UTF_8)
+                    }
                     zip.closeEntry()
                 }
             }
@@ -172,6 +181,9 @@ class VenueTableRoutesTest {
             assertTrue(entries.contains("table_1.png"))
             assertTrue(entries.contains("table_2.png"))
             assertTrue(entries.contains("manifest.json"))
+            assertNotNull(manifestContent)
+            assertTrue(manifestContent!!.contains("https://t.me/hookah_test_bot?start=token-one"))
+            assertTrue(manifestContent!!.contains("https://t.me/hookah_test_bot?start=token-two"))
         }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -182,6 +194,7 @@ class VenueTableRoutesTest {
     private fun buildConfig(
         jdbcUrl: String,
         webAppUrl: String? = null,
+        botUsername: String? = null,
     ): MapApplicationConfig {
         val config =
             mutableMapOf(
@@ -193,6 +206,9 @@ class VenueTableRoutesTest {
             )
         if (webAppUrl != null) {
             config["telegram.webAppPublicUrl"] = webAppUrl
+        }
+        if (botUsername != null) {
+            config["telegram.botUsername"] = botUsername
         }
         return MapApplicationConfig(*config.map { it.key to it.value }.toTypedArray())
     }

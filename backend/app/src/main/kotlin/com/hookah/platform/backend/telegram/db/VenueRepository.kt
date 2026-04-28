@@ -1,17 +1,39 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.sql.Connection
+import java.sql.ResultSet
 import java.sql.SQLException
 import java.time.Instant
 import javax.sql.DataSource
 
 open class VenueRepository(private val dataSource: DataSource?) {
     private val logger = LoggerFactory.getLogger(VenueRepository::class.java)
+    private val botTestCatalogVenues =
+        listOf(
+            BotTestCatalogVenueSeed(
+                name = "Тестовая кальянная",
+                city = "Москва",
+                address = "Тверская, 1",
+            ),
+            BotTestCatalogVenueSeed(
+                name = "Дым и Лёд",
+                city = "Москва",
+                address = "Покровка, 12",
+            ),
+            BotTestCatalogVenueSeed(
+                name = "Hookah Lounge 24",
+                city = "Москва",
+                address = "Новый Арбат, 24",
+            ),
+        )
 
     suspend fun findVenueById(venueId: Long): VenueShort? {
         val ds = dataSource ?: return null
@@ -37,6 +59,116 @@ open class VenueRepository(private val dataSource: DataSource?) {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    suspend fun listCatalogVenuesForGuest(): List<CatalogVenueShort> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val blockedStatuses = SubscriptionStatus.blockedDbValues
+        val blockedPlaceholders = blockedStatuses.joinToString(",") { "?" }
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT v.id, v.name, v.city, v.address, v.status
+                        FROM venues v
+                        LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
+                        WHERE v.status = ?
+                          AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
+                        ORDER BY v.id ASC
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, VenueStatus.PUBLISHED.dbValue)
+                        blockedStatuses.forEachIndexed { index, status ->
+                            statement.setString(index + 2, status)
+                        }
+                        statement.executeQuery().use { rs ->
+                            val venues = mutableListOf<CatalogVenueShort>()
+                            while (rs.next()) {
+                                mapCatalogVenue(rs)?.let { venues.add(it) }
+                            }
+                            venues
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun ensureBotTestCatalogVenues() {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        botTestCatalogVenues.forEach { venue ->
+                            connection.prepareStatement(
+                                """
+                                INSERT INTO venues (name, city, address, status)
+                                SELECT ?, ?, ?, ?
+                                WHERE NOT EXISTS (
+                                    SELECT 1
+                                    FROM venues
+                                    WHERE LOWER(name) = LOWER(?)
+                                )
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, venue.name)
+                                statement.setString(2, venue.city)
+                                statement.setString(3, venue.address)
+                                statement.setString(4, VenueStatus.PUBLISHED.dbValue)
+                                statement.setString(5, venue.name)
+                                statement.executeUpdate()
+                            }
+                        }
+                        connection.commit()
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun findCatalogVenueByIdForGuest(id: Long): CatalogVenueShort? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val blockedStatuses = SubscriptionStatus.blockedDbValues
+        val blockedPlaceholders = blockedStatuses.joinToString(",") { "?" }
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT v.id, v.name, v.city, v.address, v.status
+                        FROM venues v
+                        LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
+                        WHERE v.id = ?
+                          AND v.status = ?
+                          AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, id)
+                        statement.setString(2, VenueStatus.PUBLISHED.dbValue)
+                        blockedStatuses.forEachIndexed { index, status ->
+                            statement.setString(index + 3, status)
+                        }
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) mapCatalogVenue(rs) else null
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
             }
         }
     }
@@ -378,6 +510,23 @@ open class VenueRepository(private val dataSource: DataSource?) {
         }
         return block()
     }
+
+    private fun mapCatalogVenue(rs: ResultSet): CatalogVenueShort? {
+        val status = VenueStatus.fromDb(rs.getString("status")) ?: return null
+        if (status != VenueStatus.PUBLISHED) return null
+        return CatalogVenueShort(
+            id = rs.getLong("id"),
+            name = rs.getString("name"),
+            city = rs.getString("city"),
+            address = rs.getString("address"),
+        )
+    }
+
+    private data class BotTestCatalogVenueSeed(
+        val name: String,
+        val city: String,
+        val address: String,
+    )
 }
 
 internal fun Throwable.hasSqlState(sqlState: String): Boolean {
@@ -416,6 +565,13 @@ data class VenueShort(
     val id: Long,
     val name: String,
     val staffChatId: Long?,
+)
+
+data class CatalogVenueShort(
+    val id: Long,
+    val name: String,
+    val city: String?,
+    val address: String?,
 )
 
 data class StaffChatStatus(

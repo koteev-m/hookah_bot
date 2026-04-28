@@ -24,6 +24,12 @@ data class GuestTabModel(
     val status: String,
 )
 
+enum class CreateInviteResult {
+    CREATED,
+    FORBIDDEN,
+    TOKEN_CONFLICT,
+}
+
 class GuestTabsRepository(private val dataSource: DataSource?) {
     suspend fun findActiveTableSession(tableSessionId: Long): TableSessionContext? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -160,6 +166,12 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        val existing = findSharedTabForOwnerForUpdate(connection, venueId, tableSessionId, ownerUserId)
+                        if (existing != null) {
+                            ensureMember(connection, existing.id, ownerUserId, "OWNER")
+                            connection.commit()
+                            return@use existing
+                        }
                         ensureUserExists(connection, ownerUserId)
                         val tabId = insertTab(connection, venueId, tableSessionId, "SHARED", ownerUserId)
                         ensureMember(connection, tabId, ownerUserId, "OWNER")
@@ -192,7 +204,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         createdBy: Long,
         token: String,
         expiresAt: Instant,
-    ): Boolean {
+    ): CreateInviteResult {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -202,28 +214,56 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                         val canInvite = isOwnerMember(connection, tabId, venueId, tableSessionId, createdBy)
                         if (!canInvite) {
                             connection.rollback()
-                            return@use false
+                            return@use CreateInviteResult.FORBIDDEN
                         }
                         ensureUserExists(connection, createdBy)
-                        connection.prepareStatement(
-                            """
-                            INSERT INTO tab_invite (tab_id, token, expires_at, created_by)
-                            VALUES (?, ?, ?, ?)
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, tabId)
-                            statement.setString(2, token)
-                            statement.setTimestamp(3, Timestamp.from(expiresAt))
-                            statement.setLong(4, createdBy)
-                            statement.executeUpdate()
+                        try {
+                            connection.prepareStatement(
+                                """
+                                INSERT INTO tab_invite (tab_id, token, expires_at, created_by)
+                                VALUES (?, ?, ?, ?)
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, tabId)
+                                statement.setString(2, token)
+                                statement.setTimestamp(3, Timestamp.from(expiresAt))
+                                statement.setLong(4, createdBy)
+                                statement.executeUpdate()
+                            }
+                        } catch (e: SQLException) {
+                            connection.rollback()
+                            if (e.isDuplicateKeyViolation()) {
+                                return@use CreateInviteResult.TOKEN_CONFLICT
+                            }
+                            throw e
                         }
                         connection.commit()
-                        true
+                        CreateInviteResult.CREATED
                     } catch (e: SQLException) {
                         connection.rollback()
                         throw e
                     } finally {
                         connection.autoCommit = true
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun deleteExpiredInvites() {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        DELETE FROM tab_invite
+                        WHERE expires_at <= now()
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.executeUpdate()
                     }
                 }
             } catch (e: SQLException) {
@@ -251,6 +291,13 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                             }
                         ensureUserExists(connection, userId)
                         ensureMember(connection, tab.id, userId, "MEMBER")
+                        closeEmptyOwnedSharedTabsAfterJoin(
+                            connection = connection,
+                            venueId = venueId,
+                            tableSessionId = tableSessionId,
+                            userId = userId,
+                            joinedTabId = tab.id,
+                        )
                         connection.commit()
                         tab
                     } catch (e: SQLException) {
@@ -360,6 +407,32 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
+    private fun findSharedTabForOwnerForUpdate(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        ownerUserId: Long,
+    ): GuestTabModel? {
+        return connection.prepareStatement(
+            """
+            SELECT id, venue_id, table_session_id, type, owner_user_id, status
+            FROM tab
+            WHERE venue_id = ?
+              AND table_session_id = ?
+              AND type = 'SHARED'
+              AND owner_user_id = ?
+              AND status = 'ACTIVE'
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, ownerUserId)
+            statement.executeQuery().use { rs -> if (rs.next()) mapTab(rs) else null }
+        }
+    }
+
     private fun findInviteTabForUpdate(
         connection: Connection,
         venueId: Long,
@@ -384,6 +457,45 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             statement.setLong(2, venueId)
             statement.setLong(3, tableSessionId)
             statement.executeQuery().use { rs -> if (rs.next()) mapTab(rs) else null }
+        }
+    }
+
+    private fun closeEmptyOwnedSharedTabsAfterJoin(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        joinedTabId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            UPDATE tab
+            SET status = 'CLOSED'
+            WHERE venue_id = ?
+              AND table_session_id = ?
+              AND type = 'SHARED'
+              AND status = 'ACTIVE'
+              AND owner_user_id = ?
+              AND id <> ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM order_batches ob
+                  WHERE ob.tab_id = tab.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM tab_member tm
+                  WHERE tm.tab_id = tab.id
+                    AND tm.user_id <> ?
+              )
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, userId)
+            statement.setLong(4, joinedTabId)
+            statement.setLong(5, userId)
+            statement.executeUpdate()
         }
     }
 

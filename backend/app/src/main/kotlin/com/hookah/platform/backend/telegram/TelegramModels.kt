@@ -16,7 +16,28 @@ data class Message(
     val chat: Chat,
     @SerialName("from") val fromUser: User? = null,
     val text: String? = null,
+    val caption: String? = null,
+    val photo: List<PhotoSize>? = null,
+    val document: Document? = null,
     @SerialName("web_app_data") val webAppData: WebAppData? = null,
+)
+
+@Serializable
+data class PhotoSize(
+    @SerialName("file_id") val fileId: String,
+    @SerialName("file_unique_id") val fileUniqueId: String? = null,
+    val width: Int,
+    val height: Int,
+    @SerialName("file_size") val fileSize: Int? = null,
+)
+
+@Serializable
+data class Document(
+    @SerialName("file_id") val fileId: String,
+    @SerialName("file_unique_id") val fileUniqueId: String? = null,
+    @SerialName("file_name") val fileName: String? = null,
+    @SerialName("mime_type") val mimeType: String? = null,
+    @SerialName("file_size") val fileSize: Int? = null,
 )
 
 @Serializable
@@ -57,6 +78,12 @@ data class ReplyKeyboardMarkup(
 ) : ReplyMarkup
 
 @Serializable
+data class ReplyKeyboardRemove(
+    @SerialName("remove_keyboard") val removeKeyboard: Boolean,
+    val selective: Boolean = false,
+) : ReplyMarkup
+
+@Serializable
 data class KeyboardButton(
     val text: String,
     @SerialName("web_app") val webApp: WebAppInfo? = null,
@@ -76,6 +103,7 @@ data class InlineKeyboardMarkup(
 data class InlineKeyboardButton(
     val text: String,
     @SerialName("callback_data") val callbackData: String? = null,
+    val url: String? = null,
     @SerialName("web_app") val webApp: WebAppInfo? = null,
 )
 

@@ -8,9 +8,11 @@ data class TelegramBotConfig(
     val enabled: Boolean,
     val token: String?,
     val mode: Mode,
+    val appEnv: String = "dev",
     val webhookPath: String,
     val webhookSecretToken: String?,
     val webAppPublicUrl: String?,
+    val botUsername: String? = null,
     val platformOwnerId: Long?,
     val longPollingTimeoutSeconds: Int,
     val staffChatLinkTtlSeconds: Long,
@@ -44,7 +46,11 @@ data class TelegramBotConfig(
                 error("telegram.webhookSecretToken must be configured for env=$appEnv")
             }
             val webAppPublicUrl = section.propertyOrNull("webAppPublicUrl")?.getString()?.takeIf { it.isNotBlank() }
-            val platformOwnerId = section.propertyOrNull("platformOwnerId")?.getString()?.toLongOrNull()
+            val botUsername =
+                section.propertyOrNull("botUsername")?.getString()?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
+            val configuredPlatformOwnerId = section.propertyOrNull("platformOwnerId")?.getString()?.toLongOrNull()
+            val ownerTelegramIdFromEnv = System.getenv("OWNER_TELEGRAM_ID")?.trim()?.toLongOrNull()
+            val platformOwnerId = ownerTelegramIdFromEnv ?: configuredPlatformOwnerId
             val longPollingTimeoutSeconds =
                 section.propertyOrNull("longPollingTimeoutSeconds")?.getString()?.toIntOrNull() ?: 25
             val staffChatLinkTtlSeconds =
@@ -98,9 +104,11 @@ data class TelegramBotConfig(
                 enabled = enabled,
                 token = token,
                 mode = mode,
+                appEnv = appEnv,
                 webhookPath = webhookPath,
                 webhookSecretToken = webhookSecretToken,
                 webAppPublicUrl = webAppPublicUrl,
+                botUsername = botUsername,
                 platformOwnerId = platformOwnerId,
                 longPollingTimeoutSeconds = longPollingTimeoutSeconds,
                 staffChatLinkTtlSeconds = staffChatLinkTtlSeconds,

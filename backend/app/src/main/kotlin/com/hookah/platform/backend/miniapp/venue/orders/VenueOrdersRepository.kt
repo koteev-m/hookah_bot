@@ -7,10 +7,12 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Timestamp
 import java.time.Instant
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import javax.sql.DataSource
@@ -56,6 +58,9 @@ data class OrderQueueItem(
     val comment: String?,
     val itemsCount: Int,
     val status: OrderWorkflowStatus,
+    val activeBatchesCount: Int = 1,
+    val displayNumber: Int? = null,
+    val displayDate: LocalDate? = null,
 )
 
 data class OrderQueueResult(
@@ -72,6 +77,8 @@ data class OrderDetail(
     val createdAt: Instant,
     val updatedAt: Instant,
     val batches: List<OrderBatchDetail>,
+    val displayNumber: Int? = null,
+    val displayDate: LocalDate? = null,
 )
 
 data class OrderBatchDetail(
@@ -83,13 +90,20 @@ data class OrderBatchDetail(
     val updatedAt: Instant,
     val rejectedReasonCode: String?,
     val rejectedReasonText: String?,
+    val authorUserId: Long? = null,
     val items: List<OrderBatchItemDetail>,
 )
 
 data class OrderBatchItemDetail(
+    val batchItemId: Long,
     val itemId: Long,
     val name: String,
     val qty: Int,
+    val priceMinor: Long? = null,
+    val currency: String? = null,
+    val isExcluded: Boolean = false,
+    val excludedReasonText: String? = null,
+    val discountPercent: Int? = null,
 )
 
 data class OrderAuditEntry(
@@ -120,6 +134,8 @@ class VenueOrdersRepository(
     private val dataSource: DataSource?,
     private val analyticsEventRepository: AnalyticsEventRepository? = null,
 ) {
+    private val logger = LoggerFactory.getLogger(VenueOrdersRepository::class.java)
+
     suspend fun listQueue(
         venueId: Long,
         status: OrderBatchStatus,
@@ -130,76 +146,19 @@ class VenueOrdersRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val items = mutableListOf<OrderQueueItem>()
-                    val sql =
-                        buildString {
-                            append(
-                                """
-                                SELECT ob.id AS batch_id,
-                                       ob.created_at AS created_at,
-                                       ob.guest_comment AS guest_comment,
-                                       ob.status AS status,
-                                       o.id AS order_id,
-                                       vt.table_number AS table_number,
-                                       COUNT(obi.id) AS items_count
-                                FROM order_batches ob
-                                JOIN orders o ON o.id = ob.order_id
-                                JOIN venue_tables vt ON vt.id = o.table_id
-                                LEFT JOIN order_batch_items obi ON obi.order_batch_id = ob.id
-                                WHERE o.venue_id = ?
-                                  AND o.status = 'ACTIVE'
-                                  AND ob.status = ?
-                                """.trimIndent(),
+                    val items =
+                        try {
+                            loadQueueItems(connection, venueId, status, limit, cursor, itemsCountFromBatchItems = true)
+                        } catch (e: SQLException) {
+                            logger.warn(
+                                "venue orders queue primary SQL failed; fallback without item count (venueId={}, status={}, sqlState={}): {}",
+                                venueId,
+                                status.dbValue,
+                                e.sqlState,
+                                e.message,
                             )
-                            if (cursor != null) {
-                                append(
-                                    """
-                                    AND (
-                                        ob.created_at < ?
-                                        OR (ob.created_at = ? AND ob.id < ?)
-                                    )
-                                    """.trimIndent(),
-                                )
-                            }
-                            append(
-                                """
-                                GROUP BY ob.id, o.id, vt.table_number
-                                ORDER BY ob.created_at DESC, ob.id DESC
-                                LIMIT ?
-                                """.trimIndent(),
-                            )
+                            loadQueueItems(connection, venueId, status, limit, cursor, itemsCountFromBatchItems = false)
                         }
-                    connection.prepareStatement(sql).use { statement ->
-                        var index = 1
-                        statement.setLong(index++, venueId)
-                        statement.setString(index++, status.dbValue)
-                        if (cursor != null) {
-                            val ts = Timestamp.from(cursor.createdAt)
-                            statement.setTimestamp(index++, ts)
-                            statement.setTimestamp(index++, ts)
-                            statement.setLong(index++, cursor.batchId)
-                        }
-                        statement.setInt(index, limit + 1)
-                        statement.executeQuery().use { rs ->
-                            while (rs.next()) {
-                                val statusRaw = rs.getString("status")
-                                val mappedStatus =
-                                    OrderBatchStatus.fromDb(statusRaw)?.toWorkflow()
-                                        ?: OrderWorkflowStatus.NEW
-                                items.add(
-                                    OrderQueueItem(
-                                        orderId = rs.getLong("order_id"),
-                                        batchId = rs.getLong("batch_id"),
-                                        tableNumber = rs.getInt("table_number"),
-                                        createdAt = rs.getTimestamp("created_at").toInstant(),
-                                        comment = rs.getString("guest_comment"),
-                                        itemsCount = rs.getInt("items_count"),
-                                        status = mappedStatus,
-                                    ),
-                                )
-                            }
-                        }
-                    }
                     val hasMore = items.size > limit
                     val trimmed = if (hasMore) items.dropLast(1) else items
                     val nextCursor =
@@ -212,9 +171,193 @@ class VenueOrdersRepository(
                     OrderQueueResult(items = trimmed, nextCursor = nextCursor)
                 }
             } catch (e: SQLException) {
+                logger.warn(
+                    "venue orders queue SQL failed (venueId={}, status={}, sqlState={}): {}",
+                    venueId,
+                    status.dbValue,
+                    e.sqlState,
+                    e.message,
+                )
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    suspend fun listOperationalQueueByOrder(
+        venueId: Long,
+        limit: Int,
+    ): List<OrderQueueItem> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT o.id AS order_id,
+                               o.display_number AS display_number,
+                               o.display_date AS display_date,
+                               vt.table_number AS table_number,
+                               ob.id AS batch_id,
+                               ob.created_at AS created_at,
+                               ob.guest_comment AS guest_comment,
+                               ob.status AS status,
+                               (
+                                   SELECT COUNT(*)
+                                   FROM order_batch_items obi
+                                   WHERE obi.order_batch_id = ob.id
+                               ) AS items_count,
+                               (
+                                   SELECT COUNT(*)
+                                   FROM order_batches ob_active
+                                   WHERE ob_active.order_id = o.id
+                                     AND ob_active.status IN ('NEW', 'ACCEPTED', 'PREPARING', 'DELIVERING')
+                               ) AS active_batches_count
+                        FROM orders o
+                        JOIN venue_tables vt ON vt.id = o.table_id
+                        JOIN order_batches ob
+                          ON ob.id = (
+                              SELECT ob2.id
+                              FROM order_batches ob2
+                              WHERE ob2.order_id = o.id
+                                AND ob2.status IN ('NEW', 'ACCEPTED', 'PREPARING', 'DELIVERING')
+                              ORDER BY ob2.created_at DESC, ob2.id DESC
+                              LIMIT 1
+                          )
+                        WHERE o.venue_id = ?
+                          AND o.status = 'ACTIVE'
+                        ORDER BY ob.created_at DESC, ob.id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setInt(2, limit)
+                        statement.executeQuery().use { rs ->
+                            val result = mutableListOf<OrderQueueItem>()
+                            while (rs.next()) {
+                                val statusRaw = rs.getString("status")
+                                val mappedStatus =
+                                    OrderBatchStatus.fromDb(statusRaw)?.toWorkflow()
+                                        ?: OrderWorkflowStatus.NEW
+                                result.add(
+                                    OrderQueueItem(
+                                        orderId = rs.getLong("order_id"),
+                                        batchId = rs.getLong("batch_id"),
+                                        tableNumber = rs.getInt("table_number"),
+                                        createdAt = rs.getTimestamp("created_at").toInstant(),
+                                        comment = rs.getString("guest_comment"),
+                                        itemsCount = rs.getInt("items_count"),
+                                        status = mappedStatus,
+                                        activeBatchesCount = rs.getInt("active_batches_count"),
+                                        displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                        displayDate = rs.getDate("display_date")?.toLocalDate(),
+                                    ),
+                                )
+                            }
+                            result
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    private fun loadQueueItems(
+        connection: Connection,
+        venueId: Long,
+        status: OrderBatchStatus,
+        limit: Int,
+        cursor: OrderQueueCursor?,
+        itemsCountFromBatchItems: Boolean,
+    ): MutableList<OrderQueueItem> {
+        val items = mutableListOf<OrderQueueItem>()
+        val itemsCountExpr =
+            if (itemsCountFromBatchItems) {
+                """
+                (
+                    SELECT COUNT(*)
+                    FROM order_batch_items obi
+                    WHERE obi.order_batch_id = ob.id
+                )
+                """.trimIndent()
+            } else {
+                "0"
+            }
+        val sql =
+            buildString {
+                append(
+                    """
+                    SELECT ob.id AS batch_id,
+                           ob.created_at AS created_at,
+                           ob.guest_comment AS guest_comment,
+                           ob.status AS status,
+                           o.id AS order_id,
+                           o.display_number AS display_number,
+                           o.display_date AS display_date,
+                           vt.table_number AS table_number,
+                           $itemsCountExpr AS items_count
+                    FROM order_batches ob
+                    JOIN orders o ON o.id = ob.order_id
+                    JOIN venue_tables vt ON vt.id = o.table_id
+                    WHERE o.venue_id = ?
+                      AND o.status = 'ACTIVE'
+                      AND ob.status = ?
+                    """.trimIndent(),
+                )
+                if (cursor != null) {
+                    append("\n")
+                    append(
+                        """
+                        AND (
+                            ob.created_at < ?
+                            OR (ob.created_at = ? AND ob.id < ?)
+                        )
+                        """.trimIndent(),
+                    )
+                }
+                append("\n")
+                append(
+                    """
+                    ORDER BY ob.created_at DESC, ob.id DESC
+                    LIMIT ?
+                    """.trimIndent(),
+                )
+            }
+        connection.prepareStatement(sql).use { statement ->
+            var index = 1
+            statement.setLong(index++, venueId)
+            statement.setString(index++, status.dbValue)
+            if (cursor != null) {
+                val ts = Timestamp.from(cursor.createdAt)
+                statement.setTimestamp(index++, ts)
+                statement.setTimestamp(index++, ts)
+                statement.setLong(index++, cursor.batchId)
+            }
+            statement.setInt(index, limit + 1)
+            statement.executeQuery().use { rs ->
+                while (rs.next()) {
+                    val statusRaw = rs.getString("status")
+                    val mappedStatus =
+                        OrderBatchStatus.fromDb(statusRaw)?.toWorkflow()
+                            ?: OrderWorkflowStatus.NEW
+                    items.add(
+                        OrderQueueItem(
+                            orderId = rs.getLong("order_id"),
+                            batchId = rs.getLong("batch_id"),
+                            tableNumber = rs.getInt("table_number"),
+                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                            comment = rs.getString("guest_comment"),
+                            itemsCount = rs.getInt("items_count"),
+                            status = mappedStatus,
+                            displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                            displayDate = rs.getDate("display_date")?.toLocalDate(),
+                        ),
+                    )
+                }
+            }
+        }
+        return items
     }
 
     suspend fun loadOrderDetail(
@@ -230,6 +373,8 @@ class VenueOrdersRepository(
                             """
                             SELECT o.id,
                                    o.status,
+                                   o.display_number,
+                                   o.display_date,
                                    o.created_at,
                                    o.updated_at,
                                    o.venue_id,
@@ -246,6 +391,8 @@ class VenueOrdersRepository(
                                 if (rs.next()) {
                                     OrderHeader(
                                         status = rs.getString("status"),
+                                        displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                        displayDate = rs.getDate("display_date")?.toLocalDate(),
                                         createdAt = rs.getTimestamp("created_at").toInstant(),
                                         updatedAt = rs.getTimestamp("updated_at").toInstant(),
                                         tableId = rs.getLong("table_id"),
@@ -260,11 +407,27 @@ class VenueOrdersRepository(
                     val batches =
                         connection.prepareStatement(
                             """
-                            SELECT id, status, source, guest_comment, created_at, updated_at,
-                                   rejected_reason_code, rejected_reason_text
-                            FROM order_batches
+                            SELECT ob.id,
+                                   ob.status,
+                                   ob.source,
+                                   ob.guest_comment,
+                                   ob.created_at,
+                                   ob.updated_at,
+                                   ob.rejected_reason_code,
+                                   ob.rejected_reason_text,
+                                   COALESCE(
+                                       ob.author_user_id,
+                                       (
+                                           SELECT gbi.user_id
+                                           FROM guest_batch_idempotency gbi
+                                           WHERE gbi.batch_id = ob.id
+                                           ORDER BY gbi.id DESC
+                                           LIMIT 1
+                                       )
+                                   ) AS guest_user_id
+                            FROM order_batches ob
                             WHERE order_id = ?
-                            ORDER BY created_at, id
+                            ORDER BY ob.created_at, ob.id
                             """.trimIndent(),
                         ).use { statement ->
                             statement.setLong(1, orderId)
@@ -284,6 +447,7 @@ class VenueOrdersRepository(
                                             updatedAt = rs.getTimestamp("updated_at").toInstant(),
                                             rejectedReasonCode = rs.getString("rejected_reason_code"),
                                             rejectedReasonText = rs.getString("rejected_reason_text"),
+                                            authorUserId = rs.getLong("guest_user_id").let { value -> if (rs.wasNull()) null else value },
                                             items = emptyList(),
                                         ),
                                     )
@@ -302,6 +466,8 @@ class VenueOrdersRepository(
 
                     OrderDetail(
                         orderId = orderId,
+                        displayNumber = orderHeader.displayNumber,
+                        displayDate = orderHeader.displayDate,
                         venueId = venueId,
                         tableId = orderHeader.tableId,
                         tableNumber = orderHeader.tableNumber,
@@ -397,7 +563,13 @@ class VenueOrdersRepository(
                                 return@use null
                             }
                         val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
-                        if (!allowedNextStatuses(current).contains(nextStatus)) {
+                        val transitionAllowed =
+                            if (nextStatus == OrderWorkflowStatus.CLOSED) {
+                                canCloseOrder(orderRow)
+                            } else {
+                                allowedNextStatuses(current).contains(nextStatus)
+                            }
+                        if (!transitionAllowed) {
                             runCatching { connection.rollback() }
                             return@use OrderStatusUpdateResult(
                                 orderId = orderId,
@@ -415,7 +587,7 @@ class VenueOrdersRepository(
                                 OrderBatchStatus.fromWorkflow(nextStatus)
                                     ?: throw IllegalStateException("Missing batch status for $nextStatus")
                             val latestBatchId =
-                                orderRow.batches.firstOrNull()?.batchId
+                                currentWorkflowBatchId(orderRow.batches)
                                     ?: run {
                                         runCatching { connection.rollback() }
                                         return@use OrderStatusUpdateResult(
@@ -505,6 +677,236 @@ class VenueOrdersRepository(
         }
     }
 
+    suspend fun acceptAllNewBatches(
+        venueId: Long,
+        orderId: Long,
+        actor: OrderActionActor,
+    ): OrderStatusUpdateResult? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow =
+                            selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use null
+                            }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        val newBatchIds =
+                            orderRow.batches
+                                .filter { it.status == OrderWorkflowStatus.NEW }
+                                .map { it.batchId }
+                        if (newBatchIds.isEmpty()) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val updated =
+                            updateNewBatchesStatus(
+                                connection = connection,
+                                batchIds = newBatchIds,
+                                status = OrderBatchStatus.ACCEPTED.dbValue,
+                                now = now,
+                            )
+                        if (updated != newBatchIds.size) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        updateOrderTimestamp(connection, orderId, now)
+                        val resultingStatus = resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
+                        insertAudit(
+                            connection = connection,
+                            orderId = orderId,
+                            actor = actor,
+                            action = "ACCEPT_ALL_NEW_BATCHES",
+                            fromStatus = current,
+                            toStatus = resultingStatus,
+                            reasonCode = null,
+                            reasonText = null,
+                        )
+                        newBatchIds.forEach { batchId ->
+                            analyticsEventRepository?.append(
+                                connection = connection,
+                                event =
+                                    AnalyticsEventRecord(
+                                        eventType = "batch_status_changed",
+                                        payload =
+                                            analyticsCorrelationPayload(
+                                                venueId = venueId,
+                                                orderId = orderId,
+                                                batchId = batchId,
+                                                extra =
+                                                    mapOf(
+                                                        "fromStatus" to OrderWorkflowStatus.NEW.toApi(),
+                                                        "toStatus" to OrderWorkflowStatus.ACCEPTED.toApi(),
+                                                    ),
+                                            ),
+                                        venueId = venueId,
+                                        orderId = orderId,
+                                        batchId = batchId,
+                                        idempotencyKey = "batch_status_changed:$venueId:$orderId:$batchId:accepted",
+                                    ),
+                            )
+                        }
+                        connection.commit()
+                        OrderStatusUpdateResult(
+                            orderId = orderId,
+                            status = resultingStatus,
+                            updatedAt = now.toInstant(),
+                            applied = true,
+                        )
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun deliverAllAcceptedBatches(
+        venueId: Long,
+        orderId: Long,
+        actor: OrderActionActor,
+    ): OrderStatusUpdateResult? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow =
+                            selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use null
+                            }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        val acceptedBatchIds =
+                            orderRow.batches
+                                .filter { it.status == OrderWorkflowStatus.ACCEPTED }
+                                .map { it.batchId }
+                        if (acceptedBatchIds.isEmpty()) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val updated =
+                            updateAcceptedBatchesStatus(
+                                connection = connection,
+                                batchIds = acceptedBatchIds,
+                                status = OrderBatchStatus.DELIVERED.dbValue,
+                                now = now,
+                            )
+                        if (updated != acceptedBatchIds.size) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        updateOrderTimestamp(connection, orderId, now)
+                        val resultingStatus = resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
+                        insertAudit(
+                            connection = connection,
+                            orderId = orderId,
+                            actor = actor,
+                            action = "DELIVER_ALL_ACCEPTED_BATCHES",
+                            fromStatus = current,
+                            toStatus = resultingStatus,
+                            reasonCode = null,
+                            reasonText = null,
+                        )
+                        acceptedBatchIds.forEach { batchId ->
+                            analyticsEventRepository?.append(
+                                connection = connection,
+                                event =
+                                    AnalyticsEventRecord(
+                                        eventType = "batch_status_changed",
+                                        payload =
+                                            analyticsCorrelationPayload(
+                                                venueId = venueId,
+                                                orderId = orderId,
+                                                batchId = batchId,
+                                                extra =
+                                                    mapOf(
+                                                        "fromStatus" to OrderWorkflowStatus.ACCEPTED.toApi(),
+                                                        "toStatus" to OrderWorkflowStatus.DELIVERED.toApi(),
+                                                    ),
+                                            ),
+                                        venueId = venueId,
+                                        orderId = orderId,
+                                        batchId = batchId,
+                                        idempotencyKey = "batch_status_changed:$venueId:$orderId:$batchId:delivered",
+                                    ),
+                            )
+                        }
+                        connection.commit()
+                        OrderStatusUpdateResult(
+                            orderId = orderId,
+                            status = resultingStatus,
+                            updatedAt = now.toInstant(),
+                            applied = true,
+                        )
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun rejectOrder(
         venueId: Long,
         orderId: Long,
@@ -535,7 +937,7 @@ class VenueOrdersRepository(
                         }
                         val now = OffsetDateTime.now(ZoneOffset.UTC)
                         val latestBatchId =
-                            orderRow.batches.firstOrNull()?.batchId
+                            currentWorkflowBatchId(orderRow.batches) ?: orderRow.batches.firstOrNull()?.batchId
                                 ?: run {
                                     runCatching { connection.rollback() }
                                     return@use OrderStatusUpdateResult(
@@ -612,6 +1014,281 @@ class VenueOrdersRepository(
         }
     }
 
+    suspend fun rejectLatestBatch(
+        venueId: Long,
+        orderId: Long,
+        reasonCode: String,
+        reasonText: String?,
+        actor: OrderActionActor,
+    ): OrderStatusUpdateResult? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow =
+                            selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use null
+                            }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val latestBatchId =
+                            currentWorkflowBatchId(orderRow.batches)
+                                ?: run {
+                                    runCatching { connection.rollback() }
+                                    return@use OrderStatusUpdateResult(
+                                        orderId = orderId,
+                                        status = current,
+                                        updatedAt = orderRow.updatedAt,
+                                        applied = false,
+                                    )
+                                }
+                        val updated = updateLatestBatchRejected(connection, latestBatchId, reasonCode, reasonText, now)
+                        if (updated != 1) {
+                            runCatching { connection.rollback() }
+                            return@use OrderStatusUpdateResult(
+                                orderId = orderId,
+                                status = current,
+                                updatedAt = orderRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        updateOrderTimestamp(connection, orderId, now)
+                        val resultingStatus = resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
+                        insertAudit(
+                            connection = connection,
+                            orderId = orderId,
+                            actor = actor,
+                            action = "REJECT_BATCH",
+                            fromStatus = current,
+                            toStatus = resultingStatus,
+                            reasonCode = reasonCode,
+                            reasonText = reasonText,
+                        )
+                        analyticsEventRepository?.append(
+                            connection = connection,
+                            event =
+                                AnalyticsEventRecord(
+                                    eventType = "batch_status_changed",
+                                    payload =
+                                        analyticsCorrelationPayload(
+                                            venueId = venueId,
+                                            orderId = orderId,
+                                            batchId = latestBatchId,
+                                            extra =
+                                                mapOf(
+                                                    "fromStatus" to current.toApi(),
+                                                    "toStatus" to resultingStatus.toApi(),
+                                                    "reasonCode" to reasonCode,
+                                                ),
+                                        ),
+                                    venueId = venueId,
+                                    orderId = orderId,
+                                    batchId = latestBatchId,
+                                    idempotencyKey = "batch_status_changed:$venueId:$orderId:$latestBatchId:rejected",
+                                ),
+                        )
+                        connection.commit()
+                        OrderStatusUpdateResult(
+                            orderId = orderId,
+                            status = resultingStatus,
+                            updatedAt = now.toInstant(),
+                            applied = true,
+                        )
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun excludeBatchItemFromBill(
+        venueId: Long,
+        orderId: Long,
+        batchItemId: Long,
+        reasonText: String,
+        actor: OrderActionActor,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow =
+                            selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use false
+                            }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
+                            return@use false
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE order_batch_items obi
+                                SET is_excluded = TRUE,
+                                    excluded_reason_text = ?,
+                                    excluded_at = ?
+                                WHERE obi.id = ?
+                                  AND obi.is_excluded = FALSE
+                                  AND EXISTS (
+                                      SELECT 1
+                                      FROM order_batches ob
+                                      JOIN orders o ON o.id = ob.order_id
+                                      WHERE ob.id = obi.order_batch_id
+                                        AND ob.order_id = ?
+                                        AND o.venue_id = ?
+                                        AND o.status = 'ACTIVE'
+                                        AND ob.status <> 'REJECTED'
+                                  )
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, reasonText)
+                                statement.setObject(2, now)
+                                statement.setLong(3, batchItemId)
+                                statement.setLong(4, orderId)
+                                statement.setLong(5, venueId)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            runCatching { connection.rollback() }
+                            return@use false
+                        }
+                        updateOrderTimestamp(connection, orderId, now)
+                        insertAudit(
+                            connection = connection,
+                            orderId = orderId,
+                            actor = actor,
+                            action = "EXCLUDE_ITEM_FROM_BILL",
+                            fromStatus = current,
+                            toStatus = current,
+                            reasonCode = "VENUE_ITEM_EXCLUDED_FROM_BILL",
+                            reasonText = reasonText,
+                        )
+                        connection.commit()
+                        true
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun setBatchItemDiscountPercent(
+        venueId: Long,
+        orderId: Long,
+        batchItemId: Long,
+        discountPercent: Int,
+        actor: OrderActionActor,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow =
+                            selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use false
+                            }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
+                            return@use false
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE order_batch_items obi
+                                SET discount_percent = ?
+                                WHERE obi.id = ?
+                                  AND obi.is_excluded = FALSE
+                                  AND EXISTS (
+                                      SELECT 1
+                                      FROM order_batches ob
+                                      JOIN orders o ON o.id = ob.order_id
+                                      WHERE ob.id = obi.order_batch_id
+                                        AND ob.order_id = ?
+                                        AND o.venue_id = ?
+                                        AND o.status = 'ACTIVE'
+                                        AND ob.status <> 'REJECTED'
+                                  )
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setInt(1, discountPercent)
+                                statement.setLong(2, batchItemId)
+                                statement.setLong(3, orderId)
+                                statement.setLong(4, venueId)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            runCatching { connection.rollback() }
+                            return@use false
+                        }
+                        updateOrderTimestamp(connection, orderId, now)
+                        insertAudit(
+                            connection = connection,
+                            orderId = orderId,
+                            actor = actor,
+                            action = "APPLY_ITEM_DISCOUNT",
+                            fromStatus = current,
+                            toStatus = current,
+                            reasonCode = "VENUE_ITEM_DISCOUNT",
+                            reasonText = "$discountPercent%",
+                        )
+                        connection.commit()
+                        true
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     private fun resolveOrderWorkflowStatus(
         orderStatusRaw: String?,
         batches: List<OrderBatchDetail>,
@@ -622,9 +1299,29 @@ class VenueOrdersRepository(
         ) {
             return OrderWorkflowStatus.CLOSED
         }
-        val latestBatch = batches.maxByOrNull { it.createdAt }
+        val latestBatch = batches.filter { it.status != OrderWorkflowStatus.CLOSED }.maxByOrNull { it.createdAt }
         return latestBatch?.status ?: OrderWorkflowStatus.NEW
     }
+
+    private fun canCloseOrder(orderRow: OrderRow): Boolean {
+        if (
+            orderRow.status.equals("CLOSED", ignoreCase = true) ||
+            orderRow.status.equals("CANCELLED", ignoreCase = true)
+        ) {
+            return false
+        }
+        return orderRow.batches.any { batch ->
+            batch.status == OrderWorkflowStatus.ACCEPTED ||
+                batch.status == OrderWorkflowStatus.DELIVERED
+        }
+    }
+
+    private fun currentWorkflowBatchId(batches: List<OrderBatchDetail>): Long? =
+        batches
+            .asSequence()
+            .filter { it.status != OrderWorkflowStatus.CLOSED }
+            .maxWithOrNull(compareBy<OrderBatchDetail> { it.createdAt }.thenBy { it.batchId })
+            ?.batchId
 
     private fun loadBatchItems(
         connection: Connection,
@@ -640,9 +1337,14 @@ class VenueOrdersRepository(
                    obi.order_batch_id,
                    obi.menu_item_id,
                    obi.qty,
-                   mi.name
+                   obi.is_excluded,
+                   obi.excluded_reason_text,
+                   obi.discount_percent,
+                   mi.name,
+                   mi.price_minor,
+                   mi.currency
             FROM order_batch_items obi
-            JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
             WHERE obi.order_batch_id IN ($placeholders)
             ORDER BY obi.order_batch_id, obi.id
             """.trimIndent()
@@ -657,9 +1359,15 @@ class VenueOrdersRepository(
                     val items = result.getOrPut(batchId) { mutableListOf() }
                     items.add(
                         OrderBatchItemDetail(
+                            batchItemId = rs.getLong("id"),
                             itemId = rs.getLong("menu_item_id"),
-                            name = rs.getString("name"),
+                            name = rs.getString("name")?.takeIf { it.isNotBlank() } ?: "Позиция #${rs.getLong("menu_item_id")}",
                             qty = rs.getInt("qty"),
+                            priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
+                            currency = rs.getString("currency"),
+                            isExcluded = rs.getBoolean("is_excluded"),
+                            excludedReasonText = rs.getString("excluded_reason_text"),
+                            discountPercent = rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value },
                         ),
                     )
                 }
@@ -667,6 +1375,41 @@ class VenueOrdersRepository(
             }
         }
     }
+
+    private fun loadBatchesForWorkflow(
+        connection: Connection,
+        orderId: Long,
+    ): List<OrderBatchDetail> =
+        connection.prepareStatement(
+            """
+            SELECT id, status, source, guest_comment, created_at, updated_at,
+                   rejected_reason_code, rejected_reason_text
+            FROM order_batches
+            WHERE order_id = ?
+            ORDER BY created_at, id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, orderId)
+            statement.executeQuery().use { rs ->
+                val result = mutableListOf<OrderBatchDetail>()
+                while (rs.next()) {
+                    result.add(
+                        OrderBatchDetail(
+                            batchId = rs.getLong("id"),
+                            status = OrderBatchStatus.fromDb(rs.getString("status"))?.toWorkflow() ?: OrderWorkflowStatus.NEW,
+                            source = rs.getString("source"),
+                            comment = rs.getString("guest_comment"),
+                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                            updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                            rejectedReasonCode = rs.getString("rejected_reason_code"),
+                            rejectedReasonText = rs.getString("rejected_reason_text"),
+                            items = emptyList(),
+                        ),
+                    )
+                }
+                result
+            }
+        }
 
     private data class OrderRow(
         val status: String,
@@ -676,6 +1419,8 @@ class VenueOrdersRepository(
 
     private data class OrderHeader(
         val status: String,
+        val displayNumber: Int?,
+        val displayDate: LocalDate?,
         val createdAt: Instant,
         val updatedAt: Instant,
         val tableId: Long,
@@ -715,7 +1460,6 @@ class VenueOrdersRepository(
                 FROM order_batches
                 WHERE order_id = ?
                 ORDER BY created_at DESC, id DESC
-                LIMIT 1
                 FOR UPDATE
                 """.trimIndent(),
             ).use { statement ->
@@ -763,6 +1507,54 @@ class VenueOrdersRepository(
             statement.setString(1, status)
             statement.setObject(2, now)
             statement.setLong(3, batchId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun updateNewBatchesStatus(
+        connection: Connection,
+        batchIds: List<Long>,
+        status: String,
+        now: OffsetDateTime,
+    ): Int {
+        val placeholders = batchIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            UPDATE order_batches
+            SET status = ?, updated_at = ?
+            WHERE id IN ($placeholders)
+              AND status = 'NEW'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, status)
+            statement.setObject(2, now)
+            batchIds.forEachIndexed { index, batchId ->
+                statement.setLong(index + 3, batchId)
+            }
+            statement.executeUpdate()
+        }
+    }
+
+    private fun updateAcceptedBatchesStatus(
+        connection: Connection,
+        batchIds: List<Long>,
+        status: String,
+        now: OffsetDateTime,
+    ): Int {
+        val placeholders = batchIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            UPDATE order_batches
+            SET status = ?, updated_at = ?
+            WHERE id IN ($placeholders)
+              AND status = 'ACCEPTED'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, status)
+            statement.setObject(2, now)
+            batchIds.forEachIndexed { index, batchId ->
+                statement.setLong(index + 3, batchId)
+            }
             statement.executeUpdate()
         }
     }

@@ -1,0 +1,26 @@
+ALTER TABLE telegram_dialog_state
+    DROP CONSTRAINT IF EXISTS telegram_dialog_state_state_check;
+
+ALTER TABLE telegram_dialog_state
+    ADD CONSTRAINT telegram_dialog_state_state_check
+        CHECK (
+            state IN (
+                'NONE',
+                'QUICK_ORDER_WAIT_TEXT',
+                'QUICK_ORDER_WAIT_CONFIRM',
+                'STAFF_CALL_WAIT_COMMENT',
+                'BOT_JOIN_SHARED_WAIT_CODE',
+                'VENUE_CONNECT_WAIT_NAME',
+                'VENUE_CONNECT_WAIT_CITY',
+                'VENUE_CONNECT_WAIT_CONTACT_CHOICE',
+                'VENUE_CONNECT_WAIT_CONTACT',
+                'VENUE_CONNECT_WAIT_CONTACT_EXTRA',
+                'VENUE_CONNECT_WAIT_COMMENT',
+                'OWNER_VENUE_TERMS_WAIT_TRIAL_CUSTOM_DATE',
+                'OWNER_VENUE_TERMS_WAIT_CURRENT_PRICE',
+                'OWNER_VENUE_TERMS_WAIT_FUTURE_PRICE',
+                'OWNER_VENUE_TERMS_WAIT_FUTURE_PRICE_DATE',
+                'OWNER_VENUE_TERMS_WAIT_NOTE',
+                'OWNER_VENUE_PROFILE_WAIT_NAME'
+            )
+        );

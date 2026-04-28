@@ -550,6 +550,41 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun listAvailableOptionsForItem(
+        venueId: Long,
+        itemId: Long,
+    ): List<VenueMenuOption> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
+                        FROM menu_item_options
+                        WHERE venue_id = ?
+                          AND item_id = ?
+                          AND is_available = true
+                        ORDER BY sort_order, id
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, itemId)
+                        statement.executeQuery().use { rs ->
+                            val result = mutableListOf<VenueMenuOption>()
+                            while (rs.next()) {
+                                result.add(mapOption(rs))
+                            }
+                            result
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun createOption(
         venueId: Long,
         itemId: Long,

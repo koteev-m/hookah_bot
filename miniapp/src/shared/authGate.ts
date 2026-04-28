@@ -75,7 +75,13 @@ export function mountAuthGate(options: AuthGateOptions) {
     refs.title.textContent = 'Hookah Mini App'
     refs.message.textContent = 'Откройте Mini App внутри Telegram'
     refs.actions.replaceChildren()
-    refs.debug.textContent = ''
+    const ctx = getTelegramContext()
+    refs.debug.textContent = [
+      `isTelegram=${String(ctx.isTelegram)}`,
+      `hasWebApp=${String(Boolean(ctx.webApp))}`,
+      `initDataLength=${ctx.initData ? String(ctx.initData.length) : '0'}`,
+      `location.href=${window.location.href}`
+    ].join('\n')
   }
 
   const runAuth = async () => {

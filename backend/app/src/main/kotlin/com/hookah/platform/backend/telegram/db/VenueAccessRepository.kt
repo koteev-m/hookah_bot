@@ -11,6 +11,14 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
         val role: String,
     )
 
+    data class VenueMemberSummary(
+        val userId: Long,
+        val role: String,
+        val username: String?,
+        val firstName: String?,
+        val lastName: String?,
+    )
+
     suspend fun hasVenueRole(userId: Long): Boolean {
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
@@ -41,7 +49,7 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
         return connection.prepareStatement(
             """
             SELECT 1 FROM venue_members
-            WHERE user_id = ? AND venue_id = ? AND role IN ('OWNER', 'ADMIN')
+            WHERE user_id = ? AND venue_id = ? AND role IN ('OWNER', 'ADMIN', 'MANAGER')
             LIMIT 1
             """.trimIndent(),
         ).use { statement ->
@@ -106,6 +114,52 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
                             venueId = rs.getLong("venue_id"),
                             role = rs.getString("role"),
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun listVenueMembers(venueId: Long): List<VenueMemberSummary> {
+        val ds = dataSource ?: return emptyList()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT vm.user_id,
+                           vm.role,
+                           u.username,
+                           u.first_name,
+                           u.last_name
+                    FROM venue_members vm
+                    LEFT JOIN users u ON u.telegram_user_id = vm.user_id
+                    WHERE vm.venue_id = ?
+                    ORDER BY CASE
+                                 WHEN vm.role = 'OWNER' THEN 0
+                                 WHEN vm.role = 'ADMIN' THEN 1
+                                 WHEN vm.role = 'MANAGER' THEN 2
+                                 WHEN vm.role = 'STAFF' THEN 3
+                                 ELSE 4
+                             END,
+                             vm.created_at,
+                             vm.user_id
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeQuery().use { rs ->
+                        val result = mutableListOf<VenueMemberSummary>()
+                        while (rs.next()) {
+                            result.add(
+                                VenueMemberSummary(
+                                    userId = rs.getLong("user_id"),
+                                    role = rs.getString("role"),
+                                    username = rs.getString("username"),
+                                    firstName = rs.getString("first_name"),
+                                    lastName = rs.getString("last_name"),
+                                ),
+                            )
+                        }
+                        result
                     }
                 }
             }

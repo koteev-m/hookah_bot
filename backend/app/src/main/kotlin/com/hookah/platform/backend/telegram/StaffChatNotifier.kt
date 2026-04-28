@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -21,6 +22,7 @@ class StaffChatNotifier(
     private val venueRepository: VenueRepository,
     private val notificationRepository: StaffChatNotificationRepository,
     private val outboxEnqueuer: TelegramOutboxEnqueuer,
+    private val venueSettingsRepository: VenueSettingsRepository? = null,
     private val isTelegramActive: () -> Boolean,
     private val scope: CoroutineScope,
 ) {
@@ -32,6 +34,13 @@ class StaffChatNotifier(
                 return@launch
             }
             try {
+                val notifyOrders =
+                    runCatching {
+                        venueSettingsRepository?.find(event.venueId)?.notifyOrdersEnabled ?: true
+                    }.getOrDefault(true)
+                if (!notifyOrders) {
+                    return@launch
+                }
                 val venue = venueRepository.findVenueById(event.venueId) ?: return@launch
                 val chatId = venue.staffChatId ?: return@launch
                 val claimResult = notificationRepository.tryClaim(event.batchId, chatId)

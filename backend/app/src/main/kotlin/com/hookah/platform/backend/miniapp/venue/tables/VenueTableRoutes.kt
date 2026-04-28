@@ -13,7 +13,7 @@ import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
-import com.hookah.platform.backend.telegram.buildWebAppUrl
+import com.hookah.platform.backend.telegram.buildTelegramStartUrl
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.lowagie.text.Document
 import com.lowagie.text.Element
@@ -69,7 +69,7 @@ fun Route.venueTableRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueTableRepository: VenueTableRepository,
     auditLogRepository: AuditLogRepository,
-    webAppPublicUrl: String?,
+    telegramBotUsername: String?,
 ) {
     route("/venue/tables") {
         get {
@@ -279,9 +279,9 @@ fun Route.venueTableRoutes(
                 throw ForbiddenException()
             }
             val format = call.request.queryParameters["format"]?.trim()?.lowercase() ?: "zip"
-            val baseUrl =
-                webAppPublicUrl?.takeIf { it.isNotBlank() }
-                    ?: throw ConfigException("webAppPublicUrl is required for QR export")
+            val botUsername =
+                telegramBotUsername?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
+                    ?: throw ConfigException("telegram.botUsername is required for QR export")
             val tables = venueTableRepository.listTablesWithTokens(venueId)
             if (tables.isEmpty()) {
                 throw InvalidInputException("No tables to export")
@@ -302,7 +302,7 @@ fun Route.venueTableRoutes(
                         ).toString(),
                     )
                     call.respondOutputStream(ContentType.Application.Zip) {
-                        writeZipPackage(this, tables, baseUrl)
+                        writeZipPackage(this, tables, botUsername)
                     }
                 }
                 "pdf" -> {
@@ -314,7 +314,7 @@ fun Route.venueTableRoutes(
                         ).toString(),
                     )
                     call.respondOutputStream(ContentType.Application.Pdf) {
-                        writePdfPackage(this, tables, baseUrl)
+                        writePdfPackage(this, tables, botUsername)
                     }
                 }
                 else -> throw InvalidInputException("format must be zip or pdf")
@@ -337,13 +337,13 @@ fun Route.venueTableRoutes(
 private fun writeZipPackage(
     output: java.io.OutputStream,
     tables: List<VenueTableToken>,
-    baseUrl: String,
+    botUsername: String,
 ) {
     ZipOutputStream(BufferedOutputStream(output)).use { zip ->
         val manifestEntries = mutableListOf<QrManifestEntry>()
         tables.forEach { table ->
             val label = "Стол №${table.tableNumber}"
-            val url = buildWebAppUrl(baseUrl, mapOf("table_token" to table.token, "screen" to "menu"))
+            val url = buildTelegramStartUrl(botUsername, table.token)
             val fileName = "table_${table.tableNumber}.png"
             val entry = ZipEntry(fileName).apply { time = 0 }
             zip.putNextEntry(entry)
@@ -371,7 +371,7 @@ private fun writeZipPackage(
 private fun writePdfPackage(
     output: java.io.OutputStream,
     tables: List<VenueTableToken>,
-    baseUrl: String,
+    botUsername: String,
 ) {
     val document = Document(PageSize.A4)
     PdfWriter.getInstance(document, output)
@@ -381,7 +381,7 @@ private fun writePdfPackage(
             document.newPage()
         }
         val label = "Стол №${table.tableNumber}"
-        val url = buildWebAppUrl(baseUrl, mapOf("table_token" to table.token, "screen" to "menu"))
+        val url = buildTelegramStartUrl(botUsername, table.token)
         val title = Paragraph(label).apply { alignment = Element.ALIGN_CENTER }
         document.add(title)
         val qrBytes = generateQrPng(url)

@@ -5,7 +5,7 @@ import { guestResolveTable } from '../api/guestApi'
 import type { TableResolveResponse } from '../api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../api/types'
 import { isDebugEnabled } from '../debug'
-import { getTelegramContext } from '../telegram'
+import { getTelegramContext, rememberTableToken } from '../telegram'
 
 export type TableContextStatus =
   | 'missing'
@@ -167,6 +167,7 @@ export async function refresh(): Promise<void> {
       return
     }
 
+    rememberTableToken(nextToken)
     updateSnapshot(buildResolvedSnapshot(result.data, nextToken))
   })
 
@@ -188,7 +189,11 @@ export async function ensureResolved(): Promise<TableContextSnapshot> {
 export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPresentation {
   switch (snapshot.status) {
     case 'missing':
-      return { title: 'Сначала отсканируйте QR', severity: 'warn' }
+      return {
+        title: 'Вы за столом?',
+        details: 'Чтобы открыть меню и сделать заказ к своему столу, отсканируйте QR-код на столе.',
+        severity: 'warn'
+      }
     case 'invalid':
       return {
         title: 'Некорректный QR. Обновите и попробуйте снова.',
@@ -222,8 +227,8 @@ export function initTableContext(): void {
     return
   }
   initialized = true
-  const { tableTokenStatus, tableToken } = getTelegramContext()
-  if (tableTokenStatus === 'valid' && tableToken) {
+  const { tableTokenStatus, tableToken, tableTokenAutoResolve } = getTelegramContext()
+  if (tableTokenStatus === 'valid' && tableToken && tableTokenAutoResolve) {
     updateSnapshot(buildEmptySnapshot('resolving', tableToken))
     void refresh()
     return

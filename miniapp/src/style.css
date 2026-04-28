@@ -466,6 +466,11 @@ input[type="number"] {
   color: #dc2626;
 }
 
+.cart-summary {
+  margin: 0.5rem 0 0;
+  color: #475569;
+}
+
 .disabled-reason {
   margin: 0;
   font-size: 0.85rem;

@@ -1,11 +1,18 @@
 import { getBackendBaseUrl } from '../shared/api/backend'
 import { isDebugEnabled } from '../shared/debug'
-import { formatTableStatus, getTableContext, initTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
-import { getCartSnapshot, subscribeCart } from '../shared/state/cartStore'
+import {
+  formatTableStatus,
+  getTableContext,
+  initTableContext,
+  refresh as refreshTableContext,
+  subscribe as subscribeTable
+} from '../shared/state/tableContext'
+import { getCartSnapshot, setCartTableToken, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
-import { getTelegramContext } from '../shared/telegram'
+import { getTelegramContext, getTelegramQrScanner } from '../shared/telegram'
 import { openBotChat } from '../shared/telegramActions'
+import { normalizeTableToken } from '../shared/validation/tableToken'
 import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
@@ -30,10 +37,13 @@ type GuestRefs = {
   app: HTMLDivElement
   statusTitle: HTMLParagraphElement
   statusDetails: HTMLParagraphElement
+  scanQrButton: HTMLButtonElement
   fallbackChatButton: HTMLButtonElement
   navButtons: NavButtonRefs
   content: HTMLDivElement
 }
+
+const scannedTokenQueryParamKeys = ['table_token', 'tableToken', 'tgWebAppStartParam', 'startapp', 'start_param'] as const
 
 function ensureDefaultHash() {
   const hash = window.location.hash
@@ -63,6 +73,47 @@ function resolveRoute(): Route {
   return { name: route, venueId: null }
 }
 
+function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | null {
+  if (!hash) {
+    return null
+  }
+  const raw = hash.replace(/^#/, '')
+  const cleaned = raw.startsWith('/') ? raw.slice(1) : raw
+  if (!cleaned) {
+    return 'catalog'
+  }
+  const [pathPart] = cleaned.split('?')
+  const segments = pathPart.split('/').filter(Boolean)
+  const route = segments[0] as RouteName | undefined
+  if (!route || !['catalog', 'venue', 'cart', 'order'].includes(route)) {
+    return null
+  }
+  return route
+}
+
+function isTabFlowRoute(route: RouteName | null): boolean {
+  return route === 'venue' || route === 'cart' || route === 'order'
+}
+
+function extractTokenFromSearchParams(params: URLSearchParams): string | null {
+  for (const key of scannedTokenQueryParamKeys) {
+    const token = normalizeTableToken(params.get(key))
+    if (token) {
+      return token
+    }
+  }
+  return null
+}
+
+function extractTableTokenFromScannedText(scannedText: string): string | null {
+  try {
+    const url = new URL(scannedText)
+    return extractTokenFromSearchParams(url.searchParams)
+  } catch {
+    return normalizeTableToken(scannedText)
+  }
+}
+
 function buildGuestShell(root: HTMLDivElement): GuestRefs {
   const app = el('div', { className: 'app-shell' })
   const header = el('header', { className: 'app-header' })
@@ -74,11 +125,15 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
   const statusCard = el('div', { className: 'table-status' })
   const statusTitle = el('p', { className: 'table-status-title', text: '' })
   const statusDetails = el('p', { className: 'table-status-details', text: '' })
+  const scanQrButton = el('button', {
+    className: 'button-secondary table-scan-button',
+    text: 'Сканировать QR'
+  }) as HTMLButtonElement
   const fallbackChatButton = el('button', {
     className: 'button-secondary table-fallback-button',
     text: 'Не грузится? → Оформить в чате'
   }) as HTMLButtonElement
-  append(statusCard, statusTitle, statusDetails, fallbackChatButton)
+  append(statusCard, statusTitle, statusDetails, scanQrButton, fallbackChatButton)
 
   const nav = el('nav', { className: 'app-nav' })
   const catalogButton = el('button', { className: 'nav-button', text: 'Каталог' })
@@ -95,6 +150,7 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
     app,
     statusTitle,
     statusDetails,
+    scanQrButton,
     fallbackChatButton,
     navButtons: {
       catalog: catalogButton,
@@ -151,6 +207,15 @@ function updateNav(navButtons: NavButtonRefs, active: RouteName) {
   })
 }
 
+function canOpenActiveOrder(snapshot: ReturnType<typeof getTableContext>): boolean {
+  return snapshot.status === 'resolved' && Boolean(snapshot.tableToken) && snapshot.orderAllowed
+}
+
+function updateOrderNavAccess(navButtons: NavButtonRefs, canOpenOrder: boolean) {
+  navButtons.cart.disabled = !canOpenOrder
+  navButtons.order.disabled = !canOpenOrder
+}
+
 export function mountGuestApp(options: GuestAppOptions) {
   const { root } = options
   if (!root) return () => undefined
@@ -160,15 +225,31 @@ export function mountGuestApp(options: GuestAppOptions) {
   const isDebug = isDebugEnabled()
 
   const refs = buildGuestShell(root)
+  let tableSnapshot = getTableContext()
+  setCartTableToken(tableSnapshot.tableToken)
+  let rerenderForTableChange: (() => void) | null = null
   const updateCartNav = (totalQty: number) => {
     refs.navButtons.cart.textContent = `Корзина (${totalQty})`
   }
 
   const tableSubscription = subscribeTable((snapshot) => {
+    const previousCanOpenOrder = canOpenActiveOrder(tableSnapshot)
+    const nextCanOpenOrder = canOpenActiveOrder(snapshot)
+    tableSnapshot = snapshot
+    setCartTableToken(snapshot.tableToken)
     const presentation = formatTableStatus(snapshot)
     refs.statusTitle.textContent = presentation.title
     refs.statusDetails.textContent = presentation.details ?? ''
     refs.app.dataset.tableSeverity = presentation.severity
+    updateOrderNavAccess(refs.navButtons, nextCanOpenOrder)
+    const routeName = resolveRoute().name
+    if (
+      rerenderForTableChange &&
+      (routeName === 'cart' || routeName === 'order') &&
+      previousCanOpenOrder !== nextCanOpenOrder
+    ) {
+      rerenderForTableChange()
+    }
   })
 
   const cartSubscription = subscribeCart((snapshot) => {
@@ -176,10 +257,32 @@ export function mountGuestApp(options: GuestAppOptions) {
   })
   updateCartNav(getCartSnapshot().totalQty)
 
-  const navigate = (hash: string) => {
-    if (window.location.hash !== hash) {
-      window.location.hash = hash
+  const historyStack: string[] = []
+  let replaceNextHistoryEntry = false
+
+  const navigate = (hash: string, options?: { replace?: boolean }) => {
+    if (window.location.hash === hash) {
+      return
     }
+    if (options?.replace) {
+      replaceNextHistoryEntry = true
+      const nextUrl = new URL(window.location.href)
+      nextUrl.hash = hash
+      window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+      window.dispatchEvent(new Event('hashchange'))
+      return
+    }
+    window.location.hash = hash
+  }
+
+  const navigateCatalogButton = () => {
+    const routeName = resolveRoute().name
+    const hasActiveVenueContext = tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && Boolean(tableSnapshot.venueId)
+    if ((routeName === 'cart' || routeName === 'order') && hasActiveVenueContext && tableSnapshot.venueId) {
+      navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
+      return
+    }
+    navigate('#/catalog', { replace: true })
   }
 
   const routeListeners = new Set<() => void>()
@@ -187,9 +290,28 @@ export function mountGuestApp(options: GuestAppOptions) {
     routeListeners.forEach((listener) => listener())
   }
 
-  const historyStack: string[] = []
   const updateHistory = (hash: string) => {
     if (!hash || hash === '#') {
+      return
+    }
+    if (replaceNextHistoryEntry) {
+      replaceNextHistoryEntry = false
+      if (historyStack.length === 0) {
+        historyStack.push(hash)
+        return
+      }
+      const nextRoute = resolveRouteNameFromHash(hash)
+      const lastRoute = resolveRouteNameFromHash(historyStack[historyStack.length - 1])
+      const prevRoute = resolveRouteNameFromHash(historyStack[historyStack.length - 2])
+      if (isTabFlowRoute(nextRoute) && isTabFlowRoute(lastRoute) && !isTabFlowRoute(prevRoute)) {
+        historyStack.push(hash)
+        return
+      }
+      historyStack[historyStack.length - 1] = hash
+      const prev = historyStack[historyStack.length - 2]
+      if (prev === hash) {
+        historyStack.pop()
+      }
       return
     }
     if (historyStack.length === 0) {
@@ -210,6 +332,52 @@ export function mountGuestApp(options: GuestAppOptions) {
 
   const disposables: Array<() => void> = []
   disposables.push(
+    on(refs.scanQrButton, 'click', () => {
+      const telegramContext = getTelegramContext()
+      const webApp = telegramContext.webApp
+      const scanQr = getTelegramQrScanner(webApp)
+      if (!scanQr) {
+        webApp?.showAlert?.('Сканер QR недоступен в текущем Telegram.')
+        return
+      }
+      try {
+        scanQr({ text: 'Наведите камеру на QR стола' }, (scannedText) => {
+          const token = extractTableTokenFromScannedText(scannedText)
+          if (!token) {
+            webApp?.showAlert?.('QR не содержит token стола.')
+            return false
+          }
+          try {
+            webApp?.closeScanQrPopup?.()
+          } catch {
+            // ignore scanner close errors
+          }
+          const nextUrl = new URL(window.location.href)
+          nextUrl.searchParams.delete('tableToken')
+          nextUrl.searchParams.delete('tgWebAppStartParam')
+          nextUrl.searchParams.delete('startapp')
+          nextUrl.searchParams.delete('start_param')
+          nextUrl.searchParams.set('table_token', token)
+          window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+          void refreshTableContext()
+            .then(() => {
+              const snapshot = getTableContext()
+              if (resolveRoute().name !== 'catalog') {
+                return
+              }
+              if (snapshot.status === 'resolved' && snapshot.venueId) {
+                navigate(`#/venue/${snapshot.venueId}`)
+              }
+            })
+            .catch(() => undefined)
+          return true
+        })
+      } catch {
+        webApp?.showAlert?.('Не удалось открыть QR-сканер.')
+      }
+    })
+  )
+  disposables.push(
     on(refs.fallbackChatButton, 'click', () => {
       const telegramContext = getTelegramContext()
       const tableSnapshot = getTableContext()
@@ -224,9 +392,9 @@ export function mountGuestApp(options: GuestAppOptions) {
       }
     })
   )
-  disposables.push(on(refs.navButtons.catalog, 'click', () => navigate('#/catalog')))
-  disposables.push(on(refs.navButtons.cart, 'click', () => navigate('#/cart')))
-  disposables.push(on(refs.navButtons.order, 'click', () => navigate('#/order')))
+  disposables.push(on(refs.navButtons.catalog, 'click', navigateCatalogButton))
+  disposables.push(on(refs.navButtons.cart, 'click', () => navigate('#/cart', { replace: true })))
+  disposables.push(on(refs.navButtons.order, 'click', () => navigate('#/order', { replace: true })))
 
   let currentDispose: (() => void) | null = null
   let currentRoute: Route = resolveRoute()
@@ -256,6 +424,14 @@ export function mountGuestApp(options: GuestAppOptions) {
     currentRoute = route
     updateNav(refs.navButtons, route.name)
     currentDispose?.()
+    if ((route.name === 'cart' || route.name === 'order') && !canOpenActiveOrder(tableSnapshot)) {
+      currentDispose = renderPlaceholder(
+        refs.content,
+        'Нужен QR стола',
+        'Корзина и заказ доступны после сканирования QR-кода стола.'
+      )
+      return
+    }
     currentDispose = renderRouteContent(
       route,
       refs.content,
@@ -276,6 +452,7 @@ export function mountGuestApp(options: GuestAppOptions) {
       }
     )
   }
+  rerenderForTableChange = render
 
   const onHashChange = () => {
     updateHistory(window.location.hash || '#/catalog')

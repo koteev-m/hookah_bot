@@ -32,6 +32,14 @@ data class VenueTableToken(
     val issuedAt: Instant,
 )
 
+data class VenueTableOwnerSummary(
+    val tableId: Long,
+    val tableNumber: Int,
+    val capacity: Int?,
+    val isActive: Boolean,
+    val token: String?,
+)
+
 class VenueTableRepository(private val dataSource: DataSource?) {
     private val tokenGenerator = TableTokenGenerator()
 
@@ -106,6 +114,49 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                                         tableNumber = rs.getInt("table_number"),
                                         token = rs.getString("token"),
                                         issuedAt = rs.getTimestamp("issued_at").toInstant(),
+                                    ),
+                                )
+                            }
+                            result
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun listOwnerTables(venueId: Long): List<VenueTableOwnerSummary> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT vt.id,
+                               vt.table_number,
+                               vt.capacity,
+                               vt.is_active,
+                               tt.token
+                        FROM venue_tables vt
+                        LEFT JOIN table_tokens tt
+                          ON tt.table_id = vt.id AND tt.is_active = true
+                        WHERE vt.venue_id = ?
+                        ORDER BY vt.table_number, vt.id
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.executeQuery().use { rs ->
+                            val result = mutableListOf<VenueTableOwnerSummary>()
+                            while (rs.next()) {
+                                result.add(
+                                    VenueTableOwnerSummary(
+                                        tableId = rs.getLong("id"),
+                                        tableNumber = rs.getInt("table_number"),
+                                        capacity = rs.getInt("capacity").takeIf { !rs.wasNull() },
+                                        isActive = rs.getBoolean("is_active"),
+                                        token = rs.getString("token"),
                                     ),
                                 )
                             }
@@ -213,6 +264,102 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                         throw e
                     } finally {
                         connection.autoCommit = true
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun createTable(
+        venueId: Long,
+        tableNumber: Int,
+        capacity: Int?,
+    ): VenueTableCreated {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val tableId = insertTable(connection, venueId, tableNumber, capacity)
+                        val issuedAt = Instant.now()
+                        insertToken(connection, tableId, issuedAt)
+                        connection.commit()
+                        VenueTableCreated(
+                            tableId = tableId,
+                            tableNumber = tableNumber,
+                            tokenIssuedAt = issuedAt,
+                        )
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun updateTableNumber(
+        venueId: Long,
+        tableId: Long,
+        tableNumber: Int,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        UPDATE venue_tables
+                        SET table_number = ?
+                        WHERE id = ? AND venue_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setInt(1, tableNumber)
+                        statement.setLong(2, tableId)
+                        statement.setLong(3, venueId)
+                        try {
+                            statement.executeUpdate() > 0
+                        } catch (e: SQLException) {
+                            if (e.sqlState == "23505") {
+                                throw TableNumberConflictException()
+                            }
+                            throw e
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun updateTableCapacity(
+        venueId: Long,
+        tableId: Long,
+        capacity: Int,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        UPDATE venue_tables
+                        SET capacity = ?
+                        WHERE id = ? AND venue_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setInt(1, capacity)
+                        statement.setLong(2, tableId)
+                        statement.setLong(3, venueId)
+                        statement.executeUpdate() > 0
                     }
                 }
             } catch (e: SQLException) {
@@ -335,16 +482,22 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         connection: Connection,
         venueId: Long,
         tableNumber: Int,
+        capacity: Int? = null,
     ): Long {
         return connection.prepareStatement(
             """
-            INSERT INTO venue_tables (venue_id, table_number, is_active)
-            VALUES (?, ?, true)
+            INSERT INTO venue_tables (venue_id, table_number, capacity, is_active)
+            VALUES (?, ?, ?, true)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setInt(2, tableNumber)
+            if (capacity == null) {
+                statement.setNull(3, java.sql.Types.INTEGER)
+            } else {
+                statement.setInt(3, capacity)
+            }
             try {
                 statement.executeUpdate()
             } catch (e: SQLException) {

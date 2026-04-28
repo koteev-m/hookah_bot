@@ -19,6 +19,7 @@ type OrderScreenOptions = {
 }
 
 type OrderRefs = {
+  header: HTMLDivElement
   statusValue: HTMLParagraphElement
   hint: HTMLParagraphElement
   message: HTMLParagraphElement
@@ -69,7 +70,8 @@ function formatItemTitle(itemId: number): string {
 
 function buildOrderDom(root: HTMLDivElement): OrderRefs {
   const wrapper = el('div', { className: 'order-screen' })
-  const header = el('div', { className: 'card' })
+  const header = el('div', { className: 'card' }) as HTMLDivElement
+  header.hidden = true
   const title = el('h3', { text: 'Активный заказ' })
   const statusValue = el('p', { className: 'order-status', text: '' })
   const hint = el('p', { className: 'order-hint', text: '' })
@@ -98,6 +100,7 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
   root.replaceChildren(wrapper)
 
   return {
+    header,
     statusValue,
     hint,
     message,
@@ -223,6 +226,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     refs.content.replaceChildren()
     updateHint()
     hideError()
+    refs.header.hidden = !currentOrder
     if (inFlight) {
       refs.content.appendChild(el('p', { className: 'order-empty', text: 'Загрузка заказа…' }))
       return

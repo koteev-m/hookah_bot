@@ -11,6 +11,7 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestTabDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestTabResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestTabsResponse
 import com.hookah.platform.backend.miniapp.guest.api.JoinTabRequest
+import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -22,12 +23,16 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import java.security.SecureRandom
 import java.time.Duration
 import java.time.Instant
-import java.util.UUID
 
 private val inviteDefaultTtl: Duration = Duration.ofMinutes(15)
 private val inviteMaxTtl: Duration = Duration.ofHours(24)
+private const val inviteCodeLength: Int = 4
+private const val inviteCodeRangeExclusive: Int = 10_000
+private const val inviteCodeMaxAttempts: Int = 32
+private val inviteCodeRandom = SecureRandom()
 
 fun Route.guestTabsRoutes(
     guestTabsRepository: GuestTabsRepository,
@@ -91,28 +96,40 @@ fun Route.guestTabsRoutes(
                     ?: throw NotFoundException()
             ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
 
+            guestTabsRepository.deleteExpiredInvites()
             val ttl = normalizeInviteTtl(request.ttlSeconds)
-            val token = UUID.randomUUID().toString().replace("-", "")
             val expiresAt = Instant.now().plus(ttl)
-            val created =
-                guestTabsRepository.createInvite(
-                    tabId = tabId,
-                    venueId = session.venueId,
-                    tableSessionId = session.id,
-                    createdBy = userId,
-                    token = token,
-                    expiresAt = expiresAt,
-                )
-            if (!created) {
-                throw ForbiddenException("Only shared tab owner can create invites")
+            repeat(inviteCodeMaxAttempts) {
+                val code = generateInviteCode()
+                when (
+                    guestTabsRepository.createInvite(
+                        tabId = tabId,
+                        venueId = session.venueId,
+                        tableSessionId = session.id,
+                        createdBy = userId,
+                        token = code,
+                        expiresAt = expiresAt,
+                    )
+                ) {
+                    CreateInviteResult.CREATED -> {
+                        call.respond(
+                            CreateTabInviteResponse(
+                                tabId = tabId,
+                                token = code,
+                                expiresAtEpochSeconds = expiresAt.epochSecond,
+                            ),
+                        )
+                        return@post
+                    }
+
+                    CreateInviteResult.FORBIDDEN -> {
+                        throw ForbiddenException("Only shared tab owner can create invites")
+                    }
+
+                    CreateInviteResult.TOKEN_CONFLICT -> Unit
+                }
             }
-            call.respond(
-                CreateTabInviteResponse(
-                    tabId = tabId,
-                    token = token,
-                    expiresAtEpochSeconds = expiresAt.epochSecond,
-                ),
-            )
+            throw InvalidInputException("Unable to generate invite code")
         }
     }
 
@@ -164,6 +181,9 @@ private fun normalizeInviteTtl(rawTtlSeconds: Long?): Duration {
     }
     return ttl
 }
+
+private fun generateInviteCode(): String =
+    inviteCodeRandom.nextInt(inviteCodeRangeExclusive).toString().padStart(inviteCodeLength, '0')
 
 private fun com.hookah.platform.backend.miniapp.guest.db.GuestTabModel.toDto(): GuestTabDto =
     GuestTabDto(

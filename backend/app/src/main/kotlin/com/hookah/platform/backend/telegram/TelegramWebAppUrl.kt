@@ -22,3 +22,12 @@ fun buildWebAppUrl(
     val baseWithParams = pathWithQuery + prefix + encodedParams
     return if (fragment == null) baseWithParams else baseWithParams + "#" + fragment
 }
+
+fun buildTelegramStartUrl(
+    botUsername: String,
+    startParam: String,
+): String {
+    val username = botUsername.trim().removePrefix("@")
+    val encodedParam = URLEncoder.encode(startParam, StandardCharsets.UTF_8)
+    return "https://t.me/$username?start=$encodedParam"
+}

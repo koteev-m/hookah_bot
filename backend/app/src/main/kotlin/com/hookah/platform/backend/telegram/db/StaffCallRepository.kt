@@ -9,6 +9,58 @@ import java.time.Instant
 import javax.sql.DataSource
 
 class StaffCallRepository(private val dataSource: DataSource?) {
+    suspend fun listActiveByVenue(
+        venueId: Long,
+        limit: Int,
+    ): List<StaffCallQueueItem> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT sc.id,
+                               sc.table_id,
+                               vt.table_number,
+                               sc.reason,
+                               sc.comment,
+                               sc.status,
+                               sc.created_at
+                        FROM staff_calls sc
+                        JOIN venue_tables vt ON vt.id = sc.table_id
+                        WHERE sc.venue_id = ?
+                          AND sc.status IN ('NEW', 'ACK')
+                        ORDER BY sc.created_at DESC, sc.id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setInt(2, limit)
+                        statement.executeQuery().use { rs ->
+                            val result = mutableListOf<StaffCallQueueItem>()
+                            while (rs.next()) {
+                                result.add(
+                                    StaffCallQueueItem(
+                                        id = rs.getLong("id"),
+                                        tableId = rs.getLong("table_id"),
+                                        tableNumber = rs.getInt("table_number"),
+                                        reason = rs.getString("reason"),
+                                        comment = rs.getString("comment"),
+                                        status = rs.getString("status"),
+                                        createdAt = rs.getTimestamp("created_at").toInstant(),
+                                    ),
+                                )
+                            }
+                            result
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun createStaffCall(
         venueId: Long,
         tableId: Long,
@@ -118,5 +170,15 @@ class StaffCallRepository(private val dataSource: DataSource?) {
 
 data class CreatedStaffCall(
     val id: Long,
+    val createdAt: Instant,
+)
+
+data class StaffCallQueueItem(
+    val id: Long,
+    val tableId: Long,
+    val tableNumber: Int,
+    val reason: String,
+    val comment: String?,
+    val status: String,
     val createdAt: Instant,
 )

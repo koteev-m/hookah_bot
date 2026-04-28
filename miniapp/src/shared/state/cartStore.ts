@@ -1,3 +1,5 @@
+import { getItemMeta, type ItemMeta, updateItemCache } from './itemCache'
+
 export type CartSnapshot = {
   items: Map<number, number>
   totalQty: number
@@ -13,9 +15,17 @@ type SetQtyResult = {
 
 const MAX_QTY = 50
 const MAX_DISTINCT = 50
+const cartDraftLocalStoragePrefix = 'hookah_guest_cart_draft:'
 const listeners = new Set<CartListener>()
 let items = new Map<number, number>()
 let totalQty = 0
+let activeTableToken: string | null = null
+let activeDraftStorageKey: string | null = null
+
+type PersistedDraft = {
+  items: Array<[number, number]>
+  itemMeta?: ItemMeta[]
+}
 
 function clampQty(qty: number): number {
   return Math.max(0, Math.min(MAX_QTY, qty))
@@ -30,6 +40,96 @@ function normalizeQty(qty: number): number {
 
 function isValidItemId(itemId: number): boolean {
   return Number.isInteger(itemId) && itemId > 0
+}
+
+function getDraftStorageKey(tableToken: string): string {
+  return `${cartDraftLocalStoragePrefix}${tableToken}`
+}
+
+function setLocalStorageItem(key: string, value: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // ignore local storage errors
+  }
+}
+
+function removeLocalStorageItem(key: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // ignore local storage errors
+  }
+}
+
+function getLocalStorageItem(key: string): string | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  try {
+    const value = window.localStorage.getItem(key)
+    return value ? value : null
+  } catch {
+    return null
+  }
+}
+
+function persistActiveDraft(): void {
+  if (!activeDraftStorageKey) {
+    return
+  }
+  if (items.size === 0) {
+    removeLocalStorageItem(activeDraftStorageKey)
+    return
+  }
+  const itemMeta: ItemMeta[] = []
+  for (const [itemId] of items) {
+    const meta = getItemMeta(itemId)
+    if (meta) {
+      itemMeta.push(meta)
+    }
+  }
+  const payload: PersistedDraft = { items: Array.from(items.entries()) }
+  if (itemMeta.length > 0) {
+    payload.itemMeta = itemMeta
+  }
+  const serialized = JSON.stringify(payload)
+  setLocalStorageItem(activeDraftStorageKey, serialized)
+}
+
+function loadDraftFromStorage(storageKey: string): { items: Map<number, number>; itemMeta: ItemMeta[] } {
+  const raw = getLocalStorageItem(storageKey)
+  if (!raw) {
+    return { items: new Map(), itemMeta: [] }
+  }
+  try {
+    const parsed = JSON.parse(raw) as PersistedDraft
+    if (!Array.isArray(parsed.items)) {
+      return { items: new Map(), itemMeta: [] }
+    }
+    const restored = new Map<number, number>()
+    for (const entry of parsed.items) {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        continue
+      }
+      const itemId = Number(entry[0])
+      const qty = normalizeQty(Number(entry[1]))
+      if (!isValidItemId(itemId) || qty <= 0) {
+        continue
+      }
+      restored.set(itemId, qty)
+    }
+    const restoredMeta = Array.isArray(parsed.itemMeta) ? parsed.itemMeta : []
+    return { items: restored, itemMeta: restoredMeta }
+  } catch {
+    return { items: new Map(), itemMeta: [] }
+  }
 }
 
 function buildSnapshot(): CartSnapshot {
@@ -56,6 +156,28 @@ function updateTotals() {
     items.set(itemId, nextQty)
     totalQty += nextQty
   }
+}
+
+export function setCartTableToken(tableToken: string | null): void {
+  const normalizedToken = tableToken?.trim() || null
+  if (normalizedToken === activeTableToken) {
+    return
+  }
+  activeTableToken = normalizedToken
+  activeDraftStorageKey = normalizedToken ? getDraftStorageKey(normalizedToken) : null
+  if (!activeDraftStorageKey) {
+    items = new Map()
+    totalQty = 0
+    notify()
+    return
+  }
+  const restoredDraft = loadDraftFromStorage(activeDraftStorageKey)
+  items = restoredDraft.items
+  if (restoredDraft.itemMeta.length > 0) {
+    updateItemCache(restoredDraft.itemMeta)
+  }
+  updateTotals()
+  notify()
 }
 
 export function getCartSnapshot(): CartSnapshot {
@@ -85,6 +207,7 @@ export function addToCart(itemId: number): SetQtyResult {
     items.set(itemId, nextQty)
   }
   updateTotals()
+  persistActiveDraft()
   notify()
   return { ok: true }
 }
@@ -104,6 +227,7 @@ export function removeFromCart(itemId: number): void {
     items.set(itemId, nextQty)
   }
   updateTotals()
+  persistActiveDraft()
   notify()
 }
 
@@ -122,6 +246,7 @@ export function setCartQty(itemId: number, qty: number): SetQtyResult {
     items.set(itemId, nextQty)
   }
   updateTotals()
+  persistActiveDraft()
   notify()
   return { ok: true }
 }
@@ -129,5 +254,6 @@ export function setCartQty(itemId: number, qty: number): SetQtyResult {
 export function clearCart(): void {
   items = new Map()
   totalQty = 0
+  persistActiveDraft()
   notify()
 }

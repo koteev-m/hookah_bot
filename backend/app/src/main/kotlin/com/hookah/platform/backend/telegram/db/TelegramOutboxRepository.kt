@@ -81,7 +81,7 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
                             FROM telegram_outbox
                             WHERE status IN (?, ?)
                               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-                            ORDER BY created_at
+                            ORDER BY created_at, id
                             LIMIT ?
                             FOR UPDATE SKIP LOCKED
                             """.trimIndent()

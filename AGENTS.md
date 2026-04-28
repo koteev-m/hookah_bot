@@ -1,34 +1,24 @@
-# Codex Project Instructions — Hookah Platform (Telegram Bot + Mini App)
+# Repository guide for Cursor
 
-## Scope
-This repo implements a multi-tenant Telegram platform for hookah lounges (“venues”) with:
-- Guest Mode (catalog, booking, in-venue QR ordering)
-- Venue Mode (admin panel for venue owners/managers/staff)
-- Platform Mode (super-admin panel to onboard/manage venues and subscriptions)
-- Fallback chat-bot flow when Mini App fails to load
+## Goal
+Maintain this Kotlin Telegram bot with minimal diffs and without breaking current behavior.
 
-## Golden rules (must follow)
-1) Multi-tenant isolation: Every read/write MUST be scoped to venue_id and authorized. No cross-venue data leakage.
-2) RBAC: Enforce roles server-side (platform_owner/platform_admin, venue_owner/venue_admin/venue_manager, staff_waiter/staff_hookah, guest).
-3) Telegram WebApp: NEVER trust client input. Validate Telegram WebApp initData server-side for auth; do not rely on initDataUnsafe.
-4) Telegram Webhook: verify secret token header; handle updates idempotently; ACK fast, process async.
-5) Orders:
-   - Table QR establishes table context.
-   - One active “order” per table_session; multiple “batches” (dosa orders) inside it.
-   - Staff receives orders in Venue Mode; optional duplicate messages to a venue-owned staff group chat.
-6) Split bill:
-   - Default: personal tab per user in a table_session
-   - Shared tab requires explicit join/consent; prevent ordering on someone else’s tab.
-7) Stop-list: menu items can be toggled available/unavailable instantly; unavailable items must not appear in guest menu.
-8) Billing: subscription per venue with trial and per-venue price overrides; card payments via external checkout+webhook; Telegram Stars optional; gating on past_due/suspended.
-9) Observability: structured logs, correlation IDs, minimal PII; metrics for webhook lag, queues, outbound delivery success.
-10) Reliability: queue-based processing for webhooks and outbound messages; rate limiting; graceful degradation to fallback bot.
+## Workflow
+- For multi-file, architectural, or risky tasks: use Plan Mode first
+- For local fixes: edit directly
+- Inspect related handlers, services, config, and tests before editing
 
-## Where the product spec lives
-- docs/PRODUCT_SPEC.md is the product source-of-truth for required blocks 1–18.
-When reviewing or modifying code, always compare implementation against that spec.
+## Coding rules
+- Idiomatic Kotlin
+- Null-safe code
+- Small focused changes
+- Keep package structure intact
+- Update tests for behavior changes
+- Add KDoc only for public API or non-obvious logic
 
-## How to work (Codex)
-- Prefer read-only mode for audits.
-- For any finding: include file paths and exact function/endpoint names; avoid vague statements.
-- When proposing fixes: list minimal patch + how to verify (tests/commands).
+## Verification
+- Prefer existing Gradle tasks from the repo
+- Run the smallest relevant checks first, then broader ones
+
+## Sensitive data
+- Never expose bot tokens, .env files, local.properties, or secrets

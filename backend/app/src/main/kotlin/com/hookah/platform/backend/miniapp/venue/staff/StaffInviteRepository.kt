@@ -71,6 +71,41 @@ class StaffInviteRepository(
         }
     }
 
+    suspend fun previewInvite(code: String): StaffInvitePreviewResult {
+        val ds = dataSource ?: return StaffInvitePreviewResult.DatabaseError
+        val normalizedCode =
+            StaffInviteCodeFormat.normalizeCode(code) ?: return StaffInvitePreviewResult.InvalidOrExpired
+        val codeHash = hashCode(normalizedCode)
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                try {
+                    val invite =
+                        loadInvite(connection, codeHash, forUpdate = false)
+                            ?: return@use StaffInvitePreviewResult.InvalidOrExpired
+                    val nowTs = now()
+                    if (invite.usedAt != null || !invite.expiresAt.isAfter(nowTs)) {
+                        return@use StaffInvitePreviewResult.InvalidOrExpired
+                    }
+                    StaffInvitePreviewResult.Success(
+                        StaffInvitePreview(
+                            venueId = invite.venueId,
+                            role = invite.role,
+                            createdByUserId = invite.createdByUserId,
+                            expiresAt = invite.expiresAt,
+                        ),
+                    )
+                } catch (e: Exception) {
+                    logger.warn(
+                        "Failed to preview staff invite: {}",
+                        sanitizeTelegramForLog(e.message),
+                    )
+                    logger.debugTelegramException(e) { "previewInvite exception" }
+                    StaffInvitePreviewResult.DatabaseError
+                }
+            }
+        }
+    }
+
     suspend fun acceptInvite(
         code: String,
         userId: Long,
@@ -128,16 +163,58 @@ class StaffInviteRepository(
         }
     }
 
+    suspend fun declineInvite(
+        code: String,
+        userId: Long,
+    ): StaffInviteDeclineResult {
+        val ds = dataSource ?: return StaffInviteDeclineResult.DatabaseError
+        val normalizedCode =
+            StaffInviteCodeFormat.normalizeCode(code) ?: return StaffInviteDeclineResult.InvalidOrExpired
+        val codeHash = hashCode(normalizedCode)
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val initialAutoCommit = connection.autoCommit
+                connection.autoCommit = false
+                try {
+                    val invite =
+                        loadInvite(connection, codeHash) ?: return@use rollbackAndReturn(connection) {
+                            StaffInviteDeclineResult.InvalidOrExpired
+                        }
+                    val nowTs = now()
+                    if (invite.usedAt != null || !invite.expiresAt.isAfter(nowTs)) {
+                        return@use rollbackAndReturn(connection) { StaffInviteDeclineResult.InvalidOrExpired }
+                    }
+                    markInviteUsed(connection, codeHash, nowTs, userId)
+                    connection.commit()
+                    StaffInviteDeclineResult.Success
+                } catch (e: Exception) {
+                    rollbackBestEffort(connection)
+                    logger.warn(
+                        "Failed to decline staff invite userId={}: {}",
+                        userId,
+                        sanitizeTelegramForLog(e.message),
+                    )
+                    logger.debugTelegramException(e) { "declineInvite exception userId=$userId" }
+                    StaffInviteDeclineResult.DatabaseError
+                } finally {
+                    connection.autoCommit = initialAutoCommit
+                }
+            }
+        }
+    }
+
     private fun loadInvite(
         connection: Connection,
         codeHash: String,
+        forUpdate: Boolean = true,
     ): StaffInviteRow? {
+        val lockClause = if (forUpdate) " FOR UPDATE" else ""
         return connection.prepareStatement(
             """
             SELECT venue_id, role, created_by_user_id, expires_at, used_at
             FROM venue_staff_invites
             WHERE code_hash = ?
-            FOR UPDATE
+            $lockClause
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, codeHash)
@@ -243,12 +320,35 @@ data class StaffInviteCodeResult(
     val ttlSeconds: Long,
 )
 
+data class StaffInvitePreview(
+    val venueId: Long,
+    val role: String,
+    val createdByUserId: Long,
+    val expiresAt: Instant,
+)
+
+sealed interface StaffInvitePreviewResult {
+    data class Success(val invite: StaffInvitePreview) : StaffInvitePreviewResult
+
+    data object InvalidOrExpired : StaffInvitePreviewResult
+
+    data object DatabaseError : StaffInvitePreviewResult
+}
+
 sealed interface StaffInviteAcceptResult {
     data class Success(val member: VenueStaffMember, val alreadyMember: Boolean) : StaffInviteAcceptResult
 
     data object InvalidOrExpired : StaffInviteAcceptResult
 
     data object DatabaseError : StaffInviteAcceptResult
+}
+
+sealed interface StaffInviteDeclineResult {
+    data object Success : StaffInviteDeclineResult
+
+    data object InvalidOrExpired : StaffInviteDeclineResult
+
+    data object DatabaseError : StaffInviteDeclineResult
 }
 
 private data class StaffInviteRow(

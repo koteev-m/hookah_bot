@@ -1,0 +1,12 @@
+**/build/**
+.gradle/
+.kotlin/
+out/
+logs/
+*.log
+.env
+.env.*
+local.properties
+secrets/**
+*.iml
+.idea/workspace.xml

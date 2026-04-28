@@ -10,6 +10,7 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -595,7 +596,7 @@ class GuestOrderRoutesTest {
 
             environment { this.config = config }
             application {
-                module(
+                moduleWithOverrides(
                     ModuleOverrides(
                         tableTokenResolver = {
                             resolveCalls += 1

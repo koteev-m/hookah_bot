@@ -59,7 +59,7 @@ object DatabaseFactory {
         return if (jdbcUrl.startsWith("jdbc:h2:", ignoreCase = true)) {
             arrayOf("classpath:db/migration/h2")
         } else {
-            arrayOf("classpath:db/migration")
+            arrayOf("classpath:db/migration/postgresql")
         }
     }
 }

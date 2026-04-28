@@ -1,6 +1,10 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
@@ -11,6 +15,8 @@ import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
+import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -21,6 +27,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.time.Duration
 
 class TelegramBotRouterLinkCommandTest {
     private val apiClient: TelegramApiClient = mockk(relaxed = true)
@@ -33,9 +40,15 @@ class TelegramBotRouterLinkCommandTest {
     private val ordersRepository: OrdersRepository = mockk()
     private val staffCallRepository: StaffCallRepository = mockk()
     private val staffChatLinkCodeRepository: StaffChatLinkCodeRepository = mockk()
+    private val guestBookingRepository: GuestBookingRepository = mockk(relaxed = true)
     private val venueRepository: VenueRepository = mockk()
+    private val venueBookingHoursRepository: VenueBookingHoursRepository = mockk(relaxed = true)
+    private val venueMenuSectionImagesRepository: VenueMenuSectionImagesRepository = mockk(relaxed = true)
     private val venueAccessRepository: VenueAccessRepository = mockk()
     private val subscriptionRepository: SubscriptionRepository = mockk()
+    private val guestMenuRepository: GuestMenuRepository = mockk()
+    private val tableSessionRepository: TableSessionRepository = mockk(relaxed = true)
+    private val guestTabsRepository: GuestTabsRepository = mockk(relaxed = true)
     private val router =
         TelegramBotRouter(
             config =
@@ -62,9 +75,16 @@ class TelegramBotRouterLinkCommandTest {
             ordersRepository = ordersRepository,
             staffCallRepository = staffCallRepository,
             staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+            guestBookingRepository = guestBookingRepository,
             venueRepository = venueRepository,
+            venueBookingHoursRepository = venueBookingHoursRepository,
+            venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
             venueAccessRepository = venueAccessRepository,
             subscriptionRepository = subscriptionRepository,
+            guestMenuRepository = guestMenuRepository,
+            tableSessionRepository = tableSessionRepository,
+            guestTabsRepository = guestTabsRepository,
+            tableSessionTtl = Duration.ofHours(2),
             json = Json { ignoreUnknownKeys = true },
             scope = CoroutineScope(Dispatchers.Unconfined),
         )

@@ -127,6 +127,90 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun updateVenueName(
+        venueId: Long,
+        name: String,
+    ): PlatformVenueDetail? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val updatedRows =
+                            connection.prepareStatement(
+                                """
+                                UPDATE venues
+                                SET name = ?
+                                WHERE id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, name)
+                                statement.setLong(2, venueId)
+                                statement.executeUpdate()
+                            }
+                        if (updatedRows <= 0) {
+                            connection.rollback()
+                            return@withContext null
+                        }
+                        val updated = loadVenueDetail(connection, venueId)
+                        connection.commit()
+                        updated
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun updateVenueAddress(
+        venueId: Long,
+        address: String,
+    ): PlatformVenueDetail? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val updatedRows =
+                            connection.prepareStatement(
+                                """
+                                UPDATE venues
+                                SET address = ?
+                                WHERE id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, address)
+                                statement.setLong(2, venueId)
+                                statement.executeUpdate()
+                            }
+                        if (updatedRows <= 0) {
+                            connection.rollback()
+                            return@withContext null
+                        }
+                        val updated = loadVenueDetail(connection, venueId)
+                        connection.commit()
+                        updated
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun listOwners(venueId: Long): List<PlatformVenueOwner> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {

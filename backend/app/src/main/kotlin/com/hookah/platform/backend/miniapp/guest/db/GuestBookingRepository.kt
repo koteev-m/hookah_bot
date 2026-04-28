@@ -35,6 +35,15 @@ data class BookingRecord(
     val status: BookingStatus,
 )
 
+data class UserBookingSummaryRecord(
+    val id: Long,
+    val venueId: Long,
+    val venueName: String,
+    val scheduledAt: Instant,
+    val partySize: Int?,
+    val status: BookingStatus,
+)
+
 class GuestBookingRepository(private val dataSource: DataSource?) {
     suspend fun create(
         venueId: Long,
@@ -125,6 +134,37 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findActiveByGuest(
+        bookingId: Long,
+        venueId: Long,
+        userId: Long,
+    ): BookingRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT id, venue_id, user_id, scheduled_at, party_size, comment, status
+                        FROM bookings
+                        WHERE id = ? AND venue_id = ? AND user_id = ?
+                          AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, bookingId)
+                        statement.setLong(2, venueId)
+                        statement.setLong(3, userId)
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) mapBooking(rs) else null
+                        }
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
     suspend fun cancelByGuest(
         bookingId: Long,
         venueId: Long,
@@ -202,6 +242,88 @@ class GuestBookingRepository(private val dataSource: DataSource?) {
                         statement.setLong(1, venueId)
                         statement.setLong(2, userId)
                         statement.setInt(3, limit)
+                        statement.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) {
+                                    add(mapBooking(rs))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
+    suspend fun listActiveByUser(
+        userId: Long,
+        limit: Int = 20,
+    ): List<UserBookingSummaryRecord> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT b.id, b.venue_id, v.name AS venue_name, b.scheduled_at, b.party_size, b.status
+                        FROM bookings b
+                        JOIN venues v ON v.id = b.venue_id
+                        WHERE b.user_id = ?
+                          AND b.status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                          AND b.scheduled_at >= CURRENT_TIMESTAMP
+                        ORDER BY b.scheduled_at ASC, b.id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, userId)
+                        statement.setInt(2, limit)
+                        statement.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) {
+                                    add(
+                                        UserBookingSummaryRecord(
+                                            id = rs.getLong("id"),
+                                            venueId = rs.getLong("venue_id"),
+                                            venueName = rs.getString("venue_name"),
+                                            scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
+                                            partySize = rs.getInt("party_size").let { if (rs.wasNull()) null else it },
+                                            status = BookingStatus.fromDb(rs.getString("status")) ?: BookingStatus.PENDING,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
+    suspend fun listActiveByVenue(
+        venueId: Long,
+        limit: Int = 20,
+    ): List<BookingRecord> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT id, venue_id, user_id, scheduled_at, party_size, comment, status
+                        FROM bookings
+                        WHERE venue_id = ?
+                          AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                          AND scheduled_at >= CURRENT_TIMESTAMP
+                        ORDER BY scheduled_at ASC, id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setInt(2, limit)
                         statement.executeQuery().use { rs ->
                             buildList {
                                 while (rs.next()) {

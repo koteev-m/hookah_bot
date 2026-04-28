@@ -24,6 +24,48 @@ class TelegramOutboxEnqueuer(
         )
     }
 
+    suspend fun enqueueEditMessageText(
+        chatId: Long,
+        messageId: Long,
+        text: String,
+        replyMarkup: ReplyMarkup? = null,
+    ) {
+        val payload = buildEditMessageTextPayload(json, chatId, messageId, text, replyMarkup)
+        repository.enqueue(
+            chatId = chatId,
+            method = "editMessageText",
+            payloadJson = json.encodeToString(EditMessageTextPayload.serializer(), payload),
+        )
+    }
+
+    suspend fun enqueueSendPhoto(
+        chatId: Long,
+        photo: String,
+        caption: String? = null,
+        replyMarkup: ReplyMarkup? = null,
+    ) {
+        val payload = buildSendPhotoPayload(json, chatId, photo, caption, replyMarkup)
+        repository.enqueue(
+            chatId = chatId,
+            method = "sendPhoto",
+            payloadJson = json.encodeToString(SendPhotoPayload.serializer(), payload),
+        )
+    }
+
+    suspend fun enqueueSendDocument(
+        chatId: Long,
+        document: String,
+        caption: String? = null,
+        replyMarkup: ReplyMarkup? = null,
+    ) {
+        val payload = buildSendDocumentPayload(json, chatId, document, caption, replyMarkup)
+        repository.enqueue(
+            chatId = chatId,
+            method = "sendDocument",
+            payloadJson = json.encodeToString(SendDocumentPayload.serializer(), payload),
+        )
+    }
+
     suspend fun enqueueAnswerCallbackQuery(
         chatId: Long,
         callbackQueryId: String,

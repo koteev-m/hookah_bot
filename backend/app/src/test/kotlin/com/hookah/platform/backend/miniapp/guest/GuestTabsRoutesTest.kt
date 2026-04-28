@@ -14,6 +14,7 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
+import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -36,6 +37,7 @@ import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class GuestTabsRoutesTest {
@@ -207,6 +209,183 @@ class GuestTabsRoutesTest {
         }
 
     @Test
+    fun `create shared tab is idempotent for same owner and table session`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-tabs-shared-idempotent")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 33)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+
+            val ownerToken = issueToken(config, userId = 90909)
+            val requestBody =
+                json.encodeToString(
+                    CreateSharedTabRequest.serializer(),
+                    CreateSharedTabRequest(tableSessionId),
+                )
+
+            val firstCreateResponse =
+                client.post("/api/guest/tabs/shared") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    setBody(requestBody)
+                }
+            assertEquals(HttpStatusCode.OK, firstCreateResponse.status)
+            val firstTab = json.decodeFromString(GuestTabResponse.serializer(), firstCreateResponse.bodyAsText()).tab
+
+            val secondCreateResponse =
+                client.post("/api/guest/tabs/shared") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    setBody(requestBody)
+                }
+            assertEquals(HttpStatusCode.OK, secondCreateResponse.status)
+            val secondTab = json.decodeFromString(GuestTabResponse.serializer(), secondCreateResponse.bodyAsText()).tab
+
+            assertEquals(firstTab.id, secondTab.id)
+
+            val tabsResponse =
+                client.get("/api/guest/tabs?table_session_id=$tableSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, tabsResponse.status)
+            val tabsPayload = json.decodeFromString(GuestTabsResponse.serializer(), tabsResponse.bodyAsText())
+            assertEquals(1, tabsPayload.tabs.count { it.type == "SHARED" && it.status == "ACTIVE" })
+        }
+
+    @Test
+    fun `invite returns four digit code and removes expired invites`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-tabs-invite-code")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 37)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val ownerUserId = 88888L
+            val ownerToken = issueToken(config, userId = ownerUserId)
+            val tabId = createSharedTab(client, ownerToken, tableSessionId)
+
+            seedExpiredInvite(jdbcUrl, tabId, ownerUserId, token = "0001")
+            assertEquals(1, countExpiredInvites(jdbcUrl))
+
+            val inviteToken = createTabInvite(client, ownerToken, tableSessionId, tabId)
+            assertTrue(Regex("\\d{4}").matches(inviteToken))
+            assertEquals(0, countExpiredInvites(jdbcUrl))
+        }
+
+    @Test
+    fun `join shared closes empty owner-only shared tabs of joiner in same session`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-tabs-join-cleanup-empty")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 34)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+
+            val ownerToken = issueToken(config, userId = 11111)
+            val anotherOwnerToken = issueToken(config, userId = 22222)
+
+            val ownSharedTabId = createSharedTab(client, ownerToken, tableSessionId)
+            val targetSharedTabId = createSharedTab(client, anotherOwnerToken, tableSessionId)
+            val targetInviteToken = createTabInvite(client, anotherOwnerToken, tableSessionId, targetSharedTabId)
+
+            joinSharedTab(client, ownerToken, tableSessionId, targetInviteToken)
+
+            assertEquals("CLOSED", fetchTabStatus(jdbcUrl, ownSharedTabId))
+            assertEquals("ACTIVE", fetchTabStatus(jdbcUrl, targetSharedTabId))
+
+            val tabsResponse =
+                client.get("/api/guest/tabs?table_session_id=$tableSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, tabsResponse.status)
+            val tabsPayload = json.decodeFromString(GuestTabsResponse.serializer(), tabsResponse.bodyAsText())
+            assertFalse(tabsPayload.tabs.any { it.id == ownSharedTabId })
+            assertTrue(tabsPayload.tabs.any { it.id == targetSharedTabId })
+        }
+
+    @Test
+    fun `join shared does not close own non-empty shared tab`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-tabs-join-cleanup-nonempty")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 35)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+
+            val ownerToken = issueToken(config, userId = 33333)
+            val anotherOwnerToken = issueToken(config, userId = 44444)
+
+            val ownSharedTabId = createSharedTab(client, ownerToken, tableSessionId)
+            seedOrderBatchForTab(jdbcUrl, venueId, tableId, ownSharedTabId)
+            val targetSharedTabId = createSharedTab(client, anotherOwnerToken, tableSessionId)
+            val targetInviteToken = createTabInvite(client, anotherOwnerToken, tableSessionId, targetSharedTabId)
+
+            joinSharedTab(client, ownerToken, tableSessionId, targetInviteToken)
+
+            assertEquals("ACTIVE", fetchTabStatus(jdbcUrl, ownSharedTabId))
+        }
+
+    @Test
+    fun `join shared does not close own shared tab with other members`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-tabs-join-cleanup-members")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 36)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+
+            val ownerToken = issueToken(config, userId = 55555)
+            val anotherOwnerToken = issueToken(config, userId = 66666)
+            val memberToken = issueToken(config, userId = 77777)
+
+            val ownSharedTabId = createSharedTab(client, ownerToken, tableSessionId)
+            val ownSharedInviteToken = createTabInvite(client, ownerToken, tableSessionId, ownSharedTabId)
+            joinSharedTab(client, memberToken, tableSessionId, ownSharedInviteToken)
+
+            val targetSharedTabId = createSharedTab(client, anotherOwnerToken, tableSessionId)
+            val targetInviteToken = createTabInvite(client, anotherOwnerToken, tableSessionId, targetSharedTabId)
+            joinSharedTab(client, ownerToken, tableSessionId, targetInviteToken)
+
+            assertEquals("ACTIVE", fetchTabStatus(jdbcUrl, ownSharedTabId))
+        }
+
+    @Test
     fun `join tab rejects too long token`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-tabs-join-token-limit")
@@ -265,6 +444,67 @@ class GuestTabsRoutesTest {
     ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
         return service.issueToken(userId).token
+    }
+
+    private suspend fun createSharedTab(
+        client: HttpClient,
+        authToken: String,
+        tableSessionId: Long,
+    ): Long {
+        val response =
+            client.post("/api/guest/tabs/shared") {
+                contentType(ContentType.Application.Json)
+                headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                setBody(
+                    json.encodeToString(
+                        CreateSharedTabRequest.serializer(),
+                        CreateSharedTabRequest(tableSessionId),
+                    ),
+                )
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        return json.decodeFromString(GuestTabResponse.serializer(), response.bodyAsText()).tab.id
+    }
+
+    private suspend fun createTabInvite(
+        client: HttpClient,
+        authToken: String,
+        tableSessionId: Long,
+        tabId: Long,
+    ): String {
+        val response =
+            client.post("/api/guest/tabs/$tabId/invite") {
+                contentType(ContentType.Application.Json)
+                headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                setBody(
+                    json.encodeToString(
+                        CreateTabInviteRequest.serializer(),
+                        CreateTabInviteRequest(tableSessionId, 600),
+                    ),
+                )
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        return json.decodeFromString(CreateTabInviteResponse.serializer(), response.bodyAsText()).token
+    }
+
+    private suspend fun joinSharedTab(
+        client: HttpClient,
+        authToken: String,
+        tableSessionId: Long,
+        token: String,
+    ) {
+        val response =
+            client.post("/api/guest/tabs/join") {
+                contentType(ContentType.Application.Json)
+                headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                setBody(
+                    json.encodeToString(
+                        JoinTabRequest.serializer(),
+                        JoinTabRequest(tableSessionId = tableSessionId, token = token, consent = true),
+                    ),
+                )
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
     }
 
     private fun seedVenue(
@@ -379,6 +619,110 @@ class GuestTabsRoutesTest {
             }
             error("Failed to insert session")
         }
+
+    private fun seedOrderBatchForTab(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        tabId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val orderId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO orders (venue_id, table_id, status)
+                    VALUES (?, ?, 'ACTIVE')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) {
+                            rs.getLong(1)
+                        } else {
+                            error("Failed to insert order")
+                        }
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO order_batches (order_id, source, status, items_snapshot, tab_id)
+                VALUES (?, 'MINIAPP', 'NEW', ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.setString(2, "[]")
+                statement.setLong(3, tabId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedExpiredInvite(
+        jdbcUrl: String,
+        tabId: Long,
+        createdBy: Long,
+        token: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO tab_invite (tab_id, token, expires_at, created_by)
+                VALUES (?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tabId)
+                statement.setString(2, token)
+                statement.setTimestamp(3, Timestamp.from(Instant.now().minus(60, ChronoUnit.SECONDS)))
+                statement.setLong(4, createdBy)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun countExpiredInvites(jdbcUrl: String): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*) AS c
+                FROM tab_invite
+                WHERE expires_at <= CURRENT_TIMESTAMP
+                """.trimIndent(),
+            ).use { statement ->
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt("c")
+                    }
+                }
+            }
+        }
+        return 0
+    }
+
+    private fun fetchTabStatus(
+        jdbcUrl: String,
+        tabId: Long,
+    ): String? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT status
+                FROM tab
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tabId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getString("status")
+                    }
+                }
+            }
+        }
+        return null
+    }
 
     private fun seedMenuCategory(
         jdbcUrl: String,

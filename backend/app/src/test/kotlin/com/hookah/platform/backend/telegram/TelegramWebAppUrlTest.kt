@@ -36,4 +36,16 @@ class TelegramWebAppUrlTest {
         val url = buildWebAppUrl("https://example.com/miniapp/", mapOf("table_token" to token))
         assertEquals("https://example.com/miniapp/?table_token=a%26b%3Dc%2B1", url)
     }
+
+    @Test
+    fun `build telegram start url`() {
+        val url = buildTelegramStartUrl("hookah_bot", "abc123")
+        assertEquals("https://t.me/hookah_bot?start=abc123", url)
+    }
+
+    @Test
+    fun `build telegram start url normalizes username and encodes param`() {
+        val url = buildTelegramStartUrl("@hookah_bot", "a+b c")
+        assertEquals("https://t.me/hookah_bot?start=a%2Bb+c", url)
+    }
 }

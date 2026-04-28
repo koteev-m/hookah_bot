@@ -1,5 +1,8 @@
 import { validateTableToken } from './validation/tableToken'
 
+const tableTokenSessionStorageKey = 'hookah_guest_table_token'
+const tableTokenLocalStorageKey = 'hookah_guest_table_token'
+
 type TelegramInitDataUnsafe = {
   start_param?: string
   startParam?: string
@@ -8,11 +11,23 @@ type TelegramInitDataUnsafe = {
   }
 }
 
+type TelegramScanQrPopupParams = {
+  text?: string
+}
+
+type TelegramScanQrPopupCallback = (scannedText: string) => boolean | void
+type TelegramScanQrPopup = (
+  params: TelegramScanQrPopupParams,
+  callback?: TelegramScanQrPopupCallback
+) => void
+
 export type TelegramWebAppLike = {
   initData?: string
   initDataUnsafe?: TelegramInitDataUnsafe
   ready?: () => void
   expand?: () => void
+  showScanQrPopup?: TelegramScanQrPopup
+  closeScanQrPopup?: () => void
   sendData?: (data: string) => void
   openTelegramLink?: (url: string) => void
   showAlert?: (message: string) => void
@@ -30,6 +45,7 @@ export type TelegramContext = {
   initData: string | null
   tableToken: string | null
   tableTokenStatus: 'missing' | 'invalid' | 'valid'
+  tableTokenAutoResolve: boolean
   startParam: string | null
   botUsername: string | null
   telegramUserId: number | null
@@ -49,11 +65,88 @@ function getWebApp(): TelegramWebAppLike | null {
   return (window as TelegramWindow).Telegram?.WebApp ?? null
 }
 
+export function getTelegramQrScanner(webApp: TelegramWebAppLike | null): TelegramScanQrPopup | null {
+  const scanner = webApp?.showScanQrPopup
+  if (!webApp || typeof scanner !== 'function') {
+    return null
+  }
+  return (params, callback) => {
+    scanner.call(webApp, params, callback)
+  }
+}
+
 function getSearchParams(): URLSearchParams | null {
   if (typeof window === 'undefined') {
     return null
   }
   return new URLSearchParams(window.location.search)
+}
+
+function getSessionStorageToken(): string | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  try {
+    const token = window.sessionStorage.getItem(tableTokenSessionStorageKey)
+    return token ? token : null
+  } catch {
+    return null
+  }
+}
+
+function getLocalStorageToken(): string | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  try {
+    const token = window.localStorage.getItem(tableTokenLocalStorageKey)
+    return token ? token : null
+  } catch {
+    return null
+  }
+}
+
+function setSessionStorageToken(token: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.sessionStorage.setItem(tableTokenSessionStorageKey, token)
+  } catch {
+    // ignore session storage errors
+  }
+}
+
+function setLocalStorageToken(token: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.setItem(tableTokenLocalStorageKey, token)
+  } catch {
+    // ignore local storage errors
+  }
+}
+
+function getStoredTableToken(): string | null {
+  const token = getSessionStorageToken() ?? getLocalStorageToken()
+  if (!token) {
+    return null
+  }
+  const validation = validateTableToken(token)
+  if (!validation.ok) {
+    return null
+  }
+  return validation.value
+}
+
+export function rememberTableToken(token: string): void {
+  const validation = validateTableToken(token)
+  if (!validation.ok) {
+    return
+  }
+  setSessionStorageToken(validation.value)
+  setLocalStorageToken(validation.value)
 }
 
 function normalizeNonEmpty(value: string | null | undefined): string | null {
@@ -75,18 +168,47 @@ function getQueryParam(params: URLSearchParams | null, key: string): string | nu
 export function getTelegramContext(): TelegramContext {
   const webApp = getWebApp()
   const params = getSearchParams()
-  const initData = webApp?.initData ? webApp.initData : null
-  const startParamCandidates = [
-    getQueryParam(params, 'tableToken'),
-    getQueryParam(params, 'tgWebAppStartParam'),
-    getQueryParam(params, 'startapp'),
-    getQueryParam(params, 'start_param'),
-    webApp?.initDataUnsafe?.start_param,
-    webApp?.initDataUnsafe?.startParam
+  const storedTableToken = getStoredTableToken()
+  const initDataFromWebApp = webApp?.initData ? webApp.initData : null
+  const initData =
+    initDataFromWebApp ??
+    (() => {
+      if (typeof window === 'undefined') {
+        return null
+      }
+      const rawHash = window.location.hash ?? ''
+      const hash = rawHash.startsWith('#') ? rawHash.slice(1) : rawHash
+      if (!hash) {
+        return null
+      }
+      const tgWebAppData = new URLSearchParams(hash).get('tgWebAppData')
+      if (!tgWebAppData) {
+        return null
+      }
+      try {
+        return decodeURIComponent(tgWebAppData)
+      } catch {
+        return tgWebAppData
+      }
+    })()
+  const startParamCandidates: Array<{ value: string | null | undefined; source: string }> = [
+    { value: getQueryParam(params, 'tableToken'), source: 'query_tableToken' },
+    { value: getQueryParam(params, 'table_token'), source: 'query_table_token' },
+    { value: getQueryParam(params, 'tgWebAppStartParam'), source: 'query_tgWebAppStartParam' },
+    { value: getQueryParam(params, 'startapp'), source: 'query_startapp' },
+    { value: getQueryParam(params, 'start_param'), source: 'query_start_param' },
+    { value: webApp?.initDataUnsafe?.start_param, source: 'initDataUnsafe_start_param' },
+    { value: webApp?.initDataUnsafe?.startParam, source: 'initDataUnsafe_startParam' }
   ]
-  const startParam = normalizeNonEmpty(
-    startParamCandidates.find((candidate) => normalizeNonEmpty(candidate))
-  )
+  const selectedStartParam = startParamCandidates.find((candidate) => normalizeNonEmpty(candidate.value))
+  const startParamSource = selectedStartParam?.source ?? (storedTableToken ? 'storage' : null)
+  const startParam = normalizeNonEmpty(selectedStartParam?.value) ?? storedTableToken
+  const screen = normalizeNonEmpty(getQueryParam(params, 'screen'))
+  const hasExplicitStartSignal =
+    startParamSource !== null &&
+    startParamSource !== 'query_tableToken' &&
+    startParamSource !== 'query_table_token'
+  const tableTokenAutoResolve = Boolean(startParam) && (screen === 'menu' || hasExplicitStartSignal)
   let tableToken: string | null = null
   let tableTokenStatus: TelegramContext['tableTokenStatus'] = 'missing'
   if (!startParam) {
@@ -108,6 +230,7 @@ export function getTelegramContext(): TelegramContext {
     initData,
     tableToken,
     tableTokenStatus,
+    tableTokenAutoResolve,
     startParam,
     botUsername,
     telegramUserId,

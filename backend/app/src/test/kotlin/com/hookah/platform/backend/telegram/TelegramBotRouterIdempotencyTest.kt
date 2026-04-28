@@ -1,6 +1,10 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
@@ -11,6 +15,8 @@ import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
+import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -20,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Test
+import java.time.Duration
 
 class TelegramBotRouterIdempotencyTest {
     @Test
@@ -35,9 +42,15 @@ class TelegramBotRouterIdempotencyTest {
             val ordersRepository: OrdersRepository = mockk()
             val staffCallRepository: StaffCallRepository = mockk()
             val staffChatLinkCodeRepository: StaffChatLinkCodeRepository = mockk()
+            val guestBookingRepository: GuestBookingRepository = mockk(relaxed = true)
             val venueRepository: VenueRepository = mockk()
+            val venueBookingHoursRepository: VenueBookingHoursRepository = mockk(relaxed = true)
+            val venueMenuSectionImagesRepository: VenueMenuSectionImagesRepository = mockk(relaxed = true)
             val venueAccessRepository: VenueAccessRepository = mockk()
             val subscriptionRepository: SubscriptionRepository = mockk()
+            val guestMenuRepository: GuestMenuRepository = mockk()
+            val tableSessionRepository: TableSessionRepository = mockk(relaxed = true)
+            val guestTabsRepository: GuestTabsRepository = mockk(relaxed = true)
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returnsMany listOf(true, false)
 
@@ -67,9 +80,16 @@ class TelegramBotRouterIdempotencyTest {
                     ordersRepository = ordersRepository,
                     staffCallRepository = staffCallRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+                    guestBookingRepository = guestBookingRepository,
                     venueRepository = venueRepository,
+                    venueBookingHoursRepository = venueBookingHoursRepository,
+                    venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
                     venueAccessRepository = venueAccessRepository,
                     subscriptionRepository = subscriptionRepository,
+                    guestMenuRepository = guestMenuRepository,
+                    tableSessionRepository = tableSessionRepository,
+                    guestTabsRepository = guestTabsRepository,
+                    tableSessionTtl = Duration.ofHours(2),
                     json = Json { ignoreUnknownKeys = true },
                     scope = CoroutineScope(Dispatchers.Unconfined),
                 )
@@ -107,9 +127,15 @@ class TelegramBotRouterIdempotencyTest {
             val ordersRepository: OrdersRepository = mockk()
             val staffCallRepository: StaffCallRepository = mockk()
             val staffChatLinkCodeRepository: StaffChatLinkCodeRepository = mockk()
+            val guestBookingRepository: GuestBookingRepository = mockk(relaxed = true)
             val venueRepository: VenueRepository = mockk()
+            val venueBookingHoursRepository: VenueBookingHoursRepository = mockk(relaxed = true)
+            val venueMenuSectionImagesRepository: VenueMenuSectionImagesRepository = mockk(relaxed = true)
             val venueAccessRepository: VenueAccessRepository = mockk()
             val subscriptionRepository: SubscriptionRepository = mockk()
+            val guestMenuRepository: GuestMenuRepository = mockk()
+            val tableSessionRepository: TableSessionRepository = mockk(relaxed = true)
+            val guestTabsRepository: GuestTabsRepository = mockk(relaxed = true)
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } throws DatabaseUnavailableException()
 
@@ -139,9 +165,16 @@ class TelegramBotRouterIdempotencyTest {
                     ordersRepository = ordersRepository,
                     staffCallRepository = staffCallRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
+                    guestBookingRepository = guestBookingRepository,
                     venueRepository = venueRepository,
+                    venueBookingHoursRepository = venueBookingHoursRepository,
+                    venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
                     venueAccessRepository = venueAccessRepository,
                     subscriptionRepository = subscriptionRepository,
+                    guestMenuRepository = guestMenuRepository,
+                    tableSessionRepository = tableSessionRepository,
+                    guestTabsRepository = guestTabsRepository,
+                    tableSessionTtl = Duration.ofHours(2),
                     json = Json { ignoreUnknownKeys = true },
                     scope = CoroutineScope(Dispatchers.Unconfined),
                 )
