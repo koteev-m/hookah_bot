@@ -28,9 +28,31 @@ jobs:
         with:
           cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
       - name: Run ktlint
-        run: ./gradlew :backend:app:ktlintCheck
+        run: ./gradlew --no-daemon :backend:app:ktlintCheck --console=plain
 
-  backend-tests:
+  backend-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        java: [21]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Java
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+        with:
+          cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Compile backend
+        run: ./gradlew --no-daemon :backend:app:compileKotlin --console=plain
+
+  backend-release-critical-routes:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
@@ -51,26 +73,148 @@ jobs:
           cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
       - name: Verify Docker availability (required for Testcontainers)
         run: docker info
-      - name: Run backend tests
-        run: ./gradlew :backend:app:test
+      - name: Run guest venue platform route tests
+        run: |
+          ./gradlew --no-daemon :backend:app:test \
+            --tests "GuestVenueRoutesTest" \
+            --tests "GuestOrderRoutesTest" \
+            --tests "GuestTableResolveRoutesTest" \
+            --tests "VenueOrderRoutesTest" \
+            --tests "PlatformVenueRoutesTest" \
+            --console=plain
+
+  backend-venue-booking-rbac:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        java: [21]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Java
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+        with:
+          cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Verify Docker availability (required for Testcontainers)
+        run: docker info
+      - name: Run venue booking RBAC tests
+        run: |
+          ./gradlew --no-daemon :backend:app:test \
+            --tests "VenueBookingRoutesTest" \
+            --tests "VenueRbacRoutesTest" \
+            --console=plain
+
+  backend-telegram-lightweight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        java: [21]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Java
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+        with:
+          cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Run Telegram keyboard payload notifier tests
+        run: |
+          ./gradlew --no-daemon :backend:app:test \
+            --tests "TelegramKeyboardsTest" \
+            --tests "SendMessagePayloadTest" \
+            --tests "StaffChatNotifierTest" \
+            --tests "TelegramBotRouterLinkCommandTest" \
+            --console=plain
+
+  backend-migration-sanity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        java: [21]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Java
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+        with:
+          cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Verify Docker availability (required for Testcontainers)
+        run: docker info
+      - name: Run migration sanity tests
+        run: |
+          ./gradlew --no-daemon :backend:app:test \
+            --tests "TelegramDialogStateMigrationTest" \
+            --tests "TableSessionsMigrationV28PostgresTest" \
+            --console=plain
 
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: ${{ always() }}
-    needs: [backend-ktlint, backend-tests]
+    needs:
+      - backend-ktlint
+      - backend-compile
+      - backend-release-critical-routes
+      - backend-venue-booking-rbac
+      - backend-telegram-lightweight
+      - backend-migration-sanity
     steps:
       - name: Aggregate backend checks
         run: |
           echo "backend-ktlint result: ${{ needs.backend-ktlint.result }}"
-          echo "backend-tests result: ${{ needs.backend-tests.result }}"
+          echo "backend-compile result: ${{ needs.backend-compile.result }}"
+          echo "backend-release-critical-routes result: ${{ needs.backend-release-critical-routes.result }}"
+          echo "backend-venue-booking-rbac result: ${{ needs.backend-venue-booking-rbac.result }}"
+          echo "backend-telegram-lightweight result: ${{ needs.backend-telegram-lightweight.result }}"
+          echo "backend-migration-sanity result: ${{ needs.backend-migration-sanity.result }}"
 
-          if [[ "${{ needs.backend-ktlint.result }}" != "success" || "${{ needs.backend-tests.result }}" != "success" ]]; then
+          if [[ "${{ needs.backend-ktlint.result }}" != "success" || \
+                "${{ needs.backend-compile.result }}" != "success" || \
+                "${{ needs.backend-release-critical-routes.result }}" != "success" || \
+                "${{ needs.backend-venue-booking-rbac.result }}" != "success" || \
+                "${{ needs.backend-telegram-lightweight.result }}" != "success" || \
+                "${{ needs.backend-migration-sanity.result }}" != "success" ]]; then
             echo "backend checks failed"
             exit 1
           fi
 
           echo "backend checks passed"
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Create CI compose env
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_DB=hookah
+          POSTGRES_USER=hookah
+          POSTGRES_PASSWORD=ci-placeholder-password
+          EOF
+      - name: Validate Docker Compose config
+        run: docker compose config --quiet
 
   miniapp:
     runs-on: ubuntu-latest

@@ -37,6 +37,43 @@ curl -s http://localhost:8080/metrics | rg "inbound_queue_depth|outbound_queue_d
 - Минимальный эксплуатационный runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 - Политика миграций Flyway (CI validate + production rollout): [docs/MIGRATION_POLICY.md](docs/MIGRATION_POLICY.md).
 
+## Release validation matrix
+CI проверяет backend маленькими release-батчами вместо одного широкого `:backend:app:test`: локально полный общий прогон может упираться в heap, а split сохраняет понятную диагностику без `continue-on-error`.
+
+Минимальная матрица перед release/deploy:
+```bash
+./gradlew --no-daemon :backend:app:compileKotlin --console=plain
+
+./gradlew --no-daemon :backend:app:test \
+  --tests "GuestVenueRoutesTest" \
+  --tests "GuestOrderRoutesTest" \
+  --tests "GuestTableResolveRoutesTest" \
+  --tests "VenueOrderRoutesTest" \
+  --tests "PlatformVenueRoutesTest" \
+  --console=plain
+
+./gradlew --no-daemon :backend:app:test \
+  --tests "VenueBookingRoutesTest" \
+  --tests "VenueRbacRoutesTest" \
+  --console=plain
+
+./gradlew --no-daemon :backend:app:test \
+  --tests "TelegramKeyboardsTest" \
+  --tests "SendMessagePayloadTest" \
+  --tests "StaffChatNotifierTest" \
+  --tests "TelegramBotRouterLinkCommandTest" \
+  --console=plain
+
+./gradlew --no-daemon :backend:app:test \
+  --tests "TelegramDialogStateMigrationTest" \
+  --tests "TableSessionsMigrationV28PostgresTest" \
+  --console=plain
+
+cd miniapp && npm run build
+docker compose config --quiet
+docker build -f backend/Dockerfile .
+```
+
 ## Mini App API
 
 ### Auth: `POST /api/auth/telegram`
