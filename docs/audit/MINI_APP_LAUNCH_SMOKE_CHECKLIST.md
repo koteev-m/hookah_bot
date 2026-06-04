@@ -19,6 +19,7 @@
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
+- CI release validation is green for the current release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and backend aggregate passed.
 - Platform owner lifecycle and commercial terms flows are in smoke scope.
 
 ## Current Staging Smoke Status
@@ -39,11 +40,13 @@ Confirmed:
 - STAFF booking RBAC split remains passed: STAFF only sees arrival actions, MANAGER/OWNER keep management actions;
 - venue selector shows venue names and Russian status labels;
 - platform archived venue action copy is explicit that restore immediately publishes with current backend behavior.
+- CI release validation passed for the current release snapshot: backend ktlint, backend compile, release-critical routes, venue booking/RBAC, Telegram lightweight tests, migration sanity, compose, Mini App build, backend Docker build and aggregate.
 
 Remaining:
 
 - no open P0/P1 from the current pilot smoke and affected re-smokes is recorded in this checklist;
 - repeat this smoke after any additional release batch;
+- operational readiness remains the next launch-supporting block: monitoring, deploy health-check wait/retry, restart/rollback and incident runbook ownership;
 - P2 follow-ups remain: frontend/browser e2e harness, cross-channel bill snapshot automation, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
@@ -350,7 +353,7 @@ Expected:
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
 - Manual comparison with Telegram full bill remains required until a cross-channel snapshot test is introduced.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
-- Broad backend test wildcards may hit heap/runtime limits; prefer targeted smoke/regression commands for release validation.
+- Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
 ## 10. Recommended Next Test Investment
 
