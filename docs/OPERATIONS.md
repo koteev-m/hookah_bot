@@ -39,6 +39,39 @@ curl -s http://localhost:8080/metrics | rg "inbound_queue_depth|outbound_queue_d
 
 ## 3) Что делать при инцидентах
 
+### 3.0 Staging/pilot first response
+
+1. Проверить публичные health endpoints:
+
+```bash
+curl -f https://staging.hookahtootah.club/health
+curl -f https://staging.hookahtootah.club/db/health
+curl -I https://staging.hookahtootah.club/miniapp/
+```
+
+2. Если любой endpoint падает, зайти на сервер и посмотреть контейнеры/логи:
+
+```bash
+ssh hookah-staging
+cd /opt/hookah-bot
+docker compose ps
+docker compose logs --tail=120 backend
+```
+
+3. Если backend запущен и health зелёный, проверить Telegram runtime вручную:
+
+- bot отвечает в Telegram;
+- Mini App открывается через bot `web_app` кнопку и получает `initData`;
+- Guest catalog открывается;
+- QR/table mode открывается;
+- staff chat получает smoke order/call notification, если проверяется операционный сценарий.
+
+4. Если проблема появилась сразу после deploy:
+
+- не запускать повторный deploy вслепую;
+- сначала сохранить симптом, время, последнюю команду deploy и последние backend logs;
+- при необходимости выполнить controlled restart или rollback из `docs/STAGING_DEPLOYMENT.md`.
+
 ### 3.1 Telegram API отвечает `429`
 
 Симптомы:

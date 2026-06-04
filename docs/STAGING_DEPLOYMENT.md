@@ -119,7 +119,9 @@ The script:
 3. builds the backend Docker image locally for `linux/amd64`, including the Mini App production build;
 4. uploads `docker-compose.yml`, `scripts/seed-staging.sh`, safe docs/templates, and the Docker image to the VPS;
 5. runs `docker compose up -d --no-build postgres backend` on the VPS;
-6. checks local VPS health endpoints and the public staging URL.
+6. waits and retries local VPS health endpoints and the public staging URL.
+
+The health wait handles short backend startup windows and transient reverse-proxy connection resets. If the script still fails after all attempts, do not redeploy blindly; inspect container status and backend logs first.
 
 On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64 --load` so the uploaded image matches a typical x86_64/amd64 VPS.
 
@@ -130,6 +132,8 @@ STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.hookahtootah.club \
 BACKEND_IMAGE=hookah_bot_ant-backend:staging \
 DOCKER_PLATFORM=linux/amd64 \
+HEALTHCHECK_ATTEMPTS=20 \
+HEALTHCHECK_SLEEP_SECONDS=3 \
 ./scripts/deploy-staging.sh user@your-vps-host
 ```
 
@@ -219,6 +223,23 @@ server {
 
 ## 7. Health Checks
 
+Post-deploy public sanity checks:
+
+```bash
+curl -f https://staging.hookahtootah.club/health
+curl -f https://staging.hookahtootah.club/db/health
+curl -I https://staging.hookahtootah.club/miniapp/
+```
+
+Server inspection commands:
+
+```bash
+ssh hookah-staging
+cd /opt/hookah-bot
+docker compose ps
+docker compose logs --tail=120 backend
+```
+
 Local on the VPS:
 
 ```bash
@@ -240,6 +261,8 @@ Expected:
 - `/health` returns `{"status":"ok"}`.
 - `/db/health` returns `{"status":"ok"}` after PostgreSQL is ready and migrations have passed.
 - `/miniapp/` returns the Mini App HTML from the backend container.
+
+If public health checks fail but local VPS checks pass, inspect the reverse proxy and TLS config before restarting backend. If both local and public checks fail, inspect backend logs and PostgreSQL health before redeploying.
 
 ## 8. Seed Staging Data
 
@@ -366,22 +389,56 @@ docker compose up -d backend
 
 ## 12. Rollback And Restart
 
-Restart backend:
+### Restart
+
+Use this for a controlled backend restart without changing image or database state:
 
 ```bash
+ssh hookah-staging
+cd /opt/hookah-bot
 docker compose restart backend
+docker compose ps
+docker compose logs --tail=120 backend
 ```
 
-Rollback to a previous git revision:
+Then verify:
 
 ```bash
-git fetch
-git checkout <known-good-commit>
-docker compose build backend
-docker compose up -d backend
+curl -f https://staging.hookahtootah.club/health
+curl -f https://staging.hookahtootah.club/db/health
+curl -I https://staging.hookahtootah.club/miniapp/
 ```
 
-If migrations were applied, rollback may require restoring a DB backup. Do not assume code rollback reverses database state.
+### Rollback
+
+The deploy script uploads a Docker image selected by `BACKEND_IMAGE`. For rollback-friendly releases, deploy with an immutable image tag, for example:
+
+```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:85f1b1e ./scripts/deploy-staging.sh hookah-staging
+```
+
+To roll back to an image that is already loaded on the VPS:
+
+```bash
+ssh hookah-staging
+cd /opt/hookah-bot
+docker images 'hookah_bot_ant-backend'
+BACKEND_IMAGE=hookah_bot_ant-backend:<known-good-tag> docker compose up -d --no-build backend
+docker compose ps
+docker compose logs --tail=120 backend
+```
+
+Then run the public sanity checks:
+
+```bash
+curl -f https://staging.hookahtootah.club/health
+curl -f https://staging.hookahtootah.club/db/health
+curl -I https://staging.hookahtootah.club/miniapp/
+```
+
+If the previous image is not available on the VPS, rebuild and redeploy that known-good commit from the developer machine using the same `BACKEND_IMAGE=<known-good-tag>` value.
+
+Database caution: if the failed release applied migrations, code rollback may not be enough. Restore a PostgreSQL backup only after stopping backend writes, and only when the operator accepts data loss/restore implications.
 
 ## 13. Local Development Remains Separate
 

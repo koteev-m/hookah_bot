@@ -12,6 +12,8 @@ BACKEND_IMAGE="${BACKEND_IMAGE:-hookah_bot_ant-backend:staging}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 GRADLE_JVM_ARGS="${GRADLE_JVM_ARGS:--Xmx2048m -XX:MaxMetaspaceSize=768m}"
 RUN_PUBLIC_CHECKS="${RUN_PUBLIC_CHECKS:-true}"
+HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
+HEALTHCHECK_SLEEP_SECONDS="${HEALTHCHECK_SLEEP_SECONDS:-3}"
 
 if [[ -z "${REMOTE}" ]]; then
   echo "Usage: $0 user@vps-host"
@@ -22,6 +24,8 @@ if [[ -z "${REMOTE}" ]]; then
   echo "  STAGING_PUBLIC_URL=${STAGING_PUBLIC_URL}"
   echo "  BACKEND_IMAGE=${BACKEND_IMAGE}"
   echo "  DOCKER_PLATFORM=${DOCKER_PLATFORM}"
+  echo "  HEALTHCHECK_ATTEMPTS=${HEALTHCHECK_ATTEMPTS}"
+  echo "  HEALTHCHECK_SLEEP_SECONDS=${HEALTHCHECK_SLEEP_SECONDS}"
   exit 2
 fi
 
@@ -37,6 +41,34 @@ require_cmd ssh
 require_cmd rsync
 require_cmd gzip
 require_cmd curl
+
+wait_http() {
+  local label="$1"
+  local method="$2"
+  local url="$3"
+  local attempt
+
+  echo "==> Waiting for ${label}: ${url}"
+  for attempt in $(seq 1 "${HEALTHCHECK_ATTEMPTS}"); do
+    if [[ "${method}" == "HEAD" ]]; then
+      if curl -fsSI "${url}" >/dev/null; then
+        echo "OK: ${label}"
+        return 0
+      fi
+    elif curl -fsS "${url}"; then
+      echo
+      echo "OK: ${label}"
+      return 0
+    fi
+
+    echo "Waiting for ${label} (${attempt}/${HEALTHCHECK_ATTEMPTS})..."
+    sleep "${HEALTHCHECK_SLEEP_SECONDS}"
+  done
+
+  echo "Health check failed after ${HEALTHCHECK_ATTEMPTS} attempts: ${label}" >&2
+  echo "Do not redeploy blindly. Inspect backend logs and container status on the VPS first." >&2
+  return 1
+}
 
 if ! docker buildx version >/dev/null 2>&1; then
   echo "Docker buildx is required for cross-platform staging builds." >&2
@@ -104,22 +136,46 @@ echo "==> Restarting staging services"
 ssh "${REMOTE}" "
   set -euo pipefail
   cd '${STAGING_PATH}'
+  wait_http() {
+    local label=\"\$1\"
+    local method=\"\$2\"
+    local url=\"\$3\"
+    local attempt
+
+    echo \"==> Waiting for \${label}: \${url}\"
+    for attempt in \$(seq 1 '${HEALTHCHECK_ATTEMPTS}'); do
+      if [[ \"\${method}\" == \"HEAD\" ]]; then
+        if curl -fsSI \"\${url}\" >/dev/null; then
+          echo \"OK: \${label}\"
+          return 0
+        fi
+      elif curl -fsS \"\${url}\"; then
+        echo
+        echo \"OK: \${label}\"
+        return 0
+      fi
+
+      echo \"Waiting for \${label} (\${attempt}/'${HEALTHCHECK_ATTEMPTS}')...\"
+      sleep '${HEALTHCHECK_SLEEP_SECONDS}'
+    done
+
+    echo \"Health check failed after '${HEALTHCHECK_ATTEMPTS}' attempts: \${label}\" >&2
+    echo \"Do not redeploy blindly. Inspect with: cd '${STAGING_PATH}' && docker compose ps && docker compose logs --tail=120 backend\" >&2
+    return 1
+  }
+
   BACKEND_IMAGE='${BACKEND_IMAGE}' docker compose up -d --no-build postgres backend
   BACKEND_IMAGE='${BACKEND_IMAGE}' docker compose ps
-  curl -fsS http://127.0.0.1:8080/health
-  echo
-  curl -fsS http://127.0.0.1:8080/db/health
-  echo
-  curl -fsSI http://127.0.0.1:8080/miniapp/ >/dev/null
+  wait_http 'local backend health' GET http://127.0.0.1:8080/health
+  wait_http 'local database health' GET http://127.0.0.1:8080/db/health
+  wait_http 'local Mini App static' HEAD http://127.0.0.1:8080/miniapp/
 "
 
 if [[ "${RUN_PUBLIC_CHECKS}" == "true" ]]; then
   echo "==> Checking public staging URL: ${STAGING_PUBLIC_URL}"
-  curl -fsS "${STAGING_PUBLIC_URL}/health"
-  echo
-  curl -fsS "${STAGING_PUBLIC_URL}/db/health"
-  echo
-  curl -fsSI "${STAGING_PUBLIC_URL}/miniapp/" >/dev/null
+  wait_http "public backend health" GET "${STAGING_PUBLIC_URL}/health"
+  wait_http "public database health" GET "${STAGING_PUBLIC_URL}/db/health"
+  wait_http "public Mini App static" HEAD "${STAGING_PUBLIC_URL}/miniapp/"
 fi
 
 echo "==> Staging deploy finished"
