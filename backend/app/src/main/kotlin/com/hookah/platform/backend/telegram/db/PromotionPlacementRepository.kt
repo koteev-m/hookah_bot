@@ -155,14 +155,12 @@ class PromotionPlacementRepository(private val dataSource: DataSource?) {
     suspend fun listActiveForPlatformManagement(
         limit: Int = 20,
         now: Instant = Instant.now(),
-    ): List<PromotionPlacement> =
-        listByStatusForPlatformManagement(PromotionPlacementStatus.ACTIVE, limit, now)
+    ): List<PromotionPlacement> = listByStatusForPlatformManagement(PromotionPlacementStatus.ACTIVE, limit, now)
 
     suspend fun listFinishedForPlatformManagement(
         limit: Int = 20,
         now: Instant = Instant.now(),
-    ): List<PromotionPlacement> =
-        listFinishedForManagement(venueId = null, now = now, limit = limit)
+    ): List<PromotionPlacement> = listFinishedForManagement(venueId = null, now = now, limit = limit)
 
     suspend fun listForVenueManagement(
         venueId: Long,
@@ -221,8 +219,7 @@ class PromotionPlacementRepository(private val dataSource: DataSource?) {
         venueId: Long,
         limit: Int = 20,
         now: Instant = Instant.now(),
-    ): List<PromotionPlacement> =
-        listFinishedForManagement(venueId = venueId, now = now, limit = limit)
+    ): List<PromotionPlacement> = listFinishedForManagement(venueId = venueId, now = now, limit = limit)
 
     suspend fun getForVenueManagement(
         venueId: Long,
@@ -337,8 +334,7 @@ class PromotionPlacementRepository(private val dataSource: DataSource?) {
             setApproved = false,
         )
 
-    suspend fun pause(id: Long): PromotionPlacement? =
-        updateStatus(id = id, status = PromotionPlacementStatus.PAUSED)
+    suspend fun pause(id: Long): PromotionPlacement? = updateStatus(id = id, status = PromotionPlacementStatus.PAUSED)
 
     suspend fun archive(id: Long): PromotionPlacement? =
         updateStatus(id = id, status = PromotionPlacementStatus.ARCHIVED)

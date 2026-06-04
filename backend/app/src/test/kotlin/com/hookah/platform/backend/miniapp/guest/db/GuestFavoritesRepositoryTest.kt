@@ -251,7 +251,8 @@ class GuestFavoritesRepositoryTest {
         itemId: Long,
     ) {
         connection.prepareStatement(
-            "MERGE INTO guest_favorite_items (user_id, venue_id, menu_item_id) KEY (user_id, menu_item_id) VALUES (?, ?, ?)",
+            "MERGE INTO guest_favorite_items (user_id, venue_id, menu_item_id) " +
+                "KEY (user_id, menu_item_id) VALUES (?, ?, ?)",
         ).use { statement ->
             statement.setLong(1, userId)
             statement.setLong(2, venueId)

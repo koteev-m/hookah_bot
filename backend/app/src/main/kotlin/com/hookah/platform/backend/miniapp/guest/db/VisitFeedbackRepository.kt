@@ -532,8 +532,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         connection: Connection,
         visitId: Long,
         userId: Long,
-    ): FeedbackVisit? =
-        loadFeedbackVisit(connection, visitId)?.takeIf { it.userId == userId }
+    ): FeedbackVisit? = loadFeedbackVisit(connection, visitId)?.takeIf { it.userId == userId }
 
     private fun findRequestByVisit(
         connection: Connection,
@@ -983,7 +982,12 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
 
     private fun ResultSet.toFeedbackVisit(): FeedbackVisit {
         val timezone = getString("timezone")
-        val zoneId = runCatching { ZoneId.of(timezone) }.getOrElse { ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE) }
+        val zoneId =
+            runCatching {
+                ZoneId.of(
+                    timezone,
+                )
+            }.getOrElse { ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE) }
         return FeedbackVisit(
             visitId = getLong("visit_id"),
             venueId = getLong("venue_id"),

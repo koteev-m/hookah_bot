@@ -29,9 +29,9 @@ import java.time.Instant
 
 private val inviteDefaultTtl: Duration = Duration.ofMinutes(15)
 private val inviteMaxTtl: Duration = Duration.ofHours(24)
-private const val inviteCodeLength: Int = 4
-private const val inviteCodeRangeExclusive: Int = 10_000
-private const val inviteCodeMaxAttempts: Int = 32
+private const val INVITE_CODE_LENGTH: Int = 4
+private const val INVITE_CODE_RANGE_EXCLUSIVE: Int = 10_000
+private const val INVITE_CODE_MAX_ATTEMPTS: Int = 32
 private val inviteCodeRandom = SecureRandom()
 
 fun Route.guestTabsRoutes(
@@ -99,7 +99,7 @@ fun Route.guestTabsRoutes(
             guestTabsRepository.deleteExpiredInvites()
             val ttl = normalizeInviteTtl(request.ttlSeconds)
             val expiresAt = Instant.now().plus(ttl)
-            repeat(inviteCodeMaxAttempts) {
+            repeat(INVITE_CODE_MAX_ATTEMPTS) {
                 val code = generateInviteCode()
                 when (
                     guestTabsRepository.createInvite(
@@ -183,7 +183,7 @@ private fun normalizeInviteTtl(rawTtlSeconds: Long?): Duration {
 }
 
 private fun generateInviteCode(): String =
-    inviteCodeRandom.nextInt(inviteCodeRangeExclusive).toString().padStart(inviteCodeLength, '0')
+    inviteCodeRandom.nextInt(INVITE_CODE_RANGE_EXCLUSIVE).toString().padStart(INVITE_CODE_LENGTH, '0')
 
 private fun com.hookah.platform.backend.miniapp.guest.db.GuestTabModel.toDto(): GuestTabDto =
     GuestTabDto(

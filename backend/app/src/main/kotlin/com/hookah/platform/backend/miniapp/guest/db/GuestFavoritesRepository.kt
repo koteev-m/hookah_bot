@@ -135,7 +135,9 @@ class GuestFavoritesRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    if (!isVenueVisibleForGuest(connection, venueId) || !isItemAvailableInVenue(connection, venueId, menuItemId)) {
+                    if (!isVenueVisibleForGuest(connection, venueId) ||
+                        !isItemAvailableInVenue(connection, venueId, menuItemId)
+                    ) {
                         return@withContext false
                     }
                     upsertItemFavorite(connection, userId, venueId, menuItemId)

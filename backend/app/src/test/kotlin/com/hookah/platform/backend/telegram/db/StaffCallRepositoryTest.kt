@@ -92,7 +92,8 @@ class StaffCallRepositoryTest {
 
     private fun migratedJdbcUrl(prefix: String): String {
         val jdbcUrl =
-            "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+            "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
         Flyway.configure()
             .dataSource(jdbcUrl, "sa", "")
             .locations("classpath:db/migration/h2")
@@ -201,7 +202,12 @@ class StaffCallRepositoryTest {
                         if (rs.next()) rs.getLong(1) else error("Failed to insert staff call")
                     }
                 }
-            return StaffCallFixture(venueId = venueId, tableId = tableId, tableSessionId = tableSessionId, staffCallId = callId)
+            return StaffCallFixture(
+                venueId = venueId,
+                tableId = tableId,
+                tableSessionId = tableSessionId,
+                staffCallId = callId,
+            )
         }
     }
 

@@ -55,7 +55,9 @@ data class TelegramBotConfig(
                     ?.toBooleanStrictOrNull()
                     ?: true
             val botUsername =
-                section.propertyOrNull("botUsername")?.getString()?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
+                section.propertyOrNull(
+                    "botUsername",
+                )?.getString()?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
             val configuredPlatformOwnerId = section.propertyOrNull("platformOwnerId")?.getString()?.toLongOrNull()
             val ownerTelegramIdFromEnv = System.getenv("OWNER_TELEGRAM_ID")?.trim()?.toLongOrNull()
             val platformOwnerId = ownerTelegramIdFromEnv ?: configuredPlatformOwnerId

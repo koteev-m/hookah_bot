@@ -25,9 +25,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.route
 import java.util.Locale
 
-fun Route.guestVisitRoutes(
-    visitRepository: VisitRepository,
-) {
+fun Route.guestVisitRoutes(visitRepository: VisitRepository) {
     route("/visits") {
         get {
             val userId = call.requireUserId()
@@ -42,8 +40,9 @@ fun Route.guestVisitRoutes(
             val visitId =
                 call.parameters["visitId"]?.toLongOrNull()
                     ?: throw InvalidInputException("visitId must be a number")
-            val visit = visitRepository.getGuestVisitDetail(userId = userId, visitId = visitId)
-                ?: throw NotFoundException()
+            val visit =
+                visitRepository.getGuestVisitDetail(userId = userId, visitId = visitId)
+                    ?: throw NotFoundException()
             call.respond(GuestVisitDetailResponse(visit = visit.toDto()))
         }
     }

@@ -260,8 +260,7 @@ private fun parseBookingInstant(value: String): Instant {
 private fun formatBookingInstant(
     value: Instant,
     zoneId: ZoneId = ZoneOffset.UTC,
-): String =
-    bookingInstantFormatter.format(value.atZone(zoneId))
+): String = bookingInstantFormatter.format(value.atZone(zoneId))
 
 private fun com.hookah.platform.backend.miniapp.guest.db.BookingRecord.toResponse(): GuestBookingResponse =
     GuestBookingResponse(

@@ -69,6 +69,5 @@ class VisitFeedbackWorker(
         return VisitFeedbackWorkerResult(sentCount = sent, failedCount = failed)
     }
 
-    private fun buildFeedbackRequestText(venueName: String): String =
-        "Спасибо за визит в $venueName.\nКак всё прошло?"
+    private fun buildFeedbackRequestText(venueName: String): String = "Спасибо за визит в $venueName.\nКак всё прошло?"
 }

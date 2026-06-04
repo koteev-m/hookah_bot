@@ -281,22 +281,24 @@ class StaffChatNotifier(
         when (result) {
             StaffChatNotificationResult.SENT_OR_QUEUED,
             StaffChatNotificationResult.SKIPPED_DUPLICATE,
-            -> logger.debug(
-                "Staff chat notification result={} venue_id={} key={}",
-                result,
-                venueId,
-                notificationKey,
-            )
+            ->
+                logger.debug(
+                    "Staff chat notification result={} venue_id={} key={}",
+                    result,
+                    venueId,
+                    notificationKey,
+                )
             StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT,
             StaffChatNotificationResult.SKIPPED_DISABLED,
             StaffChatNotificationResult.SKIPPED_INACTIVE,
             StaffChatNotificationResult.FAILED_ENQUEUE,
-            -> logger.warn(
-                "Staff chat notification result={} venue_id={} key={}",
-                result,
-                venueId,
-                notificationKey,
-            )
+            ->
+                logger.warn(
+                    "Staff chat notification result={} venue_id={} key={}",
+                    result,
+                    venueId,
+                    notificationKey,
+                )
         }
     }
 }
@@ -364,7 +366,7 @@ internal fun buildNewBatchNotificationText(
         statusLine?.takeIf { it.isNotBlank() }?.let {
             append("\n\n").append(it)
         }
-	    }
+    }
 
 private fun formatStaffChatPromotionDiscounts(discounts: List<NewBatchPromotionDiscount>): String {
     val lines =
@@ -503,7 +505,7 @@ internal fun buildBookingStaffNotificationText(
                 },
             )
             displayNumber?.let { append(" №").append(it) }
-            }
+        }
         append('\n')
         append("Заведение: ").append(venueName)
         append('\n').append("Гость: ").append(guestDisplayNameOrFallback(guestDisplayName))
@@ -519,14 +521,11 @@ internal fun buildBookingStaffNotificationText(
         }
     }
 
-private fun staffCallNotificationKey(staffCallId: Long): Long =
-    -1_000_000_000_000L - staffCallId
+private fun staffCallNotificationKey(staffCallId: Long): Long = -1_000_000_000_000L - staffCallId
 
 private fun bookingNotificationKey(
     bookingId: Long,
     event: BookingStaffNotificationEvent,
-): Long =
-    -2_000_000_000_000L - (bookingId * 10L) - event.dedupeCode
+): Long = -2_000_000_000_000L - (bookingId * 10L) - event.dedupeCode
 
-private fun guestDisplayNameOrFallback(value: String?): String =
-    value?.trim()?.takeIf { it.isNotBlank() } ?: "Гость"
+private fun guestDisplayNameOrFallback(value: String?): String = value?.trim()?.takeIf { it.isNotBlank() } ?: "Гость"

@@ -307,19 +307,22 @@ class GuestTabsRoutesTest {
 
             val firstActiveResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=tabs-session-token&tableSessionId=$firstSessionId&tabId=$firstSharedTabId",
+                    "/api/guest/order/active?tableToken=tabs-session-token" +
+                        "&tableSessionId=$firstSessionId&tabId=$firstSharedTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
                 }
             val secondActiveResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=tabs-session-token&tableSessionId=$secondSessionId&tabId=$secondSharedTabId",
+                    "/api/guest/order/active?tableToken=tabs-session-token" +
+                        "&tableSessionId=$secondSessionId&tabId=$secondSharedTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
                 }
             val crossSessionResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=tabs-session-token&tableSessionId=$secondSessionId&tabId=$firstSharedTabId",
+                    "/api/guest/order/active?tableToken=tabs-session-token" +
+                        "&tableSessionId=$secondSessionId&tabId=$firstSharedTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
                 }

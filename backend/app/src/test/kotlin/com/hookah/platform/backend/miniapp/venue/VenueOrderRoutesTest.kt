@@ -624,7 +624,9 @@ class VenueOrderRoutesTest {
             assertEquals("Закуска", rejectedItem.name)
             assertEquals(70_000, rejectedItem.lineGrossMinor)
             assertEquals("Нет позиции", rejectedItem.reason)
-            val normalItem = payload.order.batches.first { it.batchId == activeBatchId }.items.first { it.itemId == normalItemId }
+            val normalItem =
+                payload.order.batches.first { it.batchId == activeBatchId }
+                    .items.first { it.itemId == normalItemId }
             assertEquals(110_000, normalItem.priceMinor)
             assertEquals("RUB", normalItem.currency)
             assertEquals(110_000, normalItem.lineGrossMinor)
@@ -632,7 +634,9 @@ class VenueOrderRoutesTest {
             assertEquals(11_000, normalItem.promoDiscountMinor)
             assertEquals(88_000, normalItem.linePayableMinor)
             assertEquals(10, normalItem.discountPercent)
-            val loyaltyItem = payload.order.batches.first { it.batchId == activeBatchId }.items.first { it.itemId == loyaltyItemId }
+            val loyaltyItem =
+                payload.order.batches.first { it.batchId == activeBatchId }
+                    .items.first { it.itemId == loyaltyItemId }
             assertEquals(50_000, loyaltyItem.lineGrossMinor)
             assertEquals(0, loyaltyItem.manualDiscountMinor)
             assertEquals(50_000, loyaltyItem.promoDiscountMinor)
@@ -668,7 +672,11 @@ class VenueOrderRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, discountResponse.status)
-            val discounted = json.decodeFromString(OrderBillItemAdjustmentResponse.serializer(), discountResponse.bodyAsText())
+            val discounted =
+                json.decodeFromString(
+                    OrderBillItemAdjustmentResponse.serializer(),
+                    discountResponse.bodyAsText(),
+                )
             val discountedItem = discounted.order.batches.single().items.single()
             assertEquals(25, discountedItem.discountPercent)
             assertEquals(2_500, discountedItem.manualDiscountMinor)
@@ -684,7 +692,11 @@ class VenueOrderRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, excludeResponse.status)
-            val excluded = json.decodeFromString(OrderBillItemAdjustmentResponse.serializer(), excludeResponse.bodyAsText())
+            val excluded =
+                json.decodeFromString(
+                    OrderBillItemAdjustmentResponse.serializer(),
+                    excludeResponse.bodyAsText(),
+                )
             assertEquals(0, excluded.order.bill.finalPayableTotalMinor)
             assertEquals(10_000, excluded.order.bill.excludedTotalMinor)
             val excludedItem = excluded.order.batches.single().items.single()
@@ -697,7 +709,11 @@ class VenueOrderRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, restoreResponse.status)
-            val restored = json.decodeFromString(OrderBillItemAdjustmentResponse.serializer(), restoreResponse.bodyAsText())
+            val restored =
+                json.decodeFromString(
+                    OrderBillItemAdjustmentResponse.serializer(),
+                    restoreResponse.bodyAsText(),
+                )
             assertEquals(0, restored.order.bill.excludedTotalMinor)
             assertEquals(7_500, restored.order.bill.finalPayableTotalMinor)
             assertEquals(false, restored.order.batches.single().items.single().isExcluded)
@@ -856,7 +872,11 @@ class VenueOrderRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, discountResponse.status)
-            val discounted = json.decodeFromString(OrderBillItemAdjustmentResponse.serializer(), discountResponse.bodyAsText())
+            val discounted =
+                json.decodeFromString(
+                    OrderBillItemAdjustmentResponse.serializer(),
+                    discountResponse.bodyAsText(),
+                )
             assertEquals(4_500, discounted.order.bill.finalPayableTotalMinor)
 
             val excludeResponse =
@@ -869,7 +889,11 @@ class VenueOrderRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, excludeResponse.status)
-            val excluded = json.decodeFromString(OrderBillItemAdjustmentResponse.serializer(), excludeResponse.bodyAsText())
+            val excluded =
+                json.decodeFromString(
+                    OrderBillItemAdjustmentResponse.serializer(),
+                    excludeResponse.bodyAsText(),
+                )
             assertEquals(0, excluded.order.bill.finalPayableTotalMinor)
             assertEquals(5_000, excluded.order.bill.excludedTotalMinor)
         }
@@ -1238,14 +1262,14 @@ class VenueOrderRoutesTest {
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val resolvedMenuItemId =
-                menuItemId ?:
-                connection.prepareStatement(
-                    "SELECT id FROM menu_items LIMIT 1",
-                ).use { statement ->
-                    statement.executeQuery().use { rs ->
-                        if (rs.next()) rs.getLong(1) else error("Missing menu item")
+                menuItemId
+                    ?: connection.prepareStatement(
+                        "SELECT id FROM menu_items LIMIT 1",
+                    ).use { statement ->
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) rs.getLong(1) else error("Missing menu item")
+                        }
                     }
-                }
             return connection.prepareStatement(
                 """
                 INSERT INTO order_batch_items (

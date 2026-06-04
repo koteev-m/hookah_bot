@@ -19,9 +19,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 
-fun Route.guestFavoritesRoutes(
-    guestFavoritesRepository: GuestFavoritesRepository,
-) {
+fun Route.guestFavoritesRoutes(guestFavoritesRepository: GuestFavoritesRepository) {
     route("/favorites") {
         route("/venues") {
             get {

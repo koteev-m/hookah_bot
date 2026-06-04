@@ -18,8 +18,8 @@ import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
-import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.NewBatchNotification
@@ -111,7 +111,12 @@ fun Route.guestOrderRoutes(
                         tableSessionId = tableSession.id,
                         userId = userId,
                     )
-                tableSession.id to (personalTab.id to ordersRepository.findActiveOrderDetailsForTab(tableSession.id, personalTab.id))
+                val activeOrderDetails =
+                    ordersRepository.findActiveOrderDetailsForTab(
+                        tableSession.id,
+                        personalTab.id,
+                    )
+                tableSession.id to (personalTab.id to activeOrderDetails)
             }
         val activeOrder = scopedActiveOrder.second.second
         call.respond(
@@ -366,14 +371,15 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
         loyaltyDiscountTotalMinor = loyaltyDiscounts.sumOf { it.discountMinor },
         finalPayableTotalMinor = allItems.sumOf { item -> item.linePayableMinor() },
         currency = currency,
-        discounts = promotionDiscounts.map { discount ->
-            com.hookah.platform.backend.miniapp.guest.api.ActiveOrderDiscountDto(
-                label = discount.label,
-                discountMinor = discount.discountMinor,
-                currency = discount.currency,
-                ruleType = discount.ruleType,
-            )
-        },
+        discounts =
+            promotionDiscounts.map { discount ->
+                com.hookah.platform.backend.miniapp.guest.api.ActiveOrderDiscountDto(
+                    label = discount.label,
+                    discountMinor = discount.discountMinor,
+                    currency = discount.currency,
+                    ruleType = discount.ruleType,
+                )
+            },
         batches =
             batches.map { batch ->
                 OrderBatchDto(

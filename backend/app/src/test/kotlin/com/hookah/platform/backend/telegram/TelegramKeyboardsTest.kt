@@ -45,7 +45,12 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `main menu shows guest mini app entry when configured`() {
-        val markup = TelegramKeyboards.mainMenu(hasVenueRole = false, isPlatformOwner = false, webAppUrl = "https://mini.app/miniapp/?mode=guest")
+        val markup =
+            TelegramKeyboards.mainMenu(
+                hasVenueRole = false,
+                isPlatformOwner = false,
+                webAppUrl = "https://mini.app/miniapp/?mode=guest",
+            )
         val reply = assertIs<ReplyKeyboardMarkup>(markup)
         val texts = reply.keyboard.flatten().map { it.text }
 
@@ -88,7 +93,12 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `main menu uses compact launch layout`() {
-        val markup = TelegramKeyboards.mainMenu(hasVenueRole = false, isPlatformOwner = false, webAppUrl = "https://mini.app/miniapp/?mode=guest")
+        val markup =
+            TelegramKeyboards.mainMenu(
+                hasVenueRole = false,
+                isPlatformOwner = false,
+                webAppUrl = "https://mini.app/miniapp/?mode=guest",
+            )
         val reply = assertIs<ReplyKeyboardMarkup>(markup)
         val rows = reply.keyboard.map { row -> row.map { it.text } }
 
@@ -175,7 +185,12 @@ class TelegramKeyboardsTest {
         val buttons = TelegramKeyboards.inlineVisitFeedbackActions(visitId = 10L).inlineKeyboard.flatten()
 
         assertEquals(listOf("⭐ 1", "⭐ 2", "⭐ 3", "⭐ 4", "⭐ 5"), buttons.take(5).map { it.text })
-        assertEquals(listOf("fb_r:10:1", "fb_r:10:2", "fb_r:10:3", "fb_r:10:4", "fb_r:10:5"), buttons.take(5).map { it.callbackData })
+        assertEquals(
+            listOf("fb_r:10:1", "fb_r:10:2", "fb_r:10:3", "fb_r:10:4", "fb_r:10:5"),
+            buttons.take(5).map {
+                it.callbackData
+            },
+        )
         assertEquals("💬 Оставить комментарий", buttons[5].text)
         assertEquals("fb_c:10", buttons[5].callbackData)
         assertEquals("Пропустить", buttons[6].text)
@@ -198,7 +213,10 @@ class TelegramKeyboardsTest {
         val buttons = TelegramKeyboards.inlineVisitFeedbackRatingOnlyActions(visitId = 10L).inlineKeyboard.flatten()
 
         assertEquals(listOf("⭐ 1", "⭐ 2", "⭐ 3", "⭐ 4", "⭐ 5"), buttons.map { it.text })
-        assertEquals(listOf("fb_r:10:1", "fb_r:10:2", "fb_r:10:3", "fb_r:10:4", "fb_r:10:5"), buttons.map { it.callbackData })
+        assertEquals(
+            listOf("fb_r:10:1", "fb_r:10:2", "fb_r:10:3", "fb_r:10:4", "fb_r:10:5"),
+            buttons.map { it.callbackData },
+        )
         assertTrue(buttons.all { it.callbackData.orEmpty().length <= 64 })
     }
 
@@ -693,7 +711,11 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `venue marketing loyalty actions render setup and lifecycle`() {
-        val rootButtons = TelegramKeyboards.inlineVenueMarketingLoyaltyRootActions(10L, hasProgram = false).inlineKeyboard.flatten()
+        val rootButtons =
+            TelegramKeyboards.inlineVenueMarketingLoyaltyRootActions(
+                10L,
+                hasProgram = false,
+            ).inlineKeyboard.flatten()
         assertEquals("🎁 Каждый N-й кальян", rootButtons[0].text)
         assertEquals("vm_loyalty_program:10", rootButtons[0].callbackData)
         assertEquals("➕ Настроить программу", rootButtons[1].text)
@@ -707,11 +729,22 @@ class TelegramKeyboardsTest {
             nthButtons.map { it.text },
         )
         assertEquals(
-            listOf("vm_loyalty_n:10:3", "vm_loyalty_n:10:5", "vm_loyalty_n:10:6", "vm_loyalty_custom:10", "vm_loyalty:10"),
+            listOf(
+                "vm_loyalty_n:10:3",
+                "vm_loyalty_n:10:5",
+                "vm_loyalty_n:10:6",
+                "vm_loyalty_custom:10",
+                "vm_loyalty:10",
+            ),
             nthButtons.map { it.callbackData },
         )
 
-        val draftButtons = TelegramKeyboards.inlineVenueMarketingLoyaltyProgramActions(10L, 20L, "DRAFT").inlineKeyboard.flatten()
+        val draftButtons =
+            TelegramKeyboards.inlineVenueMarketingLoyaltyProgramActions(
+                10L,
+                20L,
+                "DRAFT",
+            ).inlineKeyboard.flatten()
         assertEquals("✏️ Изменить N", draftButtons[0].text)
         assertEquals("vm_loyalty_setup:10", draftButtons[0].callbackData)
         assertEquals("🎯 Что засчитывается", draftButtons[1].text)
@@ -723,20 +756,51 @@ class TelegramKeyboardsTest {
         assertEquals("🗄 Архивировать", draftButtons[4].text)
         assertEquals("vm_loyalty_status:10:20:ARCHIVED", draftButtons[4].callbackData)
 
-        val activeButtons = TelegramKeyboards.inlineVenueMarketingLoyaltyProgramActions(10L, 20L, "ACTIVE").inlineKeyboard.flatten()
+        val activeButtons =
+            TelegramKeyboards.inlineVenueMarketingLoyaltyProgramActions(
+                10L,
+                20L,
+                "ACTIVE",
+            ).inlineKeyboard.flatten()
         assertEquals("⏸ Приостановить", activeButtons[3].text)
         assertEquals("vm_loyalty_status:10:20:PAUSED", activeButtons[3].callbackData)
 
-        val customButtons = TelegramKeyboards.inlineVenueMarketingLoyaltyCustomNWaitActions(10L).inlineKeyboard.flatten()
+        val customButtons =
+            TelegramKeyboards.inlineVenueMarketingLoyaltyCustomNWaitActions(
+                10L,
+            ).inlineKeyboard.flatten()
         assertEquals("↩️ К выбору N", customButtons.single().text)
         assertEquals("vm_loyalty_setup:10", customButtons.single().callbackData)
 
-        val earnScopeButtons = TelegramKeyboards.inlineVenueMarketingLoyaltyTargetScopeActions(10L, 20L, "earn").inlineKeyboard.flatten()
-        assertEquals(listOf("✅ Все кальяны", "🎯 Выбрать отдельные позиции", "↩️ Назад"), earnScopeButtons.map { it.text })
-        assertEquals(listOf("vle_all:10:20", "vle_items:10:20:0", "vm_loyalty_program:10"), earnScopeButtons.map { it.callbackData })
+        val earnScopeButtons =
+            TelegramKeyboards.inlineVenueMarketingLoyaltyTargetScopeActions(
+                10L,
+                20L,
+                "earn",
+            ).inlineKeyboard.flatten()
+        assertEquals(
+            listOf("✅ Все кальяны", "🎯 Выбрать отдельные позиции", "↩️ Назад"),
+            earnScopeButtons.map { it.text },
+        )
+        assertEquals(
+            listOf("vle_all:10:20", "vle_items:10:20:0", "vm_loyalty_program:10"),
+            earnScopeButtons.map {
+                it.callbackData
+            },
+        )
 
-        val rewardScopeButtons = TelegramKeyboards.inlineVenueMarketingLoyaltyTargetScopeActions(10L, 20L, "reward").inlineKeyboard.flatten()
-        assertEquals(listOf("vlr_all:10:20", "vlr_items:10:20:0", "vm_loyalty_program:10"), rewardScopeButtons.map { it.callbackData })
+        val rewardScopeButtons =
+            TelegramKeyboards.inlineVenueMarketingLoyaltyTargetScopeActions(
+                10L,
+                20L,
+                "reward",
+            ).inlineKeyboard.flatten()
+        assertEquals(
+            listOf("vlr_all:10:20", "vlr_items:10:20:0", "vm_loyalty_program:10"),
+            rewardScopeButtons.map {
+                it.callbackData
+            },
+        )
     }
 
     @Test
@@ -764,7 +828,11 @@ class TelegramKeyboardsTest {
         assertEquals("↩️ К размещениям", listButtons[1].text)
         assertEquals("vm_placements:10", listButtons[1].callbackData)
 
-        val detailButtons = TelegramKeyboards.inlineVenueMarketingPlacementDetailActions(10L, "active").inlineKeyboard.flatten()
+        val detailButtons =
+            TelegramKeyboards.inlineVenueMarketingPlacementDetailActions(
+                10L,
+                "active",
+            ).inlineKeyboard.flatten()
         assertEquals("↩️ К размещениям", detailButtons.single().text)
         assertEquals("vm_places_active:10", detailButtons.single().callbackData)
     }
@@ -792,7 +860,10 @@ class TelegramKeyboardsTest {
         assertEquals("↩️ К акциям", archiveButtons[1].text)
         assertEquals("vp_root:10", archiveButtons[1].callbackData)
 
-        val archivedDetailButtons = TelegramKeyboards.inlineVenuePromotionArchivedDetailActions(10L).inlineKeyboard.flatten()
+        val archivedDetailButtons =
+            TelegramKeyboards.inlineVenuePromotionArchivedDetailActions(
+                10L,
+            ).inlineKeyboard.flatten()
         assertEquals(listOf("↩️ К архиву"), archivedDetailButtons.map { it.text })
         assertEquals("vp_archive_root:10", archivedDetailButtons.single().callbackData)
     }
@@ -870,7 +941,9 @@ class TelegramKeyboardsTest {
                 .flatten()
 
         assertTrue(buttons.any { it.text == "📝 Простая акция" && it.callbackData == "vp_tpl:10:TEXT_ONLY" })
-        assertTrue(buttons.any { it.text == "🕒 Счастливые часы" && it.callbackData == "vp_tpl:10:HAPPY_HOURS_PERCENT" })
+        assertTrue(
+            buttons.any { it.text == "🕒 Счастливые часы" && it.callbackData == "vp_tpl:10:HAPPY_HOURS_PERCENT" },
+        )
         assertTrue(buttons.any { it.text == "🎁 Подарок к позиции" && it.callbackData == "vp_tpl:10:GIFT_WITH_ITEM" })
         assertTrue(buttons.any { it.text == "🖼 Баннер / афиша" && it.callbackData == "vp_tpl:10:BANNER" })
         assertTrue(buttons.any { it.text == "↩️ Назад" && it.callbackData == "vp_root:10" })
@@ -989,7 +1062,11 @@ class TelegramKeyboardsTest {
                 .inlineKeyboard
                 .flatten()
         assertTrue(rewardModeButtons.any { it.text == "🎁 Конкретная позиция" && it.callbackData == "vpg_rf:10:501" })
-        assertTrue(rewardModeButtons.any { it.text == "🎁 На выбор из нескольких позиций" && it.callbackData == "vpg_rcmode:10:501" })
+        assertTrue(
+            rewardModeButtons.any {
+                it.text == "🎁 На выбор из нескольких позиций" && it.callbackData == "vpg_rcmode:10:501"
+            },
+        )
 
         val rewardChoiceCategoryButtons =
             TelegramKeyboards
@@ -1016,8 +1093,15 @@ class TelegramKeyboardsTest {
                 )
                 .inlineKeyboard
                 .flatten()
-        assertTrue(rewardChoiceItemButtons.any { it.text == "✅ Чай" && it.callbackData == "vpg_rcitog:10:501:TEA:701:0" })
-        assertTrue(rewardChoiceItemButtons.any { it.text == "Зелёный чай" && it.callbackData == "vpg_rcitog:10:501:TEA:702:0" })
+        assertTrue(
+            rewardChoiceItemButtons.any { it.text == "✅ Чай" && it.callbackData == "vpg_rcitog:10:501:TEA:701:0" },
+        )
+        assertTrue(
+            rewardChoiceItemButtons.any {
+                it.text == "Зелёный чай" &&
+                    it.callbackData == "vpg_rcitog:10:501:TEA:702:0"
+            },
+        )
         assertTrue(rewardChoiceItemButtons.any { it.text == "✅ Готово" && it.callbackData == "vpg_rcdone:10:501:TEA" })
     }
 
@@ -1038,7 +1122,12 @@ class TelegramKeyboardsTest {
 
         val detailButtons =
             TelegramKeyboards
-                .inlineVenuePromotionRuleDetailActions(venueId = 10L, promotionId = 501L, ruleId = 601L, status = "DRAFT")
+                .inlineVenuePromotionRuleDetailActions(
+                    venueId = 10L,
+                    promotionId = 501L,
+                    ruleId = 601L,
+                    status = "DRAFT",
+                )
                 .inlineKeyboard
                 .flatten()
         assertTrue(detailButtons.none { it.text == "▶️ Включить" })
@@ -1066,7 +1155,9 @@ class TelegramKeyboardsTest {
         assertTrue(giftDetailButtons.any { it.text == "🎯 Условие подарка" && it.callbackData == "vpg_tedit:10:501" })
         assertTrue(giftDetailButtons.any { it.text == "🎁 Подарок" && it.callbackData == "vpg_rew:10:501" })
         assertTrue(giftDetailButtons.any { it.text == "🕒 Расписание" && it.callbackData == "vpr_s:10:501:602" })
-        assertTrue(giftDetailButtons.any { it.text == "⚖️ Совместимость акций" && it.callbackData == "vpr_cmp:10:501:602" })
+        assertTrue(
+            giftDetailButtons.any { it.text == "⚖️ Совместимость акций" && it.callbackData == "vpr_cmp:10:501:602" },
+        )
         assertTrue(giftDetailButtons.any { it.text == "🗑 Удалить правило" && it.callbackData == "vpr_del:10:501:602" })
         assertTrue(giftDetailButtons.any { it.text == "↩️ К правилам" && it.callbackData == "vpr_root:10:501" })
         assertTrue(giftDetailButtons.none { it.text == "✏️ Процент скидки" })
@@ -1080,8 +1171,14 @@ class TelegramKeyboardsTest {
                 )
                 .inlineKeyboard
                 .flatten()
-        assertTrue(deleteConfirmButtons.any { it.text == "✅ Да, удалить правило" && it.callbackData == "vpr_del_yes:10:501:601" })
-        assertTrue(deleteConfirmButtons.any { it.text == "↩️ Назад к правилу" && it.callbackData == "vpr_o:10:501:601" })
+        assertTrue(
+            deleteConfirmButtons.any {
+                it.text == "✅ Да, удалить правило" && it.callbackData == "vpr_del_yes:10:501:601"
+            },
+        )
+        assertTrue(
+            deleteConfirmButtons.any { it.text == "↩️ Назад к правилу" && it.callbackData == "vpr_o:10:501:601" },
+        )
 
         val targetEditButtons =
             TelegramKeyboards
@@ -1107,8 +1204,16 @@ class TelegramKeyboardsTest {
                 )
                 .inlineKeyboard
                 .flatten()
-        assertTrue(scopeButtons.any { it.text == "✅ Все позиции категории «Кальяны»" && it.callbackData == "vpr_tall:10:501:601:HOOKAH" })
-        assertTrue(scopeButtons.any { it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpr_titems:10:501:601:HOOKAH:0" })
+        assertTrue(
+            scopeButtons.any {
+                it.text == "✅ Все позиции категории «Кальяны»" && it.callbackData == "vpr_tall:10:501:601:HOOKAH"
+            },
+        )
+        assertTrue(
+            scopeButtons.any {
+                it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpr_titems:10:501:601:HOOKAH:0"
+            },
+        )
 
         val itemButtons =
             TelegramKeyboards
@@ -1125,8 +1230,12 @@ class TelegramKeyboardsTest {
                 )
                 .inlineKeyboard
                 .flatten()
-        assertTrue(itemButtons.any { it.text == "✅ Кальян обычный" && it.callbackData == "vpr_itog:10:501:601:HOOKAH:701:0" })
-        assertTrue(itemButtons.any { it.text == "Премиум кальян" && it.callbackData == "vpr_itog:10:501:601:HOOKAH:702:0" })
+        assertTrue(
+            itemButtons.any { it.text == "✅ Кальян обычный" && it.callbackData == "vpr_itog:10:501:601:HOOKAH:701:0" },
+        )
+        assertTrue(
+            itemButtons.any { it.text == "Премиум кальян" && it.callbackData == "vpr_itog:10:501:601:HOOKAH:702:0" },
+        )
         assertTrue(itemButtons.any { it.text == "✅ Готово" && it.callbackData == "vpr_idone:10:501:601:HOOKAH" })
 
         val percentEditButtons =
@@ -1147,20 +1256,46 @@ class TelegramKeyboardsTest {
 
         val compatibilityButtons =
             TelegramKeyboards
-                .inlineVenuePromotionRuleCompatibilityActions(venueId = 10L, promotionId = 501L, ruleId = 601L, stackable = false)
+                .inlineVenuePromotionRuleCompatibilityActions(
+                    venueId = 10L,
+                    promotionId = 501L,
+                    ruleId = 601L,
+                    stackable = false,
+                )
                 .inlineKeyboard
                 .flatten()
-        assertTrue(compatibilityButtons.any { it.text == "✅ Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:0" })
-        assertTrue(compatibilityButtons.any { it.text == "Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:1" })
+        assertTrue(
+            compatibilityButtons.any {
+                it.text == "✅ Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:0"
+            },
+        )
+        assertTrue(
+            compatibilityButtons.any {
+                it.text == "Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:1"
+            },
+        )
         assertTrue(compatibilityButtons.any { it.text == "↩️ К правилу" && it.callbackData == "vpr_o:10:501:601" })
 
         val stackableCompatibilityButtons =
             TelegramKeyboards
-                .inlineVenuePromotionRuleCompatibilityActions(venueId = 10L, promotionId = 501L, ruleId = 601L, stackable = true)
+                .inlineVenuePromotionRuleCompatibilityActions(
+                    venueId = 10L,
+                    promotionId = 501L,
+                    ruleId = 601L,
+                    stackable = true,
+                )
                 .inlineKeyboard
                 .flatten()
-        assertTrue(stackableCompatibilityButtons.any { it.text == "Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:0" })
-        assertTrue(stackableCompatibilityButtons.any { it.text == "✅ Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:1" })
+        assertTrue(
+            stackableCompatibilityButtons.any {
+                it.text == "Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:0"
+            },
+        )
+        assertTrue(
+            stackableCompatibilityButtons.any {
+                it.text == "✅ Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:501:601:1"
+            },
+        )
     }
 
     @Test
@@ -1223,7 +1358,11 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `inline venue booking hold settings render quick custom and back choices`() {
-        val buttons = TelegramKeyboards.inlineVenueBookingHoldSettingsActions(10L, currentHoldMinutes = 45).inlineKeyboard.flatten()
+        val buttons =
+            TelegramKeyboards.inlineVenueBookingHoldSettingsActions(
+                10L,
+                currentHoldMinutes = 45,
+            ).inlineKeyboard.flatten()
 
         assertEquals(
             listOf("30 минут", "60 минут", "✏️ Ввести своё число", "↩️ Назад"),
@@ -1237,7 +1376,11 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `inline venue booking hold settings do not render current quick value as action`() {
-        val buttons = TelegramKeyboards.inlineVenueBookingHoldSettingsActions(10L, currentHoldMinutes = 30).inlineKeyboard.flatten()
+        val buttons =
+            TelegramKeyboards.inlineVenueBookingHoldSettingsActions(
+                10L,
+                currentHoldMinutes = 30,
+            ).inlineKeyboard.flatten()
 
         assertEquals(
             listOf("60 минут", "✏️ Ввести своё число", "↩️ Назад"),
@@ -1251,27 +1394,48 @@ class TelegramKeyboardsTest {
         val buttons = TelegramKeyboards.inlineVenueBookingHoldCustomInputActions(10L).inlineKeyboard.flatten()
 
         assertEquals(listOf("⬅️ Назад", "✖️ Отмена"), buttons.map { it.text })
-        assertEquals(listOf("venue_booking_hold_back:10", "venue_booking_hold_back:10"), buttons.map { it.callbackData })
+        assertEquals(
+            listOf("venue_booking_hold_back:10", "venue_booking_hold_back:10"),
+            buttons.map { it.callbackData },
+        )
         assertFalse(buttons.any { it.text.contains("минут") || it.text.contains("Ввести") })
     }
 
     @Test
     fun `owner setup root sections return to setup root`() {
-        fun callbackFor(markup: InlineKeyboardMarkup, label: String): String? =
-            markup.inlineKeyboard.flatten().firstOrNull { it.text == label }?.callbackData
+        fun callbackFor(
+            markup: InlineKeyboardMarkup,
+            label: String,
+        ): String? = markup.inlineKeyboard.flatten().firstOrNull { it.text == label }?.callbackData
 
-        assertEquals("owner_venue_hub_setup:10", callbackFor(TelegramKeyboards.inlineVenueOwnerProfileActions(10L), "↩️ Назад к настройке"))
         assertEquals(
             "owner_venue_hub_setup:10",
-            callbackFor(TelegramKeyboards.inlineVenueOwnerOrderMenuRootActions(10L, emptyList()), "↩️ Назад к настройке"),
+            callbackFor(TelegramKeyboards.inlineVenueOwnerProfileActions(10L), "↩️ Назад к настройке"),
         )
-        assertEquals("owner_venue_hub_setup:10", callbackFor(TelegramKeyboards.inlineVenueOwnerTablesRootActions(10L), "↩️ Назад к настройке"))
-        assertEquals("owner_venue_hub_setup:10", callbackFor(TelegramKeyboards.inlineVenueOwnerStaffRootActions(10L), "↩️ Назад к настройке"))
+        assertEquals(
+            "owner_venue_hub_setup:10",
+            callbackFor(
+                TelegramKeyboards.inlineVenueOwnerOrderMenuRootActions(10L, emptyList()),
+                "↩️ Назад к настройке",
+            ),
+        )
+        assertEquals(
+            "owner_venue_hub_setup:10",
+            callbackFor(TelegramKeyboards.inlineVenueOwnerTablesRootActions(10L), "↩️ Назад к настройке"),
+        )
+        assertEquals(
+            "owner_venue_hub_setup:10",
+            callbackFor(TelegramKeyboards.inlineVenueOwnerStaffRootActions(10L), "↩️ Назад к настройке"),
+        )
     }
 
     @Test
     fun `owner venue description media upload actions render done and back`() {
-        val buttons = TelegramKeyboards.inlineOwnerVenueDescriptionMediaUploadActions(10L, 101L).inlineKeyboard.flatten()
+        val buttons =
+            TelegramKeyboards.inlineOwnerVenueDescriptionMediaUploadActions(
+                10L,
+                101L,
+            ).inlineKeyboard.flatten()
 
         assertEquals(listOf("✅ Готово", "⬅️ Назад"), buttons.map { it.text })
         assertEquals(
@@ -1311,14 +1475,32 @@ class TelegramKeyboardsTest {
                 venueId = 10L,
                 sectionButtons = listOf(20L to "Кальянное меню"),
             ).inlineKeyboard.flatten()
-        val ordersButtons = TelegramKeyboards.inlineVenueStaffOrdersRootActions(10L, emptyList()).inlineKeyboard.flatten()
+        val ordersButtons =
+            TelegramKeyboards.inlineVenueStaffOrdersRootActions(
+                10L,
+                emptyList(),
+            ).inlineKeyboard.flatten()
         val callsButtons = TelegramKeyboards.inlineVenueStaffCallsRootActions(10L).inlineKeyboard.flatten()
         val bookingsButtons = TelegramKeyboards.inlineBackToVenueMenu(10L).inlineKeyboard.flatten()
 
-        assertEquals(true, orderMenuButtons.any { it.text == "↩️ Назад к настройке" && it.callbackData == "owner_venue_hub_setup:10" })
-        assertEquals(true, ordersButtons.any { it.text == "↩️ Назад к заведению" && it.callbackData == "venue_menu_back:10" })
-        assertEquals(true, callsButtons.any { it.text == "↩️ Назад к заведению" && it.callbackData == "venue_menu_back:10" })
-        assertEquals(true, bookingsButtons.any { it.text == "↩️ Назад к заведению" && it.callbackData == "venue_menu_back:10" })
+        assertEquals(
+            true,
+            orderMenuButtons.any {
+                it.text == "↩️ Назад к настройке" && it.callbackData == "owner_venue_hub_setup:10"
+            },
+        )
+        assertEquals(
+            true,
+            ordersButtons.any { it.text == "↩️ Назад к заведению" && it.callbackData == "venue_menu_back:10" },
+        )
+        assertEquals(
+            true,
+            callsButtons.any { it.text == "↩️ Назад к заведению" && it.callbackData == "venue_menu_back:10" },
+        )
+        assertEquals(
+            true,
+            bookingsButtons.any { it.text == "↩️ Назад к заведению" && it.callbackData == "venue_menu_back:10" },
+        )
     }
 
     @Test
@@ -1784,7 +1966,12 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `table entry choice includes active table session when provided`() {
-        val markup = TelegramKeyboards.inlineTableEntryChoice("https://mini.app/miniapp/", "abc123", tableSessionId = 55L)
+        val markup =
+            TelegramKeyboards.inlineTableEntryChoice(
+                "https://mini.app/miniapp/",
+                "abc123",
+                tableSessionId = 55L,
+            )
         val webAppUrl = markup.inlineKeyboard.flatten()[0].webApp?.url.orEmpty()
 
         assertTrue(webAppUrl.contains("tableToken=abc123"))
@@ -2511,7 +2698,9 @@ class TelegramKeyboardsTest {
         assertEquals("Кальяны", categoryButtons[0].text)
         assertEquals("omt_cs:11:22:HOOKAH", categoryButtons[0].callbackData)
         assertTrue(categoryButtons.any { it.text == "Другое" })
-        assertTrue(categoryButtons.any { it.text == "↩️ Назад" && it.callbackData == "owner_venue_order_menu_section:11:22" })
+        assertTrue(
+            categoryButtons.any { it.text == "↩️ Назад" && it.callbackData == "owner_venue_order_menu_section:11:22" },
+        )
 
         val itemMarkup =
             TelegramKeyboards.inlineVenueOwnerOrderMenuItemTypeActions(
@@ -2531,7 +2720,9 @@ class TelegramKeyboardsTest {
         assertEquals("Как у раздела", itemButtons[0].text)
         assertEquals("omt_is:11:22:33:INHERIT", itemButtons[0].callbackData)
         assertTrue(itemButtons.any { it.text == "Напитки" && it.callbackData == "omt_is:11:22:33:DRINK" })
-        assertTrue(itemButtons.any { it.text == "↩️ Назад" && it.callbackData == "owner_venue_order_menu_item_more:11:22:33" })
+        assertTrue(
+            itemButtons.any { it.text == "↩️ Назад" && it.callbackData == "owner_venue_order_menu_item_more:11:22:33" },
+        )
     }
 
     @Test
@@ -2809,7 +3000,12 @@ class TelegramKeyboardsTest {
         val accept = TelegramKeyboards.inlineStaffChatOrderBatchAccept(17L, 57L).inlineKeyboard.flatten().single()
         val deliver = TelegramKeyboards.inlineStaffChatOrderBatchDeliver(17L, 57L).inlineKeyboard.flatten().single()
         val close = TelegramKeyboards.inlineStaffChatOrderCloseBill(17L, 19L, 57L).inlineKeyboard.flatten().single()
-        val closeConfirm = TelegramKeyboards.inlineStaffChatOrderCloseBillConfirm(17L, 19L, 57L).inlineKeyboard.flatten()
+        val closeConfirm =
+            TelegramKeyboards.inlineStaffChatOrderCloseBillConfirm(
+                17L,
+                19L,
+                57L,
+            ).inlineKeyboard.flatten()
 
         assertEquals("✅ Принять", accept.text)
         assertEquals("sc_ob_a:17:57", accept.callbackData)

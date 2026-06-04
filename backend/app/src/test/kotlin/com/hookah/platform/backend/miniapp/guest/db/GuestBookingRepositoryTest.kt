@@ -236,9 +236,18 @@ class GuestBookingRepositoryTest {
             val noShow = repository.create(fixture.venueId, fixture.userId, scheduledAt.plusSeconds(5), 2, null)
             val alreadyExpired = repository.create(fixture.venueId, fixture.userId, scheduledAt.plusSeconds(6), 2, null)
 
-            assertEquals(BookingStatus.CONFIRMED, repository.updateByVenue(confirmed.id, fixture.venueId, BookingStatus.CONFIRMED)?.status)
-            assertEquals(BookingStatus.CHANGED, repository.updateByVenue(changed.id, fixture.venueId, BookingStatus.CHANGED)?.status)
-            assertEquals(BookingStatus.CANCELED, repository.updateByVenue(canceled.id, fixture.venueId, BookingStatus.CANCELED)?.status)
+            assertEquals(
+                BookingStatus.CONFIRMED,
+                repository.updateByVenue(confirmed.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
+            )
+            assertEquals(
+                BookingStatus.CHANGED,
+                repository.updateByVenue(changed.id, fixture.venueId, BookingStatus.CHANGED)?.status,
+            )
+            assertEquals(
+                BookingStatus.CANCELED,
+                repository.updateByVenue(canceled.id, fixture.venueId, BookingStatus.CANCELED)?.status,
+            )
             assertEquals(BookingStatus.SEATED, repository.markSeated(fixture.venueId, seated.id)?.status)
             assertEquals(BookingStatus.NO_SHOW, repository.markNoShow(fixture.venueId, noShow.id)?.status)
             forceBookingStatus(jdbcUrl, alreadyExpired.id, BookingStatus.EXPIRED)
@@ -351,7 +360,10 @@ class GuestBookingRepositoryTest {
                     venueZoneId = zoneId,
                     serviceDate = serviceDate,
                 )
-            assertEquals(BookingStatus.CONFIRMED, repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)?.status)
+            assertEquals(
+                BookingStatus.CONFIRMED,
+                repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
+            )
 
             val result = repository.scheduleRemindersForBooking(booking.id, now = now, venueZoneId = zoneId)
             val reminders = listReminders(jdbcUrl, booking.id)
@@ -361,7 +373,12 @@ class GuestBookingRepositoryTest {
                 LocalDateTime.of(serviceDate, LocalTime.of(11, 0)).atZone(zoneId).toInstant(),
                 reminders.first { it.kind == BookingReminderKind.DAY_OF_VISIT }.scheduledFor,
             )
-            assertEquals(scheduledAt.minus(Duration.ofHours(2)), reminders.first { it.kind == BookingReminderKind.PRE_VISIT }.scheduledFor)
+            assertEquals(
+                scheduledAt.minus(Duration.ofHours(2)),
+                reminders.first {
+                    it.kind == BookingReminderKind.PRE_VISIT
+                }.scheduledFor,
+            )
             assertTrue(reminders.all { it.status == BookingReminderStatus.PENDING })
         }
 
@@ -399,8 +416,14 @@ class GuestBookingRepositoryTest {
             repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
 
             val earlyNow = LocalDateTime.of(serviceDate, LocalTime.of(14, 0)).atZone(zoneId).toInstant()
-            assertEquals(1, repository.scheduleRemindersForBooking(booking.id, now = earlyNow, venueZoneId = zoneId).pendingCount)
-            assertEquals(scheduledAt.minus(Duration.ofHours(1)), listReminders(jdbcUrl, booking.id).single().scheduledFor)
+            assertEquals(
+                1,
+                repository.scheduleRemindersForBooking(booking.id, now = earlyNow, venueZoneId = zoneId).pendingCount,
+            )
+            assertEquals(
+                scheduledAt.minus(Duration.ofHours(1)),
+                listReminders(jdbcUrl, booking.id).single().scheduledFor,
+            )
 
             val closeNow = LocalDateTime.of(serviceDate, LocalTime.of(18, 0)).atZone(zoneId).toInstant()
             val closeResult = repository.scheduleRemindersForBooking(booking.id, now = closeNow, venueZoneId = zoneId)

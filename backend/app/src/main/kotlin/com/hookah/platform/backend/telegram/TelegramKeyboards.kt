@@ -830,7 +830,12 @@ object TelegramKeyboards {
                         listOf(
                             InlineKeyboardButton(
                                 text = "↩️ Назад",
-                                callbackData = if (kind == "earn") "vm_loyalty_earn:$venueId:$programId" else "vm_loyalty_reward:$venueId:$programId",
+                                callbackData =
+                                    if (kind == "earn") {
+                                        "vm_loyalty_earn:$venueId:$programId"
+                                    } else {
+                                        "vm_loyalty_reward:$venueId:$programId"
+                                    },
                             ),
                         ),
                     )
@@ -1793,10 +1798,10 @@ object TelegramKeyboards {
                 )
                 add(
                     listOf(
-                    InlineKeyboardButton(
-                        text = "💬 Заказывать в боте",
-                        callbackData = "continue_in_bot",
-                    ),
+                        InlineKeyboardButton(
+                            text = "💬 Заказывать в боте",
+                            callbackData = "continue_in_bot",
+                        ),
                     ),
                 )
             }
@@ -2463,16 +2468,16 @@ object TelegramKeyboards {
         InlineKeyboardMarkup(
             inlineKeyboard =
                 buildList {
-	                    typeButtons.chunked(2).forEach { row ->
-	                        add(
-	                            row.map { (type, label) ->
-	                                InlineKeyboardButton(
-	                                    text = label,
-	                                    callbackData = "vpr_tcat:$venueId:$promotionId:$ruleId:$type",
-	                                )
-	                            },
-	                        )
-	                    }
+                    typeButtons.chunked(2).forEach { row ->
+                        add(
+                            row.map { (type, label) ->
+                                InlineKeyboardButton(
+                                    text = label,
+                                    callbackData = "vpr_tcat:$venueId:$promotionId:$ruleId:$type",
+                                )
+                            },
+                        )
+                    }
                     add(
                         listOf(
                             InlineKeyboardButton(
@@ -2481,184 +2486,184 @@ object TelegramKeyboards {
                             ),
                         ),
                     )
-	                },
-	        )
+                },
+        )
 
-	    fun inlineVenuePromotionRuleTargetScopeCreateActions(
-	        venueId: Long,
-	        promotionId: Long,
-	        targetType: String,
-	        targetLabel: String,
-	    ): InlineKeyboardMarkup =
-	        InlineKeyboardMarkup(
-	            inlineKeyboard =
-	                listOf(
-	                    listOf(
-	                        InlineKeyboardButton(
-	                            text = "✅ Все позиции категории «$targetLabel»",
-	                            callbackData = "vpr_tall_new:$venueId:$promotionId:$targetType",
-	                        ),
-	                    ),
-	                    listOf(
-	                        InlineKeyboardButton(
-	                            text = "🎯 Выбрать отдельные позиции",
-	                            callbackData = "vpr_titems_new:$venueId:$promotionId:$targetType:0",
-	                        ),
-	                    ),
-	                    listOf(
-	                        InlineKeyboardButton(
-	                            text = "↩️ Назад",
-	                            callbackData = "vpr_add:$venueId:$promotionId",
-	                        ),
-	                    ),
-	                ),
-	        )
+    fun inlineVenuePromotionRuleTargetScopeCreateActions(
+        venueId: Long,
+        promotionId: Long,
+        targetType: String,
+        targetLabel: String,
+    ): InlineKeyboardMarkup =
+        InlineKeyboardMarkup(
+            inlineKeyboard =
+                listOf(
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "✅ Все позиции категории «$targetLabel»",
+                            callbackData = "vpr_tall_new:$venueId:$promotionId:$targetType",
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "🎯 Выбрать отдельные позиции",
+                            callbackData = "vpr_titems_new:$venueId:$promotionId:$targetType:0",
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "↩️ Назад",
+                            callbackData = "vpr_add:$venueId:$promotionId",
+                        ),
+                    ),
+                ),
+        )
 
-	    fun inlineVenuePromotionRuleTargetScopeEditActions(
-	        venueId: Long,
-	        promotionId: Long,
-	        ruleId: Long,
-	        targetType: String,
-	        targetLabel: String,
-	    ): InlineKeyboardMarkup =
-	        InlineKeyboardMarkup(
-	            inlineKeyboard =
-	                listOf(
-	                    listOf(
-	                        InlineKeyboardButton(
-	                            text = "✅ Все позиции категории «$targetLabel»",
-	                            callbackData = "vpr_tall:$venueId:$promotionId:$ruleId:$targetType",
-	                        ),
-	                    ),
-	                    listOf(
-	                        InlineKeyboardButton(
-	                            text = "🎯 Выбрать отдельные позиции",
-	                            callbackData = "vpr_titems:$venueId:$promotionId:$ruleId:$targetType:0",
-	                        ),
-	                    ),
-	                    listOf(
-	                        InlineKeyboardButton(
-	                            text = "↩️ Назад",
-	                            callbackData = "vpr_tedit:$venueId:$promotionId:$ruleId",
-	                        ),
-	                    ),
-	                ),
-	        )
+    fun inlineVenuePromotionRuleTargetScopeEditActions(
+        venueId: Long,
+        promotionId: Long,
+        ruleId: Long,
+        targetType: String,
+        targetLabel: String,
+    ): InlineKeyboardMarkup =
+        InlineKeyboardMarkup(
+            inlineKeyboard =
+                listOf(
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "✅ Все позиции категории «$targetLabel»",
+                            callbackData = "vpr_tall:$venueId:$promotionId:$ruleId:$targetType",
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "🎯 Выбрать отдельные позиции",
+                            callbackData = "vpr_titems:$venueId:$promotionId:$ruleId:$targetType:0",
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "↩️ Назад",
+                            callbackData = "vpr_tedit:$venueId:$promotionId:$ruleId",
+                        ),
+                    ),
+                ),
+        )
 
-	    fun inlineVenuePromotionRuleTargetItemsCreateActions(
-	        venueId: Long,
-	        promotionId: Long,
-	        targetType: String,
-	        page: Int,
-	        items: List<Pair<Long, String>>,
-	        selectedItemIds: Set<Long>,
-	        hasPreviousPage: Boolean,
-	        hasNextPage: Boolean,
-	    ): InlineKeyboardMarkup =
-	        InlineKeyboardMarkup(
-	            inlineKeyboard =
-	                buildList {
-	                    items.forEach { (itemId, name) ->
-	                        add(
-	                            listOf(
-	                                InlineKeyboardButton(
-	                                    text = "${if (itemId in selectedItemIds) "✅ " else ""}$name",
-	                                    callbackData = "vpr_itog_new:$venueId:$promotionId:$targetType:$itemId:$page",
-	                                ),
-	                            ),
-	                        )
-	                    }
-	                    addPromotionTargetPagination(
-	                        hasPreviousPage = hasPreviousPage,
-	                        hasNextPage = hasNextPage,
-	                        previousCallback = "vpr_titems_new:$venueId:$promotionId:$targetType:${page - 1}",
-	                        nextCallback = "vpr_titems_new:$venueId:$promotionId:$targetType:${page + 1}",
-	                    )
-	                    add(
-	                        listOf(
-	                            InlineKeyboardButton(
-	                                text = "✅ Готово",
-	                                callbackData = "vpr_idone_new:$venueId:$promotionId:$targetType",
-	                            ),
-	                        ),
-	                    )
-	                    add(
-	                        listOf(
-	                            InlineKeyboardButton(
-	                                text = "↩️ Назад",
-	                                callbackData = "vpr_t:$venueId:$promotionId:$targetType",
-	                            ),
-	                        ),
-	                    )
-	                },
-	        )
+    fun inlineVenuePromotionRuleTargetItemsCreateActions(
+        venueId: Long,
+        promotionId: Long,
+        targetType: String,
+        page: Int,
+        items: List<Pair<Long, String>>,
+        selectedItemIds: Set<Long>,
+        hasPreviousPage: Boolean,
+        hasNextPage: Boolean,
+    ): InlineKeyboardMarkup =
+        InlineKeyboardMarkup(
+            inlineKeyboard =
+                buildList {
+                    items.forEach { (itemId, name) ->
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "${if (itemId in selectedItemIds) "✅ " else ""}$name",
+                                    callbackData = "vpr_itog_new:$venueId:$promotionId:$targetType:$itemId:$page",
+                                ),
+                            ),
+                        )
+                    }
+                    addPromotionTargetPagination(
+                        hasPreviousPage = hasPreviousPage,
+                        hasNextPage = hasNextPage,
+                        previousCallback = "vpr_titems_new:$venueId:$promotionId:$targetType:${page - 1}",
+                        nextCallback = "vpr_titems_new:$venueId:$promotionId:$targetType:${page + 1}",
+                    )
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "✅ Готово",
+                                callbackData = "vpr_idone_new:$venueId:$promotionId:$targetType",
+                            ),
+                        ),
+                    )
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "↩️ Назад",
+                                callbackData = "vpr_t:$venueId:$promotionId:$targetType",
+                            ),
+                        ),
+                    )
+                },
+        )
 
-	    fun inlineVenuePromotionRuleTargetItemsEditActions(
-	        venueId: Long,
-	        promotionId: Long,
-	        ruleId: Long,
-	        targetType: String,
-	        page: Int,
-	        items: List<Pair<Long, String>>,
-	        selectedItemIds: Set<Long>,
-	        hasPreviousPage: Boolean,
-	        hasNextPage: Boolean,
-	    ): InlineKeyboardMarkup =
-	        InlineKeyboardMarkup(
-	            inlineKeyboard =
-	                buildList {
-	                    items.forEach { (itemId, name) ->
-	                        add(
-	                            listOf(
-	                                InlineKeyboardButton(
-	                                    text = "${if (itemId in selectedItemIds) "✅ " else ""}$name",
-	                                    callbackData = "vpr_itog:$venueId:$promotionId:$ruleId:$targetType:$itemId:$page",
-	                                ),
-	                            ),
-	                        )
-	                    }
-	                    addPromotionTargetPagination(
-	                        hasPreviousPage = hasPreviousPage,
-	                        hasNextPage = hasNextPage,
-	                        previousCallback = "vpr_titems:$venueId:$promotionId:$ruleId:$targetType:${page - 1}",
-	                        nextCallback = "vpr_titems:$venueId:$promotionId:$ruleId:$targetType:${page + 1}",
-	                    )
-	                    add(
-	                        listOf(
-	                            InlineKeyboardButton(
-	                                text = "✅ Готово",
-	                                callbackData = "vpr_idone:$venueId:$promotionId:$ruleId:$targetType",
-	                            ),
-	                        ),
-	                    )
-	                    add(
-	                        listOf(
-	                            InlineKeyboardButton(
-	                                text = "↩️ Назад",
-	                                callbackData = "vpr_tcat:$venueId:$promotionId:$ruleId:$targetType",
-	                            ),
-	                        ),
-	                    )
-	                },
-	        )
+    fun inlineVenuePromotionRuleTargetItemsEditActions(
+        venueId: Long,
+        promotionId: Long,
+        ruleId: Long,
+        targetType: String,
+        page: Int,
+        items: List<Pair<Long, String>>,
+        selectedItemIds: Set<Long>,
+        hasPreviousPage: Boolean,
+        hasNextPage: Boolean,
+    ): InlineKeyboardMarkup =
+        InlineKeyboardMarkup(
+            inlineKeyboard =
+                buildList {
+                    items.forEach { (itemId, name) ->
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "${if (itemId in selectedItemIds) "✅ " else ""}$name",
+                                    callbackData = "vpr_itog:$venueId:$promotionId:$ruleId:$targetType:$itemId:$page",
+                                ),
+                            ),
+                        )
+                    }
+                    addPromotionTargetPagination(
+                        hasPreviousPage = hasPreviousPage,
+                        hasNextPage = hasNextPage,
+                        previousCallback = "vpr_titems:$venueId:$promotionId:$ruleId:$targetType:${page - 1}",
+                        nextCallback = "vpr_titems:$venueId:$promotionId:$ruleId:$targetType:${page + 1}",
+                    )
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "✅ Готово",
+                                callbackData = "vpr_idone:$venueId:$promotionId:$ruleId:$targetType",
+                            ),
+                        ),
+                    )
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "↩️ Назад",
+                                callbackData = "vpr_tcat:$venueId:$promotionId:$ruleId:$targetType",
+                            ),
+                        ),
+                    )
+                },
+        )
 
-	    private fun MutableList<List<InlineKeyboardButton>>.addPromotionTargetPagination(
-	        hasPreviousPage: Boolean,
-	        hasNextPage: Boolean,
-	        previousCallback: String,
-	        nextCallback: String,
-	    ) {
-	        val row = mutableListOf<InlineKeyboardButton>()
-	        if (hasPreviousPage) {
-	            row += InlineKeyboardButton(text = "◀️ Назад", callbackData = previousCallback)
-	        }
-	        if (hasNextPage) {
-	            row += InlineKeyboardButton(text = "▶️ Далее", callbackData = nextCallback)
-	        }
-	        if (row.isNotEmpty()) {
-	            add(row)
-	        }
-	    }
+    private fun MutableList<List<InlineKeyboardButton>>.addPromotionTargetPagination(
+        hasPreviousPage: Boolean,
+        hasNextPage: Boolean,
+        previousCallback: String,
+        nextCallback: String,
+    ) {
+        val row = mutableListOf<InlineKeyboardButton>()
+        if (hasPreviousPage) {
+            row += InlineKeyboardButton(text = "◀️ Назад", callbackData = previousCallback)
+        }
+        if (hasNextPage) {
+            row += InlineKeyboardButton(text = "▶️ Далее", callbackData = nextCallback)
+        }
+        if (row.isNotEmpty()) {
+            add(row)
+        }
+    }
 
     fun inlineVenueGiftTriggerTypeActions(
         venueId: Long,
@@ -3102,13 +3107,23 @@ object TelegramKeyboards {
                 listOf(
                     listOf(
                         InlineKeyboardButton(
-                            text = if (stackable) "Не суммировать с похожими акциями" else "✅ Не суммировать с похожими акциями",
+                            text =
+                                if (stackable) {
+                                    "Не суммировать с похожими акциями"
+                                } else {
+                                    "✅ Не суммировать с похожими акциями"
+                                },
                             callbackData = "vpr_cmp_set:$venueId:$promotionId:$ruleId:0",
                         ),
                     ),
                     listOf(
                         InlineKeyboardButton(
-                            text = if (stackable) "✅ Можно суммировать с другими акциями" else "Можно суммировать с другими акциями",
+                            text =
+                                if (stackable) {
+                                    "✅ Можно суммировать с другими акциями"
+                                } else {
+                                    "Можно суммировать с другими акциями"
+                                },
                             callbackData = "vpr_cmp_set:$venueId:$promotionId:$ruleId:1",
                         ),
                     ),
@@ -3676,6 +3691,7 @@ object TelegramKeyboards {
         backCallbackData: String = "bot_catalog_venue_book_date:$venueId:$isoDate",
     ): InlineKeyboardMarkup {
         val encodedTime = time.replace(':', '_')
+
         fun guestButton(
             label: String,
             token: String,
@@ -3907,7 +3923,10 @@ object TelegramKeyboards {
             inlineKeyboard =
                 listOf(
                     listOf(
-                        InlineKeyboardButton(text = "Без trial", callbackData = "owner_venue_terms_trial:$requestId:none"),
+                        InlineKeyboardButton(
+                            text = "Без trial",
+                            callbackData = "owner_venue_terms_trial:$requestId:none",
+                        ),
                         InlineKeyboardButton(text = "7 дней", callbackData = "owner_venue_terms_trial:$requestId:7d"),
                     ),
                     listOf(
@@ -3916,7 +3935,10 @@ object TelegramKeyboards {
                     ),
                     listOf(
                         InlineKeyboardButton(text = "3 месяца", callbackData = "owner_venue_terms_trial:$requestId:3m"),
-                        InlineKeyboardButton(text = "Другая дата окончания", callbackData = "owner_venue_terms_trial:$requestId:custom"),
+                        InlineKeyboardButton(
+                            text = "Другая дата окончания",
+                            callbackData = "owner_venue_terms_trial:$requestId:custom",
+                        ),
                     ),
                     listOf(
                         InlineKeyboardButton(text = "⬅️ К заявкам", callbackData = "owner_venue_requests_back"),
@@ -3929,8 +3951,14 @@ object TelegramKeyboards {
             inlineKeyboard =
                 listOf(
                     listOf(
-                        InlineKeyboardButton(text = "Не задавать", callbackData = "owner_venue_terms_future:$requestId:skip"),
-                        InlineKeyboardButton(text = "Задать будущую стоимость", callbackData = "owner_venue_terms_future:$requestId:set"),
+                        InlineKeyboardButton(
+                            text = "Не задавать",
+                            callbackData = "owner_venue_terms_future:$requestId:skip",
+                        ),
+                        InlineKeyboardButton(
+                            text = "Задать будущую стоимость",
+                            callbackData = "owner_venue_terms_future:$requestId:set",
+                        ),
                     ),
                     listOf(
                         InlineKeyboardButton(text = "⬅️ К заявкам", callbackData = "owner_venue_requests_back"),
@@ -3991,42 +4019,42 @@ object TelegramKeyboards {
         InlineKeyboardMarkup(
             inlineKeyboard =
                 listOf(
-                listOf(
-                    InlineKeyboardButton(
-                        text = "✏️ Название",
-                        callbackData = "owner_venue_field:$venueId:name",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "✏️ Название",
+                            callbackData = "owner_venue_field:$venueId:name",
+                        ),
+                        InlineKeyboardButton(
+                            text = "🏙 Город",
+                            callbackData = "owner_venue_field:$venueId:city",
+                        ),
                     ),
-                    InlineKeyboardButton(
-                        text = "🏙 Город",
-                        callbackData = "owner_venue_field:$venueId:city",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "📍 Адрес",
+                            callbackData = "owner_venue_field:$venueId:address",
+                        ),
+                        InlineKeyboardButton(
+                            text = "☎️ Контакт",
+                            callbackData = "owner_venue_field:$venueId:contact",
+                        ),
                     ),
-                ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "📍 Адрес",
-                        callbackData = "owner_venue_field:$venueId:address",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "📝 Краткое описание",
+                            callbackData = "owner_venue_field:$venueId:card_description",
+                        ),
                     ),
-                    InlineKeyboardButton(
-                        text = "☎️ Контакт",
-                        callbackData = "owner_venue_field:$venueId:contact",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "🕒 Часы работы",
+                            callbackData = "owner_venue_field:$venueId:hours",
+                        ),
+                        InlineKeyboardButton(
+                            text = "ℹ️ О заведении / Правила",
+                            callbackData = "owner_venue_field:$venueId:description",
+                        ),
                     ),
-                ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "📝 Краткое описание",
-                        callbackData = "owner_venue_field:$venueId:card_description",
-                    ),
-                ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "🕒 Часы работы",
-                        callbackData = "owner_venue_field:$venueId:hours",
-                    ),
-                    InlineKeyboardButton(
-                        text = "ℹ️ О заведении / Правила",
-                        callbackData = "owner_venue_field:$venueId:description",
-                    ),
-                ),
                     listOf(
                         InlineKeyboardButton(
                             text = "👁 Предпросмотр",
@@ -4034,73 +4062,73 @@ object TelegramKeyboards {
                         ),
                     ),
                     listOf(
-                    InlineKeyboardButton(
-                        text = "✅ Готовность к публикации",
-                        callbackData = "owner_venue_publish_readiness:$venueId",
+                        InlineKeyboardButton(
+                            text = "✅ Готовность к публикации",
+                            callbackData = "owner_venue_publish_readiness:$venueId",
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "↩️ Назад к настройке",
+                            callbackData = "owner_venue_hub_setup:$venueId",
+                        ),
                     ),
                 ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "↩️ Назад к настройке",
-                        callbackData = "owner_venue_hub_setup:$venueId",
-                    ),
-                ),
-            ),
         )
 
     fun inlineVenueManagerProfileActions(venueId: Long): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 listOf(
-                listOf(
-                    InlineKeyboardButton(
-                        text = "✏️ Название",
-                        callbackData = "owner_venue_field:$venueId:name",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "✏️ Название",
+                            callbackData = "owner_venue_field:$venueId:name",
+                        ),
+                        InlineKeyboardButton(
+                            text = "🏙 Город",
+                            callbackData = "owner_venue_field:$venueId:city",
+                        ),
                     ),
-                    InlineKeyboardButton(
-                        text = "🏙 Город",
-                        callbackData = "owner_venue_field:$venueId:city",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "📍 Адрес",
+                            callbackData = "owner_venue_field:$venueId:address",
+                        ),
+                        InlineKeyboardButton(
+                            text = "☎️ Контакт",
+                            callbackData = "owner_venue_field:$venueId:contact",
+                        ),
                     ),
-                ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "📍 Адрес",
-                        callbackData = "owner_venue_field:$venueId:address",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "📝 Краткое описание",
+                            callbackData = "owner_venue_field:$venueId:card_description",
+                        ),
                     ),
-                    InlineKeyboardButton(
-                        text = "☎️ Контакт",
-                        callbackData = "owner_venue_field:$venueId:contact",
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "🕒 Часы работы",
+                            callbackData = "owner_venue_field:$venueId:hours",
+                        ),
+                        InlineKeyboardButton(
+                            text = "ℹ️ О заведении / Правила",
+                            callbackData = "owner_venue_field:$venueId:description",
+                        ),
                     ),
-                ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "📝 Краткое описание",
-                        callbackData = "owner_venue_field:$venueId:card_description",
-                    ),
-                ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "🕒 Часы работы",
-                        callbackData = "owner_venue_field:$venueId:hours",
-                    ),
-                    InlineKeyboardButton(
-                        text = "ℹ️ О заведении / Правила",
-                        callbackData = "owner_venue_field:$venueId:description",
-                    ),
-                ),
                     listOf(
                         InlineKeyboardButton(
                             text = "👁 Предпросмотр",
-                        callbackData = "owner_venue_publish_preview:$venueId",
+                            callbackData = "owner_venue_publish_preview:$venueId",
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "↩️ Назад",
+                            callbackData = "staff_venue_menu_back",
+                        ),
                     ),
                 ),
-                listOf(
-                    InlineKeyboardButton(
-                        text = "↩️ Назад",
-                        callbackData = "staff_venue_menu_back",
-                    ),
-                ),
-            ),
         )
 
     fun inlineVenueOwnerOrderMenuRootActions(
@@ -4852,7 +4880,9 @@ object TelegramKeyboards {
                             listOf(
                                 InlineKeyboardButton(
                                     text = label,
-                                    callbackData = "owner_venue_order_menu_item_option:$venueId:$sectionId:$itemId:$optionId",
+                                    callbackData =
+                                        "owner_venue_order_menu_item_option:$venueId:$sectionId:$itemId:" +
+                                            "$optionId",
                                 ),
                             ),
                         )
@@ -4864,7 +4894,9 @@ object TelegramKeyboards {
                                 row.map { (profileIndex, label) ->
                                     InlineKeyboardButton(
                                         text = label,
-                                        callbackData = "owner_venue_item_flavor_p:$venueId:$sectionId:$itemId:$profileIndex",
+                                        callbackData =
+                                            "owner_venue_item_flavor_p:$venueId:$sectionId:$itemId:" +
+                                                "$profileIndex",
                                     )
                                 },
                             )
@@ -4963,7 +4995,9 @@ object TelegramKeyboards {
                     listOf(
                         InlineKeyboardButton(
                             text = "✏️ Переименовать",
-                            callbackData = "owner_venue_order_menu_item_option_rename:$venueId:$sectionId:$itemId:$optionId",
+                            callbackData =
+                                "owner_venue_order_menu_item_option_rename:$venueId:$sectionId:$itemId:" +
+                                    "$optionId",
                         ),
                     ),
                     listOf(
@@ -4980,7 +5014,9 @@ object TelegramKeyboards {
                     listOf(
                         InlineKeyboardButton(
                             text = "🗑 Удалить вариант",
-                            callbackData = "owner_venue_order_menu_item_option_delete_ask:$venueId:$sectionId:$itemId:$optionId",
+                            callbackData =
+                                "owner_venue_order_menu_item_option_delete_ask:$venueId:$sectionId:$itemId:" +
+                                    "$optionId",
                         ),
                     ),
                     listOf(
@@ -5004,7 +5040,9 @@ object TelegramKeyboards {
                     listOf(
                         InlineKeyboardButton(
                             text = "✅ Да, удалить",
-                            callbackData = "owner_venue_order_menu_item_option_delete_confirm:$venueId:$sectionId:$itemId:$optionId",
+                            callbackData =
+                                "owner_venue_order_menu_item_option_delete_confirm:$venueId:$sectionId:$itemId:" +
+                                    "$optionId",
                         ),
                     ),
                     listOf(
@@ -6636,9 +6674,7 @@ object TelegramKeyboards {
                 ),
         )
 
-    fun inlineBotGiftChoiceOptionsActions(
-        options: List<Triple<Long, String, Boolean>>,
-    ): InlineKeyboardMarkup =
+    fun inlineBotGiftChoiceOptionsActions(options: List<Triple<Long, String, Boolean>>): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 buildList {
@@ -7008,9 +7044,7 @@ object TelegramKeyboards {
         )
     }
 
-    fun inlineVenueMiniAppEntry(
-        webAppUrl: String?,
-    ): InlineKeyboardMarkup? {
+    fun inlineVenueMiniAppEntry(webAppUrl: String?): InlineKeyboardMarkup? {
         val url = webAppUrl ?: return null
         return InlineKeyboardMarkup(
             inlineKeyboard =
@@ -7038,13 +7072,14 @@ object TelegramKeyboards {
                             text = "📱 Открыть панель заведения",
                             webApp =
                                 WebAppInfo(
-                                    url = buildWebAppUrl(
-                                        url,
-                                        mapOf(
-                                            "mode" to "venue",
-                                            "venueId" to venueId.toString(),
+                                    url =
+                                        buildWebAppUrl(
+                                            url,
+                                            mapOf(
+                                                "mode" to "venue",
+                                                "venueId" to venueId.toString(),
+                                            ),
                                         ),
-                                    ),
                                 ),
                         ),
                     ),

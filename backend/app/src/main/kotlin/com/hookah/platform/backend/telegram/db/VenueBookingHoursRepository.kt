@@ -3,12 +3,12 @@ package com.hookah.platform.backend.telegram.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.sql.Date as SqlDate
 import java.sql.SQLException
 import java.sql.Time
 import java.time.LocalDate
 import java.time.LocalTime
 import javax.sql.DataSource
+import java.sql.Date as SqlDate
 
 data class VenueBookingHours(
     val venueId: Long,

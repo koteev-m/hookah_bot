@@ -59,7 +59,9 @@ class UserRepositoryTest {
         }
 
     private fun testDataSource(): DataSource {
-        val url = "jdbc:h2:mem:user-repository-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"
+        val url =
+            "jdbc:h2:mem:user-repository-${UUID.randomUUID()};" +
+                "MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"
         return object : DataSource {
             init {
                 DriverManager.getConnection(url).use { connection ->

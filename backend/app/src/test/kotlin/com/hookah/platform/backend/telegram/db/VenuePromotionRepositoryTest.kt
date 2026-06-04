@@ -42,7 +42,10 @@ class VenuePromotionRepositoryTest {
             assertEquals("До 23:00", created.terms)
             assertEquals(VenuePromotionStatus.DRAFT, created.status)
             assertEquals(VenuePromotionTemplateType.TEXT_ONLY, created.templateType)
-            assertEquals(listOf(created.id), repository.listVenuePromotionsForManagement(fixture.visibleVenueId).map { it.id })
+            assertEquals(
+                listOf(created.id),
+                repository.listVenuePromotionsForManagement(fixture.visibleVenueId).map { it.id },
+            )
             assertNull(repository.getPromotionForManagement(fixture.otherVenueId, created.id))
 
             val updated =
@@ -71,7 +74,10 @@ class VenuePromotionRepositoryTest {
 
             repository.archivePromotion(fixture.visibleVenueId, created.id)
             assertTrue(repository.listVenuePromotionsForManagement(fixture.visibleVenueId).isEmpty())
-            assertEquals(listOf(created.id), repository.listArchivedPromotionsForManagement(fixture.visibleVenueId).map { it.id })
+            assertEquals(
+                listOf(created.id),
+                repository.listArchivedPromotionsForManagement(fixture.visibleVenueId).map { it.id },
+            )
         }
 
     @Test
@@ -178,7 +184,7 @@ class VenuePromotionRepositoryTest {
                         surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
                         requestedByUserId = OWNER_ID,
                     ),
-            )
+                )
             assertEquals(PromotionPlacementStatus.PENDING, request.status)
             assertEquals(listOf(request.id), placementRepository.listPending().map { it.id })
             assertEquals(
@@ -199,8 +205,14 @@ class VenuePromotionRepositoryTest {
                     ),
                 )
             assertEquals(PromotionPlacementStatus.ACTIVE, activePlacement.status)
-            assertEquals(listOf(activePlacement.id), placementRepository.listActiveForGlobalPromotions(now = now).map { it.id })
-            assertEquals(listOf(activePlacement.id), placementRepository.listActiveForPlatformManagement(now = now).map { it.id })
+            assertEquals(
+                listOf(activePlacement.id),
+                placementRepository.listActiveForGlobalPromotions(now = now).map { it.id },
+            )
+            assertEquals(
+                listOf(activePlacement.id),
+                placementRepository.listActiveForPlatformManagement(now = now).map { it.id },
+            )
             assertEquals(
                 listOf(activePlacement.id),
                 placementRepository
@@ -244,7 +256,10 @@ class VenuePromotionRepositoryTest {
                     endsAt = now.plusSeconds(7 * 24 * 60 * 60),
                 ),
             )
-            assertEquals(listOf(activePlacement.id), placementRepository.listActiveForGlobalPromotions(now = now).map { it.id })
+            assertEquals(
+                listOf(activePlacement.id),
+                placementRepository.listActiveForGlobalPromotions(now = now).map { it.id },
+            )
 
             val expiredBanner =
                 promotionRepository.createPromotion(
@@ -262,7 +277,9 @@ class VenuePromotionRepositoryTest {
                     status = VenuePromotionStatus.ACTIVE,
                 ),
             )
-            assertNotNull(mediaRepository.replacePrimaryImage(fixture.visibleVenueId, expiredBanner.id, "photo-expired"))
+            assertNotNull(
+                mediaRepository.replacePrimaryImage(fixture.visibleVenueId, expiredBanner.id, "photo-expired"),
+            )
             val expiredRequest =
                 assertNotNull(
                     placementRepository.createRequest(
@@ -281,10 +298,25 @@ class VenuePromotionRepositoryTest {
                         endsAt = now.minusSeconds(24 * 60 * 60),
                     ),
                 )
-            assertEquals(listOf(activePlacement.id), placementRepository.listActiveForGlobalPromotions(now = now).map { it.id })
-            assertFalse(placementRepository.listActiveForPlatformManagement(now = now).map { it.id }.contains(expiredPlacement.id))
-            assertTrue(placementRepository.listFinishedForPlatformManagement(now = now).map { it.id }.contains(expiredPlacement.id))
-            assertTrue(placementRepository.listFinishedForVenueManagement(fixture.visibleVenueId, now = now).map { it.id }.contains(expiredPlacement.id))
+            assertEquals(
+                listOf(activePlacement.id),
+                placementRepository.listActiveForGlobalPromotions(now = now).map { it.id },
+            )
+            assertFalse(
+                placementRepository.listActiveForPlatformManagement(
+                    now = now,
+                ).map { it.id }.contains(expiredPlacement.id),
+            )
+            assertTrue(
+                placementRepository.listFinishedForPlatformManagement(
+                    now = now,
+                ).map { it.id }.contains(expiredPlacement.id),
+            )
+            assertTrue(
+                placementRepository.listFinishedForVenueManagement(fixture.visibleVenueId, now = now).map {
+                    it.id
+                }.contains(expiredPlacement.id),
+            )
 
             val textPromotion =
                 promotionRepository.createPromotion(
@@ -308,7 +340,11 @@ class VenuePromotionRepositoryTest {
             assertTrue(placementRepository.listActiveForGlobalPromotions().isEmpty())
             val archivedPlacement = assertNotNull(placementRepository.archive(activePlacement.id))
             assertEquals(PromotionPlacementStatus.ARCHIVED, archivedPlacement.status)
-            assertTrue(placementRepository.listFinishedForPlatformManagement(now = now).map { it.id }.contains(activePlacement.id))
+            assertTrue(
+                placementRepository.listFinishedForPlatformManagement(
+                    now = now,
+                ).map { it.id }.contains(activePlacement.id),
+            )
         }
 
     @Test
@@ -351,7 +387,10 @@ class VenuePromotionRepositoryTest {
             assertEquals(PromotionPlacementStatus.ACTIVE, active.status)
             assertTrue(placementRepository.listPendingForPlatform().isEmpty())
             assertEquals(listOf(active.id), placementRepository.listActiveForGlobalFeed(now = now).map { it.id })
-            assertEquals(listOf(active.id), placementRepository.listActiveForPlatformManagement(now = now).map { it.id })
+            assertEquals(
+                listOf(active.id),
+                placementRepository.listActiveForPlatformManagement(now = now).map { it.id },
+            )
             assertEquals(
                 listOf(active.id),
                 placementRepository
@@ -381,7 +420,9 @@ class VenuePromotionRepositoryTest {
                     ),
                 )
             assertTrue(placementRepository.listPendingForPlatform().none { it.id == futureStart.id })
-            assertTrue(placementRepository.listActiveForPlatformManagement(now = now).map { it.id }.contains(futureStart.id))
+            assertTrue(
+                placementRepository.listActiveForPlatformManagement(now = now).map { it.id }.contains(futureStart.id),
+            )
             assertEquals(listOf(active.id), placementRepository.listActiveForGlobalFeed(now = now).map { it.id })
 
             val expiredRequest = assertNotNull(placementRepository.createRequest(fixture.visibleVenueId, OWNER_ID))
@@ -395,7 +436,9 @@ class VenuePromotionRepositoryTest {
                     ),
                 )
             assertEquals(listOf(active.id), placementRepository.listActiveForGlobalFeed(now = now).map { it.id })
-            assertTrue(placementRepository.listFinishedForPlatformManagement(now = now).map { it.id }.contains(expired.id))
+            assertTrue(
+                placementRepository.listFinishedForPlatformManagement(now = now).map { it.id }.contains(expired.id),
+            )
             assertNull(placementRepository.getForVenueManagement(fixture.otherVenueId, active.id))
             assertNotNull(placementRepository.getForVenueManagement(fixture.visibleVenueId, active.id))
 
@@ -412,13 +455,42 @@ class VenuePromotionRepositoryTest {
             val repository = VenuePromotionRepository(dataSource(jdbcUrl))
             val now = Instant.parse("2026-05-14T12:00:00Z")
 
-            val visibleActive = insertPromotion(jdbcUrl, fixture.visibleVenueId, "Активная", VenuePromotionStatus.ACTIVE, now.minusSeconds(3600), now.plusSeconds(3600))
+            val visibleActive =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.visibleVenueId,
+                    "Активная",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(3600),
+                    now.plusSeconds(3600),
+                )
             insertPromotion(jdbcUrl, fixture.visibleVenueId, "Черновик", VenuePromotionStatus.DRAFT, null, null)
             insertPromotion(jdbcUrl, fixture.visibleVenueId, "Пауза", VenuePromotionStatus.PAUSED, null, null)
             insertPromotion(jdbcUrl, fixture.visibleVenueId, "Архив", VenuePromotionStatus.ARCHIVED, null, null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Будущая", VenuePromotionStatus.ACTIVE, now.plusSeconds(3600), null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Истекшая", VenuePromotionStatus.ACTIVE, null, now.minusSeconds(3600))
-            insertPromotion(jdbcUrl, fixture.hiddenVenueId, "Скрытое заведение", VenuePromotionStatus.ACTIVE, null, null)
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Будущая",
+                VenuePromotionStatus.ACTIVE,
+                now.plusSeconds(3600),
+                null,
+            )
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Истекшая",
+                VenuePromotionStatus.ACTIVE,
+                null,
+                now.minusSeconds(3600),
+            )
+            insertPromotion(
+                jdbcUrl,
+                fixture.hiddenVenueId,
+                "Скрытое заведение",
+                VenuePromotionStatus.ACTIVE,
+                null,
+                null,
+            )
             insertPromotion(jdbcUrl, fixture.blockedVenueId, "Блок подписки", VenuePromotionStatus.ACTIVE, null, null)
 
             val promotions = repository.listActivePromotionsForGuest(now = now)
@@ -435,8 +507,24 @@ class VenuePromotionRepositoryTest {
             val fixture = seedFixture(jdbcUrl)
             val repository = VenuePromotionRepository(dataSource(jdbcUrl))
             val now = Instant.parse("2026-05-14T12:00:00Z")
-            val first = insertPromotion(jdbcUrl, fixture.visibleVenueId, "Первая", VenuePromotionStatus.ACTIVE, now.minusSeconds(7200), null)
-            val second = insertPromotion(jdbcUrl, fixture.visibleVenueId, "Вторая", VenuePromotionStatus.ACTIVE, now.minusSeconds(3600), null)
+            val first =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.visibleVenueId,
+                    "Первая",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(7200),
+                    null,
+                )
+            val second =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.visibleVenueId,
+                    "Вторая",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(3600),
+                    null,
+                )
 
             val promotions = repository.listActivePromotionsForGuest(now = now)
 
@@ -450,12 +538,57 @@ class VenuePromotionRepositoryTest {
             val fixture = seedFixture(jdbcUrl)
             val repository = VenuePromotionRepository(dataSource(jdbcUrl))
             val now = Instant.parse("2026-05-14T12:00:00Z")
-            val excluded = insertPromotion(jdbcUrl, fixture.visibleVenueId, "Продвигаемая", VenuePromotionStatus.ACTIVE, now.minusSeconds(300), null)
-            val visible = insertPromotion(jdbcUrl, fixture.visibleVenueId, "Счастливые часы", VenuePromotionStatus.ACTIVE, now.minusSeconds(600), null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Афиша", VenuePromotionStatus.ACTIVE, now.minusSeconds(700), null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Сет", VenuePromotionStatus.ACTIVE, now.minusSeconds(800), null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Поздний чай", VenuePromotionStatus.ACTIVE, now.minusSeconds(900), null)
-            val other = insertPromotion(jdbcUrl, fixture.otherVenueId, "Другое заведение", VenuePromotionStatus.ACTIVE, now.minusSeconds(1200), null)
+            val excluded =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.visibleVenueId,
+                    "Продвигаемая",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(300),
+                    null,
+                )
+            val visible =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.visibleVenueId,
+                    "Счастливые часы",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(600),
+                    null,
+                )
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Афиша",
+                VenuePromotionStatus.ACTIVE,
+                now.minusSeconds(700),
+                null,
+            )
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Сет",
+                VenuePromotionStatus.ACTIVE,
+                now.minusSeconds(800),
+                null,
+            )
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Поздний чай",
+                VenuePromotionStatus.ACTIVE,
+                now.minusSeconds(900),
+                null,
+            )
+            val other =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.otherVenueId,
+                    "Другое заведение",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(1200),
+                    null,
+                )
 
             val feed =
                 repository.listPromotionVenuesForGuest(
@@ -472,7 +605,12 @@ class VenuePromotionRepositoryTest {
             assertEquals(listOf(visible), mix.previewPromotions.map { it.id }.take(1))
             assertEquals(3, mix.previewPromotions.size)
             assertTrue(mix.previewPromotions.none { it.id == excluded })
-            assertTrue(feed.any { item -> item.venueId == fixture.otherVenueId && item.previewPromotions.any { it.id == other } })
+            assertTrue(
+                feed.any {
+                        item ->
+                    item.venueId == fixture.otherVenueId && item.previewPromotions.any { it.id == other }
+                },
+            )
         }
 
     @Test
@@ -482,12 +620,34 @@ class VenuePromotionRepositoryTest {
             val fixture = seedFixture(jdbcUrl)
             val repository = VenuePromotionRepository(dataSource(jdbcUrl))
             val now = Instant.parse("2026-05-14T12:00:00Z")
-            val visible = insertPromotion(jdbcUrl, fixture.visibleVenueId, "Активная", VenuePromotionStatus.ACTIVE, now.minusSeconds(3600), now.plusSeconds(3600))
+            val visible =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.visibleVenueId,
+                    "Активная",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(3600),
+                    now.plusSeconds(3600),
+                )
             insertPromotion(jdbcUrl, fixture.visibleVenueId, "Черновик", VenuePromotionStatus.DRAFT, null, null)
             insertPromotion(jdbcUrl, fixture.visibleVenueId, "Пауза", VenuePromotionStatus.PAUSED, null, null)
             insertPromotion(jdbcUrl, fixture.visibleVenueId, "Архив", VenuePromotionStatus.ARCHIVED, null, null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Будущая", VenuePromotionStatus.ACTIVE, now.plusSeconds(3600), null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Истекшая", VenuePromotionStatus.ACTIVE, null, now.minusSeconds(3600))
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Будущая",
+                VenuePromotionStatus.ACTIVE,
+                now.plusSeconds(3600),
+                null,
+            )
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Истекшая",
+                VenuePromotionStatus.ACTIVE,
+                null,
+                now.minusSeconds(3600),
+            )
             insertPromotion(jdbcUrl, fixture.hiddenVenueId, "Скрытое", VenuePromotionStatus.ACTIVE, null, null)
             insertPromotion(jdbcUrl, fixture.blockedVenueId, "Блок", VenuePromotionStatus.ACTIVE, null, null)
 
@@ -508,7 +668,14 @@ class VenuePromotionRepositoryTest {
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                 (1..6).forEach { index ->
                     val venueId = insertVenue(connection, "Venue $index", VenueStatus.PUBLISHED.dbValue)
-                    insertPromotion(jdbcUrl, venueId, "Акция $index", VenuePromotionStatus.ACTIVE, now.minusSeconds(index.toLong()), null)
+                    insertPromotion(
+                        jdbcUrl,
+                        venueId,
+                        "Акция $index",
+                        VenuePromotionStatus.ACTIVE,
+                        now.minusSeconds(index.toLong()),
+                        null,
+                    )
                 }
             }
 
@@ -527,9 +694,17 @@ class VenuePromotionRepositoryTest {
             val fixture = seedFixture(jdbcUrl)
             val repository = VenuePromotionRepository(dataSource(jdbcUrl))
             val now = Instant.parse("2026-05-14T12:00:00Z")
-            val first = insertPromotion(jdbcUrl, fixture.visibleVenueId, "Первая", VenuePromotionStatus.ACTIVE, null, null)
+            val first =
+                insertPromotion(jdbcUrl, fixture.visibleVenueId, "Первая", VenuePromotionStatus.ACTIVE, null, null)
             insertPromotion(jdbcUrl, fixture.otherVenueId, "Другая", VenuePromotionStatus.ACTIVE, null, null)
-            insertPromotion(jdbcUrl, fixture.visibleVenueId, "Будущая", VenuePromotionStatus.ACTIVE, now.plusSeconds(3600), null)
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Будущая",
+                VenuePromotionStatus.ACTIVE,
+                now.plusSeconds(3600),
+                null,
+            )
 
             val venuePromotions = repository.listActivePromotionsForVenue(fixture.visibleVenueId, now = now)
 
@@ -552,7 +727,10 @@ class VenuePromotionRepositoryTest {
                     createdByUserId = OWNER_ID,
                 )
 
-            assertEquals(emptyList(), ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id))
+            assertEquals(
+                emptyList(),
+                ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id),
+            )
             assertEquals(emptyList(), ruleRepository.listRulesForVenueManagement(fixture.visibleVenueId))
         }
 
@@ -590,7 +768,14 @@ class VenuePromotionRepositoryTest {
             assertEquals(setOf(1, 2, 3, 4, 5), created.daysOfWeek)
             assertEquals(PromotionRuleTargetType.CATEGORY_TYPE, created.targets.single().targetType)
             assertEquals(MenuSemanticType.HOOKAH, created.targets.single().semanticType)
-            assertEquals(listOf(created.id), ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id).map { it.id })
+            assertEquals(
+                listOf(
+                    created.id,
+                ),
+                ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id).map {
+                    it.id
+                },
+            )
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId))
 
             val edited =
@@ -601,13 +786,16 @@ class VenuePromotionRepositoryTest {
                         targetValue = MenuSemanticType.TEA,
                         discountPercent = 10,
                     ),
-            )
+                )
             assertEquals(MenuSemanticType.TEA, edited.targetValue)
             assertEquals(10, edited.discountPercent)
             assertEquals(PromotionRuleTargetType.CATEGORY_TYPE, edited.targets.single().targetType)
             assertEquals(MenuSemanticType.TEA, edited.targets.single().semanticType)
 
-            val active = assertNotNull(ruleRepository.setRuleStatus(fixture.visibleVenueId, created.id, VenuePromotionStatus.ACTIVE))
+            val active =
+                assertNotNull(
+                    ruleRepository.setRuleStatus(fixture.visibleVenueId, created.id, VenuePromotionStatus.ACTIVE),
+                )
             assertEquals(VenuePromotionStatus.ACTIVE, active.status)
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId))
             assertNotNull(
@@ -617,7 +805,10 @@ class VenuePromotionRepositoryTest {
                     status = VenuePromotionStatus.ACTIVE,
                 ),
             )
-            assertEquals(listOf(created.id), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
+            assertEquals(
+                listOf(created.id),
+                ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id },
+            )
             assertNull(ruleRepository.getRuleForManagement(fixture.otherVenueId, created.id))
 
             val scheduled =
@@ -667,11 +858,26 @@ class VenuePromotionRepositoryTest {
 
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
 
-            assertNotNull(promotionRepository.setPromotionStatus(fixture.visibleVenueId, promotion.id, VenuePromotionStatus.PAUSED))
+            assertNotNull(
+                promotionRepository.setPromotionStatus(
+                    fixture.visibleVenueId,
+                    promotion.id,
+                    VenuePromotionStatus.PAUSED,
+                ),
+            )
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
 
-            assertNotNull(promotionRepository.setPromotionStatus(fixture.visibleVenueId, promotion.id, VenuePromotionStatus.ACTIVE))
-            assertEquals(listOf(rule.id), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
+            assertNotNull(
+                promotionRepository.setPromotionStatus(
+                    fixture.visibleVenueId,
+                    promotion.id,
+                    VenuePromotionStatus.ACTIVE,
+                ),
+            )
+            assertEquals(
+                listOf(rule.id),
+                ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id },
+            )
 
             assertNotNull(promotionRepository.archivePromotion(fixture.visibleVenueId, promotion.id))
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
@@ -710,7 +916,11 @@ class VenuePromotionRepositoryTest {
                     createdByUserId = OWNER_ID,
                 )
 
-            val selectionItems = ruleRepository.listMenuItemsForTargetSelection(fixture.visibleVenueId, MenuSemanticType.HOOKAH)
+            val selectionItems =
+                ruleRepository.listMenuItemsForTargetSelection(
+                    fixture.visibleVenueId,
+                    MenuSemanticType.HOOKAH,
+                )
             assertEquals(listOf(ordinaryHookah, premiumHookah), selectionItems.map { it.id })
 
             val updated =
@@ -745,7 +955,8 @@ class VenuePromotionRepositoryTest {
             val fixture = seedFixture(jdbcUrl)
             val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
             val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
-            val triggerCategoryId = insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val triggerCategoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
             insertMenuItem(jdbcUrl, fixture.visibleVenueId, triggerCategoryId, "Кальян обычный")
             val rewardCategoryId = insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Чай", MenuSemanticType.TEA)
             val rewardItemId = insertMenuItem(jdbcUrl, fixture.visibleVenueId, rewardCategoryId, "Чай")
@@ -781,7 +992,13 @@ class VenuePromotionRepositoryTest {
             assertEquals(PromotionRuleTargetType.CATEGORY_TYPE, created.targets.single().targetType)
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId))
 
-            assertNotNull(promotionRepository.setPromotionStatus(fixture.visibleVenueId, promotion.id, VenuePromotionStatus.ACTIVE))
+            assertNotNull(
+                promotionRepository.setPromotionStatus(
+                    fixture.visibleVenueId,
+                    promotion.id,
+                    VenuePromotionStatus.ACTIVE,
+                ),
+            )
             val active = ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).single()
             assertEquals(PromotionRuleType.GIFT_WITH_ITEM, active.ruleType)
             assertEquals(rewardItemId, active.reward?.rewardMenuItemId)
@@ -807,7 +1024,10 @@ class VenuePromotionRepositoryTest {
                     ),
                 )
             assertEquals(PromotionRewardMode.CHOICE_ITEMS, choiceReward.reward?.rewardMode)
-            assertEquals(setOf(rewardItemId, updatedRewardItemId), choiceReward.reward?.options?.map { it.menuItemId }?.toSet())
+            assertEquals(
+                setOf(rewardItemId, updatedRewardItemId),
+                choiceReward.reward?.options?.map { it.menuItemId }?.toSet(),
+            )
 
             assertFailsWith<IllegalArgumentException> {
                 ruleRepository.createGiftWithItemRule(
@@ -980,15 +1200,28 @@ class VenuePromotionRepositoryTest {
                 ),
             )
 
-            assertEquals(listOf(rule.id), ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id).map { it.id })
-            assertEquals(listOf(rule.id), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
+            assertEquals(
+                listOf(
+                    rule.id,
+                ),
+                ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id).map {
+                    it.id
+                },
+            )
+            assertEquals(
+                listOf(rule.id),
+                ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id },
+            )
 
             val archived = assertNotNull(ruleRepository.archiveRule(fixture.visibleVenueId, promotion.id, rule.id))
 
             assertEquals(VenuePromotionStatus.ARCHIVED, archived.status)
             assertTrue(ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id).isEmpty())
             assertTrue(ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).isEmpty())
-            assertEquals(VenuePromotionStatus.ARCHIVED, ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id)?.status)
+            assertEquals(
+                VenuePromotionStatus.ARCHIVED,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id)?.status,
+            )
             assertNull(ruleRepository.archiveRule(fixture.otherVenueId, promotion.id, rule.id))
         }
 
@@ -999,7 +1232,8 @@ class VenuePromotionRepositoryTest {
             val fixture = seedFixture(jdbcUrl)
             val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
             val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
-            val hookahCategoryId = insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val hookahCategoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
             val hookahItemId = insertMenuItem(jdbcUrl, fixture.visibleVenueId, hookahCategoryId, "Кальян обычный")
             val teaCategoryId = insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Чай", MenuSemanticType.TEA)
             val teaItemId = insertMenuItem(jdbcUrl, fixture.visibleVenueId, teaCategoryId, "Чай")

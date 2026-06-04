@@ -194,8 +194,9 @@ class VisitRepository(private val dataSource: DataSource?) {
         orderId: Long,
         now: Instant = Instant.now(),
     ): OrderClosedVisitsResult {
-        val order = loadClosedOrder(connection, orderId)
-            ?: return OrderClosedVisitsResult(orderId = orderId, participantsCount = 0, recordedCount = 0)
+        val order =
+            loadClosedOrder(connection, orderId)
+                ?: return OrderClosedVisitsResult(orderId = orderId, participantsCount = 0, recordedCount = 0)
         val participants = loadRealGuestParticipants(connection, order)
         var recorded = 0
         val visitIds = mutableListOf<Long>()
@@ -203,7 +204,12 @@ class VisitRepository(private val dataSource: DataSource?) {
             val existingForSession = findVisitByTableSessionAndUser(connection, order.tableSessionId, userId)
             if (existingForSession != null) {
                 val visit =
-                    updateVisitForOrderMerge(connection, existingForSession.id, order, hasBooking = existingForSession.bookingId != null)
+                    updateVisitForOrderMerge(
+                        connection,
+                        existingForSession.id,
+                        order,
+                        hasBooking = existingForSession.bookingId != null,
+                    )
                 visitIds.add(visit.id)
                 recorded++
                 return@forEach

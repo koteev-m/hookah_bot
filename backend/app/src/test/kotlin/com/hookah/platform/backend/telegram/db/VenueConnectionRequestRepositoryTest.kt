@@ -31,7 +31,9 @@ class VenueConnectionRequestRepositoryTest {
                         ),
                     )
 
-                assertTrue(repository.setStatusByOwner(firstRequestId, VenueConnectionRequestRepository.STATUS_APPROVED))
+                assertTrue(
+                    repository.setStatusByOwner(firstRequestId, VenueConnectionRequestRepository.STATUS_APPROVED),
+                )
                 assertEquals(
                     firstRequestId,
                     repository.findActiveUnlinkedByUser(telegramUserId)?.id,
@@ -69,7 +71,7 @@ class VenueConnectionRequestRepositoryTest {
                     driverClassName = "org.h2.Driver"
                     jdbcUrl =
                         "jdbc:h2:mem:$dbName;MODE=PostgreSQL;" +
-                            "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+                        "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
                     maximumPoolSize = 3
                 },
             )

@@ -28,7 +28,9 @@ data class AiAssistantConfig(
             val result =
                 AiAssistantConfig(
                     enabled = config.propertyOrNull("ai.enabled")?.getString()?.toBooleanStrictOrNull() ?: false,
-                    provider = config.propertyOrNull("ai.provider")?.getString()?.takeIf { it.isNotBlank() } ?: PROVIDER_FAKE,
+                    provider =
+                        config.propertyOrNull("ai.provider")?.getString()?.takeIf { it.isNotBlank() }
+                            ?: PROVIDER_FAKE,
                     apiKey = config.propertyOrNull("ai.apiKey")?.getString()?.takeIf { it.isNotBlank() },
                     model = config.propertyOrNull("ai.model")?.getString()?.takeIf { it.isNotBlank() },
                     timeoutMs =
@@ -47,7 +49,9 @@ data class AiAssistantConfig(
                         config.propertyOrNull("ai.rateLimitPerUserPerHour")?.getString()?.toIntOrNull()
                             ?.coerceIn(1, 500)
                             ?: 20,
-                    logRawPrompts = config.propertyOrNull("ai.logRawPrompts")?.getString()?.toBooleanStrictOrNull() ?: false,
+                    logRawPrompts =
+                        config.propertyOrNull("ai.logRawPrompts")?.getString()?.toBooleanStrictOrNull()
+                            ?: false,
                     writeActionsEnabled =
                         config.propertyOrNull("ai.writeActionsEnabled")?.getString()?.toBooleanStrictOrNull() ?: false,
                     systemPromptVersion =

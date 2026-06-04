@@ -171,8 +171,9 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                             }
                         insertDefaultEarnTarget(connection, id)
                         insertDefaultRewardTarget(connection, id)
-                        val created = selectProgram(connection, venueId, id)
-                            ?: throw SQLException("Created loyalty program not found")
+                        val created =
+                            selectProgram(connection, venueId, id)
+                                ?: throw SQLException("Created loyalty program not found")
                         connection.commit()
                         created
                     } catch (e: Exception) {
@@ -247,8 +248,9 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                                 existing.id
                             }
                         ensureDefaultTargets(connection, programId)
-                        val program = selectProgram(connection, venueId, programId)
-                            ?: throw SQLException("Loyalty program not found after save")
+                        val program =
+                            selectProgram(connection, venueId, programId)
+                                ?: throw SQLException("Loyalty program not found after save")
                         connection.commit()
                         program
                     } catch (e: Exception) {
@@ -660,8 +662,9 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
         connection: Connection,
         orderId: Long,
     ): LoyaltyAccrualResult {
-        val program = selectActiveProgramForClosedOrder(connection, orderId)
-            ?: return LoyaltyAccrualResult(orderId = orderId, itemsCounted = 0, progressAdded = 0, rewardsAdded = 0)
+        val program =
+            selectActiveProgramForClosedOrder(connection, orderId)
+                ?: return LoyaltyAccrualResult(orderId = orderId, itemsCounted = 0, progressAdded = 0, rewardsAdded = 0)
         val rows = loadEligibleEarnRows(connection, orderId, program.id)
         val paidRequired = paidRequiredForReward(program.nthValue)
         var countedItems = 0
@@ -831,7 +834,9 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
     ): Boolean =
         targets.any { target ->
             when (target.targetType) {
-                LoyaltyProgramTargetType.CATEGORY_TYPE -> target.semanticType != null && target.semanticType == effectiveType
+                LoyaltyProgramTargetType.CATEGORY_TYPE ->
+                    target.semanticType != null && target.semanticType == effectiveType
+
                 LoyaltyProgramTargetType.MENU_ITEM -> target.menuItemId == menuItemId
             }
         }
@@ -1647,7 +1652,13 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
             statement.setString(11, dedupeKey)
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
-                if (keys.next()) keys.getLong(1) else throw SQLException("Failed to create loyalty promotion application")
+                if (keys.next()) {
+                    keys.getLong(
+                        1,
+                    )
+                } else {
+                    throw SQLException("Failed to create loyalty promotion application")
+                }
             }
         }
 

@@ -7,7 +7,6 @@ import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
-import java.sql.Timestamp
 import java.sql.Types
 import java.time.Instant
 import javax.sql.DataSource
@@ -185,8 +184,9 @@ class VenueOwnerAccountRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val summary = buildQuotaSummary(connection, ownerAccountId)
-                        ?: return@use VenueOwnerQuotaCheckResult.NotFound
+                    val summary =
+                        buildQuotaSummary(connection, ownerAccountId)
+                            ?: return@use VenueOwnerQuotaCheckResult.NotFound
                     if (summary.usedVenuesCount >= summary.account.allowedVenuesCount) {
                         VenueOwnerQuotaCheckResult.LimitExceeded(summary)
                     } else {
@@ -381,26 +381,30 @@ class VenueOwnerAccountRepository(private val dataSource: DataSource?) {
                 defaultLimit = defaultLimit,
                 updatedByUserId = updatedByUserId,
             )
-        val venue = loadVenueOwnerAccountForUpdate(connection, venueId)
-            ?: return OwnerAccountAssignmentPreparationResult.NotFound
+        val venue =
+            loadVenueOwnerAccountForUpdate(connection, venueId)
+                ?: return OwnerAccountAssignmentPreparationResult.NotFound
         if (venue.ownerAccountId == account.id) {
-            val summary = buildQuotaSummary(connection, account.id)
-                ?: return OwnerAccountAssignmentPreparationResult.DatabaseError
+            val summary =
+                buildQuotaSummary(connection, account.id)
+                    ?: return OwnerAccountAssignmentPreparationResult.DatabaseError
             return OwnerAccountAssignmentPreparationResult.Success(account, summary)
         }
         if (venue.ownerAccountId != null && venue.ownerAccountId != account.id) {
             return OwnerAccountAssignmentPreparationResult.OwnerAccountMismatch
         }
         if (venue.countsTowardsQuota) {
-            val summary = buildQuotaSummary(connection, account.id)
-                ?: return OwnerAccountAssignmentPreparationResult.DatabaseError
+            val summary =
+                buildQuotaSummary(connection, account.id)
+                    ?: return OwnerAccountAssignmentPreparationResult.DatabaseError
             if (summary.usedVenuesCount >= summary.account.allowedVenuesCount) {
                 return OwnerAccountAssignmentPreparationResult.QuotaExceeded(summary)
             }
         }
         attachOwnerAccount(connection, venueId, account.id)
-        val updatedSummary = buildQuotaSummary(connection, account.id)
-            ?: return OwnerAccountAssignmentPreparationResult.DatabaseError
+        val updatedSummary =
+            buildQuotaSummary(connection, account.id)
+                ?: return OwnerAccountAssignmentPreparationResult.DatabaseError
         return OwnerAccountAssignmentPreparationResult.Success(account, updatedSummary)
     }
 
@@ -455,8 +459,10 @@ class VenueOwnerAccountRepository(private val dataSource: DataSource?) {
                             }
                         if (
                             status == "APPROVED" &&
-                            (resolvedApprovedExtraCount == null ||
-                                resolvedApprovedExtraCount !in 1..request.requestedExtraCount)
+                            (
+                                resolvedApprovedExtraCount == null ||
+                                    resolvedApprovedExtraCount !in 1..request.requestedExtraCount
+                            )
                         ) {
                             return@use rollbackAndReturn(connection) {
                                 VenueOwnerLimitRequestDecisionResult.InvalidApprovedCount(request.requestedExtraCount)

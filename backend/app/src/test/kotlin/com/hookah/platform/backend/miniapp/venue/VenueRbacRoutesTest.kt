@@ -373,7 +373,11 @@ class VenueRbacRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, doneResponse.status)
-            val donePayload = json.decodeFromString(VenueStaffCallActionResponse.serializer(), doneResponse.bodyAsText())
+            val donePayload =
+                json.decodeFromString(
+                    VenueStaffCallActionResponse.serializer(),
+                    doneResponse.bodyAsText(),
+                )
             assertTrue(donePayload.applied)
             assertEquals("DONE", donePayload.call.status)
 

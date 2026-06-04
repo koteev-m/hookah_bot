@@ -141,7 +141,8 @@ class StaffInviteRepository(
                         val existingRank = venueRoleRank(resolvedExisting)
                         val invitedRank = venueRoleRank(resolvedInvited)
                         if (invitedRank > existingRank) {
-                            val updatedMember = updateMemberRole(connection, normalizedExistingMember, resolvedInvited.name)
+                            val updatedMember =
+                                updateMemberRole(connection, normalizedExistingMember, resolvedInvited.name)
                             markInviteUsed(connection, codeHash, nowTs, userId)
                             connection.commit()
                             return@use StaffInviteAcceptResult.Success(

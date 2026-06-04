@@ -1,11 +1,11 @@
 package com.hookah.platform.backend.promotions
 
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
-import com.hookah.platform.backend.telegram.db.PromotionRuleTarget
-import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
+import com.hookah.platform.backend.telegram.db.PromotionRewardMode
 import com.hookah.platform.backend.telegram.db.PromotionRuleReward
 import com.hookah.platform.backend.telegram.db.PromotionRuleRewardOption
-import com.hookah.platform.backend.telegram.db.PromotionRewardMode
+import com.hookah.platform.backend.telegram.db.PromotionRuleTarget
+import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
 import com.hookah.platform.backend.telegram.db.PromotionRuleType
 import com.hookah.platform.backend.telegram.db.VenuePromotionRule
 import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
@@ -184,8 +184,18 @@ class PromotionRuleEngineTest {
                 cartItems = listOf(cartItem(1L, "Кальян", 1, 200_000L, MenuSemanticType.HOOKAH)),
                 activeRules =
                     listOf(
-                        giftRule(201L, target = MenuSemanticType.HOOKAH, rewardItemName = "Чай", rewardPriceMinor = 30_000L),
-                        giftRule(202L, target = MenuSemanticType.HOOKAH, rewardItemName = "Сок", rewardPriceMinor = 50_000L),
+                        giftRule(
+                            201L,
+                            target = MenuSemanticType.HOOKAH,
+                            rewardItemName = "Чай",
+                            rewardPriceMinor = 30_000L,
+                        ),
+                        giftRule(
+                            202L,
+                            target = MenuSemanticType.HOOKAH,
+                            rewardItemName = "Сок",
+                            rewardPriceMinor = 50_000L,
+                        ),
                     ),
             )
 
@@ -524,7 +534,12 @@ class PromotionRuleEngineTest {
                 cartItems = listOf(cartItem(1L, "Кальян", 1, 100_000L, MenuSemanticType.HOOKAH)),
                 activeRules =
                     listOf(
-                        rule(101L, target = MenuSemanticType.HOOKAH, percent = 20, status = VenuePromotionStatus.PAUSED),
+                        rule(
+                            101L,
+                            target = MenuSemanticType.HOOKAH,
+                            percent = 20,
+                            status = VenuePromotionStatus.PAUSED,
+                        ),
                         rule(
                             102L,
                             target = MenuSemanticType.HOOKAH,

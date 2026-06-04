@@ -10,8 +10,8 @@ import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
-import com.hookah.platform.backend.platform.PlatformOwnerAssignmentResult
 import com.hookah.platform.backend.platform.PlatformEffectivePrice
+import com.hookah.platform.backend.platform.PlatformOwnerAssignmentResult
 import com.hookah.platform.backend.platform.PlatformPriceScheduleItem
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettings
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
@@ -149,13 +149,25 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             router.process(
                 TelegramUpdate(
                     updateId = 1,
-                    message = Message(messageId = 1, chat = Chat(chatId, "private"), fromUser = from, text = "🤝 Добавить свою кальянную"),
+                    message =
+                        Message(
+                            messageId = 1,
+                            chat = Chat(chatId, "private"),
+                            fromUser = from,
+                            text = "🤝 Добавить свою кальянную",
+                        ),
                 ),
             )
             router.process(
                 TelegramUpdate(
                     updateId = 2,
-                    message = Message(messageId = 2, chat = Chat(chatId, "private"), fromUser = from, text = "Дым и Лёд"),
+                    message =
+                        Message(
+                            messageId = 2,
+                            chat = Chat(chatId, "private"),
+                            fromUser = from,
+                            text = "Дым и Лёд",
+                        ),
                 ),
             )
             router.process(
@@ -167,7 +179,13 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             router.process(
                 TelegramUpdate(
                     updateId = 4,
-                    message = Message(messageId = 4, chat = Chat(chatId, "private"), fromUser = from, text = "@smoke_owner"),
+                    message =
+                        Message(
+                            messageId = 4,
+                            chat = Chat(chatId, "private"),
+                            fromUser = from,
+                            text = "@smoke_owner",
+                        ),
                 ),
             )
             router.process(
@@ -286,13 +304,25 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             router.process(
                 TelegramUpdate(
                     updateId = 20,
-                    message = Message(messageId = 20, chat = Chat(chatId, "private"), fromUser = from, text = "🤝 Добавить свою кальянную"),
+                    message =
+                        Message(
+                            messageId = 20,
+                            chat = Chat(chatId, "private"),
+                            fromUser = from,
+                            text = "🤝 Добавить свою кальянную",
+                        ),
                 ),
             )
             router.process(
                 TelegramUpdate(
                     updateId = 21,
-                    message = Message(messageId = 21, chat = Chat(chatId, "private"), fromUser = from, text = "Lounge X"),
+                    message =
+                        Message(
+                            messageId = 21,
+                            chat = Chat(chatId, "private"),
+                            fromUser = from,
+                            text = "Lounge X",
+                        ),
                 ),
             )
             router.process(
@@ -440,13 +470,25 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             router.process(
                 TelegramUpdate(
                     updateId = 30,
-                    message = Message(messageId = 30, chat = Chat(chatId, "private"), fromUser = from, text = "🤝 Добавить свою кальянную"),
+                    message =
+                        Message(
+                            messageId = 30,
+                            chat = Chat(chatId, "private"),
+                            fromUser = from,
+                            text = "🤝 Добавить свою кальянную",
+                        ),
                 ),
             )
             router.process(
                 TelegramUpdate(
                     updateId = 31,
-                    message = Message(messageId = 31, chat = Chat(chatId, "private"), fromUser = from, text = "Lounge Y"),
+                    message =
+                        Message(
+                            messageId = 31,
+                            chat = Chat(chatId, "private"),
+                            fromUser = from,
+                            text = "Lounge Y",
+                        ),
                 ),
             )
             router.process(

@@ -83,14 +83,12 @@ class PromotionVenuePlacementRepository(private val dataSource: DataSource?) {
     suspend fun listActiveForPlatformManagement(
         limit: Int = 20,
         now: Instant = Instant.now(),
-    ): List<PromotionVenuePlacement> =
-        listByStatusForPlatform(PromotionPlacementStatus.ACTIVE, limit, now)
+    ): List<PromotionVenuePlacement> = listByStatusForPlatform(PromotionPlacementStatus.ACTIVE, limit, now)
 
     suspend fun listFinishedForPlatformManagement(
         limit: Int = 20,
         now: Instant = Instant.now(),
-    ): List<PromotionVenuePlacement> =
-        listFinishedForManagement(venueId = null, now = now, limit = limit)
+    ): List<PromotionVenuePlacement> = listFinishedForManagement(venueId = null, now = now, limit = limit)
 
     suspend fun listForVenueManagement(
         venueId: Long,
@@ -140,8 +138,7 @@ class PromotionVenuePlacementRepository(private val dataSource: DataSource?) {
         venueId: Long,
         limit: Int = 20,
         now: Instant = Instant.now(),
-    ): List<PromotionVenuePlacement> =
-        listFinishedForManagement(venueId = venueId, now = now, limit = limit)
+    ): List<PromotionVenuePlacement> = listFinishedForManagement(venueId = venueId, now = now, limit = limit)
 
     suspend fun getForVenueManagement(
         venueId: Long,

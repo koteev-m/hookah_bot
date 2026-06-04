@@ -2,15 +2,15 @@ package com.hookah.platform.backend.telegram
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
-import io.ktor.client.request.forms.formData
-import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
-import io.ktor.http.Headers
 import io.ktor.http.ContentType
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
@@ -249,7 +249,10 @@ class TelegramApiClient(
                             append("chat_id", chatId.toString())
                             caption?.let { append("caption", it) }
                             replyMarkupJson?.let { replyMarkupElement ->
-                                append("reply_markup", json.encodeToString(JsonElement.serializer(), replyMarkupElement))
+                                append(
+                                    "reply_markup",
+                                    json.encodeToString(JsonElement.serializer(), replyMarkupElement),
+                                )
                             }
                             append(
                                 key = "photo",

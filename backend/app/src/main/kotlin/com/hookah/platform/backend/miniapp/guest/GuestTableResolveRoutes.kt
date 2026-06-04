@@ -120,7 +120,12 @@ private data class ResolvedTableSession(
     val inactiveReason: String?,
 ) {
     val tableSessionId: Long = session?.id ?: requestedSessionId ?: 0L
-    val status: String = if (!active && inactiveReason == "TABLE_SESSION_EXPIRED") "EXPIRED" else session?.status?.name ?: "UNKNOWN"
+    val status: String =
+        if (!active && inactiveReason == "TABLE_SESSION_EXPIRED") {
+            "EXPIRED"
+        } else {
+            session?.status?.name ?: "UNKNOWN"
+        }
 }
 
 private fun TableSessionRecord.inactiveReason(now: Instant): String =

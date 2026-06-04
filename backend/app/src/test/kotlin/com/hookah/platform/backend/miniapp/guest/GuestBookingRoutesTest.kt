@@ -156,7 +156,9 @@ class GuestBookingRoutesTest {
             assertEquals(HttpStatusCode.OK, noShowResponse.status)
             assertEquals(
                 "no_show",
-                json.parseToJsonElement(noShowResponse.bodyAsText()).jsonObject.getValue("status").jsonPrimitive.content,
+                json.parseToJsonElement(
+                    noShowResponse.bodyAsText(),
+                ).jsonObject.getValue("status").jsonPrimitive.content,
             )
 
             assertEquals(2, outboxCountForChat(jdbcUrl, TELEGRAM_USER_ID))
@@ -342,8 +344,8 @@ class GuestBookingRoutesTest {
                     rs.next()
                     rs.getDate("display_date").toLocalDate().toString() to rs.getInt("display_number")
                 }
+            }
         }
-    }
 
     private fun setVenueTimezone(
         jdbcUrl: String,

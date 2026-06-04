@@ -73,7 +73,13 @@ class PromotionDiagnosticsTool(
                     add("Акция: ${promotion.title}")
                     add("Тип: ${promotion.templateType.dbValue}")
                     add("Статус акции: ${humanizeStatus(promotion.status)}")
-                    add("Период акции: ${formatInstantRange(promotion.startsAt, promotion.endsAt, request.venueZoneId)}")
+                    add(
+                        "Период акции: ${formatInstantRange(
+                            promotion.startsAt,
+                            promotion.endsAt,
+                            request.venueZoneId,
+                        )}",
+                    )
                     add("Видна гостю сейчас: ${if (visible) "да" else "нет"}")
                     if (rules.isEmpty()) {
                         add("Правила: не найдены")
@@ -83,7 +89,17 @@ class PromotionDiagnosticsTool(
                             add("Правило ${index + 1}: ${humanizeRuleType(rule.ruleType)}")
                             add("Статус правила: ${humanizeStatus(rule.status)}")
                             add("Расписание: ${formatSchedule(rule)}")
-                            add("Расписание активно сейчас: ${if (rule.matchesSchedule(request.now, request.venueZoneId)) "да" else "нет"}")
+                            add(
+                                "Расписание активно сейчас: ${if (rule.matchesSchedule(
+                                        request.now,
+                                        request.venueZoneId,
+                                    )
+                                ) {
+                                    "да"
+                                } else {
+                                    "нет"
+                                }}",
+                            )
                             add("Цели: ${formatTargets(rule.targets)}")
                             if (rule.ruleType == PromotionRuleType.HAPPY_HOURS_PERCENT) {
                                 add("Скидка: ${rule.discountPercent}%")
@@ -111,7 +127,10 @@ class PromotionDiagnosticsTool(
             when (promotion.status) {
                 VenuePromotionStatus.ACTIVE -> Unit
                 VenuePromotionStatus.ARCHIVED -> add("Акция в архиве, поэтому скрыта от гостей и не применяется.")
-                VenuePromotionStatus.PAUSED -> add("Акция приостановлена. Включите акцию, чтобы она стала видна гостям.")
+                VenuePromotionStatus.PAUSED ->
+                    add(
+                        "Акция приостановлена. Включите акцию, чтобы она стала видна гостям.",
+                    )
                 VenuePromotionStatus.DRAFT -> add("Акция в черновике. Она не видна гостям и не применяется.")
             }
             if (promotion.startsAt != null && promotion.startsAt > now) {
@@ -125,9 +144,18 @@ class PromotionDiagnosticsTool(
             }
             val inactiveRules = rules.filter { it.status != VenuePromotionStatus.ACTIVE }
             if (inactiveRules.isNotEmpty()) {
-                add("Есть правила не в статусе ACTIVE: ${inactiveRules.joinToString { "#${it.id} ${humanizeStatus(it.status)}" }}.")
+                add(
+                    "Есть правила не в статусе ACTIVE: ${inactiveRules.joinToString {
+                        "#${it.id} ${humanizeStatus(
+                            it.status,
+                        )}"
+                    }}.",
+                )
             }
-            val scheduledOut = rules.filter { it.status == VenuePromotionStatus.ACTIVE && !it.matchesSchedule(now, zoneId) }
+            val scheduledOut =
+                rules.filter { rule ->
+                    rule.status == VenuePromotionStatus.ACTIVE && !rule.matchesSchedule(now, zoneId)
+                }
             if (scheduledOut.isNotEmpty()) {
                 add("Расписание активных правил сейчас не совпадает с текущим временем заведения.")
             }
@@ -183,7 +211,13 @@ class PromotionDiagnosticsTool(
         startsTime: LocalTime?,
         endsTime: LocalTime?,
     ): String? =
-        if (startsTime == null || endsTime == null) null else "${startsTime.format(timeFormatter)}-${endsTime.format(timeFormatter)}"
+        if (startsTime == null || endsTime == null) {
+            null
+        } else {
+            "${startsTime.format(
+                timeFormatter,
+            )}-${endsTime.format(timeFormatter)}"
+        }
 
     private fun formatTargets(targets: List<PromotionRuleTarget>): String =
         if (targets.isEmpty()) {
@@ -204,9 +238,10 @@ class PromotionDiagnosticsTool(
             PromotionRewardMode.FIXED_ITEM ->
                 "${reward.rewardMenuItemName} ×${reward.rewardQty}${if (reward.isAvailable) "" else " (недоступно)"}"
             PromotionRewardMode.CHOICE_ITEMS -> {
-                val options = reward.options.take(5).joinToString { option ->
-                    option.menuItemName + if (option.isAvailable) "" else " (недоступно)"
-                }
+                val options =
+                    reward.options.take(5).joinToString { option ->
+                        option.menuItemName + if (option.isAvailable) "" else " (недоступно)"
+                    }
                 "на выбор: $options" + if (reward.options.size > 5) ", +${reward.options.size - 5} ещё" else ""
             }
         }
@@ -218,7 +253,10 @@ class PromotionDiagnosticsTool(
     ): String =
         when {
             startsAt == null && endsAt == null -> "без ограничений"
-            startsAt != null && endsAt != null -> "${formatInstant(startsAt, zoneId)} - ${formatInstant(endsAt, zoneId)}"
+            startsAt != null && endsAt != null -> "${formatInstant(
+                startsAt,
+                zoneId,
+            )} - ${formatInstant(endsAt, zoneId)}"
             startsAt != null -> "с ${formatInstant(startsAt, zoneId)}"
             else -> "до ${formatInstant(endsAt!!, zoneId)}"
         }

@@ -162,7 +162,8 @@ class OrdersRepository(
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
-                    "SELECT id, status, display_number, display_date FROM orders WHERE table_session_id = ? AND status = 'ACTIVE'",
+                    "SELECT id, status, display_number, display_date FROM orders WHERE " +
+                        "table_session_id = ? AND status = 'ACTIVE'",
                 ).use { statement ->
                     statement.setLong(1, tableSessionId)
                     statement.executeQuery().use { rs ->
@@ -170,7 +171,11 @@ class OrdersRepository(
                             ActiveOrderSummary(
                                 id = rs.getLong("id"),
                                 status = rs.getString("status"),
-                                displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                displayNumber =
+                                    rs.getInt("display_number").let {
+                                            value ->
+                                        if (rs.wasNull()) null else value
+                                    },
                                 displayDate = rs.getDate("display_date")?.toLocalDate(),
                             )
                         } else {
@@ -212,7 +217,11 @@ class OrdersRepository(
                             ActiveOrderSummary(
                                 id = rs.getLong("id"),
                                 status = rs.getString("status"),
-                                displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                displayNumber =
+                                    rs.getInt("display_number").let {
+                                            value ->
+                                        if (rs.wasNull()) null else value
+                                    },
                                 displayDate = rs.getDate("display_date")?.toLocalDate(),
                             )
                         } else {
@@ -231,7 +240,8 @@ class OrdersRepository(
                 ds.connection.use { connection ->
                     val order =
                         connection.prepareStatement(
-                            "SELECT id, status, display_number, display_date FROM orders WHERE table_session_id = ? AND status = 'ACTIVE'",
+                            "SELECT id, status, display_number, display_date FROM orders WHERE " +
+                                "table_session_id = ? AND status = 'ACTIVE'",
                         ).use { statement ->
                             statement.setLong(1, tableSessionId)
                             statement.executeQuery().use { rs ->
@@ -239,7 +249,11 @@ class OrdersRepository(
                                     ActiveOrderHeader(
                                         orderId = rs.getLong("id"),
                                         status = rs.getString("status"),
-                                        displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                        displayNumber =
+                                            rs.getInt("display_number").let {
+                                                    value ->
+                                                if (rs.wasNull()) null else value
+                                            },
                                         displayDate = rs.getDate("display_date")?.toLocalDate(),
                                     )
                                 } else {
@@ -278,7 +292,12 @@ class OrdersRepository(
                         status = order.status,
                         displayNumber = order.displayNumber,
                         displayDate = order.displayDate,
-                        promotionDiscounts = loadPromotionDiscountsForBatches(connection, order.orderId, batches.map { it.first }),
+                        promotionDiscounts =
+                            loadPromotionDiscountsForBatches(
+                                connection,
+                                order.orderId,
+                                batches.map { it.first },
+                            ),
                         batches =
                             batches.map { (batchId, comment) ->
                                 OrderBatchDetails(
@@ -327,7 +346,11 @@ class OrdersRepository(
                                     ActiveOrderHeader(
                                         orderId = rs.getLong("id"),
                                         status = rs.getString("status"),
-                                        displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                        displayNumber =
+                                            rs.getInt("display_number").let {
+                                                    value ->
+                                                if (rs.wasNull()) null else value
+                                            },
                                         displayDate = rs.getDate("display_date")?.toLocalDate(),
                                     )
                                 } else {
@@ -371,7 +394,12 @@ class OrdersRepository(
                         status = order.status,
                         displayNumber = order.displayNumber,
                         displayDate = order.displayDate,
-                        promotionDiscounts = loadPromotionDiscountsForBatches(connection, order.orderId, batches.map { it.first }),
+                        promotionDiscounts =
+                            loadPromotionDiscountsForBatches(
+                                connection,
+                                order.orderId,
+                                batches.map { it.first },
+                            ),
                         batches =
                             batches.map { (batchId, comment) ->
                                 OrderBatchDetails(
@@ -440,7 +468,11 @@ class OrdersRepository(
                                             status = rs.getString("status"),
                                             tabType = loadUserTabTypeForOrder(connection, userId, orderId),
                                             items = loadOrderItemsSummaryForUser(connection, orderId, userId),
-                                            displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                            displayNumber =
+                                                rs.getInt("display_number").let {
+                                                        value ->
+                                                    if (rs.wasNull()) null else value
+                                                },
                                             displayDate = rs.getDate("display_date")?.toLocalDate(),
                                             promotionDiscounts = loadPromotionDiscountsForOrder(connection, orderId),
                                         ),
@@ -561,9 +593,17 @@ class OrdersRepository(
                                 itemId = itemId,
                                 itemName = itemName,
                                 qty = qty,
-                                priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
+                                priceMinor =
+                                    rs.getLong("price_minor").let {
+                                            value ->
+                                        if (rs.wasNull()) null else value
+                                    },
                                 currency = rs.getString("currency"),
-                                discountPercent = rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value },
+                                discountPercent =
+                                    rs.getInt("discount_percent").let {
+                                            value ->
+                                        if (rs.wasNull()) null else value
+                                    },
                                 promoDiscountMinor = rs.getLong("promo_discount_minor"),
                                 isPromotionReward = rs.getBoolean("is_promotion_reward"),
                             ),
@@ -670,7 +710,8 @@ class OrdersRepository(
                             connection.rollback()
                             return@use null
                         }
-                        val checkoutMenuItems = loadCheckoutMenuItems(connection, venueId, items.map { it.itemId }.toSet())
+                        val checkoutMenuItems =
+                            loadCheckoutMenuItems(connection, venueId, items.map { it.itemId }.toSet())
                         if (checkoutMenuItems.size != items.map { it.itemId }.toSet().size) {
                             connection.rollback()
                             return@use null
@@ -1338,7 +1379,9 @@ class OrdersRepository(
                     discountPercent = null,
                     discountTotalMinor = discountMinor,
                     currency = rewardMenuItem.currency,
-                    dedupeKey = "batch:$batchId:rule:${rule.id}:gift:${gift.rewardMenuItemId}:${rewardMenuItem.currency}",
+                    dedupeKey =
+                        "batch:$batchId:rule:${rule.id}:gift:${gift.rewardMenuItemId}:" +
+                            "${rewardMenuItem.currency}",
                     adjustments =
                         listOf(
                             PromotionAdjustmentInput(
@@ -1368,12 +1411,12 @@ class OrdersRepository(
         return PromotionRulesApplicationResult(
             discounts =
                 applications.map { application ->
-            CreatedOrderPromotionDiscount(
-                label = application.titleSnapshot,
-                discountMinor = application.discountTotalMinor,
-                currency = application.currency,
+                    CreatedOrderPromotionDiscount(
+                        label = application.titleSnapshot,
+                        discountMinor = application.discountTotalMinor,
+                        currency = application.currency,
                         ruleType = application.ruleType,
-            )
+                    )
                 },
         )
     }
@@ -1841,7 +1884,11 @@ class OrdersRepository(
                             itemName = rs.getString("item_name")?.takeIf { it.isNotBlank() },
                             priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
                             currency = rs.getString("currency"),
-                            discountPercent = rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value },
+                            discountPercent =
+                                rs.getInt("discount_percent").let {
+                                        value ->
+                                    if (rs.wasNull()) null else value
+                                },
                             promoDiscountMinor = rs.getLong("promo_discount_minor"),
                             isPromotionReward = rs.getBoolean("is_promotion_reward"),
                         ),

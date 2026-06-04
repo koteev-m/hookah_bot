@@ -629,8 +629,7 @@ private fun OrderDetail.resolveCurrency(): String =
         ?: promotionDiscounts.firstOrNull { it.currency.isNotBlank() }?.currency
         ?: DEFAULT_CURRENCY
 
-private fun OrderBatchItemDetail.lineGrossMinor(): Long =
-    priceMinor?.let { it * qty } ?: 0L
+private fun OrderBatchItemDetail.lineGrossMinor(): Long = priceMinor?.let { it * qty } ?: 0L
 
 private fun OrderBatchItemDetail.manualDiscountMinor(): Long =
     discountPercent?.takeIf { it in 1..100 }?.let { lineGrossMinor() * it / 100 } ?: 0L
@@ -638,8 +637,7 @@ private fun OrderBatchItemDetail.manualDiscountMinor(): Long =
 private fun OrderBatchItemDetail.payableMinor(): Long =
     (lineGrossMinor() - manualDiscountMinor() - promoDiscountMinor.coerceAtLeast(0L)).coerceAtLeast(0L)
 
-private fun OrderBatchItemDetail.isActiveBillItem(): Boolean =
-    !isExcluded && itemStatus == OrderBatchItemStatus.ACTIVE
+private fun OrderBatchItemDetail.isActiveBillItem(): Boolean = !isExcluded && itemStatus == OrderBatchItemStatus.ACTIVE
 
 private fun isCancelledBatch(batch: OrderBatchDetail): Boolean =
     batch.status == OrderWorkflowStatus.CLOSED ||
@@ -658,8 +656,7 @@ private fun OrderPromotionDiscount.toDto(): OrderBillDiscountDto =
         ruleType = ruleType,
     )
 
-private fun batchLabel(index: Int): String =
-    if (index == 0) "Основной заказ" else "Дозаказ $index"
+private fun batchLabel(index: Int): String = if (index == 0) "Основной заказ" else "Дозаказ $index"
 
 private fun formatInstant(value: java.time.Instant): String {
     return instantFormatter.format(value.atOffset(ZoneOffset.UTC))

@@ -184,7 +184,12 @@ class VenueOwnerAccountRepositoryTest {
             seedUser(jdbcUrl, PLATFORM_OWNER_ID)
             val repository = VenueOwnerAccountRepository(dataSource(jdbcUrl))
             val account = repository.getOrCreateForOwner(OWNER_USER_ID, defaultLimit = 1)
-            val approveRequest = repository.createLimitRequest(account.id, requestedExtraCount = 2, comment = "Need growth")
+            val approveRequest =
+                repository.createLimitRequest(
+                    account.id,
+                    requestedExtraCount = 2,
+                    comment = "Need growth",
+                )
             val rejectRequest = repository.createLimitRequest(account.id, requestedExtraCount = 3, comment = "Later")
 
             val pending = repository.listPendingLimitRequests()
@@ -275,7 +280,8 @@ class VenueOwnerAccountRepositoryTest {
     }
 
     private fun freshJdbcUrl(prefix: String): String =
-        "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+        "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;" +
+            "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
 
     private fun migrate(
         jdbcUrl: String,

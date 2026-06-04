@@ -36,12 +36,12 @@ import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.db.DbConfig
 import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
-import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
-import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.BookingExpiryWorker
 import com.hookah.platform.backend.miniapp.guest.BookingExpiryWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.BookingReminderWorker
 import com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerConfig
+import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
+import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorker
@@ -54,8 +54,8 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
-import com.hookah.platform.backend.miniapp.guest.guestFavoritesRoutes
 import com.hookah.platform.backend.miniapp.guest.guestBookingRoutes
+import com.hookah.platform.backend.miniapp.guest.guestFavoritesRoutes
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
@@ -103,6 +103,7 @@ import com.hookah.platform.backend.telegram.TelegramUpdate
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
+import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.PromotionApplicationRepository
 import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
@@ -121,10 +122,9 @@ import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
-import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
-import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
@@ -138,6 +138,7 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.request
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
@@ -180,7 +181,6 @@ import io.ktor.server.routing.head
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import io.ktor.http.HttpHeaders
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -1096,13 +1096,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository,
                 )
-                    venueStaffRoutes(
-                        venueAccessRepository = venueAccessRepository,
-                        venueStaffRepository = venueStaffRepository,
-                        staffInviteRepository = staffInviteRepository,
-                        staffInviteConfig = staffInviteConfig,
-                        venueOwnerAccountRepository = venueOwnerAccountRepository,
-                    )
+                venueStaffRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    venueStaffRepository = venueStaffRepository,
+                    staffInviteRepository = staffInviteRepository,
+                    staffInviteConfig = staffInviteConfig,
+                    venueOwnerAccountRepository = venueOwnerAccountRepository,
+                )
                 venueStaffCallRoutes(
                     venueAccessRepository = venueAccessRepository,
                     staffCallRepository = staffCallRepository,

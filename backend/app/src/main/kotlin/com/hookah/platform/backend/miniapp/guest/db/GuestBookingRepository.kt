@@ -390,7 +390,14 @@ class GuestBookingRepository(
                             } else {
                                 val booking = mapBooking(rs)
                                 val holdMinutes = getOrCreateHoldMinutes(connection, venueId)
-                                booking.takeIf { isActiveAt(it.scheduledAt, it.arrivalDeadlineAt, holdMinutes, Instant.now()) }
+                                booking.takeIf {
+                                    isActiveAt(
+                                        it.scheduledAt,
+                                        it.arrivalDeadlineAt,
+                                        holdMinutes,
+                                        Instant.now(),
+                                    )
+                                }
                             }
                         }
                     }
@@ -427,8 +434,9 @@ class GuestBookingRepository(
                         if (scheduledAt == null) {
                             val deadlineFallback =
                                 if (nextStatus in ACTIVE_STATUSES) {
+                                    val holdMinutes = getOrCreateHoldMinutes(connection, venueId)
                                     current.arrivalDeadlineAt
-                                        ?: bookingDeadline(current.scheduledAt, getOrCreateHoldMinutes(connection, venueId))
+                                        ?: bookingDeadline(current.scheduledAt, holdMinutes)
                                 } else {
                                     current.arrivalDeadlineAt
                                 }
@@ -445,8 +453,14 @@ class GuestBookingRepository(
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setString(1, nextStatus.name)
-                                statement.setString(2, if (nextStatus == BookingStatus.CANCELED) cancelReasonText else null)
-                                statement.setString(3, if (nextStatus == BookingStatus.CANCELED) canceledByRole else null)
+                                statement.setString(
+                                    2,
+                                    if (nextStatus == BookingStatus.CANCELED) cancelReasonText else null,
+                                )
+                                statement.setString(
+                                    3,
+                                    if (nextStatus == BookingStatus.CANCELED) canceledByRole else null,
+                                )
                                 if (nextStatus == BookingStatus.CANCELED && canceledByUserId != null) {
                                     statement.setLong(4, canceledByUserId)
                                 } else {
@@ -533,8 +547,7 @@ class GuestBookingRepository(
             timestampColumn = "no_show_at",
         )
 
-    suspend fun expireOverdue(now: Instant = Instant.now()): Int =
-        expireOverdueBookings(now = now).expiredCount
+    suspend fun expireOverdue(now: Instant = Instant.now()): Int = expireOverdueBookings(now = now).expiredCount
 
     suspend fun expireOverdueBookings(
         now: Instant = Instant.now(),
@@ -580,7 +593,8 @@ class GuestBookingRepository(
             if (isH2) {
                 "COALESCE(b.arrival_deadline_at, DATEADD('MINUTE', COALESCE(vbs.hold_minutes, 30), b.scheduled_at))"
             } else {
-                "COALESCE(b.arrival_deadline_at, b.scheduled_at + (COALESCE(vbs.hold_minutes, 30) * INTERVAL '1 minute'))"
+                "COALESCE(b.arrival_deadline_at, " +
+                    "b.scheduled_at + (COALESCE(vbs.hold_minutes, 30) * INTERVAL '1 minute'))"
             }
         val forUpdateClause = if (isH2) "" else "FOR UPDATE OF b SKIP LOCKED"
         return connection.prepareStatement(
@@ -613,22 +627,23 @@ class GuestBookingRepository(
         now: Instant,
     ): Int {
         val placeholders = bookingIds.joinToString(",") { "?" }
-        val updated = connection.prepareStatement(
-            """
-            UPDATE bookings
-            SET status = 'EXPIRED',
-                expired_at = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE status IN ('PENDING', 'CONFIRMED', 'CHANGED')
-              AND id IN ($placeholders)
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setTimestamp(1, Timestamp.from(now))
-            bookingIds.forEachIndexed { index, bookingId ->
-                statement.setLong(index + 2, bookingId)
+        val updated =
+            connection.prepareStatement(
+                """
+                UPDATE bookings
+                SET status = 'EXPIRED',
+                    expired_at = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                  AND id IN ($placeholders)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setTimestamp(1, Timestamp.from(now))
+                bookingIds.forEachIndexed { index, bookingId ->
+                    statement.setLong(index + 2, bookingId)
+                }
+                statement.executeUpdate()
             }
-            statement.executeUpdate()
-        }
         if (updated > 0) {
             cancelPendingReminders(connection, bookingIds)
         }
@@ -647,7 +662,13 @@ class GuestBookingRepository(
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val booking = loadById(connection, bookingId) ?: return@use BookingReminderScheduleResult(0, 0, 0)
+                        val booking =
+                            loadById(
+                                connection,
+                                bookingId,
+                            ) ?: return@use BookingReminderScheduleResult(
+                                0, 0, 0,
+                            )
                         val canceledCount = cancelPendingReminders(connection, bookingId)
                         if (booking.status !in setOf(BookingStatus.CONFIRMED, BookingStatus.CHANGED)) {
                             connection.commit()
@@ -903,7 +924,9 @@ class GuestBookingRepository(
                                             venueName = rs.getString("venue_name"),
                                             scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
                                             partySize = rs.getInt("party_size").let { if (rs.wasNull()) null else it },
-                                            status = BookingStatus.fromDb(rs.getString("status")) ?: BookingStatus.PENDING,
+                                            status =
+                                                BookingStatus.fromDb(rs.getString("status"))
+                                                    ?: BookingStatus.PENDING,
                                             displayNumber =
                                                 rs.getInt("display_number").let { if (rs.wasNull()) null else it },
                                             displayDate = rs.getDate("display_date")?.toLocalDate(),
@@ -1119,7 +1142,10 @@ class GuestBookingRepository(
         fun statusFor(scheduledFor: Instant): BookingReminderStatus =
             if (scheduledFor.isAfter(now)) BookingReminderStatus.PENDING else BookingReminderStatus.SKIPPED
 
-        fun add(kind: BookingReminderKind, scheduledFor: Instant) {
+        fun add(
+            kind: BookingReminderKind,
+            scheduledFor: Instant,
+        ) {
             plans.add(ReminderPlan(kind = kind, scheduledFor = scheduledFor, status = statusFor(scheduledFor)))
         }
 
@@ -1333,8 +1359,7 @@ class GuestBookingRepository(
     private fun cancelPendingReminders(
         connection: java.sql.Connection,
         bookingId: Long,
-    ): Int =
-        cancelPendingReminders(connection, listOf(bookingId))
+    ): Int = cancelPendingReminders(connection, listOf(bookingId))
 
     private fun cancelPendingReminders(
         connection: java.sql.Connection,
@@ -1360,14 +1385,12 @@ class GuestBookingRepository(
         bookingId: Long,
         kind: BookingReminderKind,
         scheduledFor: Instant,
-    ): String =
-        "booking:$bookingId:${kind.name}:${scheduledFor.epochSecond}"
+    ): String = "booking:$bookingId:${kind.name}:${scheduledFor.epochSecond}"
 
     private fun bookingDisplayDate(
         scheduledAt: Instant,
         venueZoneId: ZoneId,
-    ): LocalDate =
-        LocalDateTime.ofInstant(scheduledAt, venueZoneId).toLocalDate()
+    ): LocalDate = LocalDateTime.ofInstant(scheduledAt, venueZoneId).toLocalDate()
 
     private fun bookingDeadline(
         scheduledAt: Instant,
@@ -1430,18 +1453,15 @@ class GuestBookingRepository(
         arrivalDeadlineAt: Instant?,
         holdMinutes: Int,
         now: Instant,
-    ): Boolean =
-        effectiveDeadlineAt(scheduledAt, arrivalDeadlineAt, holdMinutes) >= now
+    ): Boolean = effectiveDeadlineAt(scheduledAt, arrivalDeadlineAt, holdMinutes) >= now
 
     private fun effectiveDeadlineAt(
         scheduledAt: Instant,
         arrivalDeadlineAt: Instant?,
         holdMinutes: Int,
-    ): Instant =
-        arrivalDeadlineAt ?: bookingDeadline(scheduledAt, holdMinutes)
+    ): Instant = arrivalDeadlineAt ?: bookingDeadline(scheduledAt, holdMinutes)
 
-    private fun isValidHoldMinutes(minutes: Int): Boolean =
-        minutes in MIN_HOLD_MINUTES..MAX_HOLD_MINUTES
+    private fun isValidHoldMinutes(minutes: Int): Boolean = minutes in MIN_HOLD_MINUTES..MAX_HOLD_MINUTES
 
     private fun nextDisplayNumber(
         connection: java.sql.Connection,
@@ -1469,6 +1489,7 @@ class GuestBookingRepository(
         const val MIN_HOLD_MINUTES = 10
         const val MAX_HOLD_MINUTES = 240
         val ACTIVE_STATUSES = setOf(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.CHANGED)
-        val TERMINAL_STATUSES = setOf(BookingStatus.CANCELED, BookingStatus.EXPIRED, BookingStatus.NO_SHOW, BookingStatus.SEATED)
+        val TERMINAL_STATUSES =
+            setOf(BookingStatus.CANCELED, BookingStatus.EXPIRED, BookingStatus.NO_SHOW, BookingStatus.SEATED)
     }
 }

@@ -83,7 +83,11 @@ class VenueMenuRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, typedCategoryResponse.status)
-            val typedCategory = json.decodeFromString(VenueMenuCategoryDto.serializer(), typedCategoryResponse.bodyAsText())
+            val typedCategory =
+                json.decodeFromString(
+                    VenueMenuCategoryDto.serializer(),
+                    typedCategoryResponse.bodyAsText(),
+                )
             assertEquals("DRINK", typedCategory.categoryType)
 
             val itemResponse =
@@ -478,7 +482,7 @@ class VenueMenuRoutesTest {
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
                     setBody("""{"categoryType":"HOOKAH"}""")
-            }
+                }
             assertEquals(HttpStatusCode.Forbidden, editCategoryTypeResponse.status)
             assertApiErrorEnvelope(editCategoryTypeResponse, ApiErrorCodes.FORBIDDEN)
 

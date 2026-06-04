@@ -120,7 +120,7 @@ class AiAssistantServiceTest {
                         venueId = 10L,
                         type = AiVenueSummaryType.FEEDBACK,
                     ),
-            )
+                )
 
             assertTrue(answer.text.contains("⭐ Сводка по отзывам"))
             assertTrue(answer.text.contains("Низкие оценки: 1"))

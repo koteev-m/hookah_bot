@@ -14,8 +14,8 @@ import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
-import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -68,7 +68,8 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val response =
                 client.get(
-                    "/api/guest/order/active?tableToken=active-token&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                    "/api/guest/order/active?tableToken=active-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$personalTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
@@ -139,7 +140,8 @@ class GuestOrderRoutesTest {
 
             val activeResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=batch-token&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                    "/api/guest/order/active?tableToken=batch-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$personalTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
@@ -229,13 +231,15 @@ class GuestOrderRoutesTest {
 
             val firstActiveResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=session-scope-token&tableSessionId=$firstSessionId&tabId=$firstTabId",
+                    "/api/guest/order/active?tableToken=session-scope-token" +
+                        "&tableSessionId=$firstSessionId&tabId=$firstTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             val secondActiveResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=session-scope-token&tableSessionId=$secondSessionId&tabId=$secondTabId",
+                    "/api/guest/order/active?tableToken=session-scope-token" +
+                        "&tableSessionId=$secondSessionId&tabId=$secondTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
@@ -299,7 +303,8 @@ class GuestOrderRoutesTest {
 
             val response =
                 client.get(
-                    "/api/guest/order/active?tableToken=active-cross-session-token&tableSessionId=$firstSessionId&tabId=$secondTabId",
+                    "/api/guest/order/active?tableToken=active-cross-session-token" +
+                        "&tableSessionId=$firstSessionId&tabId=$secondTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
@@ -591,7 +596,10 @@ class GuestOrderRoutesTest {
                     .single()
             assertEquals(hookahItemId, summary.itemId)
             assertEquals(40L, summary.promoDiscountMinor)
-            assertEquals(listOf("Счастливые часы" to 40L), orderSummary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(
+                listOf("Счастливые часы" to 40L),
+                orderSummary.promotionDiscounts.map { it.label to it.discountMinor },
+            )
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
         }
@@ -675,7 +683,8 @@ class GuestOrderRoutesTest {
 
             val activeResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=cart-preview-token&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                    "/api/guest/order/active?tableToken=cart-preview-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$personalTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
@@ -686,7 +695,12 @@ class GuestOrderRoutesTest {
             assertEquals(preview.promoDiscountTotalMinor, order.promoDiscountTotalMinor)
             assertEquals(preview.loyaltyDiscountTotalMinor, order.loyaltyDiscountTotalMinor)
             assertEquals(preview.finalPayableTotalMinor, order.finalPayableTotalMinor)
-            assertEquals(preview.discounts.map { it.label to it.discountMinor }, order.discounts.map { it.label to it.discountMinor })
+            assertEquals(
+                preview.discounts.map {
+                    it.label to it.discountMinor
+                },
+                order.discounts.map { it.label to it.discountMinor },
+            )
         }
 
     @Test
@@ -753,7 +767,10 @@ class GuestOrderRoutesTest {
             assertEquals(listOf(hookahItemId, teaItemId), summary.items.map { it.itemId })
             assertEquals(100L, summary.items.single { it.itemId == teaItemId }.promoDiscountMinor)
             assertTrue(summary.items.single { it.itemId == teaItemId }.isPromotionReward)
-            assertEquals(listOf("Чай в подарок" to 100L), summary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(
+                listOf("Чай в подарок" to 100L),
+                summary.promotionDiscounts.map { it.label to it.discountMinor },
+            )
             assertEquals(2, countBatchItems(jdbcUrl, batchId))
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
@@ -816,7 +833,12 @@ class GuestOrderRoutesTest {
                 OrdersRepository(h2DataSource(jdbcUrl))
                     .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
                     .single()
-            assertEquals(listOf("Лояльность: бесплатный кальян" to 1_500L), summary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(
+                listOf("Лояльность: бесплатный кальян" to 1_500L),
+                summary.promotionDiscounts.map {
+                    it.label to it.discountMinor
+                },
+            )
             assertEquals(1_500L, summary.items.single { it.itemId == lightHookahId }.promoDiscountMinor)
             assertEquals(0L, summary.items.single { it.itemId == regularHookahId }.promoDiscountMinor)
             assertEquals(1, countRows(jdbcUrl, "loyalty_redemptions"))
@@ -930,9 +952,20 @@ class GuestOrderRoutesTest {
                 OrdersRepository(h2DataSource(jdbcUrl))
                     .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
                     .single()
-            assertEquals(listOf("Лояльность: бесплатный кальян" to 2_000L), summary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(
+                listOf("Лояльность: бесплатный кальян" to 2_000L),
+                summary.promotionDiscounts.map {
+                    it.label to it.discountMinor
+                },
+            )
             assertEquals(2_000L, summary.items.single().promoDiscountMinor)
-            assertEquals(0L, summary.items.single().priceMinor!! * summary.items.single().qty - summary.items.single().promoDiscountMinor)
+            val finalPayableMinor =
+                summary.items.single().priceMinor!! * summary.items.single().qty -
+                    summary.items.single().promoDiscountMinor
+            assertEquals(
+                0L,
+                finalPayableMinor,
+            )
             assertEquals(1, countRows(jdbcUrl, "loyalty_redemptions"))
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
@@ -1056,7 +1089,10 @@ class GuestOrderRoutesTest {
                     .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
                     .single()
             assertEquals(listOf(hookahItemId, juiceItemId), firstSummary.items.map { it.itemId })
-            assertEquals(listOf("Сок в подарок" to 500L), firstSummary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(
+                listOf("Сок в подарок" to 500L),
+                firstSummary.promotionDiscounts.map { it.label to it.discountMinor },
+            )
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
 
@@ -1086,7 +1122,12 @@ class GuestOrderRoutesTest {
                 OrdersRepository(h2DataSource(jdbcUrl))
                     .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
                     .maxBy { it.orderId }
-            assertEquals(listOf("Сок в подарок" to 500L), giftOnlyStackableSummary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(
+                listOf("Сок в подарок" to 500L),
+                giftOnlyStackableSummary.promotionDiscounts.map {
+                    it.label to it.discountMinor
+                },
+            )
 
             val stackableTableId = seedTable(jdbcUrl, venueId, 38)
             seedTableToken(jdbcUrl, stackableTableId, "stackability-token-2")
@@ -1371,7 +1412,8 @@ class GuestOrderRoutesTest {
 
             val response =
                 client.get(
-                    "/api/guest/order/active?tableToken=active-foreign-personal-token&tableSessionId=$tableSessionId&tabId=$guestBTabId",
+                    "/api/guest/order/active?tableToken=active-foreign-personal-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$guestBTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, guestA)}") }
                 }
@@ -1426,7 +1468,8 @@ class GuestOrderRoutesTest {
             val guestAToken = issueToken(config, guestA)
             val beforeJoinResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=active-shared-token&tableSessionId=$tableSessionId&tabId=$sharedTabId",
+                    "/api/guest/order/active?tableToken=active-shared-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$sharedTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                 }
@@ -1437,7 +1480,8 @@ class GuestOrderRoutesTest {
 
             val afterJoinResponse =
                 client.get(
-                    "/api/guest/order/active?tableToken=active-shared-token&tableSessionId=$tableSessionId&tabId=$sharedTabId",
+                    "/api/guest/order/active?tableToken=active-shared-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$sharedTabId",
                 ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                 }
@@ -2455,7 +2499,8 @@ class GuestOrderRoutesTest {
         programId: Long,
     ): Int =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            connection.prepareStatement("SELECT COUNT(*) FROM guest_loyalty_ledger WHERE program_id = ?").use { statement ->
+            connection.prepareStatement("SELECT COUNT(*) FROM guest_loyalty_ledger WHERE program_id = ?").use {
+                    statement ->
                 statement.setLong(1, programId)
                 statement.executeQuery().use { rs ->
                     rs.next()
@@ -2464,8 +2509,7 @@ class GuestOrderRoutesTest {
             }
         }
 
-    private fun countPromotionApplications(jdbcUrl: String): Int =
-        countRows(jdbcUrl, "order_promotion_applications")
+    private fun countPromotionApplications(jdbcUrl: String): Int = countRows(jdbcUrl, "order_promotion_applications")
 
     private fun countPromotionAdjustments(jdbcUrl: String): Int =
         countRows(jdbcUrl, "order_batch_item_promotion_adjustments")
@@ -2475,7 +2519,8 @@ class GuestOrderRoutesTest {
         batchId: Long,
     ): Int =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            connection.prepareStatement("SELECT COUNT(*) FROM order_batch_items WHERE order_batch_id = ?").use { statement ->
+            connection.prepareStatement("SELECT COUNT(*) FROM order_batch_items WHERE order_batch_id = ?").use {
+                    statement ->
                 statement.setLong(1, batchId)
                 statement.executeQuery().use { rs ->
                     rs.next()

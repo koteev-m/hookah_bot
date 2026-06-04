@@ -3,7 +3,10 @@ package com.hookah.platform.backend.ai
 class AiContextAssembler {
     fun buildPromotionDiagnosticsPrompt(result: PromotionDiagnosticsResult): String =
         buildString {
-            append("Проверь настройки акции и объясни владельцу, почему она может быть не видна гостям или не применяться.\n\n")
+            append(
+                "Проверь настройки акции и объясни владельцу, почему она может быть не видна " +
+                    "гостям или не применяться.\n\n",
+            )
             append("Диагностика:\n")
             result.summaryLines.forEach { line ->
                 if (line.isBlank()) {
@@ -14,7 +17,10 @@ class AiContextAssembler {
             }
             append("\nВероятные причины:\n")
             result.likelyReasons.forEach { reason -> append("- ").append(reason).append('\n') }
-            append("\nПравила безопасности: только объяснение, без изменения настроек и без обещаний автоматического исправления.")
+            append(
+                "\nПравила безопасности: только объяснение, без изменения настроек и без обещаний " +
+                    "автоматического исправления.",
+            )
         }
 
     fun buildDraftTextPrompt(
@@ -29,7 +35,10 @@ class AiContextAssembler {
                 }
                 AiDraftTextType.FEEDBACK_REPLY -> {
                     append("Подготовь вежливый черновик ответа на отзыв. Ничего не отправляй гостю.\n")
-                    append("Ответ должен быть спокойным, без обещаний компенсации и без признания юридической ответственности.\n")
+                    append(
+                        "Ответ должен быть спокойным, без обещаний компенсации и без признания " +
+                            "юридической ответственности.\n",
+                    )
                 }
                 AiDraftTextType.BANNER_TEXT -> {
                     append("Подготовь короткий черновик текста для баннера или афиши.\n")
@@ -38,7 +47,10 @@ class AiContextAssembler {
             }
             append("\nВвод пользователя:\n")
             append(sanitizedBrief)
-            append("\n\nПравила безопасности: это только черновик, без сохранения в БД, без изменения настроек и без выполнения действий.")
+            append(
+                "\n\nПравила безопасности: это только черновик, без сохранения в БД, без " +
+                    "изменения настроек и без выполнения действий.",
+            )
         }
 
     fun buildVenueSummaryPrompt(result: VenueSummaryResult): String =
@@ -53,6 +65,9 @@ class AiContextAssembler {
                 append("\nОграничения данных:\n")
                 result.sourceNotes.forEach { line -> append("- ").append(line).append('\n') }
             }
-            append("\nПравила безопасности: это read-only сводка. Не предлагай, что настройки уже изменены, сообщения отправлены или суммы счёта поменялись.")
+            append(
+                "\nПравила безопасности: это read-only сводка. Не предлагай, что настройки уже " +
+                    "изменены, сообщения отправлены или суммы счёта поменялись.",
+            )
         }
 }

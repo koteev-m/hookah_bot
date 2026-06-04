@@ -97,7 +97,10 @@ class BookingReminderWorker(
             append("\n\n").append(reminder.venueName)
             append('\n')
             when (reminder.kind) {
-                BookingReminderKind.DAY_OF_VISIT -> append("Сегодня ").append(visitText.replaceFirstChar { it.lowercase(Locale.ROOT) })
+                BookingReminderKind.DAY_OF_VISIT ->
+                    append(
+                        "Сегодня ",
+                    ).append(visitText.replaceFirstChar { it.lowercase(Locale.ROOT) })
                 BookingReminderKind.PRE_VISIT -> append(visitText)
             }
             deadlineText?.let { append("\nБронь держится до ").append(it).append('.') }

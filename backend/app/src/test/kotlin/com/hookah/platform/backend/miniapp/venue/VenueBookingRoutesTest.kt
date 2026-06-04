@@ -261,7 +261,9 @@ class VenueBookingRoutesTest {
             assertEquals(HttpStatusCode.OK, noShowResponse.status)
             assertEquals(
                 "no_show",
-                json.parseToJsonElement(noShowResponse.bodyAsText()).jsonObject.getValue("status").jsonPrimitive.content,
+                json.parseToJsonElement(
+                    noShowResponse.bodyAsText(),
+                ).jsonObject.getValue("status").jsonPrimitive.content,
             )
         }
 

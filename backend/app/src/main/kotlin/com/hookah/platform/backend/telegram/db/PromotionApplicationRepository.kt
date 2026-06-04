@@ -129,8 +129,9 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
         applications
             .filter { it.discountTotalMinor > 0L && it.adjustments.isNotEmpty() }
             .forEach { application ->
-                val applicationId = findApplicationIdByDedupeKey(connection, application.dedupeKey)
-                    ?: insertApplication(connection, application)
+                val applicationId =
+                    findApplicationIdByDedupeKey(connection, application.dedupeKey)
+                        ?: insertApplication(connection, application)
                 application.adjustments
                     .filter { it.discountMinor > 0L }
                     .forEach { adjustment ->
@@ -151,14 +152,12 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
     private fun findAdjustmentsByOrder(
         connection: Connection,
         orderId: Long,
-    ): List<PromotionAdjustmentRecord> =
-        selectAdjustments(connection, "opa.order_id = ?", orderId)
+    ): List<PromotionAdjustmentRecord> = selectAdjustments(connection, "opa.order_id = ?", orderId)
 
     private fun findAdjustmentsByBatch(
         connection: Connection,
         batchId: Long,
-    ): List<PromotionAdjustmentRecord> =
-        selectAdjustments(connection, "opa.batch_id = ?", batchId)
+    ): List<PromotionAdjustmentRecord> = selectAdjustments(connection, "opa.batch_id = ?", batchId)
 
     private fun findAdjustmentsByItemIds(
         connection: Connection,
@@ -212,14 +211,12 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
     private fun summarizePromoDiscountForOrder(
         connection: Connection,
         orderId: Long,
-    ): PromotionDiscountSummary? =
-        summarize(connection, "opa.order_id = ?", orderId)
+    ): PromotionDiscountSummary? = summarize(connection, "opa.order_id = ?", orderId)
 
     private fun summarizePromoDiscountForBatch(
         connection: Connection,
         batchId: Long,
-    ): PromotionDiscountSummary? =
-        summarize(connection, "opa.batch_id = ?", batchId)
+    ): PromotionDiscountSummary? = summarize(connection, "opa.batch_id = ?", batchId)
 
     private fun summarize(
         connection: Connection,

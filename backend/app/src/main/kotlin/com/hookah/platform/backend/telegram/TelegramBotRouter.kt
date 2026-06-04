@@ -1,7 +1,10 @@
 package com.hookah.platform.backend.telegram
 
-import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.client.j2se.MatrixToImageWriter
+import com.google.zxing.qrcode.QRCodeWriter
 import com.hookah.platform.backend.ai.AiAssistantService
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
@@ -23,27 +26,28 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.VenueRole
-import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.effectiveType
+import com.hookah.platform.backend.miniapp.venue.orders.BatchStatusUpdateResult
 import com.hookah.platform.backend.miniapp.venue.orders.OrderActionActor
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchStatus
-import com.hookah.platform.backend.miniapp.venue.orders.BatchStatusUpdateResult
 import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderPromotionDiscount
 import com.hookah.platform.backend.miniapp.venue.orders.OrderQueueItem
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
-import com.hookah.platform.backend.miniapp.venue.orders.allowedNextStatuses
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteDeclineResult
@@ -55,18 +59,12 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
 import com.hookah.platform.backend.miniapp.venue.tables.TableNumberConflictException
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableOwnerSummary
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.client.j2se.MatrixToImageWriter
-import com.google.zxing.qrcode.QRCodeWriter
-import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
-import com.hookah.platform.backend.miniapp.venue.VenueStatus
-import com.hookah.platform.backend.promotions.PromotionRuleCartItem
-import com.hookah.platform.backend.promotions.PromotionRuleEngine
-import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
-import com.hookah.platform.backend.promotions.PromotionRulePreviewResult
 import com.hookah.platform.backend.platform.OwnerAccountAssignmentPreparationResult
 import com.hookah.platform.backend.platform.PlatformOwnerAssignmentResult
 import com.hookah.platform.backend.platform.PlatformPriceScheduleItem
+import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
+import com.hookah.platform.backend.platform.PlatformSubscriptionSnapshot
+import com.hookah.platform.backend.platform.PlatformSubscriptionSummary
 import com.hookah.platform.backend.platform.PlatformVenueDetail
 import com.hookah.platform.backend.platform.PlatformVenueFilter
 import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
@@ -74,55 +72,62 @@ import com.hookah.platform.backend.platform.PlatformVenueOwner
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.PlatformVenueStatusAudit
 import com.hookah.platform.backend.platform.PlatformVenueSummary
-import com.hookah.platform.backend.platform.PlatformSubscriptionSnapshot
-import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
-import com.hookah.platform.backend.platform.PlatformSubscriptionSummary
-import com.hookah.platform.backend.platform.VenueOwnerAccountVenue
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
+import com.hookah.platform.backend.platform.VenueOwnerAccountVenue
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequestDecisionResult
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequestSummary
 import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
 import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
-import com.hookah.platform.backend.telegram.db.ChatContextRepository
+import com.hookah.platform.backend.promotions.PromotionRuleCartItem
+import com.hookah.platform.backend.promotions.PromotionRuleEngine
+import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
+import com.hookah.platform.backend.promotions.PromotionRulePreviewResult
+import com.hookah.platform.backend.telegram.ai.AiTelegramHandler
+import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
+import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
+import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
+import com.hookah.platform.backend.telegram.db.GuestProfile
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
-import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
+import com.hookah.platform.backend.telegram.db.LinkAndBindResult
+import com.hookah.platform.backend.telegram.db.LoyaltyCartItem
+import com.hookah.platform.backend.telegram.db.LoyaltyProgram
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramTarget
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramTargetType
+import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
+import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
-import com.hookah.platform.backend.telegram.db.LinkAndBindResult
 import com.hookah.platform.backend.telegram.db.OrdersRepository
-import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.PromotionPlacement
+import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
+import com.hookah.platform.backend.telegram.db.PromotionPlacementStatus
+import com.hookah.platform.backend.telegram.db.PromotionPlacementSurface
+import com.hookah.platform.backend.telegram.db.PromotionRewardMode
+import com.hookah.platform.backend.telegram.db.PromotionRuleTargetMenuItem
+import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
+import com.hookah.platform.backend.telegram.db.PromotionRuleType
+import com.hookah.platform.backend.telegram.db.PromotionVenueFeedItem
+import com.hookah.platform.backend.telegram.db.PromotionVenuePlacement
+import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
 import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.StaffCallStatusUpdateResult
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeFormat
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffChatStatus
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
-import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
 import com.hookah.platform.backend.telegram.db.TelegramUserContact
+import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
 import com.hookah.platform.backend.telegram.db.UnlinkResult
 import com.hookah.platform.backend.telegram.db.UserActiveOrderItemSummary
-import com.hookah.platform.backend.telegram.db.GuestProfile
-import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
-import com.hookah.platform.backend.telegram.db.LoyaltyCartItem
-import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
-import com.hookah.platform.backend.telegram.db.LoyaltyProgram
-import com.hookah.platform.backend.telegram.db.LoyaltyProgramTarget
-import com.hookah.platform.backend.telegram.db.LoyaltyProgramTargetType
-import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
-import com.hookah.platform.backend.telegram.db.LoyaltyRepository
-import com.hookah.platform.backend.telegram.db.PromotionPlacement
-import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
-import com.hookah.platform.backend.telegram.db.PromotionPlacementStatus
-import com.hookah.platform.backend.telegram.db.PromotionPlacementSurface
-import com.hookah.platform.backend.telegram.db.PromotionVenuePlacement
-import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHours
@@ -137,22 +142,16 @@ import com.hookah.platform.backend.telegram.db.VenueNotificationSetting
 import com.hookah.platform.backend.telegram.db.VenuePromotion
 import com.hookah.platform.backend.telegram.db.VenuePromotionMedia
 import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
-import com.hookah.platform.backend.telegram.db.PromotionVenueFeedItem
+import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionRule
 import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
-import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
 import com.hookah.platform.backend.telegram.db.VenuePromotionTemplateType
-import com.hookah.platform.backend.telegram.db.PromotionRuleTargetMenuItem
-import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
-import com.hookah.platform.backend.telegram.db.PromotionRuleType
-import com.hookah.platform.backend.telegram.db.PromotionRewardMode
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettings
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueStatsReport
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
-import com.hookah.platform.backend.telegram.ai.AiTelegramHandler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -164,10 +163,14 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
+import java.io.ByteArrayOutputStream
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.security.SecureRandom
 import java.time.DateTimeException
+import java.time.DayOfWeek
 import java.time.Duration
 import java.time.Instant
-import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -175,12 +178,8 @@ import java.time.MonthDay
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
-import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-import java.io.ByteArrayOutputStream
 
 class TelegramBotRouter(
     private val config: TelegramBotConfig,
@@ -215,22 +214,26 @@ class TelegramBotRouter(
     private val tableSessionRepository: TableSessionRepository,
     private val guestTabsRepository: GuestTabsRepository,
     private val platformVenueRepository: PlatformVenueRepository = PlatformVenueRepository(null),
-    private val platformSubscriptionSettingsRepository: PlatformSubscriptionSettingsRepository = PlatformSubscriptionSettingsRepository(null),
+    private val platformSubscriptionSettingsRepository: PlatformSubscriptionSettingsRepository =
+        PlatformSubscriptionSettingsRepository(null),
     private val platformVenueMemberRepository: PlatformVenueMemberRepository = PlatformVenueMemberRepository(null),
     private val venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     private val tableSessionTtl: Duration,
     private val json: Json,
-    private val venueConnectionRequestRepository: VenueConnectionRequestRepository = VenueConnectionRequestRepository(null),
+    private val venueConnectionRequestRepository: VenueConnectionRequestRepository =
+        VenueConnectionRequestRepository(null),
     private val scope: CoroutineScope,
     private val venueInfoSectionsRepository: VenueInfoSectionsRepository = VenueInfoSectionsRepository(null),
-    private val venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository = VenueInfoSectionMediaRepository(null),
+    private val venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository =
+        VenueInfoSectionMediaRepository(null),
     private val venueOrdersRepository: VenueOrdersRepository = VenueOrdersRepository(null),
     private val venueStatsRepository: VenueStatsRepository = VenueStatsRepository(null),
     private val venuePromotionRepository: VenuePromotionRepository = VenuePromotionRepository(null),
     private val venuePromotionMediaRepository: VenuePromotionMediaRepository = VenuePromotionMediaRepository(null),
     private val venuePromotionRuleRepository: VenuePromotionRuleRepository = VenuePromotionRuleRepository(null),
     private val promotionPlacementRepository: PromotionPlacementRepository = PromotionPlacementRepository(null),
-    private val promotionVenuePlacementRepository: PromotionVenuePlacementRepository = PromotionVenuePlacementRepository(null),
+    private val promotionVenuePlacementRepository: PromotionVenuePlacementRepository =
+        PromotionVenuePlacementRepository(null),
     private val loyaltyRepository: LoyaltyRepository = LoyaltyRepository(null),
     private val venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
     private val visitRepository: VisitRepository = VisitRepository(null),
@@ -383,7 +386,7 @@ class TelegramBotRouter(
     private val bookingDateMorePageSize = 6
     private val bookingDateMaxDaysAhead = 8
     private val hookahSectionName = "кальянное меню"
-    private val DEFAULT_HOOKAH_FLAVOR_PROFILES =
+    private val defaultHookahFlavorProfiles =
         listOf(
             "Ягодный",
             "Фруктовый",
@@ -394,7 +397,7 @@ class TelegramBotRouter(
             "Пряный",
             "Цветочный",
         )
-    private val OBSOLETE_HOOKAH_FLAVOR_PROFILE_VALUES =
+    private val obsoleteHookahFlavorProfileValues =
         listOf(
             "Яблоко",
             "Виноград",
@@ -422,8 +425,8 @@ class TelegramBotRouter(
             "Освежающий/мятный",
             "Освежающий / Мятный",
         )
-    private val OBSOLETE_HOOKAH_FLAVOR_PROFILE_KEYS =
-        OBSOLETE_HOOKAH_FLAVOR_PROFILE_VALUES.map { normalizeFlavorNameKey(it) }.toSet()
+    private val obsoleteHookahFlavorProfileKeys =
+        obsoleteHookahFlavorProfileValues.map { normalizeFlavorNameKey(it) }.toSet()
 
     private data class BotDraftCartKey(
         val chatId: Long,
@@ -624,7 +627,10 @@ class TelegramBotRouter(
         if (command != null && state.state == DialogStateType.BOT_MENU_CART_WAIT_COMMENT) {
             dialogStateRepository.clear(chatId)
         }
-        if (command != null && (state.state == DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT || isFeedbackReplyDialogState(state.state))) {
+        if (
+            command != null &&
+            (state.state == DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT || isFeedbackReplyDialogState(state.state))
+        ) {
             dialogStateRepository.clear(chatId)
         }
         if (command != null && state.state == DialogStateType.VENUE_FEEDBACK_WAIT_PUBLIC_REVIEW_URL) {
@@ -633,13 +639,25 @@ class TelegramBotRouter(
         if (command != null && AiTelegramHandler.isDialogState(state.state)) {
             dialogStateRepository.clear(chatId)
         }
-        if (!text.isNullOrBlank() && isVenueConnectionDialogState(state.state) && isVenueConnectionInterruptAction(text)) {
+        if (
+            !text.isNullOrBlank() &&
+            isVenueConnectionDialogState(state.state) &&
+            isVenueConnectionInterruptAction(text)
+        ) {
             dialogStateRepository.clear(chatId)
         }
-        if (!text.isNullOrBlank() && isOwnerVenueTermsDialogState(state.state) && isOwnerVenueTermsInterruptAction(text)) {
+        if (
+            !text.isNullOrBlank() &&
+            isOwnerVenueTermsDialogState(state.state) &&
+            isOwnerVenueTermsInterruptAction(text)
+        ) {
             dialogStateRepository.clear(chatId)
         }
-        if (!text.isNullOrBlank() && isOwnerVenueProfileDialogState(state.state) && isOwnerVenueProfileInterruptAction(text)) {
+        if (
+            !text.isNullOrBlank() &&
+            isOwnerVenueProfileDialogState(state.state) &&
+            isOwnerVenueProfileInterruptAction(text)
+        ) {
             dialogStateRepository.clear(chatId)
         }
         if (
@@ -652,7 +670,11 @@ class TelegramBotRouter(
         if (!text.isNullOrBlank() && isGuestProfileDialogState(state.state) && isBotNavigationActionText(text)) {
             dialogStateRepository.clear(chatId)
         }
-        if (!text.isNullOrBlank() && state.state == DialogStateType.BOT_MENU_CART_WAIT_COMMENT && isBotNavigationActionText(text)) {
+        if (
+            !text.isNullOrBlank() &&
+            state.state == DialogStateType.BOT_MENU_CART_WAIT_COMMENT &&
+            isBotNavigationActionText(text)
+        ) {
             dialogStateRepository.clear(chatId)
         }
         if (command != null) {
@@ -716,8 +738,17 @@ class TelegramBotRouter(
             text == "🎁 Акции заведения" -> showCurrentVenuePromotions(chatId)
             text == "🪑 Я за столом / У меня QR" -> showTableQrEntryHint(chatId)
             text == "📄 Мои заказы и брони" -> showMyOrdersAndBookings(chatId, from)
-            text == "📜 История посещений" -> showGuestVisitHistory(chatId, from?.id ?: chatContextRepository.get(chatId)?.userId)
-            text == "📜 История" -> showGuestVisitHistory(chatId, from?.id ?: chatContextRepository.get(chatId)?.userId, tableContextBack = true)
+            text == "📜 История посещений" ->
+                showGuestVisitHistory(
+                    chatId,
+                    from?.id ?: chatContextRepository.get(chatId)?.userId,
+                )
+            text == "📜 История" ->
+                showGuestVisitHistory(
+                    chatId,
+                    from?.id ?: chatContextRepository.get(chatId)?.userId,
+                    tableContextBack = true,
+                )
             text == "⭐ Любимое" -> showFavoriteItemsForCurrentTable(chatId)
             text == "👤 Мой профиль" || text == "👤 Профиль" -> showGuestProfile(chatId, from)
             text == "🤝 Добавить свою кальянную" -> showAddVenueEntry(chatId, from)
@@ -1431,9 +1462,19 @@ class TelegramBotRouter(
             data?.startsWith("owner_venue_description_text:") == true ->
                 promptOwnerVenueDescriptionSectionText(chatId, callbackQuery.from.id, data)
             data?.startsWith("owner_venue_description_media_done:") == true ->
-                finishOwnerVenueDescriptionSectionMediaUpload(chatId, callbackQuery.from.id, data, "owner_venue_description_media_done:")
+                finishOwnerVenueDescriptionSectionMediaUpload(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    "owner_venue_description_media_done:",
+                )
             data?.startsWith("owner_venue_description_media_back:") == true ->
-                finishOwnerVenueDescriptionSectionMediaUpload(chatId, callbackQuery.from.id, data, "owner_venue_description_media_back:")
+                finishOwnerVenueDescriptionSectionMediaUpload(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    "owner_venue_description_media_back:",
+                )
             data?.startsWith("owner_venue_description_media:") == true ->
                 promptOwnerVenueDescriptionSectionMedia(chatId, callbackQuery.from.id, data)
             data?.startsWith("owner_venue_description_media_delete:") == true ->
@@ -1723,9 +1764,19 @@ class TelegramBotRouter(
             data?.startsWith("venue_settings_toggle_orders:") == true ->
                 toggleVenueSettingsNotification(chatId, callbackQuery.from.id, data, VenueNotificationSetting.ORDERS)
             data?.startsWith("venue_settings_toggle_staff_calls:") == true ->
-                toggleVenueSettingsNotification(chatId, callbackQuery.from.id, data, VenueNotificationSetting.STAFF_CALLS)
+                toggleVenueSettingsNotification(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    VenueNotificationSetting.STAFF_CALLS,
+                )
             data?.startsWith("venue_settings_toggle_cancellations:") == true ->
-                toggleVenueSettingsNotification(chatId, callbackQuery.from.id, data, VenueNotificationSetting.CANCELLATIONS)
+                toggleVenueSettingsNotification(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    VenueNotificationSetting.CANCELLATIONS,
+                )
             data?.startsWith("venue_staff_chat_root:") == true ->
                 showVenueStaffChatRootByCallback(chatId, callbackQuery.from.id, data)
             data?.startsWith("venue_staff_chat_generate:") == true ->
@@ -1762,12 +1813,20 @@ class TelegramBotRouter(
             data == "guest_miniapp_unavailable" -> enqueueMessage(chatId, miniAppUnavailableMessage())
             data == "continue_in_bot" -> continueInBot(chatId)
             data == "relocation_call_staff" -> createRelocationStaffCall(chatId)
-            data == "relocation_back_to_table_actions" || data == "table_actions_back" -> showRelocationBackToTableActions(chatId)
+            data == "relocation_back_to_table_actions" || data == "table_actions_back" ->
+                showRelocationBackToTableActions(
+                    chatId,
+                )
             data == "gp_all" -> showGuestAllPromotions(chatId)
             data?.startsWith("gp_page:") == true -> showGuestAllPromotionsPage(chatId, data)
             data?.startsWith("gp_v:") == true -> showGuestVenuePromotions(chatId, data)
             data?.startsWith("gp_o:") == true -> showGuestPromotionDetail(chatId, data)
-            data == "bot_menu_reorder_entry" -> showBotMenu(chatId, reorderMode = true, sourceMessageId = sourceMessageId)
+            data == "bot_menu_reorder_entry" ->
+                showBotMenu(
+                    chatId,
+                    reorderMode = true,
+                    sourceMessageId = sourceMessageId,
+                )
             data == "bot_menu_back_categories" -> {
                 logger.warn(
                     "CALLBACK back_categories data={}",
@@ -1794,7 +1853,12 @@ class TelegramBotRouter(
             data?.startsWith("bot_menu_item_option_add_to_cart:") == true ->
                 addBotMenuItemOptionToCart(chatId, data, sourceMessageId)
             data?.startsWith("bot_menu_item_add:") == true -> showBotMenuItemDetails(chatId, data, sourceMessageId)
-            data?.startsWith("bot_menu_item_add_to_cart:") == true -> showBotMenuItemDetails(chatId, data, sourceMessageId)
+            data?.startsWith("bot_menu_item_add_to_cart:") == true ->
+                showBotMenuItemDetails(
+                    chatId,
+                    data,
+                    sourceMessageId,
+                )
             data?.startsWith("bot_menu_item_reorder:") == true ->
                 reorderBotMenuItem(chatId, data, callbackQuery.id)
             data == "bot_menu_item_cart" -> showBotMenuCart(chatId, sourceMessageId)
@@ -2056,7 +2120,14 @@ class TelegramBotRouter(
     ) {
         if (from?.id == null) {
             enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
-            callbackQueryId?.let { enqueueCallbackAnswer(chatId, it, text = "Не удалось открыть профиль", showAlert = true) }
+            callbackQueryId?.let {
+                enqueueCallbackAnswer(
+                    chatId,
+                    it,
+                    text = "Не удалось открыть профиль",
+                    showAlert = true,
+                )
+            }
             return
         }
         dialogStateRepository.set(chatId, DialogState(DialogStateType.GUEST_PROFILE_WAIT_NAME))
@@ -2104,7 +2175,14 @@ class TelegramBotRouter(
         val userId = from?.id
         if (userId == null) {
             enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
-            callbackQueryId?.let { enqueueCallbackAnswer(chatId, it, text = "Не удалось открыть профиль", showAlert = true) }
+            callbackQueryId?.let {
+                enqueueCallbackAnswer(
+                    chatId,
+                    it,
+                    text = "Не удалось открыть профиль",
+                    showAlert = true,
+                )
+            }
             return
         }
         val profile = loadGuestProfile(userId)
@@ -2176,8 +2254,7 @@ class TelegramBotRouter(
             .onFailure { logBestEffort("load guest profile", it) }
             .getOrNull()
 
-    private suspend fun loadGuestDisplayName(userId: Long): String? =
-        loadGuestProfile(userId)?.guestDisplayName
+    private suspend fun loadGuestDisplayName(userId: Long): String? = loadGuestProfile(userId)?.guestDisplayName
 
     private fun buildGuestProfileText(profile: GuestProfile?): String =
         buildString {
@@ -2589,10 +2666,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val draft = parseBotVenueBookingCommentData(data, "bot_catalog_venue_book_comment_prompt:") ?: run {
-            enqueueMessage(chatId, "Не удалось продолжить бронирование. Попробуйте ещё раз.")
-            return
-        }
+        val draft =
+            parseBotVenueBookingCommentData(data, "bot_catalog_venue_book_comment_prompt:") ?: run {
+                enqueueMessage(chatId, "Не удалось продолжить бронирование. Попробуйте ещё раз.")
+                return
+            }
         val venue = loadCatalogVenueById(chatId, draft.venueId) ?: return
         val bookingHours = loadBookingHours(chatId, venue, draft.date) ?: return
         val timeSlots =
@@ -2630,10 +2708,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val draft = parseBotVenueBookingCommentData(data, "bot_catalog_venue_book_comment_skip:") ?: run {
-            enqueueMessage(chatId, "Не удалось продолжить бронирование. Попробуйте ещё раз.")
-            return
-        }
+        val draft =
+            parseBotVenueBookingCommentData(data, "bot_catalog_venue_book_comment_skip:") ?: run {
+                enqueueMessage(chatId, "Не удалось продолжить бронирование. Попробуйте ещё раз.")
+                return
+            }
         val venue = loadCatalogVenueById(chatId, draft.venueId) ?: return
         val bookingHours = loadBookingHours(chatId, venue, draft.date) ?: return
         val timeSlots =
@@ -2780,12 +2859,12 @@ class TelegramBotRouter(
                         bookingId = editContext.bookingId,
                         venueId = draft.venueId,
                         userId = draft.userId,
-	                        scheduledAt = scheduledAt,
-	                        partySize = partySize,
-	                        comment = draft.comment,
-	                        venueZoneId = venueZoneId,
-                            serviceDate = draft.date,
-	                    )
+                        scheduledAt = scheduledAt,
+                        partySize = partySize,
+                        comment = draft.comment,
+                        venueZoneId = venueZoneId,
+                        serviceDate = draft.date,
+                    )
                 } catch (e: DatabaseUnavailableException) {
                     botBookingEditContexts.remove(chatId)
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -2798,7 +2877,7 @@ class TelegramBotRouter(
             }
             enqueueMessage(
                 chatId,
-                    "✅ Бронь обновлена\n" +
+                "✅ Бронь обновлена\n" +
                     "${formatBookingDisplayLabel(updatedBooking)}\n\n" +
                     "Кальянная: ${venue.name}\n" +
                     "$guestVisitText\n" +
@@ -2824,12 +2903,12 @@ class TelegramBotRouter(
                 guestBookingRepository.create(
                     venueId = draft.venueId,
                     userId = draft.userId,
-	                    scheduledAt = scheduledAt,
-	                    partySize = partySize,
-	                    comment = draft.comment,
-	                    venueZoneId = venueZoneId,
-                        serviceDate = draft.date,
-	                )
+                    scheduledAt = scheduledAt,
+                    partySize = partySize,
+                    comment = draft.comment,
+                    venueZoneId = venueZoneId,
+                    serviceDate = draft.date,
+                )
             } catch (e: DatabaseUnavailableException) {
                 botBookingEditContexts.remove(chatId)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -2900,7 +2979,9 @@ class TelegramBotRouter(
         sendBotBookingScreen(
             chatId = chatId,
             venueId = venue.id,
-            text = "🪑 ${venue.name}\n🗓 Смена: ${date.format(bookingDateConfirmFormatter)}\nВыберите время бронирования.$overnightHint",
+            text = "🪑 ${venue.name}\n🗓 Смена: ${date.format(
+                bookingDateConfirmFormatter,
+            )}\nВыберите время бронирования.$overnightHint",
             replyMarkup =
                 TelegramKeyboards.inlineBotVenueBookingTimeActions(
                     venueId = venue.id,
@@ -2931,7 +3012,7 @@ class TelegramBotRouter(
                     venueId = venue.id,
                     isoDate = date.toString(),
                     time = time,
-                    backCallbackData = "bot_catalog_venue_book_date:${venue.id}:${date}",
+                    backCallbackData = "bot_catalog_venue_book_date:${venue.id}:$date",
                 ),
         )
     }
@@ -3126,8 +3207,10 @@ class TelegramBotRouter(
         val supportedMedia =
             mediaAttachments.filter { attachment ->
                 attachment.telegramFileId.isNotBlank() &&
-                    (attachment.mediaType.equals("image", ignoreCase = true) ||
-                        attachment.mediaType.equals("pdf", ignoreCase = true))
+                    (
+                        attachment.mediaType.equals("image", ignoreCase = true) ||
+                            attachment.mediaType.equals("pdf", ignoreCase = true)
+                    )
             }
         val sectionTitle = formatGuestVenueInfoSectionTitle(section)
         val sectionText = section.textContent?.trim()?.takeIf { it.isNotBlank() } ?: "Раздел пока не заполнен."
@@ -3191,7 +3274,7 @@ class TelegramBotRouter(
                 logger.warn("failed to load my orders and bookings for user_id={}", userId, e)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
-        }
+            }
         if (bookings.isEmpty() && activeOrders.isEmpty()) {
             enqueueMessage(
                 chatId,
@@ -3520,7 +3603,11 @@ class TelegramBotRouter(
         detail: GuestVisitDetail,
         currentItemsById: Map<Long, MenuItemModel>,
     ): GuestVisitRepeatPlan {
-        val historicalItems = detail.orders.flatMap { order -> order.items }.filterNot { item -> item.isPromotionReward }
+        val historicalItems =
+            detail.orders.flatMap {
+                    order ->
+                order.items
+            }.filterNot { item -> item.isPromotionReward }
         if (historicalItems.isEmpty()) {
             return GuestVisitRepeatPlan(repeatableItems = emptyList(), unavailableItems = emptyList())
         }
@@ -3597,8 +3684,7 @@ class TelegramBotRouter(
     private fun formatGuestVisitRepeatItemName(
         name: String,
         qty: Int,
-    ): String =
-        "$name ×$qty"
+    ): String = "$name ×$qty"
 
     private fun formatGuestVisitHistoryButton(
         visit: GuestVisitHistoryItem,
@@ -3705,9 +3791,18 @@ class TelegramBotRouter(
         val promoDiscountMinor = items.sumOf { item -> item.promoDiscountMinor.coerceAtLeast(0L) }
         if (promoDiscountMinor <= 0L) return null
         val rewardItems = items.filter { item -> item.isPromotionReward && item.promoDiscountMinor > 0L }
-        val currency = items.firstOrNull { item -> item.promoDiscountMinor > 0L && !item.currency.isNullOrBlank() }?.currency ?: return null
+        val currency =
+            items.firstOrNull {
+                    item ->
+                item.promoDiscountMinor > 0L && !item.currency.isNullOrBlank()
+            }?.currency ?: return null
         return if (rewardItems.size == 1 && rewardItems.single().promoDiscountMinor == promoDiscountMinor) {
-            listOf("🎁 ${rewardItems.single().itemName} в подарок: −${formatGuestVisitMoney(promoDiscountMinor, currency)}")
+            listOf(
+                "🎁 ${rewardItems.single().itemName} в подарок: −${formatGuestVisitMoney(
+                    promoDiscountMinor,
+                    currency,
+                )}",
+            )
         } else {
             listOf("🎁 Акция: −${formatGuestVisitMoney(promoDiscountMinor, currency)}")
         }
@@ -3802,10 +3897,11 @@ class TelegramBotRouter(
                 venueId = canceled.venueId,
                 bookingId = canceled.id,
                 event = BookingStaffNotificationEvent.CANCELLED,
-                        scheduledAtText = formatBookingInstantForStaff(
-                            canceled.scheduledAt,
-                            resolveVenueZoneId(canceled.venueId),
-                        ),
+                scheduledAtText =
+                    formatBookingInstantForStaff(
+                        canceled.scheduledAt,
+                        resolveVenueZoneId(canceled.venueId),
+                    ),
                 partySize = canceled.partySize,
                 comment = canceled.comment,
                 displayNumber = canceled.displayNumber,
@@ -4076,7 +4172,11 @@ class TelegramBotRouter(
                 append(buildVenueStaffBookingText(displayBooking, zoneId = resolveVenueZoneId(displayBooking.venueId)))
                 append("\n\nВыберите причину отмены. Гость увидит её в уведомлении.")
             }
-        val replyMarkup = TelegramKeyboards.inlineVenueStaffBookingCancelReasonActions(displayBooking.venueId, displayBooking.id)
+        val replyMarkup =
+            TelegramKeyboards.inlineVenueStaffBookingCancelReasonActions(
+                displayBooking.venueId,
+                displayBooking.id,
+            )
         if (sourceMessageId != null) {
             enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
         } else {
@@ -4394,10 +4494,11 @@ class TelegramBotRouter(
                 venueId = booking.venueId,
                 bookingId = booking.id,
                 event = BookingStaffNotificationEvent.VENUE_CANCELLED,
-                scheduledAtText = formatBookingInstantForStaff(
-                    booking.scheduledAt,
-                    resolveVenueZoneId(booking.venueId),
-                ),
+                scheduledAtText =
+                    formatBookingInstantForStaff(
+                        booking.scheduledAt,
+                        resolveVenueZoneId(booking.venueId),
+                    ),
                 partySize = booking.partySize,
                 comment = booking.comment,
                 displayNumber = booking.displayNumber,
@@ -4799,7 +4900,9 @@ class TelegramBotRouter(
                 append('\n').append("Заведение: ").append(venueName)
                 append('\n').append("Гость: ").append(guestDisplayName)
                 append('\n').append("Смена: ").append(formatWeekdayFull(serviceDate.dayOfWeek))
-                append('\n').append("Визит: ").append(formatStaffBookingVisitText(serviceDate, booking.scheduledAt, zoneId))
+                append(
+                    '\n',
+                ).append("Визит: ").append(formatStaffBookingVisitText(serviceDate, booking.scheduledAt, zoneId))
                 append('\n').append("Текст: ").append(replyText)
             }
         enqueueGroupMessageWithoutReplyKeyboard(staffChatId, staffText)
@@ -4813,16 +4916,17 @@ class TelegramBotRouter(
         callbackQueryId: String?,
         data: String,
     ) {
-        val bookingId = parseBookingReminderBookingId(data, "br_ok:") ?: run {
-            answerBookingCallbackOrMessage(
-                chatId = chatId,
-                callbackQueryId = callbackQueryId,
-                text = "Не удалось подтвердить",
-                fallbackMessage = "Не удалось подтвердить бронь. Попробуйте ещё раз.",
-                showAlert = true,
-            )
-            return
-        }
+        val bookingId =
+            parseBookingReminderBookingId(data, "br_ok:") ?: run {
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Не удалось подтвердить",
+                    fallbackMessage = "Не удалось подтвердить бронь. Попробуйте ещё раз.",
+                    showAlert = true,
+                )
+                return
+            }
         val booking =
             try {
                 guestBookingRepository.markGuestConfirmed(bookingId = bookingId, userId = user.id)
@@ -4884,7 +4988,14 @@ class TelegramBotRouter(
         callbackQueryId: String?,
         data: String,
     ) {
-        val booking = loadActiveGuestBookingFromReminder(chatId, callbackQueryId, user.id, data, "br_cancel_yes:") ?: return
+        val booking =
+            loadActiveGuestBookingFromReminder(
+                chatId,
+                callbackQueryId,
+                user.id,
+                data,
+                "br_cancel_yes:",
+            ) ?: return
         val canceled =
             try {
                 guestBookingRepository.cancelByGuest(
@@ -4918,10 +5029,11 @@ class TelegramBotRouter(
                 venueId = canceled.venueId,
                 bookingId = canceled.id,
                 event = BookingStaffNotificationEvent.CANCELLED,
-                scheduledAtText = formatBookingInstantForStaff(
-                    canceled.scheduledAt,
-                    resolveVenueZoneId(canceled.venueId),
-                ),
+                scheduledAtText =
+                    formatBookingInstantForStaff(
+                        canceled.scheduledAt,
+                        resolveVenueZoneId(canceled.venueId),
+                    ),
                 partySize = canceled.partySize,
                 comment = canceled.comment,
                 displayNumber = canceled.displayNumber,
@@ -4975,16 +5087,17 @@ class TelegramBotRouter(
         callbackQueryId: String?,
         data: String,
     ) {
-        val (visitId, rating) = parseVisitFeedbackRatingData(data) ?: run {
-            answerBookingCallbackOrMessage(
-                chatId = chatId,
-                callbackQueryId = callbackQueryId,
-                text = "Не удалось сохранить оценку",
-                fallbackMessage = "Не удалось сохранить оценку. Попробуйте ещё раз.",
-                showAlert = true,
-            )
-            return
-        }
+        val (visitId, rating) =
+            parseVisitFeedbackRatingData(data) ?: run {
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Не удалось сохранить оценку",
+                    fallbackMessage = "Не удалось сохранить оценку. Попробуйте ещё раз.",
+                    showAlert = true,
+                )
+                return
+            }
         val feedback =
             try {
                 visitFeedbackRepository.submitRating(visitId = visitId, userId = user.id, rating = rating)
@@ -5075,10 +5188,10 @@ class TelegramBotRouter(
             try {
                 venueSettingsRepository.markPublicReviewCtaShown(userId, feedback.venueId)
                 true
-        } catch (e: DatabaseUnavailableException) {
-            logBestEffort("mark public review CTA shown", e)
-            false
-        }
+            } catch (e: DatabaseUnavailableException) {
+                logBestEffort("mark public review CTA shown", e)
+                false
+            }
         if (!markedShown) return "Спасибо за оценку!" to null
         return (
             "Спасибо за оценку!\n\n" +
@@ -5560,16 +5673,17 @@ class TelegramBotRouter(
         data: String,
         prefix: String,
     ): com.hookah.platform.backend.miniapp.guest.db.BookingRecord? {
-        val bookingId = parseBookingReminderBookingId(data, prefix) ?: run {
-            answerBookingCallbackOrMessage(
-                chatId = chatId,
-                callbackQueryId = callbackQueryId,
-                text = "Не удалось открыть бронь",
-                fallbackMessage = "Не удалось открыть бронь. Попробуйте ещё раз.",
-                showAlert = true,
-            )
-            return null
-        }
+        val bookingId =
+            parseBookingReminderBookingId(data, prefix) ?: run {
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Не удалось открыть бронь",
+                    fallbackMessage = "Не удалось открыть бронь. Попробуйте ещё раз.",
+                    showAlert = true,
+                )
+                return null
+            }
         val booking =
             try {
                 guestBookingRepository.findActiveByGuest(bookingId = bookingId, userId = userId)
@@ -5651,8 +5765,7 @@ class TelegramBotRouter(
     private fun formatBookingInstantForStaff(
         value: Instant,
         zoneId: ZoneId = ZoneId.systemDefault(),
-    ): String =
-        LocalDateTime.ofInstant(value, zoneId).format(bookingDateTimeFormatter)
+    ): String = LocalDateTime.ofInstant(value, zoneId).format(bookingDateTimeFormatter)
 
     private suspend fun buildGuestBookingDraftVisitText(
         chatId: Long,
@@ -5660,8 +5773,9 @@ class TelegramBotRouter(
         draft: BotBookingDraft,
         zoneId: ZoneId,
     ): String? {
-        val localTime = runCatching { LocalTime.parse(draft.time, bookingTimeFormatter) }.getOrNull()
-            ?: return null
+        val localTime =
+            runCatching { LocalTime.parse(draft.time, bookingTimeFormatter) }.getOrNull()
+                ?: return null
         val bookingHours = loadBookingHours(chatId, venue, draft.date) ?: return null
         val scheduledAt =
             actualBookingLocalDateTime(
@@ -5776,8 +5890,7 @@ class TelegramBotRouter(
     private fun orderBatchGuestLine(batch: OrderBatchDetail): String =
         "Гость: ${formatGuestDisplayNameForStaff(batch.guestDisplayName)}"
 
-    private fun orderDetailGuestSummaryLine(detail: OrderDetail): String =
-        orderBatchesGuestSummaryLine(detail.batches)
+    private fun orderDetailGuestSummaryLine(detail: OrderDetail): String = orderBatchesGuestSummaryLine(detail.batches)
 
     private fun orderBatchesGuestSummaryLine(batches: List<OrderBatchDetail>): String {
         val guests =
@@ -5899,7 +6012,7 @@ class TelegramBotRouter(
             }
             val promoSummary =
                 formatPromotionDiscountSummary(order.promotionDiscounts)
-                ?: formatGuestOrderSummaryPromoSummary(order.items, label = "Акция")?.let { listOf(it) }
+                    ?: formatGuestOrderSummaryPromoSummary(order.items, label = "Акция")?.let { listOf(it) }
             promoSummary?.forEach { promoText ->
                 append("\n").append(promoText)
             }
@@ -5954,7 +6067,7 @@ class TelegramBotRouter(
             }
             val promoSummary =
                 formatPromotionDiscountSummary(order.promotionDiscounts)
-                ?: formatGuestActiveOrderPromoSummary(items, label = "Акция")?.let { listOf(it) }
+                    ?: formatGuestActiveOrderPromoSummary(items, label = "Акция")?.let { listOf(it) }
             promoSummary?.forEach { promoText ->
                 append("\n").append(promoText)
             }
@@ -5990,10 +6103,10 @@ class TelegramBotRouter(
             val payableMinor =
                 guestOrderItemPayableMinor(
                     priceMinor = item.priceMinor,
-                        qty = item.qty,
-                        discountPercent = item.discountPercent,
-                        promoDiscountMinor = item.promoDiscountMinor,
-                    )
+                    qty = item.qty,
+                    discountPercent = item.discountPercent,
+                    promoDiscountMinor = item.promoDiscountMinor,
+                )
             if (payableMinor != null && !item.currency.isNullOrBlank()) {
                 totalMinor += payableMinor
                 if (totalCurrency == null) {
@@ -6012,10 +6125,10 @@ class TelegramBotRouter(
             val payableMinor =
                 guestOrderItemPayableMinor(
                     priceMinor = item.priceMinor,
-                        qty = item.qty,
-                        discountPercent = item.discountPercent,
-                        promoDiscountMinor = item.promoDiscountMinor,
-                    )
+                    qty = item.qty,
+                    discountPercent = item.discountPercent,
+                    promoDiscountMinor = item.promoDiscountMinor,
+                )
             if (payableMinor != null && !item.currency.isNullOrBlank()) {
                 totalMinor += payableMinor
                 if (totalCurrency == null) {
@@ -6033,7 +6146,11 @@ class TelegramBotRouter(
     ): String? {
         val totalMinor = items.sumOf { item -> item.promoDiscountMinor.coerceAtLeast(0L) }
         if (totalMinor <= 0L) return null
-        val currency = items.firstOrNull { item -> item.promoDiscountMinor > 0L && !item.currency.isNullOrBlank() }?.currency ?: return null
+        val currency =
+            items.firstOrNull {
+                    item ->
+                item.promoDiscountMinor > 0L && !item.currency.isNullOrBlank()
+            }?.currency ?: return null
         return "🎁 $label: −${formatCompactMoney(totalMinor, currency)}"
     }
 
@@ -6043,13 +6160,15 @@ class TelegramBotRouter(
     ): String? {
         val totalMinor = items.sumOf { item -> item.promoDiscountMinor.coerceAtLeast(0L) }
         if (totalMinor <= 0L) return null
-        val currency = items.firstOrNull { item -> item.promoDiscountMinor > 0L && !item.currency.isNullOrBlank() }?.currency ?: return null
+        val currency =
+            items.firstOrNull {
+                    item ->
+                item.promoDiscountMinor > 0L && !item.currency.isNullOrBlank()
+            }?.currency ?: return null
         return "🎁 $label: −${formatCompactMoney(totalMinor, currency)}"
     }
 
-    private fun formatPromotionDiscountSummary(
-        discounts: List<CreatedOrderPromotionDiscount>,
-    ): List<String>? =
+    private fun formatPromotionDiscountSummary(discounts: List<CreatedOrderPromotionDiscount>): List<String>? =
         formatPromotionDiscountLines(
             discounts.map { discount ->
                 PromotionDiscountTextLine(
@@ -6060,9 +6179,7 @@ class TelegramBotRouter(
             },
         )
 
-    private fun formatVenuePromotionDiscountSummary(
-        discounts: List<OrderPromotionDiscount>,
-    ): List<String>? =
+    private fun formatVenuePromotionDiscountSummary(discounts: List<OrderPromotionDiscount>): List<String>? =
         formatPromotionDiscountLines(
             discounts.map { discount ->
                 PromotionDiscountTextLine(
@@ -6073,9 +6190,7 @@ class TelegramBotRouter(
             },
         )
 
-    private fun formatGuestVisitPromotionDiscountSummary(
-        discounts: List<GuestVisitPromotionDiscount>,
-    ): List<String>? =
+    private fun formatGuestVisitPromotionDiscountSummary(discounts: List<GuestVisitPromotionDiscount>): List<String>? =
         formatPromotionDiscountLines(
             discounts.map { discount ->
                 PromotionDiscountTextLine(
@@ -6129,8 +6244,7 @@ class TelegramBotRouter(
         return (amountMinor - manualDiscountMinor - promoDiscountMinor.coerceAtLeast(0L)).coerceAtLeast(0L)
     }
 
-    private fun isMiniAppEntryAvailable(): Boolean =
-        config.miniAppEntryEnabled && config.webAppPublicUrl != null
+    private fun isMiniAppEntryAvailable(): Boolean = config.miniAppEntryEnabled && config.webAppPublicUrl != null
 
     private fun miniAppUnavailableMessage(): String =
         if (!config.miniAppEntryEnabled) {
@@ -6209,7 +6323,13 @@ class TelegramBotRouter(
             return
         }
         val context = resolveGuestContext(chatId) ?: return
-        val tableSessionId = botDraftCartSessionIds[BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)]
+        val tableSessionId =
+            botDraftCartSessionIds[
+                BotDraftCartKey(
+                    chatId = chatId,
+                    tableToken = context.table.tableToken,
+                ),
+            ]
         enqueueMessage(
             chatId,
             "📱 Mini App\nОткройте заказ по столу в Mini App. Если не загрузится, можно продолжить заказ в боте.",
@@ -6438,9 +6558,18 @@ class TelegramBotRouter(
 
     private suspend fun showCurrentVenuePromotions(chatId: Long) {
         when (val context = loadContext(chatId)) {
-            is LoadContextResult.Loaded -> showGuestVenuePromotions(chatId, context.context.table.venueId, tableContextBack = true)
+            is LoadContextResult.Loaded ->
+                showGuestVenuePromotions(
+                    chatId,
+                    context.context.table.venueId,
+                    tableContextBack = true,
+                )
             LoadContextResult.DatabaseUnavailable -> enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-            LoadContextResult.Missing -> enqueueMessage(chatId, "Акции заведения доступны после выбора заведения или входа по QR.")
+            LoadContextResult.Missing ->
+                enqueueMessage(
+                    chatId,
+                    "Акции заведения доступны после выбора заведения или входа по QR.",
+                )
         }
     }
 
@@ -6674,7 +6803,10 @@ class TelegramBotRouter(
                 ?.joinToString(", ")
                 ?.takeIf { it.isNotBlank() }
         return when {
-            city != null && shortAddress != null && !shortAddress.contains(city, ignoreCase = true) -> "$city, $shortAddress"
+            city != null &&
+                shortAddress != null &&
+                !shortAddress.contains(city, ignoreCase = true) ->
+                "$city, $shortAddress"
             shortAddress != null -> shortAddress
             city != null -> city
             else -> "Адрес уточняется"
@@ -6865,7 +6997,9 @@ class TelegramBotRouter(
             data.startsWith("vm_loyalty_n:") -> createVenueMarketingLoyaltyProgram(chatId, userId, data)
             data.startsWith("vm_loyalty_status:") -> updateVenueMarketingLoyaltyStatus(chatId, userId, data)
             data.startsWith("vm_loyalty_earn:") -> showVenueMarketingLoyaltyTargetScope(chatId, userId, data, "earn")
-            data.startsWith("vm_loyalty_reward:") -> showVenueMarketingLoyaltyTargetScope(chatId, userId, data, "reward")
+            data.startsWith(
+                "vm_loyalty_reward:",
+            ) -> showVenueMarketingLoyaltyTargetScope(chatId, userId, data, "reward")
             data.startsWith("vle_all:") -> updateVenueMarketingLoyaltyTargetAll(chatId, userId, data, "earn")
             data.startsWith("vlr_all:") -> updateVenueMarketingLoyaltyTargetAll(chatId, userId, data, "reward")
             data.startsWith("vle_items:") -> showVenueMarketingLoyaltyTargetItems(chatId, userId, data, "earn")
@@ -6968,10 +7102,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val venueId = parseOwnerVenueIdFromCallback(data, "vm_loyalty:") ?: run {
-            enqueueMessage(chatId, "Не удалось открыть лояльность. Попробуйте ещё раз.")
-            return
-        }
+        val venueId =
+            parseOwnerVenueIdFromCallback(data, "vm_loyalty:") ?: run {
+                enqueueMessage(chatId, "Не удалось открыть лояльность. Попробуйте ещё раз.")
+                return
+            }
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         val programs =
             try {
@@ -6990,7 +7125,9 @@ class TelegramBotRouter(
                 append("а бонус отображается в профиле.\n\n")
                 append("Гость копит только те кальяны, которые входят в условия программы. ")
                 append("Когда накопит нужное количество, в профиле появится бонус. ")
-                append("Например, если выбрать «каждый 6-й», гость оплачивает 5 кальянов, а 6-й получает бесплатно.\n\n")
+                append(
+                    "Например, если выбрать «каждый 6-й», гость оплачивает 5 кальянов, а 6-й получает бесплатно.\n\n",
+                )
                 if (program == null) {
                     append("Программа пока не настроена.")
                 } else {
@@ -7009,10 +7146,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val venueId = parseOwnerVenueIdFromCallback(data, "vm_loyalty_program:") ?: run {
-            enqueueMessage(chatId, "Не удалось открыть программу лояльности. Попробуйте ещё раз.")
-            return
-        }
+        val venueId =
+            parseOwnerVenueIdFromCallback(data, "vm_loyalty_program:") ?: run {
+                enqueueMessage(chatId, "Не удалось открыть программу лояльности. Попробуйте ещё раз.")
+                return
+            }
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         val program =
             try {
@@ -7056,10 +7194,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val venueId = parseOwnerVenueIdFromCallback(data, "vm_loyalty_setup:") ?: run {
-            enqueueMessage(chatId, "Не удалось настроить лояльность. Попробуйте ещё раз.")
-            return
-        }
+        val venueId =
+            parseOwnerVenueIdFromCallback(data, "vm_loyalty_setup:") ?: run {
+                enqueueMessage(chatId, "Не удалось настроить лояльность. Попробуйте ещё раз.")
+                return
+            }
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         enqueueMessage(
             chatId,
@@ -7076,10 +7215,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val venueId = parseOwnerVenueIdFromCallback(data, "vm_loyalty_custom:") ?: run {
-            enqueueMessage(chatId, "Не удалось настроить лояльность. Попробуйте ещё раз.")
-            return
-        }
+        val venueId =
+            parseOwnerVenueIdFromCallback(data, "vm_loyalty_custom:") ?: run {
+                enqueueMessage(chatId, "Не удалось настроить лояльность. Попробуйте ещё раз.")
+                return
+            }
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         dialogStateRepository.set(
             chatId,
@@ -7101,15 +7241,17 @@ class TelegramBotRouter(
         text: String,
         state: DialogState,
     ) {
-        val venueId = state.payload["venueId"]?.toLongOrNull() ?: run {
-            dialogStateRepository.clear(chatId)
-            enqueueMessage(chatId, "Не удалось настроить лояльность. Попробуйте ещё раз.")
-            return
-        }
-        val userId = user?.id ?: run {
-            enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
-            return
-        }
+        val venueId =
+            state.payload["venueId"]?.toLongOrNull() ?: run {
+                dialogStateRepository.clear(chatId)
+                enqueueMessage(chatId, "Не удалось настроить лояльность. Попробуйте ещё раз.")
+                return
+            }
+        val userId =
+            user?.id ?: run {
+                enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
+                return
+            }
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         val nthValue = text.trim().toIntOrNull()
         if (nthValue == null || nthValue !in 2..50) {
@@ -7129,10 +7271,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenueLoyaltyNthData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось создать программу лояльности. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenueLoyaltyNthData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось создать программу лояльности. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, nthValue) = parsed
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         saveVenueMarketingLoyaltyProgram(chatId, userId, venueId, nthValue)
@@ -7164,10 +7307,17 @@ class TelegramBotRouter(
         data: String,
         kind: String,
     ) {
-        val parsed = parseVenueLoyaltyProgramData(data, if (kind == "earn") "vm_loyalty_earn:" else "vm_loyalty_reward:") ?: run {
-            enqueueMessage(chatId, "Не удалось открыть настройку лояльности. Попробуйте ещё раз.")
-            return
-        }
+        val callbackPrefix =
+            if (kind == "earn") {
+                "vm_loyalty_earn:"
+            } else {
+                "vm_loyalty_reward:"
+            }
+        val parsed =
+            parseVenueLoyaltyProgramData(data, callbackPrefix) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть настройку лояльности. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, programId) = parsed
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         loadVenueLoyaltyProgramForManagement(chatId, venueId, programId) ?: return
@@ -7191,10 +7341,11 @@ class TelegramBotRouter(
         data: String,
         kind: String,
     ) {
-        val parsed = parseVenueLoyaltyProgramData(data, if (kind == "earn") "vle_all:" else "vlr_all:") ?: run {
-            enqueueMessage(chatId, "Не удалось сохранить настройку лояльности. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenueLoyaltyProgramData(data, if (kind == "earn") "vle_all:" else "vlr_all:") ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить настройку лояльности. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, programId) = parsed
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         val updated =
@@ -7232,10 +7383,11 @@ class TelegramBotRouter(
         data: String,
         kind: String,
     ) {
-        val parsed = parseVenueLoyaltyItemsData(data, if (kind == "earn") "vle_items:" else "vlr_items:") ?: run {
-            enqueueMessage(chatId, "Не удалось открыть список позиций. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenueLoyaltyItemsData(data, if (kind == "earn") "vle_items:" else "vlr_items:") ?: run {
+                enqueueMessage(chatId, "Не удалось открыть список позиций. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, programId, page) = parsed
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         loadVenueLoyaltyProgramForManagement(chatId, venueId, programId) ?: return
@@ -7253,13 +7405,17 @@ class TelegramBotRouter(
         data: String,
         kind: String,
     ) {
-        val parsed = parseVenueLoyaltyItemToggleData(data, if (kind == "earn") "vle_t:" else "vlr_t:") ?: run {
-            enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenueLoyaltyItemToggleData(data, if (kind == "earn") "vle_t:" else "vlr_t:") ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, programId, itemId, page) = parsed
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
-        val selected = loyaltyTargetDrafts.getOrPut(LoyaltyTargetDraftKey(chatId, venueId, programId, kind)) { mutableSetOf() }
+        val selected =
+            loyaltyTargetDrafts.getOrPut(
+                LoyaltyTargetDraftKey(chatId, venueId, programId, kind),
+            ) { mutableSetOf() }
         if (!selected.add(itemId)) selected.remove(itemId)
         showVenueMarketingLoyaltyTargetItemsScreen(chatId, venueId, programId, kind, page)
     }
@@ -7270,10 +7426,11 @@ class TelegramBotRouter(
         data: String,
         kind: String,
     ) {
-        val parsed = parseVenueLoyaltyProgramData(data, if (kind == "earn") "vle_done:" else "vlr_done:") ?: run {
-            enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenueLoyaltyProgramData(data, if (kind == "earn") "vle_done:" else "vlr_done:") ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, programId) = parsed
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         val key = LoyaltyTargetDraftKey(chatId, venueId, programId, kind)
@@ -7367,10 +7524,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenueLoyaltyStatusData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось обновить программу лояльности. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenueLoyaltyStatusData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось обновить программу лояльности. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, programId, status) = parsed
         requireVenueMarketingAccess(chatId, userId, venueId) ?: return
         val updated =
@@ -7554,9 +7712,12 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             "📌 Поднять в Акциях\n$venueName\n\n" +
-                "Заявка отправляет ваше заведение на рассмотрение для показа в верхнем блоке «Рекомендуем» раздела 🎁 Акции.\n\n" +
-                "Если заявка будет одобрена, гости увидят ваше заведение выше обычного списка акций на согласованный срок.\n\n" +
-                "Условия и период размещения согласуются с владельцем платформы вручную. Заявка не гарантирует автоматическое размещение.",
+                "Заявка отправляет ваше заведение на рассмотрение для показа в верхнем блоке " +
+                "«Рекомендуем» раздела 🎁 Акции.\n\n" +
+                "Если заявка будет одобрена, гости увидят ваше заведение выше обычного списка " +
+                "акций на согласованный срок.\n\n" +
+                "Условия и период размещения согласуются с владельцем платформы вручную. Заявка " +
+                "не гарантирует автоматическое размещение.",
             TelegramKeyboards.inlineVenueMarketingTopRequestActions(venueId),
         )
     }
@@ -7759,7 +7920,10 @@ class TelegramBotRouter(
         val parts = data.split(":")
         val venueId = parts.getOrNull(1)?.toLongOrNull()
         val placementId = parts.getOrNull(2)?.toLongOrNull()
-        val backFilter = parts.getOrNull(3)?.takeIf { it == "active" || it == "pending" || it == "finished" } ?: "pending"
+        val backFilter =
+            parts.getOrNull(3)
+                ?.takeIf { it == "active" || it == "pending" || it == "finished" }
+                ?: "pending"
         if (venueId == null || placementId == null) {
             enqueueMessage(chatId, "Не удалось открыть размещение. Попробуйте ещё раз.")
             return
@@ -7791,7 +7955,10 @@ class TelegramBotRouter(
         val parts = data.split(":")
         val venueId = parts.getOrNull(1)?.toLongOrNull()
         val placementId = parts.getOrNull(2)?.toLongOrNull()
-        val backFilter = parts.getOrNull(3)?.takeIf { it == "active" || it == "pending" || it == "finished" } ?: "pending"
+        val backFilter =
+            parts.getOrNull(3)
+                ?.takeIf { it == "active" || it == "pending" || it == "finished" }
+                ?: "pending"
         if (venueId == null || placementId == null) {
             enqueueMessage(chatId, "Не удалось открыть размещение. Попробуйте ещё раз.")
             return
@@ -7848,12 +8015,18 @@ class TelegramBotRouter(
         now: Instant,
     ): String {
         val statusText =
-            if (placement.status == PromotionPlacementStatus.ACTIVE && placement.endsAt != null && placement.endsAt < now) {
+            if (
+                placement.status == PromotionPlacementStatus.ACTIVE &&
+                placement.endsAt != null &&
+                placement.endsAt < now
+            ) {
                 "истёк срок"
             } else {
                 humanizePromotionPlacementStatus(placement.status)
             }
-        return "${shortPromotionPlacementSurface(placement.surface)} · ${placement.promotionTitle.take(24)} · $statusText"
+        return "${shortPromotionPlacementSurface(
+            placement.surface,
+        )} · ${placement.promotionTitle.take(24)} · $statusText"
     }
 
     private fun buildOwnerPromotionVenuePlacementListLabel(
@@ -7861,7 +8034,11 @@ class TelegramBotRouter(
         now: Instant,
     ): String {
         val statusText =
-            if (placement.status == PromotionPlacementStatus.ACTIVE && placement.endsAt != null && placement.endsAt < now) {
+            if (
+                placement.status == PromotionPlacementStatus.ACTIVE &&
+                placement.endsAt != null &&
+                placement.endsAt < now
+            ) {
                 "истёк срок"
             } else {
                 humanizePromotionPlacementStatus(placement.status)
@@ -8075,10 +8252,11 @@ class TelegramBotRouter(
         data: String,
         nextState: DialogStateType,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть акцию. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть акцию. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.status == VenuePromotionStatus.ARCHIVED) {
@@ -8103,12 +8281,14 @@ class TelegramBotRouter(
                     "Текущее название: ${promotion.title}\n\nНапишите новое название акции."
                 DialogStateType.VENUE_PROMOTION_WAIT_DESCRIPTION ->
                     if (promotion.templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-                        "Текущее описание и условия:\n${promotion.description}\n\nНапишите новое описание и условия акции одним сообщением."
+                        "Текущее описание и условия:\n${promotion.description}\n\n" +
+                            "Напишите новое описание и условия акции одним сообщением."
                     } else {
                         "Текущее описание:\n${promotion.description}\n\nНапишите новое описание акции."
                     }
                 DialogStateType.VENUE_PROMOTION_WAIT_TERMS ->
-                    "Текущие условия:\n${promotion.terms ?: "не указаны"}\n\nНапишите новые условия или отправьте «—», чтобы очистить."
+                    "Текущие условия:\n${promotion.terms ?: "не указаны"}\n\n" +
+                        "Напишите новые условия или отправьте «—», чтобы очистить."
                 else -> "Напишите новое значение."
             }
         val markup =
@@ -8125,10 +8305,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть баннер. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть баннер. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.status == VenuePromotionStatus.ARCHIVED) {
@@ -8164,10 +8345,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось удалить изображение. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось удалить изображение. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.status == VenuePromotionStatus.ARCHIVED) {
@@ -8191,10 +8373,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть размещение. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть размещение. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.status == VenuePromotionStatus.ARCHIVED) {
@@ -8270,7 +8453,14 @@ class TelegramBotRouter(
             return
         }
         val inputActions = venuePromotionTextInputActions(venueId, promotionId)
-        val title = validatePromotionText(chatId, text, "Название", promotionTitleMaxLength, replyMarkup = inputActions) ?: return
+        val title =
+            validatePromotionText(
+                chatId,
+                text,
+                "Название",
+                promotionTitleMaxLength,
+                replyMarkup = inputActions,
+            ) ?: return
         if (promotionId == null) {
             val templateType = state.payload["template_type"] ?: VenuePromotionTemplateType.TEXT_ONLY.dbValue
             dialogStateRepository.set(
@@ -8288,7 +8478,8 @@ class TelegramBotRouter(
             enqueueMessage(
                 chatId,
                 if (templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT.dbValue) {
-                    "Напишите описание и условия акции одним сообщением.\nНапример: скидка 20% на кальяны с 18:00 до 20:00 по будням."
+                    "Напишите описание и условия акции одним сообщением.\n" +
+                        "Например: скидка 20% на кальяны с 18:00 до 20:00 по будням."
                 } else {
                     "Напишите описание акции."
                 },
@@ -8359,7 +8550,11 @@ class TelegramBotRouter(
                         return
                     }
                 dialogStateRepository.clear(chatId)
-                enqueueMessage(chatId, "Акция создана как черновик. Настройте правило Happy Hours в разделе «Правила акции»: скидку, дни и время проведения.")
+                enqueueMessage(
+                    chatId,
+                    "Акция создана как черновик. Настройте правило Happy Hours в разделе «Правила " +
+                        "акции»: скидку, дни и время проведения.",
+                )
                 showVenuePromotionDetailByIds(chatId, userId, venueId, created.id)
                 return
             }
@@ -8426,7 +8621,11 @@ class TelegramBotRouter(
         }
         val updated =
             try {
-                venuePromotionRepository.updatePromotion(venueId = venueId, promotionId = promotionId, description = description)
+                venuePromotionRepository.updatePromotion(
+                    venueId = venueId,
+                    promotionId = promotionId,
+                    description = description,
+                )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -8476,12 +8675,20 @@ class TelegramBotRouter(
             return
         }
         if (message.document != null) {
-            enqueueMessage(chatId, "Отправьте изображение, не PDF.", venuePromotionMediaInputActions(venueId, promotionId))
+            enqueueMessage(
+                chatId,
+                "Отправьте изображение, не PDF.",
+                venuePromotionMediaInputActions(venueId, promotionId),
+            )
             return
         }
         val photoFileId = message.photo?.maxByOrNull { it.fileSize ?: 0 }?.fileId
         if (photoFileId == null) {
-            enqueueMessage(chatId, "Отправьте изображение для баннера.", venuePromotionMediaInputActions(venueId, promotionId))
+            enqueueMessage(
+                chatId,
+                "Отправьте изображение для баннера.",
+                venuePromotionMediaInputActions(venueId, promotionId),
+            )
             return
         }
         if (promotionId == null) {
@@ -8554,7 +8761,10 @@ class TelegramBotRouter(
     ) {
         val venueId = parseOwnerVenueIdFromCallback(data, "vp_terms_skip:")
         val state = dialogStateRepository.get(chatId)
-        if (venueId == null || state.state != DialogStateType.VENUE_PROMOTION_WAIT_TERMS || state.payload["venue_id"] != venueId.toString()) {
+        if (venueId == null ||
+            state.state != DialogStateType.VENUE_PROMOTION_WAIT_TERMS ||
+            state.payload["venue_id"] != venueId.toString()
+        ) {
             enqueueMessage(chatId, "Не удалось пропустить условия. Попробуйте ещё раз.")
             return
         }
@@ -8651,10 +8861,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть акцию. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть акцию. Попробуйте ещё раз.")
+                return
+            }
         showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
     }
 
@@ -8663,10 +8874,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть архивную акцию. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть архивную акцию. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.status != VenuePromotionStatus.ARCHIVED) {
@@ -8751,10 +8963,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть правила акции. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть правила акции. Попробуйте ещё раз.")
+                return
+            }
         showVenuePromotionRulesRootByIds(chatId, userId, venueId, promotionId)
     }
 
@@ -8792,15 +9005,17 @@ class TelegramBotRouter(
                 append("⚙️ Правила акции\n")
                 append(promotion.title)
                 append("\n\n")
-                    if (rules.isEmpty()) {
-                        if (promotion.templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM) {
-                            append("Правило подарка пока не настроено.")
-                        } else {
-                            append("Правил акции пока нет. В v1 доступна автоматическая процентная скидка по типу позиций.")
-                        }
+                if (rules.isEmpty()) {
+                    if (promotion.templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM) {
+                        append("Правило подарка пока не настроено.")
                     } else {
-                        append("Выберите правило или добавьте новое.")
+                        append(
+                            "Правил акции пока нет. В v1 доступна автоматическая процентная скидка по типу позиций.",
+                        )
                     }
+                } else {
+                    append("Выберите правило или добавьте новое.")
+                }
             },
             TelegramKeyboards.inlineVenuePromotionRulesRootActions(
                 venueId = venueId,
@@ -8816,10 +9031,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось добавить правило. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось добавить правило. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
@@ -8827,22 +9043,22 @@ class TelegramBotRouter(
             showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
             return
         }
-	        enqueueMessage(
-	            chatId,
-	            "Выберите категорию для скидки.",
-	            TelegramKeyboards.inlineVenuePromotionRuleTargetTypeActions(
-	                venueId = venueId,
-	                promotionId = promotionId,
-	                typeButtons = menuSemanticTypeButtons(),
+        enqueueMessage(
+            chatId,
+            "Выберите категорию для скидки.",
+            TelegramKeyboards.inlineVenuePromotionRuleTargetTypeActions(
+                venueId = venueId,
+                promotionId = promotionId,
+                typeButtons = menuSemanticTypeButtons(),
             ),
-	        )
-	    }
+        )
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetScopeForCreate(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
+    private suspend fun showVenuePromotionRuleTargetScopeForCreate(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
         val parsed = parseVenuePromotionRuleTargetData(data)
         if (parsed == null) {
             enqueueMessage(chatId, "Не удалось добавить правило. Попробуйте ещё раз.")
@@ -8851,34 +9067,35 @@ class TelegramBotRouter(
         val (venueId, promotionId, targetType) = parsed
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
-	        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-	            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
-	            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
-	            return
-	        }
-	        showVenuePromotionRuleTargetScopeCreateScreen(chatId, venueId, promotionId, targetType)
-	    }
+        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+            return
+        }
+        showVenuePromotionRuleTargetScopeCreateScreen(chatId, venueId, promotionId, targetType)
+    }
 
-	    private suspend fun promptVenuePromotionRulePercentForCategory(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val (venueId, promotionId, targetType) = parseVenuePromotionRuleTargetData(data) ?: run {
-	            enqueueMessage(chatId, "Не удалось сохранить цель правила. Попробуйте ещё раз.")
-	            return
-	        }
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
-	        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-	            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
-	            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
-	            return
-	        }
-	        dialogStateRepository.set(
-	            chatId,
-	            DialogState(
-	                state = DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT,
+    private suspend fun promptVenuePromotionRulePercentForCategory(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val (venueId, promotionId, targetType) =
+            parseVenuePromotionRuleTargetData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить цель правила. Попробуйте ещё раз.")
+                return
+            }
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
+        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+            return
+        }
+        dialogStateRepository.set(
+            chatId,
+            DialogState(
+                state = DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT,
                 payload =
                     mapOf(
                         "venue_id" to venueId.toString(),
@@ -8891,100 +9108,104 @@ class TelegramBotRouter(
             chatId,
             "Введите процент скидки от 1 до 100.\nНапример: 20",
             TelegramKeyboards.inlineVenuePromotionRulePercentInputActions(venueId, promotionId),
-	        )
-	    }
+        )
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetItemsForCreate(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val parsed = parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
-	            enqueueMessage(chatId, "Не удалось открыть выбор позиций. Попробуйте ещё раз.")
-	            return
-	        }
-	        val (venueId, promotionId, targetType, page) = parsed
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
-	        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-	            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
-	            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
-	            return
-	        }
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
-	        promotionRuleItemTargetDrafts.getOrPut(key) { mutableSetOf() }
-	        showVenuePromotionRuleTargetItemsCreateScreen(chatId, venueId, promotionId, targetType, page)
-	    }
-
-	    private suspend fun toggleVenuePromotionRuleTargetItemForCreate(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val parsed = parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
-	            enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
-	            return
-	        }
-	        val (venueId, promotionId, targetType, itemId, page) = parsed
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
-	        val selected = promotionRuleItemTargetDrafts.getOrPut(key) { mutableSetOf() }
-	        if (!selected.add(itemId)) selected.remove(itemId)
-	        showVenuePromotionRuleTargetItemsCreateScreen(chatId, venueId, promotionId, targetType, page)
-	    }
-
-	    private suspend fun finishVenuePromotionRuleTargetItemsForCreate(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val (venueId, promotionId, targetType) = parseVenuePromotionRuleTargetData(data) ?: run {
-	            enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
-	            return
-	        }
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
-	        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-	            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
-	            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
-	            return
-	        }
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
-	        val selected = promotionRuleItemTargetDrafts[key].orEmpty().toList()
-	        if (selected.isEmpty()) {
-	            enqueueMessage(chatId, "Выберите хотя бы одну позицию.")
-	            showVenuePromotionRuleTargetItemsCreateScreen(chatId, venueId, promotionId, targetType, page = 0)
-	            return
-	        }
-	        dialogStateRepository.set(
-	            chatId,
-	            DialogState(
-	                state = DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT,
-	                payload =
-	                    mapOf(
-	                        "venue_id" to venueId.toString(),
-	                        "promotion_id" to promotionId.toString(),
-	                        "target_value" to targetType.dbValue,
-	                        "target_menu_item_ids" to selected.joinToString(","),
-	                    ),
-	            ),
-	        )
-	        enqueueMessage(
-	            chatId,
-	            "Введите процент скидки от 1 до 100.\nНапример: 20",
-	            TelegramKeyboards.inlineVenuePromotionRulePercentInputActions(venueId, promotionId),
-	        )
-	    }
-
-	    private suspend fun showVenuePromotionRuleTargetEditPicker(
+    private suspend fun showVenuePromotionRuleTargetItemsForCreate(
         chatId: Long,
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор цели. Попробуйте ещё раз.")
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор позиций. Попробуйте ещё раз.")
+                return
+            }
+        val (venueId, promotionId, targetType, page) = parsed
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
+        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
             return
         }
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
+        promotionRuleItemTargetDrafts.getOrPut(key) { mutableSetOf() }
+        showVenuePromotionRuleTargetItemsCreateScreen(chatId, venueId, promotionId, targetType, page)
+    }
+
+    private suspend fun toggleVenuePromotionRuleTargetItemForCreate(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
+                return
+            }
+        val (venueId, promotionId, targetType, itemId, page) = parsed
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
+        val selected = promotionRuleItemTargetDrafts.getOrPut(key) { mutableSetOf() }
+        if (!selected.add(itemId)) selected.remove(itemId)
+        showVenuePromotionRuleTargetItemsCreateScreen(chatId, venueId, promotionId, targetType, page)
+    }
+
+    private suspend fun finishVenuePromotionRuleTargetItemsForCreate(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val (venueId, promotionId, targetType) =
+            parseVenuePromotionRuleTargetData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
+                return
+            }
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
+        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+            return
+        }
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
+        val selected = promotionRuleItemTargetDrafts[key].orEmpty().toList()
+        if (selected.isEmpty()) {
+            enqueueMessage(chatId, "Выберите хотя бы одну позицию.")
+            showVenuePromotionRuleTargetItemsCreateScreen(chatId, venueId, promotionId, targetType, page = 0)
+            return
+        }
+        dialogStateRepository.set(
+            chatId,
+            DialogState(
+                state = DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT,
+                payload =
+                    mapOf(
+                        "venue_id" to venueId.toString(),
+                        "promotion_id" to promotionId.toString(),
+                        "target_value" to targetType.dbValue,
+                        "target_menu_item_ids" to selected.joinToString(","),
+                    ),
+            ),
+        )
+        enqueueMessage(
+            chatId,
+            "Введите процент скидки от 1 до 100.\nНапример: 20",
+            TelegramKeyboards.inlineVenuePromotionRulePercentInputActions(venueId, promotionId),
+        )
+    }
+
+    private suspend fun showVenuePromotionRuleTargetEditPicker(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор цели. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
@@ -8993,41 +9214,41 @@ class TelegramBotRouter(
             return
         }
         loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
-	        enqueueMessage(
-	            chatId,
-	            "Выберите категорию для скидки.",
-	            TelegramKeyboards.inlineVenuePromotionRuleTargetEditActions(
-	                venueId = venueId,
-	                promotionId = promotionId,
+        enqueueMessage(
+            chatId,
+            "Выберите категорию для скидки.",
+            TelegramKeyboards.inlineVenuePromotionRuleTargetEditActions(
+                venueId = venueId,
+                promotionId = promotionId,
                 ruleId = ruleId,
                 typeButtons = menuSemanticTypeButtons(),
             ),
-	        )
-	    }
+        )
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetScopeForEdit(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val parsed = parseVenuePromotionRuleTargetEditData(data)
-	        if (parsed == null) {
-	            enqueueMessage(chatId, "Не удалось открыть выбор цели. Попробуйте ещё раз.")
-	            return
-	        }
-	        val (venueId, promotionId, ruleId, targetType) = parsed
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
-	        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-	            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
-	            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
-	            return
-	        }
-	        loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
-	        showVenuePromotionRuleTargetScopeEditScreen(chatId, venueId, promotionId, ruleId, targetType)
-	    }
+    private suspend fun showVenuePromotionRuleTargetScopeForEdit(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val parsed = parseVenuePromotionRuleTargetEditData(data)
+        if (parsed == null) {
+            enqueueMessage(chatId, "Не удалось открыть выбор цели. Попробуйте ещё раз.")
+            return
+        }
+        val (venueId, promotionId, ruleId, targetType) = parsed
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
+        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+            return
+        }
+        loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
+        showVenuePromotionRuleTargetScopeEditScreen(chatId, venueId, promotionId, ruleId, targetType)
+    }
 
-	    private suspend fun updateVenuePromotionRuleTarget(
+    private suspend fun updateVenuePromotionRuleTarget(
         chatId: Long,
         userId: Long,
         data: String,
@@ -9045,264 +9266,271 @@ class TelegramBotRouter(
             showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
             return
         }
-	        loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
-	        val updated =
-	            try {
-	                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
-	                    venueId = venueId,
-	                    ruleId = ruleId,
-	                    semanticType = targetType,
-	                )
-	            } catch (e: DatabaseUnavailableException) {
-	                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+        loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
+        val updated =
+            try {
+                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
+                    venueId = venueId,
+                    ruleId = ruleId,
+                    semanticType = targetType,
+                )
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
         if (updated == null || updated.promotionId != promotionId) {
             enqueueMessage(chatId, "Правило не найдено.")
-	            return
-	        }
-	        enqueueMessage(chatId, "Скидка будет действовать на все позиции категории «${humanizeMenuSemanticType(targetType)}».")
-	        showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
-	    }
+            return
+        }
+        enqueueMessage(
+            chatId,
+            "Скидка будет действовать на все позиции категории «${humanizeMenuSemanticType(targetType)}».",
+        )
+        showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetItemsForEdit(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val parsed = parseVenuePromotionRuleTargetEditItemsData(data) ?: run {
-	            enqueueMessage(chatId, "Не удалось открыть выбор позиций. Попробуйте ещё раз.")
-	            return
-	        }
-	        val (venueId, promotionId, ruleId, targetType, page) = parsed
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
-	        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-	            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
-	            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
-	            return
-	        }
-	        val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
-	        promotionRuleItemTargetDrafts.getOrPut(key) {
-	            rule.targets
-	                .filter { it.targetType == PromotionRuleTargetType.MENU_ITEM && it.menuItemId != null }
-	                .mapNotNull { it.menuItemId }
-	                .toMutableSet()
-	        }
-	        showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page)
-	    }
+    private suspend fun showVenuePromotionRuleTargetItemsForEdit(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val parsed =
+            parseVenuePromotionRuleTargetEditItemsData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор позиций. Попробуйте ещё раз.")
+                return
+            }
+        val (venueId, promotionId, ruleId, targetType, page) = parsed
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
+        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+            return
+        }
+        val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
+        promotionRuleItemTargetDrafts.getOrPut(key) {
+            rule.targets
+                .filter { it.targetType == PromotionRuleTargetType.MENU_ITEM && it.menuItemId != null }
+                .mapNotNull { it.menuItemId }
+                .toMutableSet()
+        }
+        showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page)
+    }
 
-	    private suspend fun toggleVenuePromotionRuleTargetItemForEdit(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val parsed = parseVenuePromotionRuleTargetEditItemToggleData(data) ?: run {
-	            enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
-	            return
-	        }
-	        val (venueId, promotionId, ruleId, targetType, itemId, page) = parsed
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
-	        val selected = promotionRuleItemTargetDrafts.getOrPut(key) { mutableSetOf() }
-	        if (!selected.add(itemId)) selected.remove(itemId)
-	        showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page)
-	    }
+    private suspend fun toggleVenuePromotionRuleTargetItemForEdit(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val parsed =
+            parseVenuePromotionRuleTargetEditItemToggleData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
+                return
+            }
+        val (venueId, promotionId, ruleId, targetType, itemId, page) = parsed
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
+        val selected = promotionRuleItemTargetDrafts.getOrPut(key) { mutableSetOf() }
+        if (!selected.add(itemId)) selected.remove(itemId)
+        showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page)
+    }
 
-	    private suspend fun finishVenuePromotionRuleTargetItemsForEdit(
-	        chatId: Long,
-	        userId: Long,
-	        data: String,
-	    ) {
-	        val parsed = parseVenuePromotionRuleTargetEditDoneData(data) ?: run {
-	            enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
-	            return
-	        }
-	        val (venueId, promotionId, ruleId, targetType) = parsed
-	        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
-	        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
-	        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-	            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
-	            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
-	            return
-	        }
-	        loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
-	        val selected = promotionRuleItemTargetDrafts[key].orEmpty().toList()
-	        if (selected.isEmpty()) {
-	            enqueueMessage(chatId, "Выберите хотя бы одну позицию.")
-	            showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page = 0)
-	            return
-	        }
-	        val updated =
-	            try {
-	                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
-	                    venueId = venueId,
-	                    ruleId = ruleId,
-	                    menuItemIds = selected,
-	                )
-	            } catch (e: IllegalArgumentException) {
-	                enqueueMessage(chatId, "Выбранные позиции должны быть из одной категории этого заведения.")
-	                showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page = 0)
-	                return
-	            } catch (e: DatabaseUnavailableException) {
-	                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-	                return
-	            }
-	        if (updated == null || updated.promotionId != promotionId) {
-	            enqueueMessage(chatId, "Правило не найдено.")
-	            return
-	        }
-	        promotionRuleItemTargetDrafts.remove(key)
-	        enqueueMessage(chatId, "Скидка будет действовать на выбранные позиции.")
-	        showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
-	    }
+    private suspend fun finishVenuePromotionRuleTargetItemsForEdit(
+        chatId: Long,
+        userId: Long,
+        data: String,
+    ) {
+        val parsed =
+            parseVenuePromotionRuleTargetEditDoneData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
+                return
+            }
+        val (venueId, promotionId, ruleId, targetType) = parsed
+        requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
+        if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(chatId, "Правила доступны для шаблона «Счастливые часы».")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+            return
+        }
+        loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
+        val selected = promotionRuleItemTargetDrafts[key].orEmpty().toList()
+        if (selected.isEmpty()) {
+            enqueueMessage(chatId, "Выберите хотя бы одну позицию.")
+            showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page = 0)
+            return
+        }
+        val updated =
+            try {
+                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+                    venueId = venueId,
+                    ruleId = ruleId,
+                    menuItemIds = selected,
+                )
+            } catch (e: IllegalArgumentException) {
+                enqueueMessage(chatId, "Выбранные позиции должны быть из одной категории этого заведения.")
+                showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page = 0)
+                return
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            }
+        if (updated == null || updated.promotionId != promotionId) {
+            enqueueMessage(chatId, "Правило не найдено.")
+            return
+        }
+        promotionRuleItemTargetDrafts.remove(key)
+        enqueueMessage(chatId, "Скидка будет действовать на выбранные позиции.")
+        showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetScopeCreateScreen(
-	        chatId: Long,
-	        venueId: Long,
-	        promotionId: Long,
-	        targetType: MenuSemanticType,
-	    ) {
-	        val targetLabel = humanizeMenuSemanticType(targetType)
-	        enqueueMessage(
-	            chatId,
-	            "На что действует скидка в категории «$targetLabel»?",
-	            TelegramKeyboards.inlineVenuePromotionRuleTargetScopeCreateActions(
-	                venueId = venueId,
-	                promotionId = promotionId,
-	                targetType = targetType.dbValue,
-	                targetLabel = targetLabel,
-	            ),
-	        )
-	    }
+    private suspend fun showVenuePromotionRuleTargetScopeCreateScreen(
+        chatId: Long,
+        venueId: Long,
+        promotionId: Long,
+        targetType: MenuSemanticType,
+    ) {
+        val targetLabel = humanizeMenuSemanticType(targetType)
+        enqueueMessage(
+            chatId,
+            "На что действует скидка в категории «$targetLabel»?",
+            TelegramKeyboards.inlineVenuePromotionRuleTargetScopeCreateActions(
+                venueId = venueId,
+                promotionId = promotionId,
+                targetType = targetType.dbValue,
+                targetLabel = targetLabel,
+            ),
+        )
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetScopeEditScreen(
-	        chatId: Long,
-	        venueId: Long,
-	        promotionId: Long,
-	        ruleId: Long,
-	        targetType: MenuSemanticType,
-	    ) {
-	        val targetLabel = humanizeMenuSemanticType(targetType)
-	        enqueueMessage(
-	            chatId,
-	            "На что действует скидка в категории «$targetLabel»?",
-	            TelegramKeyboards.inlineVenuePromotionRuleTargetScopeEditActions(
-	                venueId = venueId,
-	                promotionId = promotionId,
-	                ruleId = ruleId,
-	                targetType = targetType.dbValue,
-	                targetLabel = targetLabel,
-	            ),
-	        )
-	    }
+    private suspend fun showVenuePromotionRuleTargetScopeEditScreen(
+        chatId: Long,
+        venueId: Long,
+        promotionId: Long,
+        ruleId: Long,
+        targetType: MenuSemanticType,
+    ) {
+        val targetLabel = humanizeMenuSemanticType(targetType)
+        enqueueMessage(
+            chatId,
+            "На что действует скидка в категории «$targetLabel»?",
+            TelegramKeyboards.inlineVenuePromotionRuleTargetScopeEditActions(
+                venueId = venueId,
+                promotionId = promotionId,
+                ruleId = ruleId,
+                targetType = targetType.dbValue,
+                targetLabel = targetLabel,
+            ),
+        )
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetItemsCreateScreen(
-	        chatId: Long,
-	        venueId: Long,
-	        promotionId: Long,
-	        targetType: MenuSemanticType,
-	        page: Int,
-	    ) {
-	        val items = loadVenuePromotionRuleTargetSelectionItems(chatId, venueId, targetType) ?: return
-	        if (items.isEmpty()) {
-	            enqueueMessage(
-	                chatId,
-	                "В этой категории пока нет позиций.",
-	                TelegramKeyboards.inlineVenuePromotionRuleTargetScopeCreateActions(
-	                    venueId = venueId,
-	                    promotionId = promotionId,
-	                    targetType = targetType.dbValue,
-	                    targetLabel = humanizeMenuSemanticType(targetType),
-	                ),
-	            )
-	            return
-	        }
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
-	        val selected = promotionRuleItemTargetDrafts[key].orEmpty()
-	        val (pageItems, normalizedPage, hasPrevious, hasNext) = paginatePromotionTargetItems(items, page)
-	        enqueueMessage(
-	            chatId,
-	            "Выберите позиции категории «${humanizeMenuSemanticType(targetType)}».",
-	            TelegramKeyboards.inlineVenuePromotionRuleTargetItemsCreateActions(
-	                venueId = venueId,
-	                promotionId = promotionId,
-	                targetType = targetType.dbValue,
-	                page = normalizedPage,
-	                items = pageItems.map { it.id to it.name },
-	                selectedItemIds = selected,
-	                hasPreviousPage = hasPrevious,
-	                hasNextPage = hasNext,
-	            ),
-	        )
-	    }
+    private suspend fun showVenuePromotionRuleTargetItemsCreateScreen(
+        chatId: Long,
+        venueId: Long,
+        promotionId: Long,
+        targetType: MenuSemanticType,
+        page: Int,
+    ) {
+        val items = loadVenuePromotionRuleTargetSelectionItems(chatId, venueId, targetType) ?: return
+        if (items.isEmpty()) {
+            enqueueMessage(
+                chatId,
+                "В этой категории пока нет позиций.",
+                TelegramKeyboards.inlineVenuePromotionRuleTargetScopeCreateActions(
+                    venueId = venueId,
+                    promotionId = promotionId,
+                    targetType = targetType.dbValue,
+                    targetLabel = humanizeMenuSemanticType(targetType),
+                ),
+            )
+            return
+        }
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = null, semanticType = targetType)
+        val selected = promotionRuleItemTargetDrafts[key].orEmpty()
+        val (pageItems, normalizedPage, hasPrevious, hasNext) = paginatePromotionTargetItems(items, page)
+        enqueueMessage(
+            chatId,
+            "Выберите позиции категории «${humanizeMenuSemanticType(targetType)}».",
+            TelegramKeyboards.inlineVenuePromotionRuleTargetItemsCreateActions(
+                venueId = venueId,
+                promotionId = promotionId,
+                targetType = targetType.dbValue,
+                page = normalizedPage,
+                items = pageItems.map { it.id to it.name },
+                selectedItemIds = selected,
+                hasPreviousPage = hasPrevious,
+                hasNextPage = hasNext,
+            ),
+        )
+    }
 
-	    private suspend fun showVenuePromotionRuleTargetItemsEditScreen(
-	        chatId: Long,
-	        venueId: Long,
-	        promotionId: Long,
-	        ruleId: Long,
-	        targetType: MenuSemanticType,
-	        page: Int,
-	    ) {
-	        val items = loadVenuePromotionRuleTargetSelectionItems(chatId, venueId, targetType) ?: return
-	        if (items.isEmpty()) {
-	            enqueueMessage(
-	                chatId,
-	                "В этой категории пока нет позиций.",
-	                TelegramKeyboards.inlineVenuePromotionRuleTargetScopeEditActions(
-	                    venueId = venueId,
-	                    promotionId = promotionId,
-	                    ruleId = ruleId,
-	                    targetType = targetType.dbValue,
-	                    targetLabel = humanizeMenuSemanticType(targetType),
-	                ),
-	            )
-	            return
-	        }
-	        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
-	        val selected = promotionRuleItemTargetDrafts[key].orEmpty()
-	        val (pageItems, normalizedPage, hasPrevious, hasNext) = paginatePromotionTargetItems(items, page)
-	        enqueueMessage(
-	            chatId,
-	            "Выберите позиции категории «${humanizeMenuSemanticType(targetType)}».",
-	            TelegramKeyboards.inlineVenuePromotionRuleTargetItemsEditActions(
-	                venueId = venueId,
-	                promotionId = promotionId,
-	                ruleId = ruleId,
-	                targetType = targetType.dbValue,
-	                page = normalizedPage,
-	                items = pageItems.map { it.id to it.name },
-	                selectedItemIds = selected,
-	                hasPreviousPage = hasPrevious,
-	                hasNextPage = hasNext,
-	            ),
-	        )
-	    }
+    private suspend fun showVenuePromotionRuleTargetItemsEditScreen(
+        chatId: Long,
+        venueId: Long,
+        promotionId: Long,
+        ruleId: Long,
+        targetType: MenuSemanticType,
+        page: Int,
+    ) {
+        val items = loadVenuePromotionRuleTargetSelectionItems(chatId, venueId, targetType) ?: return
+        if (items.isEmpty()) {
+            enqueueMessage(
+                chatId,
+                "В этой категории пока нет позиций.",
+                TelegramKeyboards.inlineVenuePromotionRuleTargetScopeEditActions(
+                    venueId = venueId,
+                    promotionId = promotionId,
+                    ruleId = ruleId,
+                    targetType = targetType.dbValue,
+                    targetLabel = humanizeMenuSemanticType(targetType),
+                ),
+            )
+            return
+        }
+        val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = ruleId, semanticType = targetType)
+        val selected = promotionRuleItemTargetDrafts[key].orEmpty()
+        val (pageItems, normalizedPage, hasPrevious, hasNext) = paginatePromotionTargetItems(items, page)
+        enqueueMessage(
+            chatId,
+            "Выберите позиции категории «${humanizeMenuSemanticType(targetType)}».",
+            TelegramKeyboards.inlineVenuePromotionRuleTargetItemsEditActions(
+                venueId = venueId,
+                promotionId = promotionId,
+                ruleId = ruleId,
+                targetType = targetType.dbValue,
+                page = normalizedPage,
+                items = pageItems.map { it.id to it.name },
+                selectedItemIds = selected,
+                hasPreviousPage = hasPrevious,
+                hasNextPage = hasNext,
+            ),
+        )
+    }
 
-	    private suspend fun loadVenuePromotionRuleTargetSelectionItems(
-	        chatId: Long,
-	        venueId: Long,
-	        targetType: MenuSemanticType,
-	    ): List<PromotionRuleTargetMenuItem>? =
-	        try {
-	            venuePromotionRuleRepository.listMenuItemsForTargetSelection(venueId, targetType)
-	        } catch (e: DatabaseUnavailableException) {
-	            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-	            null
-	        }
+    private suspend fun loadVenuePromotionRuleTargetSelectionItems(
+        chatId: Long,
+        venueId: Long,
+        targetType: MenuSemanticType,
+    ): List<PromotionRuleTargetMenuItem>? =
+        try {
+            venuePromotionRuleRepository.listMenuItemsForTargetSelection(venueId, targetType)
+        } catch (e: DatabaseUnavailableException) {
+            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+            null
+        }
 
     private suspend fun showVenueGiftTriggerCategoryPicker(
         chatId: Long,
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть настройку подарка. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть настройку подарка. Попробуйте ещё раз.")
+                return
+            }
         showVenueGiftTriggerCategoryPickerByIds(chatId, userId, venueId, promotionId)
     }
 
@@ -9329,10 +9557,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, targetType) = parseVenuePromotionRuleTargetData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор условия. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, targetType) =
+            parseVenuePromotionRuleTargetData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор условия. Попробуйте ещё раз.")
+                return
+            }
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val targetLabel = humanizeMenuSemanticType(targetType)
         enqueueMessage(
@@ -9352,10 +9581,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, targetType) = parseVenuePromotionRuleTargetData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось сохранить условие подарка. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, targetType) =
+            parseVenuePromotionRuleTargetData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить условие подарка. Попробуйте ещё раз.")
+                return
+            }
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val giftRule = loadGiftRuleForPromotion(chatId, venueId, promotionId)
         if (giftRule != null) {
@@ -9374,11 +9604,15 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "Правило подарка не найдено.")
                 return
             }
-            enqueueMessage(chatId, "Подарок будет действовать для всех позиций категории «${humanizeMenuSemanticType(targetType)}».")
+            enqueueMessage(
+                chatId,
+                "Подарок будет действовать для всех позиций категории «${humanizeMenuSemanticType(targetType)}».",
+            )
             showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
             return
         }
-        giftPromotionDrafts[GiftPromotionDraftKey(chatId, venueId, promotionId)] = GiftPromotionDraft(targetType = targetType)
+        giftPromotionDrafts[GiftPromotionDraftKey(chatId, venueId, promotionId)] =
+            GiftPromotionDraft(targetType = targetType)
         enqueueMessage(chatId, "Условие подарка сохранено. Теперь выберите подарок.")
         showVenueGiftRewardModePickerByIds(chatId, userId, venueId, promotionId)
     }
@@ -9388,10 +9622,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор позиций. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор позиций. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, promotionId, targetType, page) = parsed
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val rule = loadGiftRuleForPromotion(chatId, venueId, promotionId)
@@ -9412,10 +9647,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать позицию. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, promotionId, targetType, itemId, page) = parsed
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val rule = loadGiftRuleForPromotion(chatId, venueId, promotionId)
@@ -9430,10 +9666,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, targetType) = parseVenuePromotionRuleTargetData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, targetType) =
+            parseVenuePromotionRuleTargetData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить позиции. Попробуйте ещё раз.")
+                return
+            }
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val rule = loadGiftRuleForPromotion(chatId, venueId, promotionId)
         val key = PromotionRuleItemTargetKey(chatId, venueId, promotionId, ruleId = rule?.id, semanticType = targetType)
@@ -9521,10 +9758,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор подарка. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор подарка. Попробуйте ещё раз.")
+                return
+            }
         showVenueGiftRewardCategoryPickerByIds(chatId, userId, venueId, promotionId)
     }
 
@@ -9533,10 +9771,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть настройку подарка. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть настройку подарка. Попробуйте ещё раз.")
+                return
+            }
         showVenueGiftRewardModePickerByIds(chatId, userId, venueId, promotionId)
     }
 
@@ -9596,10 +9835,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор подарков. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор подарков. Попробуйте ещё раз.")
+                return
+            }
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val draft = giftPromotionDrafts[GiftPromotionDraftKey(chatId, venueId, promotionId)]
         val rule = if (draft == null) loadGiftRuleForPromotion(chatId, venueId, promotionId) else null
@@ -9610,7 +9850,8 @@ class TelegramBotRouter(
         }
         enqueueMessage(
             chatId,
-            "Выберите категорию подарков. Затем отметьте несколько позиций, из которых гость сможет выбрать один подарок.",
+            "Выберите категорию подарков. Затем отметьте несколько позиций, из которых гость " +
+                "сможет выбрать один подарок.",
             TelegramKeyboards.inlineVenueGiftRewardChoiceCategoryActions(
                 venueId = venueId,
                 promotionId = promotionId,
@@ -9624,10 +9865,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор подарка. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор подарка. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, promotionId, rewardType, page) = parsed
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val items = loadVenuePromotionRuleTargetSelectionItems(chatId, venueId, rewardType) ?: return
@@ -9664,10 +9906,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор подарков. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemsData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор подарков. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, promotionId, rewardType, page) = parsed
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val draft = giftPromotionDrafts[GiftPromotionDraftKey(chatId, venueId, promotionId)]
@@ -9695,10 +9938,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось выбрать подарок. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать подарок. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, promotionId, rewardType, itemId, page) = parsed
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val key = GiftRewardOptionDraftKey(chatId, venueId, promotionId, rewardType)
@@ -9712,10 +9956,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, rewardType) = parseVenuePromotionRuleTargetData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось сохранить подарки. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, rewardType) =
+            parseVenuePromotionRuleTargetData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить подарки. Попробуйте ещё раз.")
+                return
+            }
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val key = GiftRewardOptionDraftKey(chatId, venueId, promotionId, rewardType)
         val selected = giftRewardOptionDrafts[key].orEmpty().toList()
@@ -9735,11 +9980,12 @@ class TelegramBotRouter(
                     )
                 } else {
                     val draftKey = GiftPromotionDraftKey(chatId, venueId, promotionId)
-                    val draft = giftPromotionDrafts[draftKey] ?: run {
-                        enqueueMessage(chatId, "Сначала выберите условие подарка.")
-                        showVenueGiftTriggerCategoryPickerByIds(chatId, userId, venueId, promotionId)
-                        return
-                    }
+                    val draft =
+                        giftPromotionDrafts[draftKey] ?: run {
+                            enqueueMessage(chatId, "Сначала выберите условие подарка.")
+                            showVenueGiftTriggerCategoryPickerByIds(chatId, userId, venueId, promotionId)
+                            return
+                        }
                     val duplicate =
                         venuePromotionRuleRepository.findDuplicateGiftWithItemRule(
                             venueId = venueId,
@@ -9842,10 +10088,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось выбрать подарок. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseVenuePromotionRuleTargetCreateItemToggleData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать подарок. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, promotionId, _, rewardItemId, _) = parsed
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val existingRule = loadGiftRuleForPromotion(chatId, venueId, promotionId)
@@ -9935,10 +10182,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть расписание подарка. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть расписание подарка. Попробуйте ещё раз.")
+                return
+            }
         loadGiftPromotionForConfig(chatId, userId, venueId, promotionId) ?: return
         val rule = loadGiftRuleForPromotion(chatId, venueId, promotionId)
         if (rule == null) {
@@ -9984,38 +10232,39 @@ class TelegramBotRouter(
             null
         }
 
-	    private data class PromotionTargetItemsPage(
-	        val items: List<PromotionRuleTargetMenuItem>,
-	        val page: Int,
-	        val hasPreviousPage: Boolean,
-	        val hasNextPage: Boolean,
-	    )
+    private data class PromotionTargetItemsPage(
+        val items: List<PromotionRuleTargetMenuItem>,
+        val page: Int,
+        val hasPreviousPage: Boolean,
+        val hasNextPage: Boolean,
+    )
 
-	    private fun paginatePromotionTargetItems(
-	        items: List<PromotionRuleTargetMenuItem>,
-	        requestedPage: Int,
-	    ): PromotionTargetItemsPage {
-	        val maxPage = ((items.size - 1) / promotionTargetItemsPageSize).coerceAtLeast(0)
-	        val page = requestedPage.coerceIn(0, maxPage)
-	        val fromIndex = page * promotionTargetItemsPageSize
-	        val toIndex = (fromIndex + promotionTargetItemsPageSize).coerceAtMost(items.size)
-	        return PromotionTargetItemsPage(
-	            items = items.subList(fromIndex, toIndex),
-	            page = page,
-	            hasPreviousPage = page > 0,
-	            hasNextPage = page < maxPage,
-	        )
-	    }
+    private fun paginatePromotionTargetItems(
+        items: List<PromotionRuleTargetMenuItem>,
+        requestedPage: Int,
+    ): PromotionTargetItemsPage {
+        val maxPage = ((items.size - 1) / promotionTargetItemsPageSize).coerceAtLeast(0)
+        val page = requestedPage.coerceIn(0, maxPage)
+        val fromIndex = page * promotionTargetItemsPageSize
+        val toIndex = (fromIndex + promotionTargetItemsPageSize).coerceAtMost(items.size)
+        return PromotionTargetItemsPage(
+            items = items.subList(fromIndex, toIndex),
+            page = page,
+            hasPreviousPage = page > 0,
+            hasNextPage = page < maxPage,
+        )
+    }
 
     private suspend fun promptVenuePromotionRulePercentEdit(
         chatId: Long,
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось изменить процент скидки. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось изменить процент скидки. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (promotion.templateType != VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
@@ -10051,14 +10300,14 @@ class TelegramBotRouter(
     ) {
         val userId = from?.id ?: return enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
         val venueId = state.payload["venue_id"]?.toLongOrNull()
-	        val promotionId = state.payload["promotion_id"]?.toLongOrNull()
-	        val ruleId = state.payload["rule_id"]?.toLongOrNull()
-	        val targetType = state.payload["target_value"]?.let { parseMenuSemanticType(it) }
-	        val targetMenuItemIds =
-	            state.payload["target_menu_item_ids"]
-	                ?.split(",")
-	                ?.mapNotNull { it.trim().toLongOrNull() }
-	                .orEmpty()
+        val promotionId = state.payload["promotion_id"]?.toLongOrNull()
+        val ruleId = state.payload["rule_id"]?.toLongOrNull()
+        val targetType = state.payload["target_value"]?.let { parseMenuSemanticType(it) }
+        val targetMenuItemIds =
+            state.payload["target_menu_item_ids"]
+                ?.split(",")
+                ?.mapNotNull { it.trim().toLongOrNull() }
+                .orEmpty()
         if (venueId == null || promotionId == null || (ruleId == null && targetType == null)) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось сохранить правило. Попробуйте ещё раз.")
@@ -10115,11 +10364,12 @@ class TelegramBotRouter(
             showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
             return
         }
-        val createTargetType = targetType ?: run {
-            dialogStateRepository.clear(chatId)
-            enqueueMessage(chatId, "Не удалось создать правило. Попробуйте ещё раз.")
-            return
-        }
+        val createTargetType =
+            targetType ?: run {
+                dialogStateRepository.clear(chatId)
+                enqueueMessage(chatId, "Не удалось создать правило. Попробуйте ещё раз.")
+                return
+            }
         val duplicate =
             try {
                 venuePromotionRuleRepository.findDuplicateHappyHoursRule(
@@ -10135,56 +10385,61 @@ class TelegramBotRouter(
             }
         if (duplicate != null) {
             dialogStateRepository.clear(chatId)
-            promotionRuleItemTargetDrafts.remove(PromotionRuleItemTargetKey(chatId, venueId, promotionId, null, createTargetType))
+            promotionRuleItemTargetDrafts.remove(
+                PromotionRuleItemTargetKey(chatId, venueId, promotionId, null, createTargetType),
+            )
             enqueueMessage(chatId, "Такое правило уже есть.")
             showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, duplicate.id)
             return
         }
-		        val created =
-		            try {
-		                val createdRule =
-	                    venuePromotionRuleRepository.createHappyHoursRule(
-	                        venueId = venueId,
-	                        promotionId = promotionId,
-	                        targetValue = createTargetType,
-	                        discountPercent = percent,
-	                        createdByUserId = userId,
-	                    )
-	                if (targetMenuItemIds.isNotEmpty()) {
-	                    venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
-	                        venueId = venueId,
-	                        ruleId = createdRule.id,
-	                        menuItemIds = targetMenuItemIds,
-	                    ) ?: createdRule
-	                } else {
-	                    createdRule
-	                }
-	            } catch (e: IllegalArgumentException) {
-	                enqueueMessage(
-	                    chatId,
+        val created =
+            try {
+                val createdRule =
+                    venuePromotionRuleRepository.createHappyHoursRule(
+                        venueId = venueId,
+                        promotionId = promotionId,
+                        targetValue = createTargetType,
+                        discountPercent = percent,
+                        createdByUserId = userId,
+                    )
+                if (targetMenuItemIds.isNotEmpty()) {
+                    venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+                        venueId = venueId,
+                        ruleId = createdRule.id,
+                        menuItemIds = targetMenuItemIds,
+                    ) ?: createdRule
+                } else {
+                    createdRule
+                }
+            } catch (e: IllegalArgumentException) {
+                enqueueMessage(
+                    chatId,
                     "Введите корректные параметры правила.",
                     TelegramKeyboards.inlineVenuePromotionRulePercentInputActions(venueId, promotionId),
                 )
                 return
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-	                return
-	            }
-	        dialogStateRepository.clear(chatId)
-	        promotionRuleItemTargetDrafts.remove(PromotionRuleItemTargetKey(chatId, venueId, promotionId, null, createTargetType))
-	        enqueueMessage(chatId, "Правило создано.")
-	        showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, created.id)
-	    }
+                return
+            }
+        dialogStateRepository.clear(chatId)
+        promotionRuleItemTargetDrafts.remove(
+            PromotionRuleItemTargetKey(chatId, venueId, promotionId, null, createTargetType),
+        )
+        enqueueMessage(chatId, "Правило создано.")
+        showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, created.id)
+    }
 
     private suspend fun showVenuePromotionRuleDetail(
         chatId: Long,
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть правило. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть правило. Попробуйте ещё раз.")
+                return
+            }
         showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
     }
 
@@ -10220,10 +10475,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось удалить правило. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось удалить правило. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
         if (rule.status == VenuePromotionStatus.ARCHIVED) {
@@ -10233,7 +10489,8 @@ class TelegramBotRouter(
         }
         enqueueMessage(
             chatId,
-            "Удалить это правило акции?\n\nОно больше не будет применяться к новым заказам. История уже оформленных заказов сохранится.",
+            "Удалить это правило акции?\n\nОно больше не будет применяться к новым заказам. " +
+                "История уже оформленных заказов сохранится.",
             TelegramKeyboards.inlineVenuePromotionRuleDeleteConfirmActions(venueId, promotionId, ruleId),
         )
     }
@@ -10243,10 +10500,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось удалить правило. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось удалить правило. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val archived =
             try {
@@ -10263,9 +10521,16 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Правило не найдено.")
             return
         }
-        promotionRuleScheduleDrafts.remove(PromotionRuleScheduleKey(chatId, venueId, promotionId, ruleId))
+        promotionRuleScheduleDrafts.remove(
+            PromotionRuleScheduleKey(chatId, venueId, promotionId, ruleId),
+        )
         promotionRuleItemTargetDrafts.keys
-            .filter { it.chatId == chatId && it.venueId == venueId && it.promotionId == promotionId && it.ruleId == ruleId }
+            .filter {
+                it.chatId == chatId &&
+                    it.venueId == venueId &&
+                    it.promotionId == promotionId &&
+                    it.ruleId == ruleId
+            }
             .forEach { promotionRuleItemTargetDrafts.remove(it) }
         enqueueMessage(chatId, "Правило удалено.")
         showVenuePromotionRulesRootByIds(chatId, userId, venueId, promotionId)
@@ -10276,10 +10541,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть расписание. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть расписание. Попробуйте ещё раз.")
+                return
+            }
         showVenuePromotionRuleScheduleByIds(chatId, userId, venueId, promotionId, ruleId)
     }
 
@@ -10288,10 +10554,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть совместимость. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть совместимость. Попробуйте ещё раз.")
+                return
+            }
         showVenuePromotionRuleCompatibilityByIds(chatId, userId, venueId, promotionId, ruleId)
     }
 
@@ -10330,13 +10597,14 @@ class TelegramBotRouter(
         val venueId = parts.getOrNull(1)?.toLongOrNull()
         val promotionId = parts.getOrNull(2)?.toLongOrNull()
         val ruleId = parts.getOrNull(3)?.toLongOrNull()
-        val stackable = parts.getOrNull(4)?.let {
-            when (it) {
-                "1" -> true
-                "0" -> false
-                else -> null
+        val stackable =
+            parts.getOrNull(4)?.let {
+                when (it) {
+                    "1" -> true
+                    "0" -> false
+                    else -> null
+                }
             }
-        }
         if (venueId == null || promotionId == null || ruleId == null || stackable == null) {
             enqueueMessage(chatId, "Не удалось сохранить совместимость. Попробуйте ещё раз.")
             return
@@ -10378,7 +10646,10 @@ class TelegramBotRouter(
                 append("🕒 Время проведения акции\n\n")
                 append("Текущий режим: ").append(buildVenuePromotionRuleScheduleText(rule)).append("\n")
                 if (rule.ruleType == PromotionRuleType.GIFT_WITH_ITEM) {
-                    append("\nЕсли расписание не задано, акция действует всегда. Если задать дни и время, подарок будет добавляться только в этот период.\n")
+                    append(
+                        "\nЕсли расписание не задано, акция действует всегда. Если задать дни и время, " +
+                            "подарок будет добавляться только в этот период.\n",
+                    )
                 }
                 if (draft != null) {
                     append("\nЧерновик: ").append(buildVenuePromotionRuleScheduleText(draft)).append("\n")
@@ -10394,10 +10665,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось обновить расписание. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось обновить расписание. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val updated =
             try {
@@ -10420,10 +10692,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть выбор дней. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть выбор дней. Попробуйте ещё раз.")
+                return
+            }
         showVenuePromotionRuleDaysPickerByIds(chatId, userId, venueId, promotionId, ruleId)
     }
 
@@ -10455,10 +10728,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось выбрать день. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать день. Попробуйте ещё раз.")
+                return
+            }
         val day = data.split(":").getOrNull(4)?.toIntOrNull()
         if (day == null || day !in 1..7) {
             enqueueMessage(chatId, "Не удалось выбрать день. Попробуйте ещё раз.")
@@ -10481,10 +10755,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось сохранить дни. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось сохранить дни. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
         val key = PromotionRuleScheduleKey(chatId, venueId, promotionId, ruleId)
@@ -10507,10 +10782,11 @@ class TelegramBotRouter(
         data: String,
         isStart: Boolean,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось настроить время. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось настроить время. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
         val key = PromotionRuleScheduleKey(chatId, venueId, promotionId, ruleId)
@@ -10697,10 +10973,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId, ruleId) = parseVenuePromotionRuleIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось открыть правило. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId, ruleId) =
+            parseVenuePromotionRuleIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось открыть правило. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         enqueueMessage(chatId, "Правила включаются вместе с акцией. Управляйте статусом на экране акции.")
         showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
@@ -10732,10 +11009,11 @@ class TelegramBotRouter(
         data: String,
         status: VenuePromotionStatus,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось обновить акцию. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось обновить акцию. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val current = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (current.status == VenuePromotionStatus.ARCHIVED) {
@@ -10755,7 +11033,10 @@ class TelegramBotRouter(
             showVenuePromotionsRootByVenueId(chatId, userId, venueId)
             return
         }
-        enqueueMessage(chatId, if (status == VenuePromotionStatus.ACTIVE) "Акция включена." else "Акция приостановлена.")
+        enqueueMessage(
+            chatId,
+            if (status == VenuePromotionStatus.ACTIVE) "Акция включена." else "Акция приостановлена.",
+        )
         showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
     }
 
@@ -10764,10 +11045,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val (venueId, promotionId) = parseVenuePromotionIds(data) ?: run {
-            enqueueMessage(chatId, "Не удалось архивировать акцию. Попробуйте ещё раз.")
-            return
-        }
+        val (venueId, promotionId) =
+            parseVenuePromotionIds(data) ?: run {
+                enqueueMessage(chatId, "Не удалось архивировать акцию. Попробуйте ещё раз.")
+                return
+            }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
         val current = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
         if (current.status == VenuePromotionStatus.ARCHIVED) {
@@ -10841,7 +11123,7 @@ class TelegramBotRouter(
             append("\nПериод: ").append(buildPromotionPeriodLine(promotion)?.removePrefix("Период: ") ?: "без срока")
             if (
                 promotion.templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT ||
-                    promotion.templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM
+                promotion.templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM
             ) {
                 append("\n\nПравила работают, когда акция включена.")
             }
@@ -10850,13 +11132,13 @@ class TelegramBotRouter(
             }
         }
 
-	    private fun buildVenuePromotionRuleButtonLabel(rule: VenuePromotionRule): String =
-            when (rule.ruleType) {
-                PromotionRuleType.GIFT_WITH_ITEM ->
-                    "Подарок · ${buildVenuePromotionRuleTargetShortText(rule)}"
-                PromotionRuleType.HAPPY_HOURS_PERCENT ->
-                    "${rule.discountPercent}% · ${buildVenuePromotionRuleTargetShortText(rule)}"
-            }
+    private fun buildVenuePromotionRuleButtonLabel(rule: VenuePromotionRule): String =
+        when (rule.ruleType) {
+            PromotionRuleType.GIFT_WITH_ITEM ->
+                "Подарок · ${buildVenuePromotionRuleTargetShortText(rule)}"
+            PromotionRuleType.HAPPY_HOURS_PERCENT ->
+                "${rule.discountPercent}% · ${buildVenuePromotionRuleTargetShortText(rule)}"
+        }
 
     private fun humanizePromotionRuleListStatus(status: VenuePromotionStatus): String =
         when (status) {
@@ -10866,33 +11148,36 @@ class TelegramBotRouter(
             VenuePromotionStatus.ARCHIVED -> "Архив"
         }
 
-	    private fun buildVenuePromotionRuleDetailText(rule: VenuePromotionRule): String =
-	        buildString {
-	            append("⚙️ Правило акции\n\n")
-	            append("Тип: ")
-                append(
-                    when (rule.ruleType) {
-                        PromotionRuleType.HAPPY_HOURS_PERCENT -> "Счастливые часы"
-                        PromotionRuleType.GIFT_WITH_ITEM -> "Подарок к позиции"
-                    },
-                )
-                append("\n")
-	            append("На что действует: ").append(buildVenuePromotionRuleTargetDetailText(rule)).append("\n")
+    private fun buildVenuePromotionRuleDetailText(rule: VenuePromotionRule): String =
+        buildString {
+            append("⚙️ Правило акции\n\n")
+            append("Тип: ")
+            append(
                 when (rule.ruleType) {
-                    PromotionRuleType.HAPPY_HOURS_PERCENT ->
-                        append("Скидка: ").append(rule.discountPercent).append("%\n")
-                    PromotionRuleType.GIFT_WITH_ITEM ->
-                        append("Подарок: ").append(buildVenueGiftRewardDetailText(rule)).append("\n")
-                }
-	            append("Расписание: ").append(buildVenuePromotionRuleScheduleText(rule)).append("\n\n")
-                append("Совместимость: ").append(buildVenuePromotionRuleCompatibilityText(rule)).append("\n\n")
-                when (rule.ruleType) {
-                    PromotionRuleType.HAPPY_HOURS_PERCENT ->
-                        append("Это правило применяется, когда акция включена.")
-                    PromotionRuleType.GIFT_WITH_ITEM ->
-                        append("Подарок добавляется к заказу автоматически, если гость выбрал позицию из условия акции, а правило активно в выбранные дни и часы.")
-	            }
-	        }
+                    PromotionRuleType.HAPPY_HOURS_PERCENT -> "Счастливые часы"
+                    PromotionRuleType.GIFT_WITH_ITEM -> "Подарок к позиции"
+                },
+            )
+            append("\n")
+            append("На что действует: ").append(buildVenuePromotionRuleTargetDetailText(rule)).append("\n")
+            when (rule.ruleType) {
+                PromotionRuleType.HAPPY_HOURS_PERCENT ->
+                    append("Скидка: ").append(rule.discountPercent).append("%\n")
+                PromotionRuleType.GIFT_WITH_ITEM ->
+                    append("Подарок: ").append(buildVenueGiftRewardDetailText(rule)).append("\n")
+            }
+            append("Расписание: ").append(buildVenuePromotionRuleScheduleText(rule)).append("\n\n")
+            append("Совместимость: ").append(buildVenuePromotionRuleCompatibilityText(rule)).append("\n\n")
+            when (rule.ruleType) {
+                PromotionRuleType.HAPPY_HOURS_PERCENT ->
+                    append("Это правило применяется, когда акция включена.")
+                PromotionRuleType.GIFT_WITH_ITEM ->
+                    append(
+                        "Подарок добавляется к заказу автоматически, если гость выбрал позицию из условия " +
+                            "акции, а правило активно в выбранные дни и часы.",
+                    )
+            }
+        }
 
     private fun buildVenuePromotionRuleCompatibilityText(rule: VenuePromotionRule): String =
         if (rule.stackable) {
@@ -10923,48 +11208,65 @@ class TelegramBotRouter(
         }
     }
 
-	    private fun buildVenuePromotionRuleTargetShortText(rule: VenuePromotionRule): String {
-	        val menuItemTargets = rule.targets.filter { it.targetType == PromotionRuleTargetType.MENU_ITEM && it.menuItemId != null }
-	        if (menuItemTargets.isNotEmpty()) {
-	            return "${menuItemTargets.size} ${pluralizeRussian(menuItemTargets.size, "позиция", "позиции", "позиций")}"
-	        }
-	        val categoryTarget = rule.targets.firstOrNull { it.targetType == PromotionRuleTargetType.CATEGORY_TYPE && it.semanticType != null }
-	        return humanizeMenuSemanticType(categoryTarget?.semanticType ?: rule.targetValue)
-	    }
+    private fun buildVenuePromotionRuleTargetShortText(rule: VenuePromotionRule): String {
+        val menuItemTargets =
+            rule.targets.filter {
+                it.targetType == PromotionRuleTargetType.MENU_ITEM && it.menuItemId != null
+            }
+        if (menuItemTargets.isNotEmpty()) {
+            return "${menuItemTargets.size} ${pluralizeRussian(menuItemTargets.size, "позиция", "позиции", "позиций")}"
+        }
+        val categoryTarget =
+            rule.targets.firstOrNull {
+                it.targetType == PromotionRuleTargetType.CATEGORY_TYPE && it.semanticType != null
+            }
+        return humanizeMenuSemanticType(categoryTarget?.semanticType ?: rule.targetValue)
+    }
 
-	    private fun buildVenuePromotionRuleTargetDetailText(rule: VenuePromotionRule): String {
-	        val menuItemTargets = rule.targets.filter { it.targetType == PromotionRuleTargetType.MENU_ITEM && it.menuItemId != null }
-	        if (menuItemTargets.isEmpty()) {
-	            val categoryTarget = rule.targets.firstOrNull { it.targetType == PromotionRuleTargetType.CATEGORY_TYPE && it.semanticType != null }
-	            return humanizeMenuSemanticType(categoryTarget?.semanticType ?: rule.targetValue)
-	        }
-	        val names =
-	            menuItemTargets
-	                .mapNotNull { it.menuItemName?.takeIf(String::isNotBlank) }
-	                .take(3)
-	        val countText = "${menuItemTargets.size} ${pluralizeRussian(menuItemTargets.size, "позиция", "позиции", "позиций")}"
-	        return if (names.isEmpty()) {
-	            countText
-	        } else {
-	            val suffix = if (menuItemTargets.size > names.size) " и ещё ${menuItemTargets.size - names.size}" else ""
-	            "$countText (${names.joinToString(", ")}$suffix)"
-	        }
-	    }
+    private fun buildVenuePromotionRuleTargetDetailText(rule: VenuePromotionRule): String {
+        val menuItemTargets =
+            rule.targets.filter {
+                it.targetType == PromotionRuleTargetType.MENU_ITEM && it.menuItemId != null
+            }
+        if (menuItemTargets.isEmpty()) {
+            val categoryTarget =
+                rule.targets.firstOrNull {
+                    it.targetType == PromotionRuleTargetType.CATEGORY_TYPE && it.semanticType != null
+                }
+            return humanizeMenuSemanticType(categoryTarget?.semanticType ?: rule.targetValue)
+        }
+        val names =
+            menuItemTargets
+                .mapNotNull { it.menuItemName?.takeIf(String::isNotBlank) }
+                .take(3)
+        val countText = "${menuItemTargets.size} ${pluralizeRussian(
+            menuItemTargets.size,
+            "позиция",
+            "позиции",
+            "позиций",
+        )}"
+        return if (names.isEmpty()) {
+            countText
+        } else {
+            val suffix = if (menuItemTargets.size > names.size) " и ещё ${menuItemTargets.size - names.size}" else ""
+            "$countText (${names.joinToString(", ")}$suffix)"
+        }
+    }
 
-	    private fun pluralizeRussian(
-	        count: Int,
-	        one: String,
-	        few: String,
-	        many: String,
-	    ): String {
-	        val mod100 = count % 100
-	        if (mod100 in 11..14) return many
-	        return when (count % 10) {
-	            1 -> one
-	            2, 3, 4 -> few
-	            else -> many
-	        }
-	    }
+    private fun pluralizeRussian(
+        count: Int,
+        one: String,
+        few: String,
+        many: String,
+    ): String {
+        val mod100 = count % 100
+        if (mod100 in 11..14) return many
+        return when (count % 10) {
+            1 -> one
+            2, 3, 4 -> few
+            else -> many
+        }
+    }
 
     private fun buildVenuePromotionRuleScheduleText(rule: VenuePromotionRule): String =
         buildVenuePromotionRuleScheduleText(rule.toScheduleDraft())
@@ -11111,78 +11413,80 @@ class TelegramBotRouter(
         return Triple(venueId, promotionId, ruleId)
     }
 
-	    private fun parseVenuePromotionRuleTargetData(data: String): Triple<Long, Long, MenuSemanticType>? {
-	        val parts = data.split(":")
-	        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
-	        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
-	        val targetType = parts.getOrNull(3)?.let { parseMenuSemanticType(it) } ?: return null
-	        return Triple(venueId, promotionId, targetType)
-	    }
+    private fun parseVenuePromotionRuleTargetData(data: String): Triple<Long, Long, MenuSemanticType>? {
+        val parts = data.split(":")
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
+        val targetType = parts.getOrNull(3)?.let { parseMenuSemanticType(it) } ?: return null
+        return Triple(venueId, promotionId, targetType)
+    }
 
-	    private fun parseVenuePromotionRuleTargetCreateItemsData(data: String): PromotionRuleTargetCreateItemsData? {
-	        val parts = data.split(":")
-	        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
-	        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
-	        val targetType = parts.getOrNull(3)?.let { parseMenuSemanticType(it) } ?: return null
-	        val page = parts.getOrNull(4)?.toIntOrNull() ?: 0
-	        return PromotionRuleTargetCreateItemsData(venueId, promotionId, targetType, page)
-	    }
+    private fun parseVenuePromotionRuleTargetCreateItemsData(data: String): PromotionRuleTargetCreateItemsData? {
+        val parts = data.split(":")
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
+        val targetType = parts.getOrNull(3)?.let { parseMenuSemanticType(it) } ?: return null
+        val page = parts.getOrNull(4)?.toIntOrNull() ?: 0
+        return PromotionRuleTargetCreateItemsData(venueId, promotionId, targetType, page)
+    }
 
-	    private fun parseVenuePromotionRuleTargetCreateItemToggleData(data: String): PromotionRuleTargetCreateItemToggleData? {
-	        val parts = data.split(":")
-	        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
-	        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
-	        val targetType = parts.getOrNull(3)?.let { parseMenuSemanticType(it) } ?: return null
-	        val itemId = parts.getOrNull(4)?.toLongOrNull() ?: return null
-	        val page = parts.getOrNull(5)?.toIntOrNull() ?: 0
-	        return PromotionRuleTargetCreateItemToggleData(venueId, promotionId, targetType, itemId, page)
-	    }
+    private fun parseVenuePromotionRuleTargetCreateItemToggleData(
+        data: String,
+    ): PromotionRuleTargetCreateItemToggleData? {
+        val parts = data.split(":")
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
+        val targetType = parts.getOrNull(3)?.let { parseMenuSemanticType(it) } ?: return null
+        val itemId = parts.getOrNull(4)?.toLongOrNull() ?: return null
+        val page = parts.getOrNull(5)?.toIntOrNull() ?: 0
+        return PromotionRuleTargetCreateItemToggleData(venueId, promotionId, targetType, itemId, page)
+    }
 
-	    private fun parseVenuePromotionRuleTargetEditData(data: String): PromotionRuleTargetEditData? {
-	        val parts = data.split(":")
-	        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+    private fun parseVenuePromotionRuleTargetEditData(data: String): PromotionRuleTargetEditData? {
+        val parts = data.split(":")
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
         val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
         val ruleId = parts.getOrNull(3)?.toLongOrNull() ?: return null
-	        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
-	        return PromotionRuleTargetEditData(venueId, promotionId, ruleId, targetType)
-	    }
+        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
+        return PromotionRuleTargetEditData(venueId, promotionId, ruleId, targetType)
+    }
 
-	    private fun parseVenuePromotionRuleTargetEditItemsData(data: String): PromotionRuleTargetEditItemsData? {
-	        val parts = data.split(":")
-	        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
-	        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
-	        val ruleId = parts.getOrNull(3)?.toLongOrNull() ?: return null
-	        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
-	        val page = parts.getOrNull(5)?.toIntOrNull() ?: 0
-	        return PromotionRuleTargetEditItemsData(venueId, promotionId, ruleId, targetType, page)
-	    }
+    private fun parseVenuePromotionRuleTargetEditItemsData(data: String): PromotionRuleTargetEditItemsData? {
+        val parts = data.split(":")
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
+        val ruleId = parts.getOrNull(3)?.toLongOrNull() ?: return null
+        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
+        val page = parts.getOrNull(5)?.toIntOrNull() ?: 0
+        return PromotionRuleTargetEditItemsData(venueId, promotionId, ruleId, targetType, page)
+    }
 
-	    private fun parseVenuePromotionRuleTargetEditItemToggleData(data: String): PromotionRuleTargetEditItemToggleData? {
-	        val parts = data.split(":")
-	        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
-	        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
-	        val ruleId = parts.getOrNull(3)?.toLongOrNull() ?: return null
-	        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
-	        val itemId = parts.getOrNull(5)?.toLongOrNull() ?: return null
-	        val page = parts.getOrNull(6)?.toIntOrNull() ?: 0
-	        return PromotionRuleTargetEditItemToggleData(venueId, promotionId, ruleId, targetType, itemId, page)
-	    }
+    private fun parseVenuePromotionRuleTargetEditItemToggleData(data: String): PromotionRuleTargetEditItemToggleData? {
+        val parts = data.split(":")
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
+        val ruleId = parts.getOrNull(3)?.toLongOrNull() ?: return null
+        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
+        val itemId = parts.getOrNull(5)?.toLongOrNull() ?: return null
+        val page = parts.getOrNull(6)?.toIntOrNull() ?: 0
+        return PromotionRuleTargetEditItemToggleData(venueId, promotionId, ruleId, targetType, itemId, page)
+    }
 
-	    private fun parseVenuePromotionRuleTargetEditDoneData(data: String): PromotionRuleTargetEditData? {
-	        val parts = data.split(":")
-	        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
-	        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
-	        val ruleId = parts.getOrNull(3)?.toLongOrNull() ?: return null
-	        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
-	        return PromotionRuleTargetEditData(venueId, promotionId, ruleId, targetType)
-	    }
+    private fun parseVenuePromotionRuleTargetEditDoneData(data: String): PromotionRuleTargetEditData? {
+        val parts = data.split(":")
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        val promotionId = parts.getOrNull(2)?.toLongOrNull() ?: return null
+        val ruleId = parts.getOrNull(3)?.toLongOrNull() ?: return null
+        val targetType = parts.getOrNull(4)?.let { parseMenuSemanticType(it) } ?: return null
+        return PromotionRuleTargetEditData(venueId, promotionId, ruleId, targetType)
+    }
 
-	    private data class PromotionRuleTargetCreateItemsData(
-	        val venueId: Long,
-	        val promotionId: Long,
-	        val targetType: MenuSemanticType,
-	        val page: Int,
-	    )
+    private data class PromotionRuleTargetCreateItemsData(
+        val venueId: Long,
+        val promotionId: Long,
+        val targetType: MenuSemanticType,
+        val page: Int,
+    )
 
     private data class PromotionPlacementRequestData(
         val venueId: Long,
@@ -11190,37 +11494,37 @@ class TelegramBotRouter(
         val surface: PromotionPlacementSurface,
     )
 
-	    private data class PromotionRuleTargetCreateItemToggleData(
-	        val venueId: Long,
-	        val promotionId: Long,
-	        val targetType: MenuSemanticType,
-	        val itemId: Long,
-	        val page: Int,
-	    )
+    private data class PromotionRuleTargetCreateItemToggleData(
+        val venueId: Long,
+        val promotionId: Long,
+        val targetType: MenuSemanticType,
+        val itemId: Long,
+        val page: Int,
+    )
 
-	    private data class PromotionRuleTargetEditData(
-	        val venueId: Long,
-	        val promotionId: Long,
-	        val ruleId: Long,
-	        val targetType: MenuSemanticType,
-	    )
+    private data class PromotionRuleTargetEditData(
+        val venueId: Long,
+        val promotionId: Long,
+        val ruleId: Long,
+        val targetType: MenuSemanticType,
+    )
 
-	    private data class PromotionRuleTargetEditItemsData(
-	        val venueId: Long,
-	        val promotionId: Long,
-	        val ruleId: Long,
-	        val targetType: MenuSemanticType,
-	        val page: Int,
-	    )
+    private data class PromotionRuleTargetEditItemsData(
+        val venueId: Long,
+        val promotionId: Long,
+        val ruleId: Long,
+        val targetType: MenuSemanticType,
+        val page: Int,
+    )
 
-	    private data class PromotionRuleTargetEditItemToggleData(
-	        val venueId: Long,
-	        val promotionId: Long,
-	        val ruleId: Long,
-	        val targetType: MenuSemanticType,
-	        val itemId: Long,
-	        val page: Int,
-	    )
+    private data class PromotionRuleTargetEditItemToggleData(
+        val venueId: Long,
+        val promotionId: Long,
+        val ruleId: Long,
+        val targetType: MenuSemanticType,
+        val itemId: Long,
+        val page: Int,
+    )
 
     private suspend fun validatePromotionText(
         chatId: Long,
@@ -11836,7 +12140,11 @@ class TelegramBotRouter(
                     payload = mapOf("request_id" to requestId.toString()),
                 ),
             )
-            enqueueMessage(chatId, "Введите дату окончания trial в формате дд.мм.гггг, например 15.04.2026. Введите 0, если trial не нужен.")
+            enqueueMessage(
+                chatId,
+                "Введите дату окончания trial в формате дд.мм.гггг, например 15.04.2026. Введите " +
+                    "0, если trial не нужен.",
+            )
             return
         }
         val trialEndsOn =
@@ -11894,12 +12202,18 @@ class TelegramBotRouter(
                         ),
                 ),
             )
-            enqueueMessage(chatId, "Trial не используется. Укажите регулярную стоимость, ₽/мес (0 или положительное число).")
+            enqueueMessage(
+                chatId,
+                "Trial не используется. Укажите регулярную стоимость, ₽/мес (0 или положительное число).",
+            )
             return
         }
         val trialEndsOn = parseIsoLocalDate(text)
         if (trialEndsOn == null) {
-            enqueueMessage(chatId, "Некорректная дата. Введите в формате дд.мм.гггг, например 15.04.2026, или 0, если trial не нужен.")
+            enqueueMessage(
+                chatId,
+                "Некорректная дата. Введите в формате дд.мм.гггг, например 15.04.2026, или 0, если trial не нужен.",
+            )
             return
         }
         dialogStateRepository.set(
@@ -11991,7 +12305,10 @@ class TelegramBotRouter(
         requestId: Long,
         payload: Map<String, String>,
     ) {
-        dialogStateRepository.set(chatId, DialogState(DialogStateType.OWNER_VENUE_TERMS_WAIT_FUTURE_PRICE, payload = payload))
+        dialogStateRepository.set(
+            chatId,
+            DialogState(DialogStateType.OWNER_VENUE_TERMS_WAIT_FUTURE_PRICE, payload = payload),
+        )
         enqueueMessage(
             chatId,
             "Будущую стоимость задаём?",
@@ -12281,7 +12598,7 @@ class TelegramBotRouter(
                 return
             }
             VenueOwnerQuotaCheckResult.NotFound,
-            VenueOwnerQuotaCheckResult.DatabaseError
+            VenueOwnerQuotaCheckResult.DatabaseError,
             -> {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -12330,7 +12647,7 @@ class TelegramBotRouter(
             }
             PlatformOwnerAssignmentResult.OwnerAccountMismatch,
             PlatformOwnerAssignmentResult.NotFound,
-            PlatformOwnerAssignmentResult.DatabaseError
+            PlatformOwnerAssignmentResult.DatabaseError,
             -> {
                 enqueueMessage(
                     chatId,
@@ -12578,7 +12895,11 @@ class TelegramBotRouter(
                         ),
                 ),
             )
-            enqueueMessage(chatId, "Введите контакт для гостей: телефон, username или короткую инструкцию.\nОтправьте «—», чтобы отменить.")
+            enqueueMessage(
+                chatId,
+                "Введите контакт для гостей: телефон, username или короткую инструкцию.\n" +
+                    "Отправьте «—», чтобы отменить.",
+            )
             return
         }
         if (fieldKey.equals("card_description", ignoreCase = true)) {
@@ -12650,7 +12971,17 @@ class TelegramBotRouter(
                 (1..7).forEach { weekday ->
                     val dayLabel = formatWeekday(DayOfWeek.of(weekday))
                     append("\n")
-                    append(dayLabel.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() })
+                    append(
+                        dayLabel.replaceFirstChar {
+                            if (it.isLowerCase()) {
+                                it.titlecase(
+                                    Locale.ROOT,
+                                )
+                            } else {
+                                it.toString()
+                            }
+                        },
+                    )
                     append(": ")
                     append(
                         formatOwnerVenueHoursStatus(
@@ -12670,7 +13001,11 @@ class TelegramBotRouter(
                         weeklyHours[weekday]?.closesAt,
                         weeklyHours[weekday]?.isClosed ?: false,
                     )
-                weekday to "${dayLabel.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }} · $status"
+                val displayDayLabel =
+                    dayLabel.replaceFirstChar {
+                        if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
+                    }
+                weekday to "$displayDayLabel · $status"
             }
         enqueueMessage(
             chatId,
@@ -12779,7 +13114,15 @@ class TelegramBotRouter(
         val dayLabel = formatWeekday(DayOfWeek.of(weekday))
         enqueueMessage(
             chatId,
-            "${dayLabel.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }}: введите время открытия в формате HH:mm (например, 12:00).\nОтправьте «—», чтобы отменить.",
+            "${dayLabel.replaceFirstChar {
+                if (it.isLowerCase()) {
+                    it.titlecase(
+                        Locale.ROOT,
+                    )
+                } else {
+                    it.toString()
+                }
+            }}: введите время открытия в формате HH:mm (например, 12:00).\nОтправьте «—», чтобы отменить.",
         )
     }
 
@@ -12820,7 +13163,15 @@ class TelegramBotRouter(
         val dayLabel = formatWeekday(DayOfWeek.of(weekday))
         enqueueMessage(
             chatId,
-            "✅ ${dayLabel.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }}: день закрыт.",
+            "✅ ${dayLabel.replaceFirstChar {
+                if (it.isLowerCase()) {
+                    it.titlecase(
+                        Locale.ROOT,
+                    )
+                } else {
+                    it.toString()
+                }
+            }}: день закрыт.",
         )
         showOwnerVenueHoursDayScreenByVenueId(chatId, userId, venueId, weekday)
     }
@@ -12875,7 +13226,9 @@ class TelegramBotRouter(
         val buttons =
             overrides.map { override ->
                 val label =
-                    "${override.serviceDate.format(bookingDateConfirmFormatter)} · ${formatOwnerVenueHoursStatus(override.opensAt, override.closesAt, override.isClosed)}"
+                    "${override.serviceDate.format(
+                        bookingDateConfirmFormatter,
+                    )} · ${formatOwnerVenueHoursStatus(override.opensAt, override.closesAt, override.isClosed)}"
                 label to override.serviceDate.toString()
             }
         enqueueMessage(
@@ -12915,7 +13268,10 @@ class TelegramBotRouter(
                     ),
             ),
         )
-        enqueueMessage(chatId, "Введите дату исключения в формате дд.мм.гггг, например 15.04.2026.\nОтправьте «—», чтобы отменить.")
+        enqueueMessage(
+            chatId,
+            "Введите дату исключения в формате дд.мм.гггг, например 15.04.2026.\nОтправьте «—», чтобы отменить.",
+        )
     }
 
     private suspend fun chooseOwnerVenueHoursOverrideMode(
@@ -12923,10 +13279,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseOwnerVenueHoursOverrideModeData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось применить исключение. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseOwnerVenueHoursOverrideModeData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось применить исключение. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, serviceDate, mode) = parsed
         val hasAccess =
             runCatching { venueAccessRepository.hasVenueAdminOrOwner(userId, venueId) }
@@ -12959,7 +13316,10 @@ class TelegramBotRouter(
                 return
             }
             dialogStateRepository.clear(chatId)
-            enqueueMessage(chatId, "✅ Исключение на ${serviceDate.format(bookingDateConfirmFormatter)} сохранено: закрыто.")
+            enqueueMessage(
+                chatId,
+                "✅ Исключение на ${serviceDate.format(bookingDateConfirmFormatter)} сохранено: закрыто.",
+            )
             showOwnerVenueHoursOverridesByVenueId(chatId, userId, venueId)
             return
         }
@@ -12978,7 +13338,9 @@ class TelegramBotRouter(
         )
         enqueueMessage(
             chatId,
-            "Введите время открытия для ${serviceDate.format(bookingDateConfirmFormatter)} в формате HH:mm (например, 12:00).\nОтправьте «—», чтобы отменить.",
+            "Введите время открытия для ${serviceDate.format(
+                bookingDateConfirmFormatter,
+            )} в формате HH:mm (например, 12:00).\nОтправьте «—», чтобы отменить.",
         )
     }
 
@@ -13017,9 +13379,18 @@ class TelegramBotRouter(
             chatId,
             buildString {
                 append("📅 Исключение: ${serviceDate.format(bookingDateConfirmFormatter)}")
-                append("\nТекущий статус: ${formatOwnerVenueHoursStatus(override.opensAt, override.closesAt, override.isClosed)}")
+                append(
+                    "\nТекущий статус: ${formatOwnerVenueHoursStatus(
+                        override.opensAt,
+                        override.closesAt,
+                        override.isClosed,
+                    )}",
+                )
             },
-            TelegramKeyboards.inlineOwnerVenueHoursOverrideEditActions(venueId = venueId, dateIso = serviceDate.toString()),
+            TelegramKeyboards.inlineOwnerVenueHoursOverrideEditActions(
+                venueId = venueId,
+                dateIso = serviceDate.toString(),
+            ),
         )
     }
 
@@ -13122,7 +13493,9 @@ class TelegramBotRouter(
         val sectionButtons =
             sections.map { section ->
                 val mediaCount = mediaCountsBySectionId[section.id] ?: 0
-                section.id to "${formatOwnerVenueInfoSectionTitle(section)} · ${formatOwnerVenueDescriptionSectionStatus(section, mediaCount)}"
+                val sectionTitle = formatOwnerVenueInfoSectionTitle(section)
+                val sectionStatus = formatOwnerVenueDescriptionSectionStatus(section, mediaCount)
+                section.id to "$sectionTitle · $sectionStatus"
             }
         enqueueMessage(
             chatId,
@@ -13394,7 +13767,9 @@ class TelegramBotRouter(
         )
         enqueueMessage(
             chatId,
-            "Отправьте изображение или PDF для раздела «${formatOwnerVenueInfoSectionTitle(section)}».\nМожно отправить несколько файлов подряд, затем нажмите «Готово».",
+            "Отправьте изображение или PDF для раздела «${formatOwnerVenueInfoSectionTitle(
+                section,
+            )}».\nМожно отправить несколько файлов подряд, затем нажмите «Готово».",
             TelegramKeyboards.inlineOwnerVenueDescriptionMediaUploadActions(venueId, section.id),
         )
     }
@@ -14228,8 +14603,13 @@ class TelegramBotRouter(
             dialogStateRepository.clear(chatId)
             enqueueMessage(
                 chatId,
-                "Дата исключения: ${serviceDate.format(bookingDateConfirmFormatter)}.\nУкажите режим работы на эту дату.",
-                TelegramKeyboards.inlineOwnerVenueHoursOverrideMode(venueId = venueId, dateIso = serviceDate.toString()),
+                "Дата исключения: ${serviceDate.format(
+                    bookingDateConfirmFormatter,
+                )}.\nУкажите режим работы на эту дату.",
+                TelegramKeyboards.inlineOwnerVenueHoursOverrideMode(
+                    venueId = venueId,
+                    dateIso = serviceDate.toString(),
+                ),
             )
             return
         }
@@ -14257,9 +14637,18 @@ class TelegramBotRouter(
         val closePrompt =
             when (mode) {
                 "override_time" -> {
-                    val serviceDate = state.payload["service_date"]?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                    val serviceDate =
+                        state.payload["service_date"]?.let {
+                            runCatching {
+                                LocalDate.parse(
+                                    it,
+                                )
+                            }.getOrNull()
+                        }
                     if (serviceDate != null) {
-                        "Введите время закрытия для ${serviceDate.format(bookingDateConfirmFormatter)} в формате HH:mm (например, 23:00).\nОтправьте «—», чтобы отменить."
+                        "Введите время закрытия для ${serviceDate.format(
+                            bookingDateConfirmFormatter,
+                        )} в формате HH:mm (например, 23:00).\nОтправьте «—», чтобы отменить."
                     } else {
                         "Введите время закрытия в формате HH:mm, например 23:00.\nОтправьте «—», чтобы отменить."
                     }
@@ -14270,9 +14659,12 @@ class TelegramBotRouter(
                         weekday
                             ?.takeIf { it in 1..7 }
                             ?.let { formatWeekday(DayOfWeek.of(it)) }
-                            ?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+                            ?.replaceFirstChar {
+                                if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
+                            }
                     if (dayLabel != null) {
-                        "$dayLabel: введите время закрытия в формате HH:mm (например, 23:00).\nОтправьте «—», чтобы отменить."
+                        "$dayLabel: введите время закрытия в формате HH:mm (например, 23:00).\n" +
+                            "Отправьте «—», чтобы отменить."
                     } else {
                         "Введите время закрытия в формате HH:mm, например 23:00.\nОтправьте «—», чтобы отменить."
                     }
@@ -14349,14 +14741,28 @@ class TelegramBotRouter(
                 }
                 dialogStateRepository.clear(chatId)
                 val dayLabel = formatWeekday(DayOfWeek.of(weekday))
-                enqueueMessage(chatId, "✅ ${dayLabel.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }}: часы обновлены.")
+                enqueueMessage(
+                    chatId,
+                    "✅ ${dayLabel.replaceFirstChar {
+                        if (it.isLowerCase()) {
+                            it.titlecase(
+                                Locale.ROOT,
+                            )
+                        } else {
+                            it.toString()
+                        }
+                    }}: часы обновлены.",
+                )
                 showOwnerVenueHoursDayScreenByVenueId(chatId, ownerUserId, venueId, weekday)
             }
             "override_time" -> {
                 val serviceDate = state.payload["service_date"]?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
                 if (serviceDate == null) {
                     dialogStateRepository.clear(chatId)
-                    enqueueMessage(chatId, "Не удалось продолжить настройку исключения. Откройте «📅 Исключения» снова.")
+                    enqueueMessage(
+                        chatId,
+                        "Не удалось продолжить настройку исключения. Откройте «📅 Исключения» снова.",
+                    )
                     return
                 }
                 val updated =
@@ -14455,8 +14861,8 @@ class TelegramBotRouter(
         val userId = from?.id
         if (userId == null) {
             enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
-                return
-            }
+            return
+        }
         val access = resolveSelectedVenueBotAccess(chatId, userId) ?: return
         if (access.role != VenueBotRole.OWNER) {
             enqueueMessage(chatId, "Доступ к настройке заведения пока не найден. Попробуйте позже.")
@@ -14914,7 +15320,7 @@ class TelegramBotRouter(
                     .map { it.userId to formatOwnerVenueStaffMember(it) }
             } else {
                 emptyList()
-        }
+            }
         enqueueMessage(
             chatId,
             if (requesterRole == VenueBotRole.MANAGER) {
@@ -14953,7 +15359,8 @@ class TelegramBotRouter(
             }
         enqueueMessage(
             chatId,
-            "👥 Добавить сотрудника\n\nВыберите роль для нового сотрудника.\nНажмите кнопку ℹ️ рядом с ролью, чтобы посмотреть права.",
+            "👥 Добавить сотрудника\n\nВыберите роль для нового сотрудника.\nНажмите кнопку ℹ️ " +
+                "рядом с ролью, чтобы посмотреть права.",
             TelegramKeyboards.inlineVenueOwnerStaffRoleChooserActions(venueId, allowedRoleKeys),
         )
     }
@@ -15116,7 +15523,8 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             "Изменить роль сотрудника?\n\n" +
-                "${formatOwnerVenueStaffMember(targetMember)} — сейчас ${humanizeOwnerVenueStaffRole(targetMember.role)}",
+                "${formatOwnerVenueStaffMember(targetMember)} — сейчас " +
+                "${humanizeOwnerVenueStaffRole(targetMember.role)}",
             TelegramKeyboards.inlineVenueOwnerStaffRoleChangeActions(
                 venueId = venueId,
                 userId = targetUserId,
@@ -15130,10 +15538,11 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val parsed = parseOwnerVenueStaffRoleChangeData(data) ?: run {
-            enqueueMessage(chatId, "Не удалось изменить роль. Попробуйте ещё раз.")
-            return
-        }
+        val parsed =
+            parseOwnerVenueStaffRoleChangeData(data) ?: run {
+                enqueueMessage(chatId, "Не удалось изменить роль. Попробуйте ещё раз.")
+                return
+            }
         val (venueId, targetUserId, roleKey) = parsed
         val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
         if (role != VenueBotRole.OWNER) {
@@ -15398,7 +15807,14 @@ class TelegramBotRouter(
         if (isPlatformOwner(userId)) {
             return TelegramKeyboards.ownerMainMenu()
         }
-        return when (val access = resolveSelectedVenueBotAccess(chatId = chatId, userId = userId, promptIfMultiple = false)) {
+        return when (
+            val access =
+                resolveSelectedVenueBotAccess(
+                    chatId = chatId,
+                    userId = userId,
+                    promptIfMultiple = false,
+                )
+        ) {
             null -> {
                 val hasVenueRole =
                     try {
@@ -16236,7 +16652,8 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             "🍽 Заказное меню\n" +
-                "Категории, позиции, цены и стоп-лист. Это меню гость видит по кнопке 🍽 Меню и использует для заказа по QR.\n\n" +
+                "Категории, позиции, цены и стоп-лист. Это меню гость видит по кнопке 🍽 Меню и " +
+                "использует для заказа по QR.\n\n" +
                 "Выберите раздел.",
             TelegramKeyboards.inlineVenueOwnerOrderMenuRootActions(
                 venueId = venueId,
@@ -16351,10 +16768,11 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Нет доступа к заведению.")
             return
         }
-        val category = loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-            enqueueMessage(chatId, "Раздел не найден.")
-            return
-        }
+        val category =
+            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+                enqueueMessage(chatId, "Раздел не найден.")
+                return
+            }
         enqueueMessage(
             chatId,
             buildString {
@@ -16795,10 +17213,11 @@ class TelegramBotRouter(
             return
         }
         val (venueId, sectionId) = parsed
-        val category = loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-            enqueueMessage(chatId, "Раздел не найден.")
-            return
-        }
+        val category =
+            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+                enqueueMessage(chatId, "Раздел не найден.")
+                return
+            }
         val hasAccess =
             runCatching { venueAccessRepository.hasVenueAdminOrOwner(userId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on order menu item add", it) }
@@ -17034,7 +17453,7 @@ class TelegramBotRouter(
                         option.id to buildOwnerVenueOrderMenuFlavorButtonLabel(option)
                     },
                 baseProfileButtons =
-                    DEFAULT_HOOKAH_FLAVOR_PROFILES.mapIndexedNotNull { index, profileName ->
+                    defaultHookahFlavorProfiles.mapIndexedNotNull { index, profileName ->
                         if (normalizeFlavorNameKey(profileName) in existingFlavorKeys) {
                             null
                         } else {
@@ -17168,7 +17587,7 @@ class TelegramBotRouter(
         val existingFlavorKeys = item.options.map { normalizeFlavorNameKey(it.name) }.toMutableSet()
         var addedCount = 0
         var existingCount = 0
-        DEFAULT_HOOKAH_FLAVOR_PROFILES.forEach { profileName ->
+        defaultHookahFlavorProfiles.forEach { profileName ->
             val key = normalizeFlavorNameKey(profileName)
             if (key in existingFlavorKeys) {
                 existingCount += 1
@@ -17259,7 +17678,8 @@ class TelegramBotRouter(
         }
         enqueueMessage(
             chatId,
-            "Сбросить варианты к базовым профилям?\nКастомные варианты будут сохранены, старые стандартные дубли будут убраны.",
+            "Сбросить варианты к базовым профилям?\nКастомные варианты будут сохранены, " +
+                "старые стандартные дубли будут убраны.",
             TelegramKeyboards.inlineVenueOwnerOrderMenuFlavorNormalizeConfirmActions(
                 venueId = venueId,
                 sectionId = sectionId,
@@ -17295,7 +17715,8 @@ class TelegramBotRouter(
         val result = normalizeHookahFlavorProfilesForItem(chatId = chatId, venueId = venueId, item = item) ?: return
         enqueueMessage(
             chatId,
-            "Готово. Удалено старых вариантов: ${result.removedCount}. Добавлено базовых профилей: ${result.addedCount}.",
+            "Готово. Удалено старых вариантов: ${result.removedCount}. Добавлено базовых " +
+                "профилей: ${result.addedCount}.",
         )
         showVenueOwnerOrderMenuItemFlavorsByIds(chatId, userId, venueId, sectionId, itemId)
     }
@@ -17330,7 +17751,7 @@ class TelegramBotRouter(
                 .map { normalizeFlavorNameKey(it.name) }
                 .toMutableSet()
         var addedCount = 0
-        DEFAULT_HOOKAH_FLAVOR_PROFILES.forEach { profileName ->
+        defaultHookahFlavorProfiles.forEach { profileName ->
             val key = normalizeFlavorNameKey(profileName)
             if (key in remainingFlavorKeys) {
                 return@forEach
@@ -17370,7 +17791,7 @@ class TelegramBotRouter(
         }
         val (venueId, sectionId, itemId, profileIndex) = parsed
         val profileName =
-            DEFAULT_HOOKAH_FLAVOR_PROFILES.getOrNull(profileIndex.toInt())
+            defaultHookahFlavorProfiles.getOrNull(profileIndex.toInt())
                 ?: run {
                     enqueueMessage(chatId, "Не удалось добавить вкусовой профиль. Попробуйте ещё раз.")
                     return
@@ -17461,7 +17882,10 @@ class TelegramBotRouter(
                     ),
             ),
         )
-        enqueueMessage(chatId, "Текущий вкус: ${option.name}\nВведите новое название вкуса.\nОтправьте «—», чтобы отменить.")
+        enqueueMessage(
+            chatId,
+            "Текущий вкус: ${option.name}\nВведите новое название вкуса.\nОтправьте «—», чтобы отменить.",
+        )
     }
 
     private suspend fun proceedOwnerVenueOrderMenuFlavorName(
@@ -17715,10 +18139,11 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Нет доступа к заведению.")
             return
         }
-        val category = loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-            enqueueMessage(chatId, "Раздел не найден.")
-            return
-        }
+        val category =
+            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+                enqueueMessage(chatId, "Раздел не найден.")
+                return
+            }
         if (category.items.none { it.id == itemId }) {
             enqueueMessage(chatId, "Позиция не найдена.")
             return
@@ -17820,10 +18245,11 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Нет доступа к заведению.")
             return
         }
-        val category = loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-            enqueueMessage(chatId, "Раздел не найден.")
-            return
-        }
+        val category =
+            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+                enqueueMessage(chatId, "Раздел не найден.")
+                return
+            }
         if (category.items.none { it.id == itemId }) {
             enqueueMessage(chatId, "Позиция не найдена.")
             return
@@ -17913,10 +18339,11 @@ class TelegramBotRouter(
         }
         val (venueId, sectionId, itemId) = parsed
         if (!ensureMenuAvailabilityManageAccess(chatId, userId, venueId)) return
-        val category = loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-            enqueueMessage(chatId, "Раздел не найден.")
-            return
-        }
+        val category =
+            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+                enqueueMessage(chatId, "Раздел не найден.")
+                return
+            }
         if (category.items.none { it.id == itemId }) {
             enqueueMessage(chatId, "Позиция не найдена.")
             return
@@ -17963,10 +18390,11 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Нет доступа к заведению.")
             return
         }
-        val category = loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-            enqueueMessage(chatId, "Раздел не найден.")
-            return
-        }
+        val category =
+            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+                enqueueMessage(chatId, "Раздел не найден.")
+                return
+            }
         if (category.items.none { it.id == itemId }) {
             enqueueMessage(chatId, "Позиция не найдена.")
             return
@@ -18071,7 +18499,8 @@ class TelegramBotRouter(
                                 "owner_venue_order_menu_stoplist_unstop:$venueId:${entry.sectionId}:${entry.itemId}"
                         } else {
                             "✅ Убрать из стоп-листа: ${entry.optionName}" to
-                                "owner_venue_order_menu_stoplist_unstop_option:$venueId:${entry.sectionId}:${entry.itemId}:${entry.optionId}"
+                                "owner_venue_order_menu_stoplist_unstop_option:" +
+                                "$venueId:${entry.sectionId}:${entry.itemId}:${entry.optionId}"
                         }
                     },
             ),
@@ -18153,7 +18582,7 @@ class TelegramBotRouter(
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return null
-        }
+            }
         return categories.firstOrNull { it.id == sectionId }
     }
 
@@ -18163,10 +18592,11 @@ class TelegramBotRouter(
         sectionId: Long,
         itemId: Long,
     ): Pair<VenueMenuCategory, com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem>? {
-        val category = loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-            enqueueMessage(chatId, "Раздел не найден.")
-            return null
-        }
+        val category =
+            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+                enqueueMessage(chatId, "Раздел не найден.")
+                return null
+            }
         val item =
             category.items.firstOrNull { it.id == itemId }
                 ?: run {
@@ -18194,11 +18624,11 @@ class TelegramBotRouter(
 
     private fun isObsoleteHookahFlavorProfileValue(name: String): Boolean {
         val trimmed = name.trim()
-        if (trimmed in DEFAULT_HOOKAH_FLAVOR_PROFILES) {
+        if (trimmed in defaultHookahFlavorProfiles) {
             return false
         }
         val key = normalizeFlavorNameKey(trimmed)
-        return key in OBSOLETE_HOOKAH_FLAVOR_PROFILE_KEYS
+        return key in obsoleteHookahFlavorProfileKeys
     }
 
     private fun normalizeFlavorNameKey(name: String): String =
@@ -18211,7 +18641,10 @@ class TelegramBotRouter(
             append("🍽 Раздел: ${category.name}")
             append("\nТип: ${humanizeMenuSemanticType(category.categoryType)}")
             append("\nПозиции: ${category.items.size}")
-            append("\n\nТип раздела применяется ко всем позициям внутри. Тип отдельной позиции меняйте только если она отличается от раздела.")
+            append(
+                "\n\nТип раздела применяется ко всем позициям внутри. Тип отдельной позиции " +
+                    "меняйте только если она отличается от раздела.",
+            )
             if (category.items.isNotEmpty()) {
                 append("\n\n")
                 category.items.forEach { item ->
@@ -18225,9 +18658,7 @@ class TelegramBotRouter(
             append("\nВыберите действие.")
         }
 
-    private fun buildOwnerVenueOrderMenuStopListText(
-        stopListEntries: List<OwnerVenueStopListEntry>,
-    ): String =
+    private fun buildOwnerVenueOrderMenuStopListText(stopListEntries: List<OwnerVenueStopListEntry>): String =
         buildString {
             append("🚫 Стоп-лист\n\n")
             val groupedBySection = stopListEntries.groupBy { it.sectionName }
@@ -18238,7 +18669,12 @@ class TelegramBotRouter(
                 groupedByItem.values.forEach { itemEntries ->
                     val itemEntry = itemEntries.first()
                     val hasItemInStopList = itemEntries.any { it.optionId == null }
-                    append("• ${itemEntry.itemName} — ${formatOwnerVenueOrderMenuPrice(itemEntry.itemPriceMinor, itemEntry.currency)}")
+                    append(
+                        "• ${itemEntry.itemName} — ${formatOwnerVenueOrderMenuPrice(
+                            itemEntry.itemPriceMinor,
+                            itemEntry.currency,
+                        )}",
+                    )
                     if (hasItemInStopList) {
                         append(" [позиция]")
                     }
@@ -18293,7 +18729,9 @@ class TelegramBotRouter(
         "${item.name} — ${formatOwnerVenueOrderMenuPrice(item.priceMinor, item.currency)}" +
             if (item.isAvailable) "" else " [стоп-лист]"
 
-    private fun buildOwnerVenueOrderMenuFlavorListText(item: com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem): String =
+    private fun buildOwnerVenueOrderMenuFlavorListText(
+        item: com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem,
+    ): String =
         buildString {
             append("Профиль вкуса\n\n")
             if (item.options.isEmpty()) {
@@ -18311,7 +18749,9 @@ class TelegramBotRouter(
             append("\nБазовые профили можно добавить быстрыми кнопками ниже.")
         }
 
-    private fun buildOwnerVenueOrderMenuFlavorOptionText(option: com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOption): String =
+    private fun buildOwnerVenueOrderMenuFlavorOptionText(
+        option: com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOption,
+    ): String =
         buildString {
             append(option.name)
             append("\n")
@@ -18320,8 +18760,7 @@ class TelegramBotRouter(
 
     private fun buildOwnerVenueOrderMenuFlavorButtonLabel(
         option: com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOption,
-    ): String =
-        option.name + if (option.isAvailable) "" else " [стоп-лист]"
+    ): String = option.name + if (option.isAvailable) "" else " [стоп-лист]"
 
     private fun formatOwnerVenueOrderMenuPrice(
         priceMinor: Long,
@@ -19323,14 +19762,18 @@ class TelegramBotRouter(
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
-        }
+            }
         dialogStateRepository.clear(chatId)
         val venueName = loadVenueNameForStaffInvite(venueId)
         val fromMarketing = state.payload["origin"] == "marketing"
         enqueueMessage(
             chatId,
             "Ссылка на отзывы сохранена.\n\n" + buildVenuePublicReviewUrlText(venueName, settings.publicReviewUrl),
-            publicReviewUrlActions(venueId, hasUrl = !settings.publicReviewUrl.isNullOrBlank(), fromMarketing = fromMarketing),
+            publicReviewUrlActions(
+                venueId,
+                hasUrl = !settings.publicReviewUrl.isNullOrBlank(),
+                fromMarketing = fromMarketing,
+            ),
         )
     }
 
@@ -19655,8 +20098,7 @@ class TelegramBotRouter(
         ;
 
         companion object {
-            fun fromKey(key: String?): VenueFeedbackFilter? =
-                entries.firstOrNull { it.key == key }
+            fun fromKey(key: String?): VenueFeedbackFilter? = entries.firstOrNull { it.key == key }
         }
     }
 
@@ -19737,19 +20179,22 @@ class TelegramBotRouter(
     ): VenueStatsPeriod? {
         return when (data) {
             "today",
-            "stats_period_today" ->
+            "stats_period_today",
+            ->
                 VenueStatsPeriod(
                     title = "Сегодня",
                     periodStart = LocalDate.now(zone).atStartOfDay(zone).toInstant(),
                 )
             "7d",
-            "stats_period_7d" ->
+            "stats_period_7d",
+            ->
                 VenueStatsPeriod(
                     title = "7 дней",
                     periodStart = LocalDate.now(zone).minusDays(7).atStartOfDay(zone).toInstant(),
                 )
             "30d",
-            "stats_period_30d" ->
+            "stats_period_30d",
+            ->
                 VenueStatsPeriod(
                     title = "30 дней",
                     periodStart = LocalDate.now(zone).minusDays(30).atStartOfDay(zone).toInstant(),
@@ -20000,7 +20445,12 @@ class TelegramBotRouter(
         val replyMarkup =
             when (nextStatus) {
                 OrderBatchStatus.ACCEPTED -> TelegramKeyboards.inlineStaffChatOrderBatchDeliver(venueId, batchId)
-                OrderBatchStatus.DELIVERED -> TelegramKeyboards.inlineStaffChatOrderCloseBill(venueId, result.orderId, batchId)
+                OrderBatchStatus.DELIVERED ->
+                    TelegramKeyboards.inlineStaffChatOrderCloseBill(
+                        venueId,
+                        result.orderId,
+                        batchId,
+                    )
                 else -> null
             }
         notifyGuestAboutStaffChatBatchStatusChange(
@@ -20030,16 +20480,29 @@ class TelegramBotRouter(
         data: String,
     ) {
         try {
-            val action = parseStaffChatOrderCloseActionData(data, "sc_oc_ask:") ?: run {
-                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
-                return
-            }
+            val action =
+                parseStaffChatOrderCloseActionData(data, "sc_oc_ask:") ?: run {
+                    enqueueCallbackAnswer(
+                        chatId,
+                        callbackQueryId,
+                        text = "Не удалось выполнить действие",
+                        showAlert = true,
+                    )
+                    return
+                }
             val role = resolveVenueRoleForStaffChatAction(user.id, action.venueId)
             if (role == null) {
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "Нет доступа", showAlert = true)
                 return
             }
-            if (editClosedStaffChatOrderBatchMessageIfNeeded(chatId, messageId, action.venueId, action.orderId, action.batchId)) {
+            if (editClosedStaffChatOrderBatchMessageIfNeeded(
+                    chatId,
+                    messageId,
+                    action.venueId,
+                    action.orderId,
+                    action.batchId,
+                )
+            ) {
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "Счёт уже закрыт.")
                 return
             }
@@ -20050,7 +20513,12 @@ class TelegramBotRouter(
                 orderId = action.orderId,
                 batchId = action.batchId,
                 statusLine = "Статус: доставлен",
-                replyMarkup = TelegramKeyboards.inlineStaffChatOrderCloseBillConfirm(action.venueId, action.orderId, action.batchId),
+                replyMarkup =
+                    TelegramKeyboards.inlineStaffChatOrderCloseBillConfirm(
+                        action.venueId,
+                        action.orderId,
+                        action.batchId,
+                    ),
                 textOverride = currentText,
             )
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Подтвердите закрытие")
@@ -20072,16 +20540,29 @@ class TelegramBotRouter(
         data: String,
     ) {
         try {
-            val action = parseStaffChatOrderCloseActionData(data, "sc_oc_back:") ?: run {
-                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
-                return
-            }
+            val action =
+                parseStaffChatOrderCloseActionData(data, "sc_oc_back:") ?: run {
+                    enqueueCallbackAnswer(
+                        chatId,
+                        callbackQueryId,
+                        text = "Не удалось выполнить действие",
+                        showAlert = true,
+                    )
+                    return
+                }
             val role = resolveVenueRoleForStaffChatAction(user.id, action.venueId)
             if (role == null) {
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "Нет доступа", showAlert = true)
                 return
             }
-            if (editClosedStaffChatOrderBatchMessageIfNeeded(chatId, messageId, action.venueId, action.orderId, action.batchId)) {
+            if (editClosedStaffChatOrderBatchMessageIfNeeded(
+                    chatId,
+                    messageId,
+                    action.venueId,
+                    action.orderId,
+                    action.batchId,
+                )
+            ) {
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "Счёт уже закрыт.")
                 return
             }
@@ -20092,7 +20573,12 @@ class TelegramBotRouter(
                 orderId = action.orderId,
                 batchId = action.batchId,
                 statusLine = "Статус: доставлен",
-                replyMarkup = TelegramKeyboards.inlineStaffChatOrderCloseBill(action.venueId, action.orderId, action.batchId),
+                replyMarkup =
+                    TelegramKeyboards.inlineStaffChatOrderCloseBill(
+                        action.venueId,
+                        action.orderId,
+                        action.batchId,
+                    ),
                 textOverride = currentText,
             )
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Ок")
@@ -20333,7 +20819,12 @@ class TelegramBotRouter(
         val replyMarkup =
             when (result.status) {
                 OrderWorkflowStatus.ACCEPTED -> TelegramKeyboards.inlineStaffChatOrderBatchDeliver(venueId, batchId)
-                OrderWorkflowStatus.DELIVERED -> TelegramKeyboards.inlineStaffChatOrderCloseBill(venueId, result.orderId, batchId)
+                OrderWorkflowStatus.DELIVERED ->
+                    TelegramKeyboards.inlineStaffChatOrderCloseBill(
+                        venueId,
+                        result.orderId,
+                        batchId,
+                    )
                 else -> null
             }
         editStaffChatOrderBatchMessage(
@@ -20676,7 +21167,11 @@ class TelegramBotRouter(
             buildList {
                 add("✏️ Изменить счёт" to "staff_venue_orders_edit_bill:$venueId:$orderId")
                 if (canCloseOrder) {
-                    add("🔒 Закрыть заказ" to "staff_venue_orders_status:$venueId:$orderId:${OrderWorkflowStatus.CLOSED.toApi()}")
+                    add(
+                        "🔒 Закрыть заказ" to
+                            "staff_venue_orders_status:$venueId:$orderId:" +
+                            OrderWorkflowStatus.CLOSED.toApi(),
+                    )
                 }
                 if (detail.status == OrderWorkflowStatus.NEW) {
                     add("❌ Отменить заказ" to "staff_venue_orders_cancel_order:$venueId:$orderId")
@@ -20761,7 +21256,13 @@ class TelegramBotRouter(
                 statusButtons = emptyList(),
                 actionButtons =
                     listOf(
-                        "🚫 Позиция закончилась" to compactStaffVenueOrderItemCallback("obi_unav_ask", venueId, orderId, batchItemId),
+                        "🚫 Позиция закончилась" to
+                            compactStaffVenueOrderItemCallback(
+                                "obi_unav_ask",
+                                venueId,
+                                orderId,
+                                batchItemId,
+                            ),
                         "❌ Убрать из счёта" to "staff_order_bill_exclude:$venueId:$orderId:$batchItemId",
                         "🏷 Применить скидку" to "staff_order_bill_discount:$venueId:$orderId:$batchItemId",
                     ),
@@ -20801,7 +21302,13 @@ class TelegramBotRouter(
                 statusButtons = emptyList(),
                 actionButtons =
                     listOf(
-                        "✅ Да, убрать" to compactStaffVenueOrderItemCallback("obi_unav_ok", venueId, orderId, batchItemId),
+                        "✅ Да, убрать" to
+                            compactStaffVenueOrderItemCallback(
+                                "obi_unav_ok",
+                                venueId,
+                                orderId,
+                                batchItemId,
+                            ),
                     ),
                 backButton = "↩️ Назад" to "staff_order_bill_item:$venueId:$orderId:$batchItemId",
             ),
@@ -20855,9 +21362,27 @@ class TelegramBotRouter(
                     "Мы убрали его из заказа.\n\n" +
                     "Что сделать?",
                 TelegramKeyboards.inlineGuestItemUnavailableActions(
-                    chooseReplacementCallback = compactStaffVenueOrderItemCallback("giu_menu", venueId, orderId, batchItemId),
-                    keepWithoutItemCallback = compactStaffVenueOrderItemCallback("giu_keep", venueId, orderId, batchItemId),
-                    callStaffCallback = compactStaffVenueOrderItemCallback("giu_call", venueId, orderId, batchItemId),
+                    chooseReplacementCallback =
+                        compactStaffVenueOrderItemCallback(
+                            "giu_menu",
+                            venueId,
+                            orderId,
+                            batchItemId,
+                        ),
+                    keepWithoutItemCallback =
+                        compactStaffVenueOrderItemCallback(
+                            "giu_keep",
+                            venueId,
+                            orderId,
+                            batchItemId,
+                        ),
+                    callStaffCallback =
+                        compactStaffVenueOrderItemCallback(
+                            "giu_call",
+                            venueId,
+                            orderId,
+                            batchItemId,
+                        ),
                     keepWithoutItemText = guestUnavailableKeepButtonLabel(result.itemName),
                 ),
             )
@@ -20879,7 +21404,9 @@ class TelegramBotRouter(
         val context =
             resolveGuestContextForUnavailableAction(
                 chatId,
-                missingMessage = "Выбрать замену можно только когда вы находитесь за столом. Отсканируйте QR-код на столе.",
+                missingMessage =
+                    "Выбрать замену можно только когда вы находитесь за столом. Отсканируйте QR-код на " +
+                        "столе.",
             ) ?: return
         if (context.userId != userId || context.table.venueId != action.venueId) {
             enqueueMessage(
@@ -20909,7 +21436,9 @@ class TelegramBotRouter(
         val context =
             resolveGuestContextForUnavailableAction(
                 chatId,
-                missingMessage = "Позвать персонал можно только когда вы находитесь за столом. Отсканируйте QR-код на столе.",
+                missingMessage =
+                    "Позвать персонал можно только когда вы находитесь за столом. Отсканируйте QR-код на " +
+                        "столе.",
             ) ?: return
         if (context.userId != userId || context.table.venueId != action.venueId) {
             enqueueMessage(
@@ -21109,10 +21638,11 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Введите число от 1 до 100.\nНапример: 20")
             return
         }
-        val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: run {
-            dialogStateRepository.clear(chatId)
-            return
-        }
+        val role =
+            resolveVenueRoleForVenue(chatId, userId, venueId) ?: run {
+                dialogStateRepository.clear(chatId)
+                return
+            }
         val actorRole =
             when (role) {
                 VenueBotRole.OWNER -> VenueRole.OWNER
@@ -21169,10 +21699,11 @@ class TelegramBotRouter(
             showVenueStaffOrderBillItemAction(chatId, userId, "staff_order_bill_item:$venueId:$orderId:$batchItemId")
             return
         }
-        val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: run {
-            dialogStateRepository.clear(chatId)
-            return
-        }
+        val role =
+            resolveVenueRoleForVenue(chatId, userId, venueId) ?: run {
+                dialogStateRepository.clear(chatId)
+                return
+            }
         val actorRole =
             when (role) {
                 VenueBotRole.OWNER -> VenueRole.OWNER
@@ -21678,10 +22209,11 @@ class TelegramBotRouter(
             }
             return
         }
-        val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: run {
-            dialogStateRepository.clear(chatId)
-            return
-        }
+        val role =
+            resolveVenueRoleForVenue(chatId, userId, venueId) ?: run {
+                dialogStateRepository.clear(chatId)
+                return
+            }
         val actorRole =
             when (role) {
                 VenueBotRole.OWNER -> VenueRole.OWNER
@@ -21804,7 +22336,7 @@ class TelegramBotRouter(
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
-        }
+            }
         if (bookings.isEmpty()) {
             enqueueMessage(
                 chatId,
@@ -21999,7 +22531,8 @@ class TelegramBotRouter(
                                 "staff_venue_stoplist_unstop_item:$venueId:${entry.sectionId}:${entry.itemId}"
                         } else {
                             "✅ Убрать из стоп-листа: ${entry.optionName}" to
-                                "staff_venue_stoplist_unstop_option:$venueId:${entry.sectionId}:${entry.itemId}:${entry.optionId}"
+                                "staff_venue_stoplist_unstop_option:" +
+                                "$venueId:${entry.sectionId}:${entry.itemId}:${entry.optionId}"
                         }
                     },
             ),
@@ -22174,7 +22707,11 @@ class TelegramBotRouter(
                 venueId = venueId,
                 sectionId = sectionId,
                 itemId = itemId,
-                flavorButtons = item.options.map { option -> option.id to buildOwnerVenueOrderMenuFlavorButtonLabel(option) },
+                flavorButtons =
+                    item.options.map {
+                            option ->
+                        option.id to buildOwnerVenueOrderMenuFlavorButtonLabel(option)
+                    },
             ),
         )
     }
@@ -22565,7 +23102,13 @@ class TelegramBotRouter(
             append("🧾 Заказы")
             append("\n\n")
             items.forEach { item ->
-                append("• ${formatTelegramOrderDisplayLabel(item.orderId, item.displayNumber, item.displayDate)} · Стол ${item.tableNumber}")
+                append(
+                    "• ${formatTelegramOrderDisplayLabel(
+                        item.orderId,
+                        item.displayNumber,
+                        item.displayDate,
+                    )} · Стол ${item.tableNumber}",
+                )
                 append("\n  Статус: ${humanizeVenueOrderWorkflowStatus(item.status)}")
                 append("\n  Гость: ${formatGuestDisplayNameForStaff(item.guestDisplayName)}")
                 val reordersCount = (item.activeBatchesCount - 1).coerceAtLeast(0)
@@ -22575,7 +23118,10 @@ class TelegramBotRouter(
                 if (item.promoDiscountMinor > 0L && item.payableMinor != null && !item.currency.isNullOrBlank()) {
                     val promoSummary =
                         formatVenuePromotionDiscountSummary(item.promotionDiscounts)
-                            ?: listOf("🎁 Акция применена: −${formatCompactMoney(item.promoDiscountMinor, item.currency)}")
+                            ?: listOf(
+                                "🎁 Акция применена: −" +
+                                    formatCompactMoney(item.promoDiscountMinor, item.currency),
+                            )
                     promoSummary.forEach { line -> append("\n  ").append(line) }
                     append("\n  К оплате: ").append(formatCompactMoney(item.payableMinor, item.currency))
                 }
@@ -22594,10 +23140,16 @@ class TelegramBotRouter(
             } else {
                 ""
             }
-        return "${formatTelegramOrderDisplayLabel(item.orderId, item.displayNumber, item.displayDate)} · Стол ${item.tableNumber} · ${humanizeVenueOrderWorkflowStatus(item.status)}$reorderSuffix"
+        return "${formatTelegramOrderDisplayLabel(
+            item.orderId,
+            item.displayNumber,
+            item.displayDate,
+        )} · Стол ${item.tableNumber} · ${humanizeVenueOrderWorkflowStatus(item.status)}$reorderSuffix"
     }
 
-    private fun buildVenueStaffOrderDetailsText(detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail): String {
+    private fun buildVenueStaffOrderDetailsText(
+        detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail,
+    ): String {
         val currentBatch = currentVenueOrderBatch(detail)
         val currentBatchItems = currentBatch?.items.orEmpty().filter { item -> isActiveBillItem(item) }
         val isReorder = !isCurrentBatchFirstInOrder(detail, currentBatch)
@@ -22606,12 +23158,20 @@ class TelegramBotRouter(
             append("\nСтол: ${detail.tableNumber}")
             append('\n').append(currentBatch?.let { orderBatchGuestLine(it) } ?: orderDetailGuestSummaryLine(detail))
             append("\nСтатус: ${humanizeVenueOrderWorkflowStatus(detail.status)}")
-            venueOrderMoneySummary(detail.batches.flatMap { batch -> batch.items }.filter { item -> isActiveBillItem(item) })
+            venueOrderMoneySummary(
+                detail.batches.flatMap {
+                        batch ->
+                    batch.items
+                }.filter { item -> isActiveBillItem(item) },
+            )
                 ?.takeIf { summary -> summary.promoDiscountMinor > 0L }
                 ?.let { summary ->
                     val promoSummary =
                         formatVenuePromotionDiscountSummary(detail.promotionDiscounts)
-                            ?: listOf("🎁 Акция применена: −${formatCompactMoney(summary.promoDiscountMinor, summary.currency)}")
+                            ?: listOf(
+                                "🎁 Акция применена: −" +
+                                    formatCompactMoney(summary.promoDiscountMinor, summary.currency),
+                            )
                     promoSummary.forEach { line -> append("\n").append(line) }
                     append("\nК оплате: ").append(formatCompactMoney(summary.payableMinor, summary.currency))
                 }
@@ -22785,7 +23345,12 @@ class TelegramBotRouter(
             val itemCurrency = item.currency?.takeIf { it.isNotBlank() } ?: return@forEach
             val baseTotalMinor = priceMinor * item.qty
             grossMinor += baseTotalMinor
-            manualDiscountMinor += item.discountPercent?.takeIf { it in 1..100 }?.let { baseTotalMinor * it / 100 } ?: 0L
+            val manualDiscountForItem =
+                item.discountPercent
+                    ?.takeIf { it in 1..100 }
+                    ?.let { baseTotalMinor * it / 100 }
+                    ?: 0L
+            manualDiscountMinor += manualDiscountForItem
             promoDiscountMinor += item.promoDiscountMinor.coerceAtLeast(0L)
             payableMinor += venueOrderBillItemPayableMinor(item) ?: return@forEach
             if (currency == null) {
@@ -22805,10 +23370,11 @@ class TelegramBotRouter(
     private fun applyDiscountPercent(
         amountMinor: Long,
         discountPercent: Int,
-    ): Long =
-        amountMinor * (100 - discountPercent) / 100
+    ): Long = amountMinor * (100 - discountPercent) / 100
 
-    private fun buildVenueStaffOrderFullText(detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail): String {
+    private fun buildVenueStaffOrderFullText(
+        detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail,
+    ): String {
         val batches =
             detail.batches
                 .sortedWith(compareBy({ it.createdAt }, { it.batchId }))
@@ -22881,7 +23447,12 @@ class TelegramBotRouter(
                                 append(" — $priceText")
                                 val baseTotalMinor = item.priceMinor?.let { it * item.qty } ?: 0L
                                 grossMinor += baseTotalMinor
-                                manualDiscountMinor += item.discountPercent?.takeIf { it in 1..100 }?.let { baseTotalMinor * it / 100 } ?: 0L
+                                val manualDiscountForItem =
+                                    item.discountPercent
+                                        ?.takeIf { it in 1..100 }
+                                        ?.let { baseTotalMinor * it / 100 }
+                                        ?: 0L
+                                manualDiscountMinor += manualDiscountForItem
                                 promoDiscountMinor += item.promoDiscountMinor.coerceAtLeast(0L)
                                 totalMinor += payableMinor
                                 if (totalCurrency == null) {
@@ -23055,12 +23626,24 @@ class TelegramBotRouter(
                 if (isCurrentBatchFirstInOrder(detail, batch)) {
                     formatTelegramOrderDisplayLabel(detail.orderId, detail.displayNumber, detail.displayDate)
                 } else if (isReplacementBeforeAcceptBatch(detail, batch)) {
-                    "${formatTelegramOrderDisplayLabel(detail.orderId, detail.displayNumber, detail.displayDate)} обновлён"
+                    "${formatTelegramOrderDisplayLabel(
+                        detail.orderId,
+                        detail.displayNumber,
+                        detail.displayDate,
+                    )} обновлён"
                 } else {
-                    "Дозаказ к ${formatTelegramOrderDisplayLabel(detail.orderId, detail.displayNumber, detail.displayDate)}"
+                    "Дозаказ к ${formatTelegramOrderDisplayLabel(
+                        detail.orderId,
+                        detail.displayNumber,
+                        detail.displayDate,
+                    )}"
                 }
             } else {
-                "${batches.size} дозаказа к ${formatTelegramOrderDisplayLabel(detail.orderId, detail.displayNumber, detail.displayDate)}"
+                "${batches.size} дозаказа к ${formatTelegramOrderDisplayLabel(
+                    detail.orderId,
+                    detail.displayNumber,
+                    detail.displayDate,
+                )}"
             }
         enqueueStaffChatOrderStatusUpdate(
             venueId = detail.venueId,
@@ -23089,8 +23672,7 @@ class TelegramBotRouter(
 
     private fun pendingNewVenueOrderBatches(
         detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail,
-    ): List<OrderBatchDetail> =
-        operationalBatchesByStatus(detail, OrderWorkflowStatus.NEW)
+    ): List<OrderBatchDetail> = operationalBatchesByStatus(detail, OrderWorkflowStatus.NEW)
 
     private fun operationalBatchesByStatus(
         detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail,
@@ -23380,8 +23962,7 @@ class TelegramBotRouter(
         venueId: Long,
         orderId: Long,
         batchItemId: Long,
-    ): String =
-        "$prefix:${compactCallbackId(venueId)}:${compactCallbackId(orderId)}:${compactCallbackId(batchItemId)}"
+    ): String = "$prefix:${compactCallbackId(venueId)}:${compactCallbackId(orderId)}:${compactCallbackId(batchItemId)}"
 
     private fun compactCallbackId(value: Long): String = java.lang.Long.toString(value, 36)
 
@@ -23476,9 +24057,7 @@ class TelegramBotRouter(
         }
     }
 
-    private fun buildOwnerVenueStaffRootText(
-        members: List<VenueAccessRepository.VenueMemberSummary>,
-    ): String =
+    private fun buildOwnerVenueStaffRootText(members: List<VenueAccessRepository.VenueMemberSummary>): String =
         buildString {
             append("👥 Персонал")
             append("\n\n")
@@ -23495,9 +24074,7 @@ class TelegramBotRouter(
             }
         }
 
-    private fun buildManagerVenueStaffRootText(
-        members: List<VenueAccessRepository.VenueMemberSummary>,
-    ): String =
+    private fun buildManagerVenueStaffRootText(members: List<VenueAccessRepository.VenueMemberSummary>): String =
         buildString {
             append("👥 Персонал")
             append("\n\n")
@@ -23519,9 +24096,7 @@ class TelegramBotRouter(
             }
         }
 
-    private fun formatOwnerVenueStaffMember(
-        member: VenueAccessRepository.VenueMemberSummary,
-    ): String {
+    private fun formatOwnerVenueStaffMember(member: VenueAccessRepository.VenueMemberSummary): String {
         val username = member.username?.trim().orEmpty()
         if (username.isNotBlank()) {
             return "@$username"
@@ -23556,13 +24131,15 @@ class TelegramBotRouter(
             "owner" ->
                 "ℹ️ Роль Owner\n\n" +
                     "Может:\n" +
-                    "• Полностью управлять заведением: меню, цены, стоп-лист, заказы, брони, часы, описание, столы и QR, персонал.\n\n" +
+                    "• Полностью управлять заведением: меню, цены, стоп-лист, заказы, брони, часы, " +
+                    "описание, столы и QR, персонал.\n\n" +
                     "Не может:\n" +
                     "• Изменять коммерческие условия платформы и подписку."
             "manager" ->
                 "ℹ️ Роль Manager\n\n" +
                     "Может:\n" +
-                    "• Управлять операционной работой заведения: меню, цены, стоп-лист, заказы, брони, часы, описание, столы и QR.\n\n" +
+                    "• Управлять операционной работой заведения: меню, цены, стоп-лист, заказы, " +
+                    "брони, часы, описание, столы и QR.\n\n" +
                     "Не может:\n" +
                     "• Управлять владением заведением и коммерческими условиями платформы."
             "staff" ->
@@ -23571,7 +24148,8 @@ class TelegramBotRouter(
                     "• Выполнять операции смены: работа с заказами и статусами, стоп-лист, текущий поток гостей.\n\n" +
                     "Не может:\n" +
                     "• Изменять цены, удалять меню и разделы, менять критичные настройки и управлять владельцами.\n\n" +
-                    "Рекомендуется использовать отдельный нейтральный аккаунт заведения, который постоянно находится в кальянной, а не личный аккаунт сотрудника."
+                    "Рекомендуется использовать отдельный нейтральный аккаунт заведения, " +
+                    "который постоянно находится в кальянной, а не личный аккаунт сотрудника."
             else -> null
         }
 
@@ -23593,7 +24171,10 @@ class TelegramBotRouter(
                 append("\nКод приглашения: $inviteCode")
             }
             if (isStaffRole) {
-                append("\n\nРекомендуется использовать отдельный нейтральный аккаунт заведения, а не личный аккаунт сотрудника.")
+                append(
+                    "\n\nРекомендуется использовать отдельный нейтральный аккаунт заведения, а не " +
+                        "личный аккаунт сотрудника.",
+                )
             }
         }
 
@@ -23602,7 +24183,9 @@ class TelegramBotRouter(
             result.roleChanged ->
                 "✅ Приглашение принято.\nВаша роль обновлена: ${humanizeOwnerVenueStaffRole(result.member.role)}."
             result.keptHigherRole ->
-                "✅ Приглашение принято.\nУ вас уже есть более высокая роль: ${humanizeOwnerVenueStaffRole(result.member.role)}."
+                "✅ Приглашение принято.\nУ вас уже есть более высокая роль: ${humanizeOwnerVenueStaffRole(
+                    result.member.role,
+                )}."
             result.alreadyMember ->
                 "✅ Приглашение принято.\nУ вас уже есть доступ к заведению."
             else ->
@@ -24481,7 +25064,9 @@ class TelegramBotRouter(
             append("Коммерческие условия")
             append("\nЗаявка: ${request.venueName}")
             append("\nКонтакт: ${request.contact}")
-            append("\n\nВыберите пробный период. Если trial не нужен, выберите «Без trial» или введите 0 в ручном вводе.")
+            append(
+                "\n\nВыберите пробный период. Если trial не нужен, выберите «Без trial» или введите 0 в ручном вводе.",
+            )
         }
 
     private fun buildOwnerCommercialTermsSummaryText(request: VenueConnectionRequestRecord): String {
@@ -24494,7 +25079,9 @@ class TelegramBotRouter(
         val currentPriceText = request.currentPriceRub?.let(::formatCommercialMonthlyRub) ?: "—"
         val futureText =
             if (request.futurePriceRub != null && request.futurePriceEffectiveOn != null) {
-                "${formatCommercialMonthlyRub(request.futurePriceRub)} с ${request.futurePriceEffectiveOn.format(bookingDateConfirmFormatter)}"
+                "${formatCommercialMonthlyRub(
+                    request.futurePriceRub,
+                )} с ${request.futurePriceEffectiveOn.format(bookingDateConfirmFormatter)}"
             } else {
                 "Не задана"
             }
@@ -24529,9 +25116,16 @@ class TelegramBotRouter(
             append("\nДоступ передан заявителю.")
             append("\n\n")
             if (termsApplied) {
-                append(buildOwnerCommercialTermsSummaryText(request).replace("Коммерческие условия", "Коммерческие условия применены"))
+                append(
+                    buildOwnerCommercialTermsSummaryText(
+                        request,
+                    ).replace("Коммерческие условия", "Коммерческие условия применены"),
+                )
             } else {
-                append("⚠️ Коммерческие условия не применены автоматически. Проверьте подписку вручную в карточке платформы.")
+                append(
+                    "⚠️ Коммерческие условия не применены автоматически. Проверьте подписку вручную в " +
+                        "карточке платформы.",
+                )
                 request.commercialNote?.takeIf { it.isNotBlank() }?.let { append("\nЗаметка из заявки: $it") }
             }
         }
@@ -24651,8 +25245,7 @@ class TelegramBotRouter(
         return LocalDateTime.of(actualDate, slotTime)
     }
 
-    private fun VenueBookingHours.isOpenAcrossMidnight(): Boolean =
-        !isClosed && !closesAt.isAfter(opensAt)
+    private fun VenueBookingHours.isOpenAcrossMidnight(): Boolean = !isClosed && !closesAt.isAfter(opensAt)
 
     private fun formatVenueAddress(venue: CatalogVenueShort): String {
         val address = venue.address?.trim().orEmpty().ifBlank { null }
@@ -24926,7 +25519,11 @@ class TelegramBotRouter(
             "⭐ Любимое\nВыберите позицию.",
             TelegramKeyboards.inlineFavoriteMenuItems(
                 items.map { item ->
-                    Triple(item.categoryId, item.itemId, "${item.name} — ${formatPrice(item.priceMinor, item.currency)}")
+                    Triple(
+                        item.categoryId,
+                        item.itemId,
+                        "${item.name} — ${formatPrice(item.priceMinor, item.currency)}",
+                    )
                 },
             ),
         )
@@ -25093,10 +25690,11 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        val category = menu.categories.firstOrNull { it.id == categoryId } ?: run {
-            enqueueMessage(chatId, "Категория не найдена.")
-            return
-        }
+        val category =
+            menu.categories.firstOrNull { it.id == categoryId } ?: run {
+                enqueueMessage(chatId, "Категория не найдена.")
+                return
+            }
         val lines =
             category.items.mapIndexed { index, item ->
                 "${index + 1}. ${item.name} — ${formatPrice(item.priceMinor, item.currency)}"
@@ -25149,14 +25747,16 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        val category = menu.categories.firstOrNull { it.id == categoryId } ?: run {
-            enqueueMessage(chatId, "Категория не найдена.")
-            return
-        }
-        val item = category.items.firstOrNull { it.id == itemId } ?: run {
-            enqueueMessage(chatId, "Позиция не найдена.")
-            return
-        }
+        val category =
+            menu.categories.firstOrNull { it.id == categoryId } ?: run {
+                enqueueMessage(chatId, "Категория не найдена.")
+                return
+            }
+        val item =
+            category.items.firstOrNull { it.id == itemId } ?: run {
+                enqueueMessage(chatId, "Позиция не найдена.")
+                return
+            }
         val availableOptions =
             try {
                 venueMenuRepository.listAvailableOptionsForItem(
@@ -25248,14 +25848,16 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        val category = menu.categories.firstOrNull { it.id == categoryId } ?: run {
-            enqueueMessage(chatId, "Категория не найдена.")
-            return
-        }
-        val item = category.items.firstOrNull { it.id == itemId } ?: run {
-            enqueueMessage(chatId, "Позиция не найдена.")
-            return
-        }
+        val category =
+            menu.categories.firstOrNull { it.id == categoryId } ?: run {
+                enqueueMessage(chatId, "Категория не найдена.")
+                return
+            }
+        val item =
+            category.items.firstOrNull { it.id == itemId } ?: run {
+                enqueueMessage(chatId, "Позиция не найдена.")
+                return
+            }
         val availableOptions =
             try {
                 venueMenuRepository.listAvailableOptionsForItem(
@@ -25266,10 +25868,11 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        val selectedOption = availableOptions.firstOrNull { it.id == optionId } ?: run {
-            enqueueMessage(chatId, "Вкус не найден или недоступен.")
-            return
-        }
+        val selectedOption =
+            availableOptions.firstOrNull { it.id == optionId } ?: run {
+                enqueueMessage(chatId, "Вкус не найден или недоступен.")
+                return
+            }
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
         val isFavorite =
             try {
@@ -25344,14 +25947,16 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        val category = menu.categories.firstOrNull { it.id == categoryId } ?: run {
-            enqueueMessage(chatId, "Категория не найдена.")
-            return
-        }
-        val item = category.items.firstOrNull { it.id == itemId } ?: run {
-            enqueueMessage(chatId, "Позиция не найдена.")
-            return
-        }
+        val category =
+            menu.categories.firstOrNull { it.id == categoryId } ?: run {
+                enqueueMessage(chatId, "Категория не найдена.")
+                return
+            }
+        val item =
+            category.items.firstOrNull { it.id == itemId } ?: run {
+                enqueueMessage(chatId, "Позиция не найдена.")
+                return
+            }
         val activeOrder =
             ordersRepository.findActiveOrderSummaryForTab(
                 tableSessionId = currentTab.tableSessionId,
@@ -25543,13 +26148,22 @@ class TelegramBotRouter(
                 } else {
                     "Итого к оплате после акции"
                 }
-            "$label: ${formatCompactMoney((totalMinor - discountMinor).coerceAtLeast(0L), currency)}"
+            val payableTotalMinor = (totalMinor - discountMinor).coerceAtLeast(0L)
+            "$label: ${formatCompactMoney(payableTotalMinor, currency)}"
         } else {
             buildString {
-                append(if (promotionPreview.loyaltyRedemption != null) "Итого к оплате:\n" else "Итого к оплате после акции:\n")
+                append(
+                    if (promotionPreview.loyaltyRedemption != null) {
+                        "Итого к оплате:\n"
+                    } else {
+                        "Итого к оплате после акции:\n"
+                    },
+                )
                 append(
                     totalsByCurrency.entries.joinToString("\n") { (currency, totalMinor) ->
-                        val discountMinor = promotionPreview.discountsByCurrency[currency.uppercase(Locale.ROOT)] ?: 0L
+                        val discountMinor =
+                            promotionPreview.discountsByCurrency[currency.uppercase(Locale.ROOT)]
+                                ?: 0L
                         "- ${formatCompactMoney((totalMinor - discountMinor).coerceAtLeast(0L), currency)}"
                     },
                 )
@@ -25571,15 +26185,18 @@ class TelegramBotRouter(
         if (progress.progressCount <= 0 && progress.rewardsAvailable <= 0) {
             return null
         }
-        val baseText = if (progress.rewardsAvailable > 0) {
-            if (progress.rewardsAvailable == 1) {
-                "🎁 Лояльность: у вас есть бесплатный кальян."
+        val baseText =
+            if (progress.rewardsAvailable > 0) {
+                if (progress.rewardsAvailable == 1) {
+                    "🎁 Лояльность: у вас есть бесплатный кальян."
+                } else {
+                    "🎁 Лояльность: доступно бесплатных кальянов: ${progress.rewardsAvailable}."
+                }
             } else {
-                "🎁 Лояльность: доступно бесплатных кальянов: ${progress.rewardsAvailable}."
+                "🎁 Лояльность: ${progress.progressCount}/${loyaltyPaidRequired(
+                    progress.nthValue,
+                )} до бесплатного кальяна."
             }
-        } else {
-            "🎁 Лояльность: ${progress.progressCount}/${loyaltyPaidRequired(progress.nthValue)} до бесплатного кальяна."
-        }
         return baseText
     }
 
@@ -25598,7 +26215,12 @@ class TelegramBotRouter(
             } catch (e: DatabaseUnavailableException) {
                 return formatBotCartPromotionPreview(PromotionRulePreviewResult(emptyList()), loyaltyPreview)
             }
-        if (rules.isEmpty()) return formatBotCartPromotionPreview(PromotionRulePreviewResult(emptyList()), loyaltyPreview)
+        if (rules.isEmpty()) {
+            return formatBotCartPromotionPreview(
+                PromotionRulePreviewResult(emptyList()),
+                loyaltyPreview,
+            )
+        }
         val menu =
             try {
                 guestMenuRepository.getMenu(venueId)
@@ -25633,7 +26255,12 @@ class TelegramBotRouter(
                     effectiveType = effectiveType,
                 )
             }
-        if (cartItems.isEmpty()) return formatBotCartPromotionPreview(PromotionRulePreviewResult(emptyList()), loyaltyPreview)
+        if (cartItems.isEmpty()) {
+            return formatBotCartPromotionPreview(
+                PromotionRulePreviewResult(emptyList()),
+                loyaltyPreview,
+            )
+        }
         val preview =
             PromotionRuleEngine.preview(
                 venueId = venueId,
@@ -25706,7 +26333,10 @@ class TelegramBotRouter(
                 }
         val loyaltyLines =
             loyaltyPreview?.let { loyalty ->
-                listOf("🎁 Лояльность: бесплатный кальян −${formatCompactMoney(loyalty.discountMinor, loyalty.currency)}")
+                listOf(
+                    "🎁 Лояльность: бесплатный кальян −" +
+                        formatCompactMoney(loyalty.discountMinor, loyalty.currency),
+                )
             } ?: emptyList()
         val giftLines =
             preview.gifts.map { gift ->
@@ -25747,7 +26377,13 @@ class TelegramBotRouter(
             warnBotDraftCartScopeMismatch(chatId)
             return
         }
-        val choice = buildBotCartPromotionPreview(context.table.venueId, context.userId, items, key)?.giftChoices?.firstOrNull()
+        val choice =
+            buildBotCartPromotionPreview(
+                context.table.venueId,
+                context.userId,
+                items,
+                key,
+            )?.giftChoices?.firstOrNull()
         if (choice == null) {
             enqueueMessage(chatId, "Сейчас нет подарка для выбора.")
             showBotMenuCart(chatId)
@@ -25774,10 +26410,11 @@ class TelegramBotRouter(
         chatId: Long,
         data: String,
     ) {
-        val rewardMenuItemId = data.removePrefix("bot_gift_opt:").toLongOrNull() ?: run {
-            enqueueMessage(chatId, "Не удалось выбрать подарок. Попробуйте ещё раз.")
-            return
-        }
+        val rewardMenuItemId =
+            data.removePrefix("bot_gift_opt:").toLongOrNull() ?: run {
+                enqueueMessage(chatId, "Не удалось выбрать подарок. Попробуйте ещё раз.")
+                return
+            }
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
@@ -25790,17 +26427,24 @@ class TelegramBotRouter(
             warnBotDraftCartScopeMismatch(chatId)
             return
         }
-        val choice = buildBotCartPromotionPreview(context.table.venueId, context.userId, items, key)?.giftChoices?.firstOrNull()
+        val choice =
+            buildBotCartPromotionPreview(
+                context.table.venueId,
+                context.userId,
+                items,
+                key,
+            )?.giftChoices?.firstOrNull()
         if (choice == null) {
             enqueueMessage(chatId, "Сейчас нет подарка для выбора.")
             showBotMenuCart(chatId)
             return
         }
-        val selectedOption = choice.options.firstOrNull { it.menuItemId == rewardMenuItemId } ?: run {
-            enqueueMessage(chatId, "Этот подарок сейчас недоступен. Выберите другой вариант.")
-            showBotGiftChoice(chatId)
-            return
-        }
+        val selectedOption =
+            choice.options.firstOrNull { it.menuItemId == rewardMenuItemId } ?: run {
+                enqueueMessage(chatId, "Этот подарок сейчас недоступен. Выберите другой вариант.")
+                showBotGiftChoice(chatId)
+                return
+            }
         botGiftChoices.computeIfAbsent(key) { ConcurrentHashMap() }[choice.ruleId] = selectedOption.menuItemId
         botSkippedGiftRules[key]?.remove(choice.ruleId)
         enqueueMessage(chatId, "Подарок выбран: ${selectedOption.menuItemName}.")
@@ -25825,10 +26469,11 @@ class TelegramBotRouter(
         val itemId = parseBotMenuCartItemId(data) ?: return
         val context = resolveGuestContext(chatId) ?: return
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        val cart = botDraftCarts[key] ?: run {
-            showBotMenuCart(chatId)
-            return
-        }
+        val cart =
+            botDraftCarts[key] ?: run {
+                showBotMenuCart(chatId)
+                return
+            }
         cart.compute(itemId) { _, existing ->
             val current = existing ?: return@compute null
             val nextQty = current.qty + delta
@@ -25849,10 +26494,11 @@ class TelegramBotRouter(
         val itemId = parseBotMenuCartItemId(data) ?: return
         val context = resolveGuestContext(chatId) ?: return
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        val cart = botDraftCarts[key] ?: run {
-            showBotMenuCart(chatId)
-            return
-        }
+        val cart =
+            botDraftCarts[key] ?: run {
+                showBotMenuCart(chatId)
+                return
+            }
         cart.remove(itemId)
         if (cart.isEmpty()) {
             botDraftCarts.remove(key)
@@ -25911,7 +26557,7 @@ class TelegramBotRouter(
                             itemId = item.itemId,
                             qty = item.qty,
                         )
-                },
+                    },
                 selectedGiftChoices = botGiftChoices[key].orEmpty(),
                 skippedGiftRuleIds = botSkippedGiftRules[key].orEmpty(),
             )
@@ -25920,7 +26566,11 @@ class TelegramBotRouter(
         clearBotDraftCart(chatId, context.table.tableToken)
         enqueueMessage(
             chatId,
-            "✅ Заказ отправлен.\n${formatTelegramOrderDisplayLabel(createdBatch.orderId, createdBatch.displayNumber, createdBatch.displayDate)}.\nЧто дальше?",
+            "✅ Заказ отправлен.\n${formatTelegramOrderDisplayLabel(
+                createdBatch.orderId,
+                createdBatch.displayNumber,
+                createdBatch.displayDate,
+            )}.\nЧто дальше?",
             TelegramKeyboards.inlineBotReorderAction(),
         )
     }
@@ -25949,10 +26599,11 @@ class TelegramBotRouter(
         chatId: Long,
         rawText: String,
     ) {
-        val context = resolveGuestContext(chatId) ?: run {
-            dialogStateRepository.clear(chatId)
-            return
-        }
+        val context =
+            resolveGuestContext(chatId) ?: run {
+                dialogStateRepository.clear(chatId)
+                return
+            }
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
         val trimmed = rawText.trim()
         if (trimmed == "-" || trimmed == "—") {
@@ -26210,13 +26861,13 @@ class TelegramBotRouter(
                     tableSessionId = tableSession.id,
                     userId = context.userId,
                     idempotencyKey = idempotencyKey,
-	                    tabId = effectiveTabId,
-	                    comment = comment,
-	                    items = items,
-	                    venueZoneId = resolveVenueZoneId(context.table.venueId),
-                        selectedGiftChoices = selectedGiftChoices,
-                        skippedGiftRuleIds = skippedGiftRuleIds,
-	                )
+                    tabId = effectiveTabId,
+                    comment = comment,
+                    items = items,
+                    venueZoneId = resolveVenueZoneId(context.table.venueId),
+                    selectedGiftChoices = selectedGiftChoices,
+                    skippedGiftRuleIds = skippedGiftRuleIds,
+                )
             if (createdBatch == null) {
                 enqueueMessage(chatId, "Не удалось оформить заказ, попробуйте ещё раз.")
                 null
@@ -26552,12 +27203,12 @@ class TelegramBotRouter(
     private fun parseBotMenuItemData(data: String): Pair<Long, Long>? {
         val payload =
             when {
-            data.startsWith("bot_menu_item_add_to_cart:") -> data.removePrefix("bot_menu_item_add_to_cart:")
-            data.startsWith("bot_menu_item_add:") -> data.removePrefix("bot_menu_item_add:")
-            data.startsWith("bot_menu_item_reorder:") -> data.removePrefix("bot_menu_item_reorder:")
-            data.startsWith("bot_menu_item:") -> data.removePrefix("bot_menu_item:")
-            else -> return null
-        }
+                data.startsWith("bot_menu_item_add_to_cart:") -> data.removePrefix("bot_menu_item_add_to_cart:")
+                data.startsWith("bot_menu_item_add:") -> data.removePrefix("bot_menu_item_add:")
+                data.startsWith("bot_menu_item_reorder:") -> data.removePrefix("bot_menu_item_reorder:")
+                data.startsWith("bot_menu_item:") -> data.removePrefix("bot_menu_item:")
+                else -> return null
+            }
         val parts = payload.split(":", limit = 2)
         val categoryId = parts.getOrNull(0)?.toLongOrNull() ?: return null
         val itemId = parts.getOrNull(1)?.toLongOrNull() ?: return null
@@ -26619,7 +27270,7 @@ class TelegramBotRouter(
             if (optionName.isNullOrBlank()) {
                 item.name
             } else {
-                "${item.name} · ${optionName}"
+                "${item.name} · $optionName"
             }
         cart[lineId] =
             BotDraftCartItem(
@@ -26663,7 +27314,8 @@ class TelegramBotRouter(
             clearBotDraftCart(chatId, tableToken)
             enqueueMessage(
                 chatId,
-                "Корзина была собрана для другого счёта, поэтому я очистил её. Соберите заказ заново для текущего счёта.",
+                "Корзина была собрана для другого счёта, поэтому я очистил её. Соберите заказ " +
+                    "заново для текущего счёта.",
             )
         }
     }
@@ -27190,7 +27842,10 @@ class TelegramBotRouter(
             "🖼 Баннеры / Афиши · На проверке\n\nЗаявки на проверку:",
             TelegramKeyboards.inlinePlatformPromotionPlacementListActions(
                 placements.map { placement ->
-                    placement.id to "${humanizePromotionPlacementSurface(placement.surface)} · ${placement.venueName} · ${placement.promotionTitle}"
+                    val placementLabel =
+                        "${humanizePromotionPlacementSurface(placement.surface)} · " +
+                            "${placement.venueName} · ${placement.promotionTitle}"
+                    placement.id to placementLabel
                 },
                 backCallbackData = "platform_places_root",
             ),
@@ -27227,7 +27882,10 @@ class TelegramBotRouter(
             TelegramKeyboards.inlinePlatformPromotionPlacementListActions(
                 placements.map { placement ->
                     val statusPrefix = if (placement.endsAt != null && placement.endsAt < now) "истёк срок · " else ""
-                    placement.id to "$statusPrefix${humanizePromotionPlacementSurface(placement.surface)} · ${placement.venueName} · ${placement.promotionTitle}"
+                    val placementLabel =
+                        "$statusPrefix${humanizePromotionPlacementSurface(placement.surface)} · " +
+                            "${placement.venueName} · ${placement.promotionTitle}"
+                    placement.id to placementLabel
                 },
                 backCallbackData = "platform_places_root",
             ),
@@ -27936,8 +28594,7 @@ class TelegramBotRouter(
     private suspend fun formatPromotionVenuePlacementDate(
         value: Instant,
         venueId: Long,
-    ): String =
-        value.atZone(resolveVenueZoneId(venueId)).toLocalDate().format(bookingDateConfirmFormatter)
+    ): String = value.atZone(resolveVenueZoneId(venueId)).toLocalDate().format(bookingDateConfirmFormatter)
 
     private suspend fun formatPromotionVenuePlacementCreatedAt(placement: PromotionVenuePlacement): String =
         placement.createdAt.atZone(resolveVenueZoneId(placement.venueId)).format(promotionDateTimeFormatter)
@@ -28005,12 +28662,18 @@ class TelegramBotRouter(
         now: Instant,
     ): String {
         val statusPrefix =
-            if (placement.status == PromotionPlacementStatus.ACTIVE && placement.endsAt != null && placement.endsAt < now) {
+            if (
+                placement.status == PromotionPlacementStatus.ACTIVE &&
+                placement.endsAt != null &&
+                placement.endsAt < now
+            ) {
                 "истёк срок · "
             } else {
                 ""
-        }
-        return "$statusPrefix${humanizePromotionPlacementSurface(placement.surface)} · ${placement.venueName} · ${placement.promotionTitle}"
+            }
+        return "$statusPrefix${humanizePromotionPlacementSurface(
+            placement.surface,
+        )} · ${placement.venueName} · ${placement.promotionTitle}"
     }
 
     private fun buildPlatformVenueTopPlacementListLabel(
@@ -28018,7 +28681,11 @@ class TelegramBotRouter(
         now: Instant,
     ): String {
         val statusPrefix =
-            if (placement.status == PromotionPlacementStatus.ACTIVE && placement.endsAt != null && placement.endsAt < now) {
+            if (
+                placement.status == PromotionPlacementStatus.ACTIVE &&
+                placement.endsAt != null &&
+                placement.endsAt < now
+            ) {
                 "истёк срок · "
             } else {
                 ""
@@ -28247,7 +28914,8 @@ class TelegramBotRouter(
         )
         enqueueMessage(
             chatId,
-            "Текущая регулярная цена для «${venue.name}».\nВведите сумму в ₽/мес, например 10000. Введите 0 для индивидуально бесплатных условий.",
+            "Текущая регулярная цена для «${venue.name}».\nВведите сумму в ₽/мес, например 10000." +
+                " Введите 0 для индивидуально бесплатных условий.",
         )
     }
 
@@ -28285,11 +28953,12 @@ class TelegramBotRouter(
         text: String,
         state: DialogState,
     ) {
-        val actorUserId = from?.id
-            ?: run {
-                enqueueMessage(chatId, "Недостаточно прав.")
-                return
-            }
+        val actorUserId =
+            from?.id
+                ?: run {
+                    enqueueMessage(chatId, "Недостаточно прав.")
+                    return
+                }
         if (!isPlatformOwner(actorUserId)) {
             enqueueMessage(chatId, "Недостаточно прав.")
             return
@@ -28440,11 +29109,12 @@ class TelegramBotRouter(
         text: String,
         state: DialogState,
     ) {
-        val actorUserId = from?.id
-            ?: run {
-                enqueueMessage(chatId, "Недостаточно прав.")
-                return
-            }
+        val actorUserId =
+            from?.id
+                ?: run {
+                    enqueueMessage(chatId, "Недостаточно прав.")
+                    return
+                }
         if (!isPlatformOwner(actorUserId)) {
             enqueueMessage(chatId, "Недостаточно прав.")
             return
@@ -28487,7 +29157,10 @@ class TelegramBotRouter(
             return
         }
         dialogStateRepository.clear(chatId)
-        enqueueMessage(chatId, "✅ Будущая цена сохранена: $futurePriceRub ₽/мес с ${effectiveFrom.format(bookingDateConfirmFormatter)}.")
+        enqueueMessage(
+            chatId,
+            "✅ Будущая цена сохранена: $futurePriceRub ₽/мес с ${effectiveFrom.format(bookingDateConfirmFormatter)}.",
+        )
         showPlatformVenueSubscription(chatId, venueId)
     }
 
@@ -28743,7 +29416,8 @@ class TelegramBotRouter(
         val action = VenueStatusAction.fromWire(actionWire)
         if (
             action == null ||
-            action !in setOf(
+            action !in
+            setOf(
                 VenueStatusAction.PUBLISH,
                 VenueStatusAction.HIDE,
                 VenueStatusAction.PAUSE,
@@ -29241,7 +29915,9 @@ class TelegramBotRouter(
                     append("\n• ${formatPlatformVenueOwner(owner)}")
                 }
             }
-            append("\n\nПодписка: ${subscriptionSummary?.let { formatPlatformSubscriptionSummary(it) } ?: "не настроена"}")
+            append(
+                "\n\nПодписка: ${subscriptionSummary?.let { formatPlatformSubscriptionSummary(it) } ?: "не настроена"}",
+            )
             quotaText?.let { append("\n$it") }
         }
 
@@ -29269,9 +29945,24 @@ class TelegramBotRouter(
             val settings = snapshot.settings
             append("\nTrial до: ${settings.trialEndDate?.format(bookingDateConfirmFormatter) ?: "—"}")
             append("\nPaid start: ${settings.paidStartDate?.format(bookingDateConfirmFormatter) ?: "—"}")
-            append("\nБазовая цена: ${settings.basePriceMinor?.let { formatPrice(it.toLong(), settings.currency) } ?: "—"}")
-            append("\nИндивидуальная цена: ${settings.priceOverrideMinor?.let { formatPrice(it.toLong(), settings.currency) } ?: "—"}")
-            append("\nТекущая цена: ${snapshot.effectivePriceToday?.let { formatPrice(it.priceMinor.toLong(), it.currency) } ?: "—"}")
+            val basePrice =
+                settings.basePriceMinor?.let { formatPrice(it.toLong(), settings.currency) }
+                    ?: "—"
+            append(
+                "\nБазовая цена: $basePrice",
+            )
+            val priceOverride =
+                settings.priceOverrideMinor?.let { formatPrice(it.toLong(), settings.currency) }
+                    ?: "—"
+            append(
+                "\nИндивидуальная цена: $priceOverride",
+            )
+            val effectivePrice =
+                snapshot.effectivePriceToday?.let { formatPrice(it.priceMinor.toLong(), it.currency) }
+                    ?: "—"
+            append(
+                "\nТекущая цена: $effectivePrice",
+            )
             append("\nВалюта: ${settings.currency}")
             val nextPrice =
                 snapshot.schedule
@@ -29281,7 +29972,12 @@ class TelegramBotRouter(
             if (nextPrice == null) {
                 append("—")
             } else {
-                append("${formatPrice(nextPrice.priceMinor.toLong(), nextPrice.currency)} с ${nextPrice.effectiveFrom.format(bookingDateConfirmFormatter)}")
+                append(
+                    "${formatPrice(
+                        nextPrice.priceMinor.toLong(),
+                        nextPrice.currency,
+                    )} с ${nextPrice.effectiveFrom.format(bookingDateConfirmFormatter)}",
+                )
             }
             val note = linkedRequest?.commercialNote?.takeIf { it.isNotBlank() }
             append("\nКоммерческие заметки: ${note ?: "—"}")
@@ -29440,7 +30136,12 @@ class TelegramBotRouter(
         }
         val summary =
             try {
-                val account = venueOwnerAccountRepository.getOrCreateForOwner(userId, defaultLimit = 1, updatedByUserId = userId)
+                val account =
+                    venueOwnerAccountRepository.getOrCreateForOwner(
+                        userId,
+                        defaultLimit = 1,
+                        updatedByUserId = userId,
+                    )
                 venueOwnerAccountRepository.getQuotaSummary(account.id)
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -29837,7 +30538,12 @@ class TelegramBotRouter(
         }
         val request =
             try {
-                val account = venueOwnerAccountRepository.getOrCreateForOwner(userId, defaultLimit = 1, updatedByUserId = userId)
+                val account =
+                    venueOwnerAccountRepository.getOrCreateForOwner(
+                        userId,
+                        defaultLimit = 1,
+                        updatedByUserId = userId,
+                    )
                 venueOwnerAccountRepository.createLimitRequest(
                     ownerAccountId = account.id,
                     requestedExtraCount = count,
@@ -29868,7 +30574,11 @@ class TelegramBotRouter(
     }
 
     private fun buildOwnerVenueConnectionRequestText(request: VenueConnectionRequestRecord): String {
-        val createdAtText = LocalDateTime.ofInstant(request.createdAt, ZoneId.systemDefault()).format(bookingDateTimeFormatter)
+        val createdAtText =
+            LocalDateTime.ofInstant(
+                request.createdAt,
+                ZoneId.systemDefault(),
+            ).format(bookingDateTimeFormatter)
         return buildString {
             append("Заявка #${request.id}")
             append("\nНазвание: ${request.venueName}")
@@ -29888,7 +30598,9 @@ class TelegramBotRouter(
                 append("\nРегулярная стоимость: ${request.currentPriceRub?.let(::formatCommercialMonthlyRub) ?: "—"}")
                 val futureText =
                     if (request.futurePriceRub != null && request.futurePriceEffectiveOn != null) {
-                        "${formatCommercialMonthlyRub(request.futurePriceRub)} с ${request.futurePriceEffectiveOn.format(bookingDateConfirmFormatter)}"
+                        "${formatCommercialMonthlyRub(
+                            request.futurePriceRub,
+                        )} с ${request.futurePriceEffectiveOn.format(bookingDateConfirmFormatter)}"
                     } else {
                         "не задана"
                     }
@@ -29968,12 +30680,12 @@ class TelegramBotRouter(
         }
         val existingOrderId = ordersRepository.findActiveOrderId(currentTab.tableSessionId)
         val orderId =
-	            ordersRepository.getOrCreateActiveOrderId(
-	                tableId = context.table.tableId,
-	                venueId = context.table.venueId,
-	                tableSessionId = currentTab.tableSessionId,
-	                venueZoneId = resolveVenueZoneId(context.table.venueId),
-	            )
+            ordersRepository.getOrCreateActiveOrderId(
+                tableId = context.table.tableId,
+                venueId = context.table.venueId,
+                tableSessionId = currentTab.tableSessionId,
+                venueZoneId = resolveVenueZoneId(context.table.venueId),
+            )
         if (orderId == null) {
             enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             return
@@ -30348,8 +31060,7 @@ class TelegramBotRouter(
         }
     }
 
-    private fun isPlatformOwner(userId: Long?): Boolean =
-        userId != null && config.platformOwnerId == userId
+    private fun isPlatformOwner(userId: Long?): Boolean = userId != null && config.platformOwnerId == userId
 
     private suspend fun loadContext(chatId: Long): LoadContextResult {
         val saved =
@@ -30446,13 +31157,13 @@ class TelegramBotRouter(
         }
         val consumeResult =
             staffChatLinkCodeRepository.linkAndBindWithCode(
-	                normalizedCode,
-	                userId,
-	                chatId,
-	                message.messageId,
-	                authorize = { connection, venueId ->
-	                    venueAccessRepository.hasVenueAdminOrOwner(connection, userId, venueId)
-	                },
+                normalizedCode,
+                userId,
+                chatId,
+                message.messageId,
+                authorize = { connection, venueId ->
+                    venueAccessRepository.hasVenueAdminOrOwner(connection, userId, venueId)
+                },
                 bind = { connection, venueId ->
                     venueRepository.bindStaffChatInTransaction(connection, venueId, chatId, userId)
                 },

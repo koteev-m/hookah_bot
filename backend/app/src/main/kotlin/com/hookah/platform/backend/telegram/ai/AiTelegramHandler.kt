@@ -1,6 +1,5 @@
 package com.hookah.platform.backend.telegram.ai
 
-import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.ai.AiAssistantPrincipal
 import com.hookah.platform.backend.ai.AiAssistantRole
 import com.hookah.platform.backend.ai.AiAssistantService
@@ -9,6 +8,7 @@ import com.hookah.platform.backend.ai.AiDraftTextType
 import com.hookah.platform.backend.ai.AiPromotionDiagnosticsCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryType
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.telegram.DialogState
 import com.hookah.platform.backend.telegram.DialogStateType
@@ -66,8 +66,18 @@ class AiTelegramHandler(
     ) {
         when {
             data.startsWith("venue_ai:") || data.startsWith("vm_ai:") -> showRoot(chatId, userId, data)
-            data.startsWith("venue_ai_diag:") || data.startsWith("vm_ai_diag:") -> showPromotionDiagnosticsPicker(chatId, userId, data)
-            data.startsWith("venue_ai_diag_p:") || data.startsWith("vm_ai_diag_p:") -> runPromotionDiagnostics(chatId, userId, data)
+            data.startsWith("venue_ai_diag:") || data.startsWith("vm_ai_diag:") ->
+                showPromotionDiagnosticsPicker(
+                    chatId,
+                    userId,
+                    data,
+                )
+            data.startsWith("venue_ai_diag_p:") || data.startsWith("vm_ai_diag_p:") ->
+                runPromotionDiagnostics(
+                    chatId,
+                    userId,
+                    data,
+                )
             data.startsWith("venue_ai_sum:") || data.startsWith("vm_ai_sum:") -> runVenueSummary(chatId, userId, data)
             data.startsWith("venue_ai_draft:") || data.startsWith("vm_ai_draft:") || data.startsWith("vm_ai_text:") ->
                 promptDraft(chatId, userId, data)
@@ -167,7 +177,8 @@ class AiTelegramHandler(
         enqueueMessage(
             chatId,
             "🤖 Помощник\n$venueName\n\n" +
-                "Помощник объясняет настройки заведения и помогает разобраться с акциями, отзывами, лояльностью и размещениями. " +
+                "Помощник объясняет настройки заведения и помогает разобраться с акциями, " +
+                "отзывами, лояльностью и размещениями. " +
                 "Он не меняет настройки без подтверждения.",
             rootActions(venueId, origin),
         )

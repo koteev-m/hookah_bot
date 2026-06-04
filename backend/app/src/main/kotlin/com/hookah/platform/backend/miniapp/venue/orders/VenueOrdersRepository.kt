@@ -208,7 +208,8 @@ class VenueOrdersRepository(
                             loadQueueItems(connection, venueId, status, limit, cursor, itemsCountFromBatchItems = true)
                         } catch (e: SQLException) {
                             logger.warn(
-                                "venue orders queue primary SQL failed; fallback without item count (venueId={}, status={}, sqlState={}): {}",
+                                "venue orders queue primary SQL failed; fallback without item count (venueId={}, " +
+                                    "status={}, sqlState={}): {}",
                                 venueId,
                                 status.dbValue,
                                 e.sqlState,
@@ -459,11 +460,19 @@ class VenueOrdersRepository(
                             itemsCount = rs.getInt("items_count"),
                             status = mappedStatus,
                             activeBatchesCount = rs.getInt("active_batches_count"),
-                            displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                            displayNumber =
+                                rs.getInt("display_number").let {
+                                        value ->
+                                    if (rs.wasNull()) null else value
+                                },
                             displayDate = rs.getDate("display_date")?.toLocalDate(),
                             guestDisplayName = rs.getString("guest_display_name"),
                             promoDiscountMinor = rs.getLong("promo_discount_minor"),
-                            payableMinor = rs.getLong("payable_minor").let { value -> if (rs.wasNull()) null else value },
+                            payableMinor =
+                                rs.getLong("payable_minor").let {
+                                        value ->
+                                    if (rs.wasNull()) null else value
+                                },
                             currency = rs.getString("currency"),
                         ),
                     )
@@ -573,7 +582,11 @@ class VenueOrdersRepository(
                             comment = rs.getString("guest_comment"),
                             itemsCount = rs.getInt("items_count"),
                             status = mappedStatus,
-                            displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                            displayNumber =
+                                rs.getInt("display_number").let {
+                                        value ->
+                                    if (rs.wasNull()) null else value
+                                },
                             displayDate = rs.getDate("display_date")?.toLocalDate(),
                             guestDisplayName = rs.getString("guest_display_name"),
                         ),
@@ -615,7 +628,11 @@ class VenueOrdersRepository(
                                 if (rs.next()) {
                                     OrderHeader(
                                         status = rs.getString("status"),
-                                        displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                                        displayNumber =
+                                            rs.getInt("display_number").let {
+                                                    value ->
+                                                if (rs.wasNull()) null else value
+                                            },
                                         displayDate = rs.getDate("display_date")?.toLocalDate(),
                                         createdAt = rs.getTimestamp("created_at").toInstant(),
                                         updatedAt = rs.getTimestamp("updated_at").toInstant(),
@@ -683,7 +700,11 @@ class VenueOrdersRepository(
                                             updatedAt = rs.getTimestamp("updated_at").toInstant(),
                                             rejectedReasonCode = rs.getString("rejected_reason_code"),
                                             rejectedReasonText = rs.getString("rejected_reason_text"),
-                                            authorUserId = rs.getLong("guest_user_id").let { value -> if (rs.wasNull()) null else value },
+                                            authorUserId =
+                                                rs.getLong("guest_user_id").let {
+                                                        value ->
+                                                    if (rs.wasNull()) null else value
+                                                },
                                             guestDisplayName = rs.getString("guest_display_name"),
                                             items = emptyList(),
                                         ),
@@ -828,7 +849,11 @@ class VenueOrdersRepository(
                             val visits = visitRepository?.recordOrderClosedVisits(connection, orderId, now.toInstant())
                             loyaltyRepository?.accrueForClosedOrder(connection, orderId)
                             visits?.visitIds.orEmpty().forEach { visitId ->
-                                visitFeedbackRepository?.scheduleFeedbackRequestForVisit(connection, visitId, now.toInstant())
+                                visitFeedbackRepository?.scheduleFeedbackRequestForVisit(
+                                    connection,
+                                    visitId,
+                                    now.toInstant(),
+                                )
                             }
                         } else {
                             val batchStatus =
@@ -1014,7 +1039,8 @@ class VenueOrdersRepository(
                                     orderId = batchRow.orderId,
                                     batchId = batchId,
                                     idempotencyKey =
-                                        "batch_status_changed:$venueId:${batchRow.orderId}:$batchId:${nextStatus.toWorkflow().toApi()}",
+                                        "batch_status_changed:$venueId:${batchRow.orderId}:$batchId:" +
+                                            nextStatus.toWorkflow().toApi(),
                                 ),
                         )
                         connection.commit()
@@ -1098,7 +1124,8 @@ class VenueOrdersRepository(
                             )
                         }
                         updateOrderTimestamp(connection, orderId, now)
-                        val resultingStatus = resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
+                        val resultingStatus =
+                            resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
                         insertAudit(
                             connection = connection,
                             orderId = orderId,
@@ -1213,7 +1240,8 @@ class VenueOrdersRepository(
                             )
                         }
                         updateOrderTimestamp(connection, orderId, now)
-                        val resultingStatus = resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
+                        val resultingStatus =
+                            resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
                         insertAudit(
                             connection = connection,
                             orderId = orderId,
@@ -1429,7 +1457,8 @@ class VenueOrdersRepository(
                             )
                         }
                         updateOrderTimestamp(connection, orderId, now)
-                        val resultingStatus = resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
+                        val resultingStatus =
+                            resolveOrderWorkflowStatus(orderRow.status, loadBatchesForWorkflow(connection, orderId))
                         insertAudit(
                             connection = connection,
                             orderId = orderId,
@@ -1968,7 +1997,9 @@ class VenueOrdersRepository(
                         itemName = rs.getString("item_name"),
                         isExcluded = rs.getBoolean("is_excluded"),
                         itemStatus = OrderBatchItemStatus.fromDb(rs.getString("item_status")),
-                        batchStatus = OrderBatchStatus.fromDb(rs.getString("batch_status")) ?: OrderBatchStatus.REJECTED,
+                        batchStatus =
+                            OrderBatchStatus.fromDb(rs.getString("batch_status"))
+                                ?: OrderBatchStatus.REJECTED,
                         guestUserId = rs.getLong("guest_user_id").let { value -> if (rs.wasNull()) null else value },
                     )
                 }
@@ -2025,19 +2056,30 @@ class VenueOrdersRepository(
                         OrderBatchItemDetail(
                             batchItemId = rs.getLong("id"),
                             itemId = rs.getLong("menu_item_id"),
-                            name = rs.getString("name")?.takeIf { it.isNotBlank() } ?: "Позиция #${rs.getLong("menu_item_id")}",
+                            name =
+                                rs.getString("name")
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: "Позиция #${rs.getLong("menu_item_id")}",
                             qty = rs.getInt("qty"),
                             priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
                             currency = rs.getString("currency"),
                             isExcluded = rs.getBoolean("is_excluded"),
                             excludedReasonText = rs.getString("excluded_reason_text"),
-                            discountPercent = rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value },
+                            discountPercent =
+                                rs.getInt("discount_percent").let {
+                                        value ->
+                                    if (rs.wasNull()) null else value
+                                },
                             promoDiscountMinor = rs.getLong("promo_discount_minor"),
                             itemStatus = OrderBatchItemStatus.fromDb(rs.getString("item_status")),
                             canceledReasonCode = rs.getString("canceled_reason_code"),
                             canceledReasonText = rs.getString("canceled_reason_text"),
                             canceledAt = rs.getTimestamp("canceled_at")?.toInstant(),
-                            canceledByUserId = rs.getLong("canceled_by_user_id").let { value -> if (rs.wasNull()) null else value },
+                            canceledByUserId =
+                                rs.getLong("canceled_by_user_id").let {
+                                        value ->
+                                    if (rs.wasNull()) null else value
+                                },
                         ),
                     )
                 }
@@ -2219,7 +2261,9 @@ class VenueOrdersRepository(
                     result.add(
                         OrderBatchDetail(
                             batchId = rs.getLong("id"),
-                            status = OrderBatchStatus.fromDb(rs.getString("status"))?.toWorkflow() ?: OrderWorkflowStatus.NEW,
+                            status =
+                                OrderBatchStatus.fromDb(rs.getString("status"))?.toWorkflow()
+                                    ?: OrderWorkflowStatus.NEW,
                             source = rs.getString("source"),
                             comment = rs.getString("guest_comment"),
                             createdAt = rs.getTimestamp("created_at").toInstant(),

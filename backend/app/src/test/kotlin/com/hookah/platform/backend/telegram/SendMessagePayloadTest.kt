@@ -53,7 +53,8 @@ class SendMessagePayloadTest {
 
         val encoded = json.encodeToString(EditMessageTextPayload.serializer(), payload)
         assertEquals(
-            """{"chat_id":123,"message_id":77,"text":"updated","reply_markup":{"inline_keyboard":[[{"text":"OK","callback_data":"ok"}]]}}""",
+            """{"chat_id":123,"message_id":77,"text":"updated","reply_markup":""" +
+                """{"inline_keyboard":[[{"text":"OK","callback_data":"ok"}]]}}""",
             encoded,
         )
     }
@@ -115,7 +116,8 @@ class SendMessagePayloadTest {
 
         val encoded = json.encodeToString(SendPhotoPayload.serializer(), payload)
         assertEquals(
-            """{"chat_id":123,"photo":"https://example.com/menu.png","caption":"Меню","reply_markup":{"inline_keyboard":[[{"text":"Назад","callback_data":"back"}]]}}""",
+            """{"chat_id":123,"photo":"https://example.com/menu.png","caption":"Меню","reply_markup":""" +
+                """{"inline_keyboard":[[{"text":"Назад","callback_data":"back"}]]}}""",
             encoded,
         )
     }

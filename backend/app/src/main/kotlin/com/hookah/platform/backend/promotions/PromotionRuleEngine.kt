@@ -74,10 +74,10 @@ object PromotionRuleEngine {
         val eligibleRules =
             activeRules
                 .asSequence()
-	                .filter { it.venueId == venueId }
-	                .filter { it.status == VenuePromotionStatus.ACTIVE }
-	                .filter { it.matchesNow(now, venueZoneId) }
-	                .toList()
+                .filter { it.venueId == venueId }
+                .filter { it.status == VenuePromotionStatus.ACTIVE }
+                .filter { it.matchesNow(now, venueZoneId) }
+                .toList()
         if (eligibleRules.isEmpty() || cartItems.isEmpty()) {
             return PromotionRulePreviewResult(emptyList())
         }
@@ -181,13 +181,13 @@ object PromotionRuleEngine {
                 } else {
                     capStackableAdjustments(
                         candidatesForGroup
-                        .groupBy { it.ruleId }
-                        .values
-                        .flatMap { ruleCandidates ->
-                            ruleCandidates
-                                .sortedWith(candidateDisplayOrder)
-                                .take(ruleCandidates.first().maxApplicationsPerItem.coerceAtLeast(1))
-                        },
+                            .groupBy { it.ruleId }
+                            .values
+                            .flatMap { ruleCandidates ->
+                                ruleCandidates
+                                    .sortedWith(candidateDisplayOrder)
+                                    .take(ruleCandidates.first().maxApplicationsPerItem.coerceAtLeast(1))
+                            },
                     )
                 }
             }
@@ -276,106 +276,107 @@ object PromotionRuleEngine {
         return !time.isBefore(start) && time.isBefore(end)
     }
 
-	    private fun VenuePromotionRule.previewLabel(): String =
-	        promotionTitle?.takeIf { it.isNotBlank() }
-	            ?: "Счастливые часы"
+    private fun VenuePromotionRule.previewLabel(): String =
+        promotionTitle?.takeIf { it.isNotBlank() }
+            ?: "Счастливые часы"
 
-        private fun VenuePromotionRule.previewGift(
-            cartItems: List<PromotionRuleCartItem>,
-            selectedRewardMenuItemId: Long? = null,
-        ): PromotionRulePreviewGift? {
-            val reward = reward ?: return null
-            if (reward.rewardQty <= 0 || reward.maxRewardsPerBatch <= 0) {
-                return null
-            }
-            val trigger =
-                cartItems
-                    .filter { it.qty > 0 }
-                    .firstOrNull { matchesItem(it) }
-                    ?: return null
-            val rewardItem =
-                when (reward.rewardMode) {
-                    PromotionRewardMode.FIXED_ITEM ->
-                        PromotionRuleRewardOption(
-                            id = null,
-                            rewardId = reward.id,
-                            menuItemId = reward.rewardMenuItemId,
-                            menuItemName = reward.rewardMenuItemName,
-                            priceMinor = reward.priceMinor,
-                            currency = reward.currency,
-                            isAvailable = reward.isAvailable,
-                        )
-                    PromotionRewardMode.CHOICE_ITEMS ->
-                        reward.options.firstOrNull { option ->
-                            option.menuItemId == selectedRewardMenuItemId
-                        } ?: return null
-                }
-            if (!rewardItem.isAvailable || rewardItem.priceMinor <= 0L) {
-                return null
-            }
-            return PromotionRulePreviewGift(
-                ruleId = id,
-                triggerLineId = trigger.lineId,
-                triggerMenuItemId = trigger.menuItemId,
-                triggerItemName = trigger.itemName,
-                rewardMenuItemId = rewardItem.menuItemId,
-                rewardItemName = rewardItem.menuItemName,
-                rewardQty = reward.rewardQty,
-                rewardPriceMinor = rewardItem.priceMinor,
-                currency = rewardItem.currency,
-                label = "${rewardItem.menuItemName} в подарок",
-            )
+    private fun VenuePromotionRule.previewGift(
+        cartItems: List<PromotionRuleCartItem>,
+        selectedRewardMenuItemId: Long? = null,
+    ): PromotionRulePreviewGift? {
+        val reward = reward ?: return null
+        if (reward.rewardQty <= 0 || reward.maxRewardsPerBatch <= 0) {
+            return null
         }
+        val trigger =
+            cartItems
+                .filter { it.qty > 0 }
+                .firstOrNull { matchesItem(it) }
+                ?: return null
+        val rewardItem =
+            when (reward.rewardMode) {
+                PromotionRewardMode.FIXED_ITEM ->
+                    PromotionRuleRewardOption(
+                        id = null,
+                        rewardId = reward.id,
+                        menuItemId = reward.rewardMenuItemId,
+                        menuItemName = reward.rewardMenuItemName,
+                        priceMinor = reward.priceMinor,
+                        currency = reward.currency,
+                        isAvailable = reward.isAvailable,
+                    )
+                PromotionRewardMode.CHOICE_ITEMS ->
+                    reward.options.firstOrNull { option ->
+                        option.menuItemId == selectedRewardMenuItemId
+                    } ?: return null
+            }
+        if (!rewardItem.isAvailable || rewardItem.priceMinor <= 0L) {
+            return null
+        }
+        return PromotionRulePreviewGift(
+            ruleId = id,
+            triggerLineId = trigger.lineId,
+            triggerMenuItemId = trigger.menuItemId,
+            triggerItemName = trigger.itemName,
+            rewardMenuItemId = rewardItem.menuItemId,
+            rewardItemName = rewardItem.menuItemName,
+            rewardQty = reward.rewardQty,
+            rewardPriceMinor = rewardItem.priceMinor,
+            currency = rewardItem.currency,
+            label = "${rewardItem.menuItemName} в подарок",
+        )
+    }
 
-        private fun VenuePromotionRule.previewGiftChoice(
-            cartItems: List<PromotionRuleCartItem>,
-            selectedRewardMenuItemId: Long?,
-        ): PromotionRulePreviewGiftChoice? {
-            val reward = reward ?: return null
-            if (reward.rewardMode != PromotionRewardMode.CHOICE_ITEMS) return null
-            val trigger =
-                cartItems
-                    .filter { it.qty > 0 }
-                    .firstOrNull { matchesItem(it) }
-                    ?: return null
-            val availableOptions =
-                reward.options
-                    .filter { it.isAvailable && it.priceMinor > 0L }
-                    .distinctBy { it.menuItemId }
-            if (availableOptions.isEmpty()) return null
-            val selectedAvailable = selectedRewardMenuItemId?.let { selected ->
+    private fun VenuePromotionRule.previewGiftChoice(
+        cartItems: List<PromotionRuleCartItem>,
+        selectedRewardMenuItemId: Long?,
+    ): PromotionRulePreviewGiftChoice? {
+        val reward = reward ?: return null
+        if (reward.rewardMode != PromotionRewardMode.CHOICE_ITEMS) return null
+        val trigger =
+            cartItems
+                .filter { it.qty > 0 }
+                .firstOrNull { matchesItem(it) }
+                ?: return null
+        val availableOptions =
+            reward.options
+                .filter { it.isAvailable && it.priceMinor > 0L }
+                .distinctBy { it.menuItemId }
+        if (availableOptions.isEmpty()) return null
+        val selectedAvailable =
+            selectedRewardMenuItemId?.let { selected ->
                 availableOptions.any { it.menuItemId == selected }
             } ?: false
-            if (selectedAvailable) return null
-            return PromotionRulePreviewGiftChoice(
-                ruleId = id,
-                triggerLineId = trigger.lineId,
-                triggerMenuItemId = trigger.menuItemId,
-                triggerItemName = trigger.itemName,
-                options = availableOptions,
-            )
-        }
+        if (selectedAvailable) return null
+        return PromotionRulePreviewGiftChoice(
+            ruleId = id,
+            triggerLineId = trigger.lineId,
+            triggerMenuItemId = trigger.menuItemId,
+            triggerItemName = trigger.itemName,
+            options = availableOptions,
+        )
+    }
 
-	    private fun VenuePromotionRule.matchesItem(item: PromotionRuleCartItem): Boolean {
-	        val effectiveTargets =
-	            targets.ifEmpty {
-	                listOf(
+    private fun VenuePromotionRule.matchesItem(item: PromotionRuleCartItem): Boolean {
+        val effectiveTargets =
+            targets.ifEmpty {
+                listOf(
                     PromotionRuleTarget(
-	                        id = null,
-	                        ruleId = id,
-	                        targetType = targetType,
-	                        semanticType = targetValue,
-	                        menuItemId = null,
-	                    ),
-	                )
-	            }
-	        return effectiveTargets.any { target ->
-	            when (target.targetType) {
-	                PromotionRuleTargetType.CATEGORY_TYPE -> target.semanticType == item.effectiveType
-	                PromotionRuleTargetType.MENU_ITEM -> target.menuItemId == item.menuItemId
-	            }
-	        }
-	    }
+                        id = null,
+                        ruleId = id,
+                        targetType = targetType,
+                        semanticType = targetValue,
+                        menuItemId = null,
+                    ),
+                )
+            }
+        return effectiveTargets.any { target ->
+            when (target.targetType) {
+                PromotionRuleTargetType.CATEGORY_TYPE -> target.semanticType == item.effectiveType
+                PromotionRuleTargetType.MENU_ITEM -> target.menuItemId == item.menuItemId
+            }
+        }
+    }
 
     private fun VenuePromotionRule.resolveConflictKey(
         lineId: Long?,
@@ -384,4 +385,4 @@ object PromotionRuleEngine {
         conflictGroup?.takeIf { it.isNotBlank() }?.let { "GROUP:$it" }
             ?: lineId?.let { "ITEM:$it" }
             ?: "MENU_ITEM:$menuItemId"
-	}
+}

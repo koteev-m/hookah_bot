@@ -184,7 +184,14 @@ class VenueOrdersRepositoryTest {
             val deliveredBatchId = seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now())
             seedBatchItem(jdbcUrl, fixture.venueId, deliveredBatchId, "Кальян обычный", categoryType = "HOOKAH")
             seedBatchItem(jdbcUrl, fixture.venueId, deliveredBatchId, "Чай", categoryType = "TEA")
-            seedBatchItem(jdbcUrl, fixture.venueId, deliveredBatchId, "Исключённый кальян", categoryType = "HOOKAH", isExcluded = true)
+            seedBatchItem(
+                jdbcUrl,
+                fixture.venueId,
+                deliveredBatchId,
+                "Исключённый кальян",
+                categoryType = "HOOKAH",
+                isExcluded = true,
+            )
             val canceledItemId =
                 seedBatchItem(jdbcUrl, fixture.venueId, deliveredBatchId, "Отменённый кальян", categoryType = "HOOKAH")
             markBatchItemStatus(jdbcUrl, canceledItemId, "CANCELED")
@@ -204,7 +211,13 @@ class VenueOrdersRepositoryTest {
             val rejectedBatchId = seedBatch(jdbcUrl, fixture.orderId, "REJECTED", Instant.now().minusSeconds(30))
             seedBatchItem(jdbcUrl, fixture.venueId, rejectedBatchId, "Отклонённый кальян", categoryType = "HOOKAH")
             val staffBatchId =
-                seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now().minusSeconds(20), authorUserId = STAFF_USER_ID)
+                seedBatch(
+                    jdbcUrl,
+                    fixture.orderId,
+                    "DELIVERED",
+                    Instant.now().minusSeconds(20),
+                    authorUserId = STAFF_USER_ID,
+                )
             seedVenueMember(jdbcUrl, fixture.venueId, STAFF_USER_ID, "STAFF")
             seedBatchItem(jdbcUrl, fixture.venueId, staffBatchId, "Staff кальян", categoryType = "HOOKAH")
             val repository =
@@ -243,7 +256,8 @@ class VenueOrdersRepositoryTest {
             val fixture = seedActiveOrder(jdbcUrl)
             val programId = seedActiveLoyaltyProgram(jdbcUrl, fixture.venueId, nthValue = 5)
             val batchId = seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now())
-            val selectedBatchItemId = seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Кальян обычный", categoryType = "HOOKAH")
+            val selectedBatchItemId =
+                seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Кальян обычный", categoryType = "HOOKAH")
             seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Премиум кальян", categoryType = "HOOKAH")
             val selectedMenuItemId =
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
@@ -362,7 +376,12 @@ class VenueOrdersRepositoryTest {
             val programId = seedActiveLoyaltyProgram(jdbcUrl, fixture.venueId, nthValue = 5)
             val repository = LoyaltyRepository(dataSource(jdbcUrl))
 
-            val updated = repository.createOrUpdateDraftProgram(fixture.venueId, nthValue = 6, createdByUserId = STAFF_USER_ID)
+            val updated =
+                repository.createOrUpdateDraftProgram(
+                    fixture.venueId,
+                    nthValue = 6,
+                    createdByUserId = STAFF_USER_ID,
+                )
 
             assertEquals(programId, updated.id)
             assertEquals(6, updated.nthValue)
@@ -377,7 +396,8 @@ class VenueOrdersRepositoryTest {
             val fixture = seedActiveOrder(jdbcUrl)
             val programId = seedActiveLoyaltyProgram(jdbcUrl, fixture.venueId, nthValue = 5)
             val batchId = seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now())
-            val batchItemId = seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Кальян обычный", categoryType = "HOOKAH")
+            val batchItemId =
+                seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Кальян обычный", categoryType = "HOOKAH")
             val menuItemId =
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                     fetchMenuItemIdForBatchItem(connection, batchItemId)
@@ -385,7 +405,12 @@ class VenueOrdersRepositoryTest {
             val repository = LoyaltyRepository(dataSource(jdbcUrl))
 
             val earnUpdated = repository.replaceEarnTargetsWithMenuItems(fixture.venueId, programId, listOf(menuItemId))
-            val rewardUpdated = repository.replaceRewardTargetsWithMenuItems(fixture.venueId, programId, listOf(menuItemId))
+            val rewardUpdated =
+                repository.replaceRewardTargetsWithMenuItems(
+                    fixture.venueId,
+                    programId,
+                    listOf(menuItemId),
+                )
 
             assertEquals(LoyaltyProgramStatus.ACTIVE, earnUpdated?.status)
             assertEquals(LoyaltyProgramStatus.ACTIVE, rewardUpdated?.status)
@@ -525,7 +550,8 @@ class VenueOrdersRepositoryTest {
 
     private fun migratedJdbcUrl(prefix: String): String {
         val jdbcUrl =
-            "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+            "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
         Flyway.configure()
             .dataSource(jdbcUrl, "sa", "")
             .locations("classpath:db/migration/h2")
@@ -952,7 +978,8 @@ class VenueOrdersRepositoryTest {
         menuItemId: Long,
     ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            connection.prepareStatement("DELETE FROM loyalty_program_earn_targets WHERE program_id = ?").use { statement ->
+            connection.prepareStatement("DELETE FROM loyalty_program_earn_targets WHERE program_id = ?").use {
+                    statement ->
                 statement.setLong(1, programId)
                 statement.executeUpdate()
             }
@@ -1034,7 +1061,8 @@ class VenueOrdersRepositoryTest {
         programId: Long,
     ): Int {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            connection.prepareStatement("SELECT COUNT(*) FROM guest_loyalty_ledger WHERE program_id = ?").use { statement ->
+            connection.prepareStatement("SELECT COUNT(*) FROM guest_loyalty_ledger WHERE program_id = ?").use {
+                    statement ->
                 statement.setLong(1, programId)
                 statement.executeQuery().use { rs ->
                     if (rs.next()) return rs.getInt(1)

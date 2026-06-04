@@ -37,7 +37,10 @@ class FakeAiAssistantClient : AiAssistantClient {
             append("🤖 Диагностика акции\n\n")
             append(prompt.trim())
             append("\n\n")
-            append("Я ничего не изменил в настройках. Если нужно исправить проблему, откройте соответствующий экран акции и подтвердите действие вручную.")
+            append(
+                "Я ничего не изменил в настройках. Если нужно исправить проблему, откройте " +
+                    "соответствующий экран акции и подтвердите действие вручную.",
+            )
         }
 
     private fun fakePromotionTextDraft(prompt: String): String =
@@ -45,7 +48,9 @@ class FakeAiAssistantClient : AiAssistantClient {
             append("Черновик. Проверьте текст перед публикацией.\n\n")
             append("Название: Акция для гостей\n")
             append("Описание: ").append(shortInput(prompt)).append('\n')
-            append("Условия: Действует по правилам заведения. Перед публикацией уточните дни, время и состав предложения.")
+            append(
+                "Условия: Действует по правилам заведения. Перед публикацией уточните дни, время и состав предложения.",
+            )
         }
 
     private fun fakeFeedbackReplyDraft(prompt: String): String =
@@ -104,7 +109,12 @@ class FakeAiAssistantClient : AiAssistantClient {
         return ParsedVenueSummary(
             title = title,
             summaryLines = prompt.extractListSection("Детерминированные данные:", "Что требует внимания:"),
-            attentionLines = prompt.extractListSection("Что требует внимания:", "Ограничения данных:", "Правила безопасности:"),
+            attentionLines =
+                prompt.extractListSection(
+                    "Что требует внимания:",
+                    "Ограничения данных:",
+                    "Правила безопасности:",
+                ),
             sourceNotes = prompt.extractListSection("Ограничения данных:", "Правила безопасности:"),
         )
     }

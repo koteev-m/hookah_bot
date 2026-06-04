@@ -76,7 +76,9 @@ class StaffChatNotifierTest {
                     staffChatId = 777L,
                 )
             val payloadSlot = slot<String>()
-            coEvery { notificationRepository.tryClaimAndEnqueue(57L, 777L, "sendMessage", capture(payloadSlot)) } returns
+            coEvery {
+                notificationRepository.tryClaimAndEnqueue(57L, 777L, "sendMessage", capture(payloadSlot))
+            } returns
                 StaffChatNotificationClaim.CLAIMED
 
             val result =
@@ -127,7 +129,9 @@ class StaffChatNotifierTest {
                     staffChatId = 777L,
                 )
             val payloadSlot = slot<String>()
-            coEvery { notificationRepository.tryClaimAndEnqueue(58L, 777L, "sendMessage", capture(payloadSlot)) } returns
+            coEvery {
+                notificationRepository.tryClaimAndEnqueue(58L, 777L, "sendMessage", capture(payloadSlot))
+            } returns
                 StaffChatNotificationClaim.CLAIMED
 
             val result =
@@ -162,7 +166,9 @@ class StaffChatNotifierTest {
                     staffChatId = 777L,
                 )
             val payloadSlot = slot<String>()
-            coEvery { notificationRepository.tryClaimAndEnqueue(59L, 777L, "sendMessage", capture(payloadSlot)) } returns
+            coEvery {
+                notificationRepository.tryClaimAndEnqueue(59L, 777L, "sendMessage", capture(payloadSlot))
+            } returns
                 StaffChatNotificationClaim.CLAIMED
 
             val result =
@@ -513,7 +519,7 @@ class StaffChatNotifierTest {
         }
 
     @Test
-    fun `booking cancellation notification is still sent when staff chat is linked and cancellation setting is disabled`() =
+    fun `booking cancellation notification is sent when staff chat is linked and cancellation setting is disabled`() =
         runBlocking {
             coEvery { venueSettingsRepository.find(1L) } returns
                 VenueSettings(

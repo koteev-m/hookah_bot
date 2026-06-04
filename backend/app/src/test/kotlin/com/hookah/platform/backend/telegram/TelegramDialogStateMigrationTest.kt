@@ -26,7 +26,9 @@ class TelegramDialogStateMigrationTest {
                     statement.executeUpdate()
                 }
 
-                connection.prepareStatement("SELECT state FROM telegram_dialog_state WHERE chat_id = ?").use { statement ->
+                connection.prepareStatement(
+                    "SELECT state FROM telegram_dialog_state WHERE chat_id = ?",
+                ).use { statement ->
                     statement.setLong(1, chatId)
                     statement.executeQuery().use { rs ->
                         rs.next()

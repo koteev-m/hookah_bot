@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -11,7 +12,6 @@ import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
 import javax.sql.DataSource
-import org.slf4j.LoggerFactory
 
 data class VenueSettings(
     val venueId: Long,
@@ -54,8 +54,26 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
         private val cityTimezoneRules =
             listOf(
                 CityTimezoneRule("Asia/Tomsk", listOf("томск")),
-                CityTimezoneRule("Europe/Moscow", listOf("москва", "москов", "санкт петербург", "спб", "петербург", "питер", "казань", "нижний новгород", "ростов", "краснодар", "сочи")),
-                CityTimezoneRule("Asia/Yekaterinburg", listOf("екатеринбург", "свердловск", "челябинск", "уфа", "пермь", "тюмень")),
+                CityTimezoneRule(
+                    "Europe/Moscow",
+                    listOf(
+                        "москва",
+                        "москов",
+                        "санкт петербург",
+                        "спб",
+                        "петербург",
+                        "питер",
+                        "казань",
+                        "нижний новгород",
+                        "ростов",
+                        "краснодар",
+                        "сочи",
+                    ),
+                ),
+                CityTimezoneRule(
+                    "Asia/Yekaterinburg",
+                    listOf("екатеринбург", "свердловск", "челябинск", "уфа", "пермь", "тюмень"),
+                ),
                 CityTimezoneRule("Asia/Novosibirsk", listOf("новосибирск", "барнаул")),
                 CityTimezoneRule("Asia/Omsk", listOf("омск")),
                 CityTimezoneRule("Asia/Krasnoyarsk", listOf("красноярск")),
@@ -420,7 +438,8 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                                 venueId,
                             )
                         val ordersCount = count(connection, "SELECT COUNT(*) FROM orders WHERE venue_id = ?", venueId)
-                        val staffCallsCount = count(connection, "SELECT COUNT(*) FROM staff_calls WHERE venue_id = ?", venueId)
+                        val staffCallsCount =
+                            count(connection, "SELECT COUNT(*) FROM staff_calls WHERE venue_id = ?", venueId)
 
                         executeDelete(connection, "DELETE FROM staff_calls WHERE venue_id = ?", venueId)
                         executeDelete(connection, "DELETE FROM orders WHERE venue_id = ?", venueId)

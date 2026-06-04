@@ -358,7 +358,12 @@ private fun validateCurrency(currency: String) {
 
 private fun parseMenuSemanticType(value: String): MenuSemanticType =
     MenuSemanticType.entries.firstOrNull { it.dbValue == value.trim().uppercase(Locale.ROOT) }
-        ?: throw InvalidInputException("menu type must be one of: ${MenuSemanticType.entries.joinToString { entry -> entry.dbValue }}")
+        ?: throw InvalidInputException(
+            "menu type must be one of: ${MenuSemanticType.entries.joinToString {
+                    entry ->
+                entry.dbValue
+            }}",
+        )
 
 private fun parseNullableMenuSemanticType(value: String): MenuSemanticType? {
     val normalized = value.trim()
@@ -388,8 +393,7 @@ private suspend fun resolveCategoryForItem(
     venueMenuRepository: VenueMenuRepository,
     venueId: Long,
     item: VenueMenuItem,
-): VenueMenuCategory? =
-    venueMenuRepository.getMenu(venueId).firstOrNull { category -> category.id == item.categoryId }
+): VenueMenuCategory? = venueMenuRepository.getMenu(venueId).firstOrNull { category -> category.id == item.categoryId }
 
 private fun VenueMenuCategory.toDto(): VenueMenuCategoryDto =
     VenueMenuCategoryDto(
@@ -400,14 +404,12 @@ private fun VenueMenuCategory.toDto(): VenueMenuCategoryDto =
         items = items.map { it.toDto(this) },
     )
 
-private fun VenueMenuItem.toDto(category: VenueMenuCategory): VenueMenuItemDto =
-    toDto(effectiveType(category))
+private fun VenueMenuItem.toDto(category: VenueMenuCategory): VenueMenuItemDto = toDto(effectiveType(category))
 
 private fun VenueMenuItem.toDtoWithCategory(category: VenueMenuCategory?): VenueMenuItemDto =
     if (category == null) toDto() else toDto(category)
 
-private fun VenueMenuItem.toDto(): VenueMenuItemDto =
-    toDto(itemType ?: MenuSemanticType.OTHER)
+private fun VenueMenuItem.toDto(): VenueMenuItemDto = toDto(itemType ?: MenuSemanticType.OTHER)
 
 private fun VenueMenuItem.toDto(effectiveType: MenuSemanticType): VenueMenuItemDto =
     VenueMenuItemDto(

@@ -1,7 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest
 
-import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.ModuleOverrides
+import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionsResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
@@ -10,8 +10,8 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
-import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import com.hookah.platform.backend.telegram.TelegramDownloadedFile
+import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.bodyAsText
@@ -274,7 +274,8 @@ class GuestVenueRoutesTest {
 
             val seeded =
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                    val venueId = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    val venueId =
+                        insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
                     val aboutId =
                         insertInfoSection(
                             connection = connection,
@@ -372,7 +373,8 @@ class GuestVenueRoutesTest {
 
             val seeded =
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                    val venueId = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    val venueId =
+                        insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
                     val sectionId =
                         insertInfoSection(
                             connection = connection,
@@ -423,7 +425,8 @@ class GuestVenueRoutesTest {
 
             val seeded =
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                    val venueId = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    val venueId =
+                        insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
                     val visibleSectionId =
                         insertInfoSection(
                             connection = connection,
@@ -456,11 +459,13 @@ class GuestVenueRoutesTest {
                 }
             val hiddenResponse =
                 client.get(
-                    "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.hiddenSectionId}/media/${seeded.hiddenMediaId}",
+                    "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.hiddenSectionId}" +
+                        "/media/${seeded.hiddenMediaId}",
                 )
             val mismatchResponse =
                 client.get(
-                    "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.visibleSectionId}/media/${seeded.hiddenMediaId}",
+                    "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.visibleSectionId}" +
+                        "/media/${seeded.hiddenMediaId}",
                 )
 
             assertEquals(HttpStatusCode.NotFound, hiddenResponse.status)

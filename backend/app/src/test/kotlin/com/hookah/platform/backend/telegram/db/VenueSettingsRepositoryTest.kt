@@ -237,7 +237,8 @@ class VenueSettingsRepositoryTest {
         userId: Long,
     ) {
         dataSource.connection.use { connection ->
-            connection.prepareStatement("INSERT INTO users (telegram_user_id, username) VALUES (?, 'guest')").use { statement ->
+            connection.prepareStatement("INSERT INTO users (telegram_user_id, username) VALUES (?, 'guest')").use {
+                    statement ->
                 statement.setLong(1, userId)
                 statement.executeUpdate()
             }

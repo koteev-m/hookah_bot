@@ -1,15 +1,15 @@
 package com.hookah.platform.backend.telegram
 
-import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
-import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
-import com.hookah.platform.backend.telegram.db.LinkCodeResult
 import com.hookah.platform.backend.telegram.db.LinkAndBindResult
+import com.hookah.platform.backend.telegram.db.LinkCodeResult
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
@@ -31,9 +31,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.sql.Connection
 import java.time.Duration
 import java.time.Instant
-import java.sql.Connection
 
 class TelegramBotRouterLinkCommandTest {
     private val apiClient: TelegramApiClient = mockk(relaxed = true)
@@ -710,7 +710,11 @@ class TelegramBotRouterLinkCommandTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(200, "Раздел «Чат персонала» доступен владельцу или менеджеру.", any())
+                outboxEnqueuer.enqueueSendMessage(
+                    200,
+                    "Раздел «Чат персонала» доступен владельцу или менеджеру.",
+                    any(),
+                )
             }
             coVerify(exactly = 0) { staffChatLinkCodeRepository.createLinkCode(any(), any()) }
         }

@@ -83,7 +83,9 @@ class VisitFeedbackWorkerTest {
                     attempts = 1,
                 )
             coEvery { repository.pickDueRequests(now, 100) } returns listOf(request)
-            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any()) } throws RuntimeException("telegram unavailable")
+            coEvery {
+                outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any())
+            } throws RuntimeException("telegram unavailable")
             coEvery { repository.markRequestFailed(any(), any()) } returns true
             val worker =
                 VisitFeedbackWorker(

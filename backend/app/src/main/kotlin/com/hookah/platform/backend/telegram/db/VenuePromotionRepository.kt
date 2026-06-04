@@ -775,7 +775,9 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
 
     private fun ResultSet.toPromotion(): VenuePromotion? {
         val status = VenuePromotionStatus.fromDb(getString("status")) ?: return null
-        val templateType = VenuePromotionTemplateType.fromDb(getString("template_type")) ?: VenuePromotionTemplateType.TEXT_ONLY
+        val templateType =
+            VenuePromotionTemplateType.fromDb(getString("template_type"))
+                ?: VenuePromotionTemplateType.TEXT_ONLY
         return VenuePromotion(
             id = getLong("id"),
             venueId = getLong("venue_id"),

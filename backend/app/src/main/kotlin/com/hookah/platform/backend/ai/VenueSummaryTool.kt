@@ -147,7 +147,12 @@ class VenueSummaryTool(
     }
 
     private suspend fun feedbackSummary(request: VenueSummaryRequest): VenueSummaryResult {
-        val feedback = visitFeedbackRepository.listVenueFeedback(request.venueId, VisitFeedbackVenueFilter.ALL, limit = 50)
+        val feedback =
+            visitFeedbackRepository.listVenueFeedback(
+                request.venueId,
+                VisitFeedbackVenueFilter.ALL,
+                limit = 50,
+            )
         val lowRatings = feedback.count { (it.rating ?: 5) <= 3 }
         val needsReply = feedback.count { it.requiresAnswer }
         val ratings = feedback.mapNotNull { it.rating }
@@ -184,14 +189,19 @@ class VenueSummaryTool(
     }
 
     private suspend fun loyaltySummary(request: VenueSummaryRequest): VenueSummaryResult {
-        val program = loyaltyRepository.listProgramsForVenue(request.venueId).firstOrNull()
-            ?: return VenueSummaryResult(
-                venueId = request.venueId,
-                type = request.type,
-                title = request.type.title,
-                summaryLines = listOf("Программа лояльности не настроена."),
-                attentionLines = listOf("Если лояльность нужна, настройте программу в разделе «📣 Продвижение → 🎁 Лояльность»."),
-            )
+        val program =
+            loyaltyRepository.listProgramsForVenue(request.venueId).firstOrNull()
+                ?: return VenueSummaryResult(
+                    venueId = request.venueId,
+                    type = request.type,
+                    title = request.type.title,
+                    summaryLines = listOf("Программа лояльности не настроена."),
+                    attentionLines =
+                        listOf(
+                            "Если лояльность нужна, настройте программу в разделе " +
+                                "«📣 Продвижение → 🎁 Лояльность».",
+                        ),
+                )
         val earnTargets = loyaltyRepository.listEarnTargets(request.venueId, program.id)
         val rewardTargets = loyaltyRepository.listRewardTargets(request.venueId, program.id)
         val progressSummary = loyaltyRepository.getProgressSummary(request.venueId, program.id)
@@ -219,7 +229,10 @@ class VenueSummaryTool(
     }
 
     private suspend fun ordersSummary(request: VenueSummaryRequest): VenueSummaryResult {
-        val periodStart = request.now.atZone(request.venueZoneId).toLocalDate().atStartOfDay(request.venueZoneId).toInstant()
+        val periodStart =
+            request.now.atZone(
+                request.venueZoneId,
+            ).toLocalDate().atStartOfDay(request.venueZoneId).toInstant()
         val sourceNotes = mutableListOf<String>()
         val stats =
             try {

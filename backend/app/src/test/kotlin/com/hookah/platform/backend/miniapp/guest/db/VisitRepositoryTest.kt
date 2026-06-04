@@ -121,7 +121,8 @@ class VisitRepositoryTest {
             val feedbackRepository = VisitFeedbackRepository(dataSource(jdbcUrl))
             val orderFixture = seedActiveOrderWithParticipants(jdbcUrl, fixture)
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                val guestThreeTab = insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_THREE, "PERSONAL")
+                val guestThreeTab =
+                    insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_THREE, "PERSONAL")
                 val guestThreeBatch = insertBatch(connection, orderFixture.orderId, guestThreeTab, null, "MINIAPP")
                 insertBatchItem(connection, guestThreeBatch, fixture.itemId)
                 insertGuestBatchIdempotency(
@@ -237,7 +238,12 @@ class VisitRepositoryTest {
             assertNotNull(detail)
             assertEquals(1800L, detail.totalMinor)
             assertEquals(200L, detail.orders.single().items.single().promoDiscountMinor)
-            assertEquals(listOf("Счастливые часы" to 200L), detail.orders.single().promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(
+                listOf("Счастливые часы" to 200L),
+                detail.orders.single().promotionDiscounts.map {
+                    it.label to it.discountMinor
+                },
+            )
         }
 
     @Test
@@ -248,7 +254,8 @@ class VisitRepositoryTest {
             val visitRepository = VisitRepository(dataSource(jdbcUrl))
             val orderFixture = seedOrderShell(jdbcUrl, fixture)
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                val guestOneTab = insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
+                val guestOneTab =
+                    insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
                 val rejectedBatch =
                     insertBatch(connection, orderFixture.orderId, guestOneTab, null, "MINIAPP", status = "REJECTED")
                 insertBatchItem(connection, rejectedBatch, fixture.itemId)
@@ -262,7 +269,8 @@ class VisitRepositoryTest {
                     "rejected",
                 )
 
-                val guestTwoTab = insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_TWO, "PERSONAL")
+                val guestTwoTab =
+                    insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_TWO, "PERSONAL")
                 val excludedBatch = insertBatch(connection, orderFixture.orderId, guestTwoTab, null, "MINIAPP")
                 insertBatchItem(connection, excludedBatch, fixture.itemId, isExcluded = true)
                 insertGuestBatchIdempotency(
@@ -292,7 +300,8 @@ class VisitRepositoryTest {
             val visitRepository = VisitRepository(dataSource(jdbcUrl))
             val orderFixture = seedOrderShell(jdbcUrl, fixture)
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                val guestTab = insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
+                val guestTab =
+                    insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
                 val batch = insertBatch(connection, orderFixture.orderId, guestTab, null, "MINIAPP")
                 insertBatchItem(connection, batch, fixture.itemId, itemStatus = "CANCELED")
                 insertGuestBatchIdempotency(
@@ -321,7 +330,8 @@ class VisitRepositoryTest {
             val visitRepository = VisitRepository(dataSource(jdbcUrl))
             val orderFixture = seedOrderShell(jdbcUrl, fixture)
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                val guestTab = insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
+                val guestTab =
+                    insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
                 val batch = insertBatch(connection, orderFixture.orderId, guestTab, null, "MINIAPP")
                 insertBatchItem(connection, batch, fixture.itemId, isExcluded = true)
                 insertBatchItem(connection, batch, fixture.itemId, isExcluded = false)
@@ -620,11 +630,27 @@ class VisitRepositoryTest {
 
             val guestOneFirstBatch = insertBatch(connection, orderId, guestOneTab, null, "MINIAPP")
             insertBatchItem(connection, guestOneFirstBatch, fixture.itemId)
-            insertGuestBatchIdempotency(connection, fixture.venueId, tableSessionId, GUEST_ONE, orderId, guestOneFirstBatch, "guest-one-1")
+            insertGuestBatchIdempotency(
+                connection,
+                fixture.venueId,
+                tableSessionId,
+                GUEST_ONE,
+                orderId,
+                guestOneFirstBatch,
+                "guest-one-1",
+            )
 
             val guestOneSecondBatch = insertBatch(connection, orderId, guestOneTab, null, "MINIAPP")
             insertBatchItem(connection, guestOneSecondBatch, fixture.itemId)
-            insertGuestBatchIdempotency(connection, fixture.venueId, tableSessionId, GUEST_ONE, orderId, guestOneSecondBatch, "guest-one-2")
+            insertGuestBatchIdempotency(
+                connection,
+                fixture.venueId,
+                tableSessionId,
+                GUEST_ONE,
+                orderId,
+                guestOneSecondBatch,
+                "guest-one-2",
+            )
 
             val guestTwoBatch = insertBatch(connection, orderId, guestTwoTab, null, "MINIAPP")
             insertBatchItem(connection, guestTwoBatch, fixture.itemId)

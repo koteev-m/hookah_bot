@@ -78,18 +78,19 @@ fun Route.venueBookingRoutes(
             val bookings = guestBookingRepository.listActiveByVenue(venueId = venueId)
             call.respond(
                 VenueBookingListResponse(
-                    items = bookings.map { booking ->
-                        VenueBookingDto(
-                            bookingId = booking.id,
-                            displayNumber = booking.displayNumber,
-                            status = booking.status.toApi(),
-                            scheduledAt = booking.scheduledAt.toString(),
-                            partySize = booking.partySize,
-                            comment = booking.comment,
-                            guestDisplayName = booking.guestDisplayName,
-                            lastGuestConfirmationAt = booking.lastGuestConfirmationAt?.toString(),
-                        )
-                    },
+                    items =
+                        bookings.map { booking ->
+                            VenueBookingDto(
+                                bookingId = booking.id,
+                                displayNumber = booking.displayNumber,
+                                status = booking.status.toApi(),
+                                scheduledAt = booking.scheduledAt.toString(),
+                                partySize = booking.partySize,
+                                comment = booking.comment,
+                                guestDisplayName = booking.guestDisplayName,
+                                lastGuestConfirmationAt = booking.lastGuestConfirmationAt?.toString(),
+                            )
+                        },
                 ),
             )
         }
@@ -106,7 +107,8 @@ fun Route.venueBookingRoutes(
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
                 text =
-                    "✅ ${formatBookingDisplayLabel(booking)} в ${formatBookingVenueName(guestBookingRepository, booking.venueId)} " +
+                    "✅ ${formatBookingDisplayLabel(booking)} в " +
+                        "${formatBookingVenueName(guestBookingRepository, booking.venueId)} " +
                         "подтверждена на ${formatBookingNotificationTime(booking.scheduledAt, zoneId)}",
             )
             guestBookingRepository.scheduleRemindersForBooking(
@@ -142,7 +144,8 @@ fun Route.venueBookingRoutes(
             outboxEnqueuer.enqueueSendMessage(
                 chatId = updated.userId,
                 text =
-                    "🕒 ${formatBookingDisplayLabel(updated)} в ${formatBookingVenueName(guestBookingRepository, updated.venueId)} " +
+                    "🕒 ${formatBookingDisplayLabel(updated)} в " +
+                        "${formatBookingVenueName(guestBookingRepository, updated.venueId)} " +
                         "перенесена. Новое время: ${formatBookingNotificationTime(updated.scheduledAt, zoneId)}",
             )
             guestBookingRepository.scheduleRemindersForBooking(
@@ -174,7 +177,8 @@ fun Route.venueBookingRoutes(
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
                 text =
-                    "❌ ${formatBookingDisplayLabel(booking)} в ${formatBookingVenueName(guestBookingRepository, booking.venueId)} " +
+                    "❌ ${formatBookingDisplayLabel(booking)} в " +
+                        "${formatBookingVenueName(guestBookingRepository, booking.venueId)} " +
                         "на ${formatBookingNotificationTime(booking.scheduledAt, zoneId)} отменена заведением.\n" +
                         "Причина: ${cancelReason ?: "не указана"}",
             )

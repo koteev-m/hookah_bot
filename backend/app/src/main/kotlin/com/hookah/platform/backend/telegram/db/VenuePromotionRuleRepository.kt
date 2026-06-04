@@ -141,8 +141,8 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                         if (promotionId != null && !promotionBelongsToVenue(connection, venueId, promotionId)) {
                             throw SQLException("Promotion does not belong to venue")
                         }
-	                        val id =
-	                            connection.prepareStatement(
+                        val id =
+                            connection.prepareStatement(
                                 """
                                 INSERT INTO promotion_rules (
                                     promotion_id,
@@ -177,12 +177,19 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                                 statement.executeUpdate()
                                 statement.generatedKeys.use { keys ->
                                     if (!keys.next()) throw SQLException("No generated key for promotion rule")
-	                                    keys.getLong(1)
-	                                }
-	                            }
-	                        replaceRuleTargetsWithCategory(connection, venueId, id, targetValue)
-	                        val created = selectRule(connection, venueId, id) ?: throw SQLException("Created promotion rule not found")
-	                        connection.commit()
+                                    keys.getLong(1)
+                                }
+                            }
+                        replaceRuleTargetsWithCategory(connection, venueId, id, targetValue)
+                        val created =
+                            selectRule(
+                                connection,
+                                venueId,
+                                id,
+                            ) ?: throw SQLException(
+                                "Created promotion rule not found",
+                            )
+                        connection.commit()
                         created
                     } catch (e: Exception) {
                         connection.rollback()
@@ -274,7 +281,14 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                             maxRewardsPerBatch = maxRewardsPerBatch,
                             rewardMode = PromotionRewardMode.FIXED_ITEM,
                         )
-                        val created = selectRule(connection, venueId, id) ?: throw SQLException("Created promotion rule not found")
+                        val created =
+                            selectRule(
+                                connection,
+                                venueId,
+                                id,
+                            ) ?: throw SQLException(
+                                "Created promotion rule not found",
+                            )
                         connection.commit()
                         created
                     } catch (e: Exception) {
@@ -461,186 +475,193 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
             updates += "priority = ?"
             values += it
         }
-	        if (updates.isEmpty()) return getRuleForManagement(venueId, ruleId)
-	        updates += "updated_at = CURRENT_TIMESTAMP"
-	        return withContext(Dispatchers.IO) {
-	            try {
-	                ds.connection.use { connection ->
-	                    connection.autoCommit = false
-	                    try {
-	                        val updated =
-	                            connection.prepareStatement(
-	                                """
-	                                UPDATE promotion_rules
-	                                SET ${updates.joinToString(", ")}
-	                                WHERE venue_id = ? AND id = ?
-	                                """.trimIndent(),
-	                            ).use { statement ->
-	                                values.forEachIndexed { index, value -> setStatementValue(statement, index + 1, value) }
-	                                statement.setLong(values.size + 1, venueId)
-	                                statement.setLong(values.size + 2, ruleId)
-	                                statement.executeUpdate()
-	                            }
-	                        val result =
-	                            if (updated == 0) {
-	                                null
-	                            } else {
-	                                targetValue?.let { replaceRuleTargetsWithCategory(connection, venueId, ruleId, it) }
-	                                selectRule(connection, venueId, ruleId)
-	                            }
-	                        connection.commit()
-	                        result
-	                    } catch (e: Exception) {
-	                        connection.rollback()
-	                        throw e
-	                    } finally {
-	                        connection.autoCommit = true
-	                    }
-	                }
-	            } catch (e: IllegalArgumentException) {
-	                throw e
+        if (updates.isEmpty()) return getRuleForManagement(venueId, ruleId)
+        updates += "updated_at = CURRENT_TIMESTAMP"
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE promotion_rules
+                                SET ${updates.joinToString(", ")}
+                                WHERE venue_id = ? AND id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                values.forEachIndexed {
+                                        index,
+                                        value,
+                                    ->
+                                    setStatementValue(statement, index + 1, value)
+                                }
+                                statement.setLong(values.size + 1, venueId)
+                                statement.setLong(values.size + 2, ruleId)
+                                statement.executeUpdate()
+                            }
+                        val result =
+                            if (updated == 0) {
+                                null
+                            } else {
+                                targetValue?.let { replaceRuleTargetsWithCategory(connection, venueId, ruleId, it) }
+                                selectRule(connection, venueId, ruleId)
+                            }
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                throw e
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
-	        }
-	    }
+        }
+    }
 
-	    suspend fun replaceRuleTargetsWithCategory(
-	        venueId: Long,
-	        ruleId: Long,
-	        semanticType: MenuSemanticType,
-	    ): VenuePromotionRule? {
-	        val ds = dataSource ?: throw DatabaseUnavailableException()
-	        return withContext(Dispatchers.IO) {
-	            try {
-	                ds.connection.use { connection ->
-	                    connection.autoCommit = false
-	                    try {
-	                        val exists = ruleBelongsToVenue(connection, venueId, ruleId)
-	                        val result =
-	                            if (!exists) {
-	                                null
-	                            } else {
-	                                connection.prepareStatement(
-	                                    """
-	                                    UPDATE promotion_rules
-	                                    SET target_type = ?,
-	                                        target_value = ?,
-	                                        updated_at = CURRENT_TIMESTAMP
-	                                    WHERE venue_id = ? AND id = ?
-	                                    """.trimIndent(),
-	                                ).use { statement ->
-	                                    statement.setString(1, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
-	                                    statement.setString(2, semanticType.dbValue)
-	                                    statement.setLong(3, venueId)
-	                                    statement.setLong(4, ruleId)
-	                                    statement.executeUpdate()
-	                                }
-	                                replaceRuleTargetsWithCategory(connection, venueId, ruleId, semanticType)
-	                                selectRule(connection, venueId, ruleId)
-	                            }
-	                        connection.commit()
-	                        result
-	                    } catch (e: Exception) {
-	                        connection.rollback()
-	                        throw e
-	                    } finally {
-	                        connection.autoCommit = true
-	                    }
-	                }
-	            } catch (e: SQLException) {
-	                throw DatabaseUnavailableException()
-	            }
-	        }
-	    }
+    suspend fun replaceRuleTargetsWithCategory(
+        venueId: Long,
+        ruleId: Long,
+        semanticType: MenuSemanticType,
+    ): VenuePromotionRule? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val exists = ruleBelongsToVenue(connection, venueId, ruleId)
+                        val result =
+                            if (!exists) {
+                                null
+                            } else {
+                                connection.prepareStatement(
+                                    """
+                                    UPDATE promotion_rules
+                                    SET target_type = ?,
+                                        target_value = ?,
+                                        updated_at = CURRENT_TIMESTAMP
+                                    WHERE venue_id = ? AND id = ?
+                                    """.trimIndent(),
+                                ).use { statement ->
+                                    statement.setString(1, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
+                                    statement.setString(2, semanticType.dbValue)
+                                    statement.setLong(3, venueId)
+                                    statement.setLong(4, ruleId)
+                                    statement.executeUpdate()
+                                }
+                                replaceRuleTargetsWithCategory(connection, venueId, ruleId, semanticType)
+                                selectRule(connection, venueId, ruleId)
+                            }
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
 
-	    suspend fun replaceRuleTargetsWithMenuItems(
-	        venueId: Long,
-	        ruleId: Long,
-	        menuItemIds: List<Long>,
-	    ): VenuePromotionRule? {
-	        val ds = dataSource ?: throw DatabaseUnavailableException()
-	        val distinctItemIds = menuItemIds.distinct()
-	        require(distinctItemIds.isNotEmpty()) { "menu_item_ids must not be empty" }
-	        return withContext(Dispatchers.IO) {
-	            try {
-	                ds.connection.use { connection ->
-	                    connection.autoCommit = false
-	                    try {
-	                        val exists = ruleBelongsToVenue(connection, venueId, ruleId)
-	                        val result =
-	                            if (!exists) {
-	                                null
-	                            } else {
-	                                val items = loadTargetSelectionItems(connection, venueId, distinctItemIds)
-	                                require(items.size == distinctItemIds.size) { "menu items must belong to venue" }
-	                                val semanticTypes = items.map { it.semanticType }.toSet()
-	                                require(semanticTypes.size == 1) { "menu item targets must share the same semantic type" }
-	                                val semanticType = semanticTypes.single()
-	                                connection.prepareStatement(
-	                                    """
-	                                    UPDATE promotion_rules
-	                                    SET target_type = ?,
-	                                        target_value = ?,
-	                                        updated_at = CURRENT_TIMESTAMP
-	                                    WHERE venue_id = ? AND id = ?
-	                                    """.trimIndent(),
-	                                ).use { statement ->
-	                                    statement.setString(1, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
-	                                    statement.setString(2, semanticType.dbValue)
-	                                    statement.setLong(3, venueId)
-	                                    statement.setLong(4, ruleId)
-	                                    statement.executeUpdate()
-	                                }
-	                                deleteRuleTargets(connection, ruleId)
-	                                distinctItemIds.forEach { menuItemId ->
-	                                    insertMenuItemTarget(connection, ruleId, menuItemId)
-	                                }
-	                                selectRule(connection, venueId, ruleId)
-	                            }
-	                        connection.commit()
-	                        result
-	                    } catch (e: Exception) {
-	                        connection.rollback()
-	                        throw e
-	                    } finally {
-	                        connection.autoCommit = true
-	                    }
-	                }
-	            } catch (e: IllegalArgumentException) {
-	                throw e
-	            } catch (e: SQLException) {
-	                throw DatabaseUnavailableException()
-	            }
-	        }
-	    }
+    suspend fun replaceRuleTargetsWithMenuItems(
+        venueId: Long,
+        ruleId: Long,
+        menuItemIds: List<Long>,
+    ): VenuePromotionRule? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val distinctItemIds = menuItemIds.distinct()
+        require(distinctItemIds.isNotEmpty()) { "menu_item_ids must not be empty" }
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val exists = ruleBelongsToVenue(connection, venueId, ruleId)
+                        val result =
+                            if (!exists) {
+                                null
+                            } else {
+                                val items = loadTargetSelectionItems(connection, venueId, distinctItemIds)
+                                require(items.size == distinctItemIds.size) { "menu items must belong to venue" }
+                                val semanticTypes = items.map { it.semanticType }.toSet()
+                                require(
+                                    semanticTypes.size == 1,
+                                ) { "menu item targets must share the same semantic type" }
+                                val semanticType = semanticTypes.single()
+                                connection.prepareStatement(
+                                    """
+                                    UPDATE promotion_rules
+                                    SET target_type = ?,
+                                        target_value = ?,
+                                        updated_at = CURRENT_TIMESTAMP
+                                    WHERE venue_id = ? AND id = ?
+                                    """.trimIndent(),
+                                ).use { statement ->
+                                    statement.setString(1, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
+                                    statement.setString(2, semanticType.dbValue)
+                                    statement.setLong(3, venueId)
+                                    statement.setLong(4, ruleId)
+                                    statement.executeUpdate()
+                                }
+                                deleteRuleTargets(connection, ruleId)
+                                distinctItemIds.forEach { menuItemId ->
+                                    insertMenuItemTarget(connection, ruleId, menuItemId)
+                                }
+                                selectRule(connection, venueId, ruleId)
+                            }
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
 
-	    suspend fun listRuleTargets(ruleId: Long): List<PromotionRuleTarget> {
-	        val ds = dataSource ?: throw DatabaseUnavailableException()
-	        return withContext(Dispatchers.IO) {
-	            try {
-	                ds.connection.use { connection -> loadTargetsForRuleIds(connection, listOf(ruleId))[ruleId].orEmpty() }
-	            } catch (e: SQLException) {
-	                throw DatabaseUnavailableException()
-	            }
-	        }
-	    }
+    suspend fun listRuleTargets(ruleId: Long): List<PromotionRuleTarget> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection -> loadTargetsForRuleIds(connection, listOf(ruleId))[ruleId].orEmpty() }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
 
-	    suspend fun listMenuItemsForTargetSelection(
-	        venueId: Long,
-	        semanticType: MenuSemanticType,
-	    ): List<PromotionRuleTargetMenuItem> {
-	        val ds = dataSource ?: throw DatabaseUnavailableException()
-	        return withContext(Dispatchers.IO) {
-	            try {
-	                ds.connection.use { connection -> loadTargetSelectionItems(connection, venueId, semanticType) }
-	            } catch (e: SQLException) {
-	                throw DatabaseUnavailableException()
-	            }
-	        }
-	    }
+    suspend fun listMenuItemsForTargetSelection(
+        venueId: Long,
+        semanticType: MenuSemanticType,
+    ): List<PromotionRuleTargetMenuItem> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection -> loadTargetSelectionItems(connection, venueId, semanticType) }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
 
-	    suspend fun setRuleStatus(
+    suspend fun setRuleStatus(
         venueId: Long,
         ruleId: Long,
         status: VenuePromotionStatus,
@@ -680,7 +701,9 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
     ): VenuePromotionRule? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         validateSchedule(startsTime, endsTime, daysOfWeek)
-        val normalizedDays = normalizeDaysOfWeek(daysOfWeek) ?: throw IllegalArgumentException("days_of_week is required")
+        val normalizedDays =
+            normalizeDaysOfWeek(daysOfWeek)
+                ?: throw IllegalArgumentException("days_of_week is required")
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
@@ -914,14 +937,14 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                         ORDER BY r.priority ASC, r.updated_at DESC, r.id DESC
                         LIMIT ?
                         """.trimIndent(),
-	                    ).use { statement ->
-	                        statement.setLong(1, venueId)
-	                        statement.setString(2, VenuePromotionStatus.ARCHIVED.dbValue)
-	                        statement.setInt(3, limit.coerceIn(1, 200))
-	                        statement.executeQuery().use { rs -> attachTargets(connection, rs.toRules()) }
-	                    }
-	                }
-	            } catch (e: SQLException) {
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setString(2, VenuePromotionStatus.ARCHIVED.dbValue)
+                        statement.setInt(3, limit.coerceIn(1, 200))
+                        statement.executeQuery().use { rs -> attachTargets(connection, rs.toRules()) }
+                    }
+                }
+            } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
@@ -947,15 +970,15 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                         ORDER BY r.priority ASC, r.updated_at DESC, r.id DESC
                         LIMIT ?
                         """.trimIndent(),
-	                    ).use { statement ->
-	                        statement.setLong(1, venueId)
-	                        statement.setLong(2, promotionId)
-	                        statement.setString(3, VenuePromotionStatus.ARCHIVED.dbValue)
-	                        statement.setInt(4, limit.coerceIn(1, 200))
-	                        statement.executeQuery().use { rs -> attachTargets(connection, rs.toRules()) }
-	                    }
-	                }
-	            } catch (e: SQLException) {
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, promotionId)
+                        statement.setString(3, VenuePromotionStatus.ARCHIVED.dbValue)
+                        statement.setInt(4, limit.coerceIn(1, 200))
+                        statement.executeQuery().use { rs -> attachTargets(connection, rs.toRules()) }
+                    }
+                }
+            } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
@@ -993,7 +1016,7 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                         statement.executeQuery().use { rs -> attachTargets(connection, rs.toRules()) }
                     }
                 }
-	            } catch (e: SQLException) {
+            } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
@@ -1054,85 +1077,85 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
             LEFT JOIN venue_promotions p ON p.id = r.promotion_id
             WHERE r.venue_id = ? AND r.id = ?
             """.trimIndent(),
-	        ).use { statement ->
-	            statement.setLong(1, venueId)
-	            statement.setLong(2, ruleId)
-	            statement.executeQuery().use { rs ->
-	                if (rs.next()) {
-	                    attachTargets(connection, listOfNotNull(rs.toRule())).firstOrNull()
-	                } else {
-	                    null
-	                }
-	            }
-	        }
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, ruleId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    attachTargets(connection, listOfNotNull(rs.toRule())).firstOrNull()
+                } else {
+                    null
+                }
+            }
+        }
 
-	    private fun attachTargets(
-	        connection: Connection,
-	        rules: List<VenuePromotionRule>,
-	    ): List<VenuePromotionRule> {
-	        if (rules.isEmpty()) return rules
-	        val targetsByRuleId = loadTargetsForRuleIds(connection, rules.map { it.id })
-	        val rewardsByRuleId = loadRewardsForRuleIds(connection, rules.map { it.id })
-	        return rules.map { rule ->
-	            val targets = targetsByRuleId[rule.id].orEmpty().ifEmpty { listOf(rule.legacyTarget()) }
-	            rule.copy(targets = targets, reward = rewardsByRuleId[rule.id])
-	        }
-	    }
+    private fun attachTargets(
+        connection: Connection,
+        rules: List<VenuePromotionRule>,
+    ): List<VenuePromotionRule> {
+        if (rules.isEmpty()) return rules
+        val targetsByRuleId = loadTargetsForRuleIds(connection, rules.map { it.id })
+        val rewardsByRuleId = loadRewardsForRuleIds(connection, rules.map { it.id })
+        return rules.map { rule ->
+            val targets = targetsByRuleId[rule.id].orEmpty().ifEmpty { listOf(rule.legacyTarget()) }
+            rule.copy(targets = targets, reward = rewardsByRuleId[rule.id])
+        }
+    }
 
-	    private fun VenuePromotionRule.legacyTarget(): PromotionRuleTarget =
-	        PromotionRuleTarget(
-	            id = null,
-	            ruleId = id,
-	            targetType = PromotionRuleTargetType.CATEGORY_TYPE,
-	            semanticType = targetValue,
-	            menuItemId = null,
-	            menuItemName = null,
-	        )
+    private fun VenuePromotionRule.legacyTarget(): PromotionRuleTarget =
+        PromotionRuleTarget(
+            id = null,
+            ruleId = id,
+            targetType = PromotionRuleTargetType.CATEGORY_TYPE,
+            semanticType = targetValue,
+            menuItemId = null,
+            menuItemName = null,
+        )
 
-	    private fun loadTargetsForRuleIds(
-	        connection: Connection,
-	        ruleIds: List<Long>,
-	    ): Map<Long, List<PromotionRuleTarget>> {
-	        val ids = ruleIds.distinct()
-	        if (ids.isEmpty()) return emptyMap()
-	        val placeholders = ids.joinToString(",") { "?" }
-	        return connection.prepareStatement(
-	            """
-	            SELECT
-	                prt.id,
-	                prt.rule_id,
-	                prt.target_type,
-	                prt.semantic_type,
-	                prt.menu_item_id,
-	                mi.name AS menu_item_name
-	            FROM promotion_rule_targets prt
-	            LEFT JOIN menu_items mi ON mi.id = prt.menu_item_id
-	            WHERE prt.rule_id IN ($placeholders)
-	            ORDER BY prt.id ASC
-	            """.trimIndent(),
-	        ).use { statement ->
-	            ids.forEachIndexed { index, ruleId -> statement.setLong(index + 1, ruleId) }
-	            statement.executeQuery().use { rs ->
-	                buildMap<Long, MutableList<PromotionRuleTarget>> {
-	                    while (rs.next()) {
-	                        val ruleId = rs.getLong("rule_id")
-	                        val targetType = PromotionRuleTargetType.fromDb(rs.getString("target_type")) ?: continue
-	                        val menuItemId = rs.getLong("menu_item_id").let { if (rs.wasNull()) null else it }
-	                        getOrPut(ruleId) { mutableListOf() }.add(
-	                            PromotionRuleTarget(
-	                                id = rs.getLong("id"),
-	                                ruleId = ruleId,
-	                                targetType = targetType,
-	                                semanticType = MenuSemanticType.nullableFromDb(rs.getString("semantic_type")),
-	                                menuItemId = menuItemId,
-	                                menuItemName = rs.getString("menu_item_name"),
-	                            ),
-	                        )
-	                    }
-	                }
-	            }
-	        }
-	    }
+    private fun loadTargetsForRuleIds(
+        connection: Connection,
+        ruleIds: List<Long>,
+    ): Map<Long, List<PromotionRuleTarget>> {
+        val ids = ruleIds.distinct()
+        if (ids.isEmpty()) return emptyMap()
+        val placeholders = ids.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            SELECT
+                prt.id,
+                prt.rule_id,
+                prt.target_type,
+                prt.semantic_type,
+                prt.menu_item_id,
+                mi.name AS menu_item_name
+            FROM promotion_rule_targets prt
+            LEFT JOIN menu_items mi ON mi.id = prt.menu_item_id
+            WHERE prt.rule_id IN ($placeholders)
+            ORDER BY prt.id ASC
+            """.trimIndent(),
+        ).use { statement ->
+            ids.forEachIndexed { index, ruleId -> statement.setLong(index + 1, ruleId) }
+            statement.executeQuery().use { rs ->
+                buildMap<Long, MutableList<PromotionRuleTarget>> {
+                    while (rs.next()) {
+                        val ruleId = rs.getLong("rule_id")
+                        val targetType = PromotionRuleTargetType.fromDb(rs.getString("target_type")) ?: continue
+                        val menuItemId = rs.getLong("menu_item_id").let { if (rs.wasNull()) null else it }
+                        getOrPut(ruleId) { mutableListOf() }.add(
+                            PromotionRuleTarget(
+                                id = rs.getLong("id"),
+                                ruleId = ruleId,
+                                targetType = targetType,
+                                semanticType = MenuSemanticType.nullableFromDb(rs.getString("semantic_type")),
+                                menuItemId = menuItemId,
+                                menuItemName = rs.getString("menu_item_name"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     private fun loadRewardsForRuleIds(
         connection: Connection,
@@ -1143,23 +1166,23 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         val placeholders = ids.joinToString(",") { "?" }
         val rewards =
             connection.prepareStatement(
-            """
-            SELECT
-                prr.id,
-                prr.rule_id,
-                prr.reward_menu_item_id,
-                prr.reward_mode,
-                prr.reward_qty,
-                prr.max_rewards_per_batch,
-                COALESCE(mi.name, 'Позиция #' || prr.reward_menu_item_id) AS reward_menu_item_name,
-                mi.price_minor,
-                COALESCE(mi.currency, 'RUB') AS currency,
-                COALESCE(mi.is_available, FALSE) AS is_available
-            FROM promotion_rule_rewards prr
-            LEFT JOIN menu_items mi ON mi.id = prr.reward_menu_item_id
-            WHERE prr.rule_id IN ($placeholders)
-            ORDER BY prr.id ASC
-            """.trimIndent(),
+                """
+                SELECT
+                    prr.id,
+                    prr.rule_id,
+                    prr.reward_menu_item_id,
+                    prr.reward_mode,
+                    prr.reward_qty,
+                    prr.max_rewards_per_batch,
+                    COALESCE(mi.name, 'Позиция #' || prr.reward_menu_item_id) AS reward_menu_item_name,
+                    mi.price_minor,
+                    COALESCE(mi.currency, 'RUB') AS currency,
+                    COALESCE(mi.is_available, FALSE) AS is_available
+                FROM promotion_rule_rewards prr
+                LEFT JOIN menu_items mi ON mi.id = prr.reward_menu_item_id
+                WHERE prr.rule_id IN ($placeholders)
+                ORDER BY prr.id ASC
+                """.trimIndent(),
             ).use { statement ->
                 ids.forEachIndexed { index, ruleId -> statement.setLong(index + 1, ruleId) }
                 statement.executeQuery().use { rs ->
@@ -1177,7 +1200,11 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                                         rewardMode = PromotionRewardMode.fromDb(rs.getString("reward_mode")),
                                         rewardQty = rs.getInt("reward_qty"),
                                         maxRewardsPerBatch = rs.getInt("max_rewards_per_batch"),
-                                        priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) 0L else value },
+                                        priceMinor =
+                                            rs.getLong("price_minor").let {
+                                                    value ->
+                                                if (rs.wasNull()) 0L else value
+                                            },
                                         currency = rs.getString("currency")?.takeIf { it.isNotBlank() } ?: "RUB",
                                         isAvailable = rs.getBoolean("is_available"),
                                     ),
@@ -1359,140 +1386,140 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         require(count == ids.size) { "reward menu items must belong to venue" }
     }
 
-	    private fun replaceRuleTargetsWithCategory(
-	        connection: Connection,
-	        venueId: Long,
-	        ruleId: Long,
-	        semanticType: MenuSemanticType,
-	    ) {
-	        require(ruleBelongsToVenue(connection, venueId, ruleId)) { "rule must belong to venue" }
-	        deleteRuleTargets(connection, ruleId)
-	        connection.prepareStatement(
-	            """
-	            INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
-	            VALUES (?, ?, ?, NULL)
-	            """.trimIndent(),
-	        ).use { statement ->
-	            statement.setLong(1, ruleId)
-	            statement.setString(2, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
-	            statement.setString(3, semanticType.dbValue)
-	            statement.executeUpdate()
-	        }
-	    }
+    private fun replaceRuleTargetsWithCategory(
+        connection: Connection,
+        venueId: Long,
+        ruleId: Long,
+        semanticType: MenuSemanticType,
+    ) {
+        require(ruleBelongsToVenue(connection, venueId, ruleId)) { "rule must belong to venue" }
+        deleteRuleTargets(connection, ruleId)
+        connection.prepareStatement(
+            """
+            INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
+            VALUES (?, ?, ?, NULL)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, ruleId)
+            statement.setString(2, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
+            statement.setString(3, semanticType.dbValue)
+            statement.executeUpdate()
+        }
+    }
 
-	    private fun deleteRuleTargets(
-	        connection: Connection,
-	        ruleId: Long,
-	    ) {
-	        connection.prepareStatement("DELETE FROM promotion_rule_targets WHERE rule_id = ?").use { statement ->
-	            statement.setLong(1, ruleId)
-	            statement.executeUpdate()
-	        }
-	    }
+    private fun deleteRuleTargets(
+        connection: Connection,
+        ruleId: Long,
+    ) {
+        connection.prepareStatement("DELETE FROM promotion_rule_targets WHERE rule_id = ?").use { statement ->
+            statement.setLong(1, ruleId)
+            statement.executeUpdate()
+        }
+    }
 
-	    private fun insertMenuItemTarget(
-	        connection: Connection,
-	        ruleId: Long,
-	        menuItemId: Long,
-	    ) {
-	        connection.prepareStatement(
-	            """
-	            INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
-	            VALUES (?, ?, NULL, ?)
-	            """.trimIndent(),
-	        ).use { statement ->
-	            statement.setLong(1, ruleId)
-	            statement.setString(2, PromotionRuleTargetType.MENU_ITEM.dbValue)
-	            statement.setLong(3, menuItemId)
-	            statement.executeUpdate()
-	        }
-	    }
+    private fun insertMenuItemTarget(
+        connection: Connection,
+        ruleId: Long,
+        menuItemId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
+            VALUES (?, ?, NULL, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, ruleId)
+            statement.setString(2, PromotionRuleTargetType.MENU_ITEM.dbValue)
+            statement.setLong(3, menuItemId)
+            statement.executeUpdate()
+        }
+    }
 
-	    private fun loadTargetSelectionItems(
-	        connection: Connection,
-	        venueId: Long,
-	        semanticType: MenuSemanticType,
-	    ): List<PromotionRuleTargetMenuItem> =
-	        connection.prepareStatement(
-	            """
-	            SELECT
-	                mi.id,
-	                mi.name,
-	                COALESCE(mi.item_type, mc.category_type) AS effective_type,
-	                mc.sort_order AS category_sort_order,
-	                mi.sort_order AS item_sort_order
-	            FROM menu_items mi
-	            JOIN menu_categories mc ON mc.id = mi.category_id AND mc.venue_id = mi.venue_id
-	            WHERE mi.venue_id = ?
-	              AND COALESCE(mi.item_type, mc.category_type) = ?
-	            ORDER BY mc.sort_order, mi.sort_order, mi.id
-	            """.trimIndent(),
-	        ).use { statement ->
-	            statement.setLong(1, venueId)
-	            statement.setString(2, semanticType.dbValue)
-	            statement.executeQuery().use { rs -> rs.toTargetSelectionItems() }
-	        }
+    private fun loadTargetSelectionItems(
+        connection: Connection,
+        venueId: Long,
+        semanticType: MenuSemanticType,
+    ): List<PromotionRuleTargetMenuItem> =
+        connection.prepareStatement(
+            """
+            SELECT
+                mi.id,
+                mi.name,
+                COALESCE(mi.item_type, mc.category_type) AS effective_type,
+                mc.sort_order AS category_sort_order,
+                mi.sort_order AS item_sort_order
+            FROM menu_items mi
+            JOIN menu_categories mc ON mc.id = mi.category_id AND mc.venue_id = mi.venue_id
+            WHERE mi.venue_id = ?
+              AND COALESCE(mi.item_type, mc.category_type) = ?
+            ORDER BY mc.sort_order, mi.sort_order, mi.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, semanticType.dbValue)
+            statement.executeQuery().use { rs -> rs.toTargetSelectionItems() }
+        }
 
-	    private fun loadTargetSelectionItems(
-	        connection: Connection,
-	        venueId: Long,
-	        menuItemIds: List<Long>,
-	    ): List<PromotionRuleTargetMenuItem> {
-	        if (menuItemIds.isEmpty()) return emptyList()
-	        val placeholders = menuItemIds.joinToString(",") { "?" }
-	        return connection.prepareStatement(
-	            """
-	            SELECT
-	                mi.id,
-	                mi.name,
-	                COALESCE(mi.item_type, mc.category_type) AS effective_type,
-	                mc.sort_order AS category_sort_order,
-	                mi.sort_order AS item_sort_order
-	            FROM menu_items mi
-	            JOIN menu_categories mc ON mc.id = mi.category_id AND mc.venue_id = mi.venue_id
-	            WHERE mi.venue_id = ?
-	              AND mi.id IN ($placeholders)
-	            ORDER BY mc.sort_order, mi.sort_order, mi.id
-	            """.trimIndent(),
-	        ).use { statement ->
-	            statement.setLong(1, venueId)
-	            menuItemIds.forEachIndexed { index, itemId -> statement.setLong(index + 2, itemId) }
-	            statement.executeQuery().use { rs -> rs.toTargetSelectionItems() }
-	        }
-	    }
+    private fun loadTargetSelectionItems(
+        connection: Connection,
+        venueId: Long,
+        menuItemIds: List<Long>,
+    ): List<PromotionRuleTargetMenuItem> {
+        if (menuItemIds.isEmpty()) return emptyList()
+        val placeholders = menuItemIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            SELECT
+                mi.id,
+                mi.name,
+                COALESCE(mi.item_type, mc.category_type) AS effective_type,
+                mc.sort_order AS category_sort_order,
+                mi.sort_order AS item_sort_order
+            FROM menu_items mi
+            JOIN menu_categories mc ON mc.id = mi.category_id AND mc.venue_id = mi.venue_id
+            WHERE mi.venue_id = ?
+              AND mi.id IN ($placeholders)
+            ORDER BY mc.sort_order, mi.sort_order, mi.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            menuItemIds.forEachIndexed { index, itemId -> statement.setLong(index + 2, itemId) }
+            statement.executeQuery().use { rs -> rs.toTargetSelectionItems() }
+        }
+    }
 
-	    private fun ResultSet.toTargetSelectionItems(): List<PromotionRuleTargetMenuItem> {
-	        val items = mutableListOf<PromotionRuleTargetMenuItem>()
-	        while (next()) {
-	            items.add(
-	                PromotionRuleTargetMenuItem(
-	                    id = getLong("id"),
-	                    name = getString("name")?.takeIf { it.isNotBlank() } ?: "Позиция #${getLong("id")}",
-	                    semanticType = MenuSemanticType.fromDb(getString("effective_type")),
-	                ),
-	            )
-	        }
-	        return items
-	    }
+    private fun ResultSet.toTargetSelectionItems(): List<PromotionRuleTargetMenuItem> {
+        val items = mutableListOf<PromotionRuleTargetMenuItem>()
+        while (next()) {
+            items.add(
+                PromotionRuleTargetMenuItem(
+                    id = getLong("id"),
+                    name = getString("name")?.takeIf { it.isNotBlank() } ?: "Позиция #${getLong("id")}",
+                    semanticType = MenuSemanticType.fromDb(getString("effective_type")),
+                ),
+            )
+        }
+        return items
+    }
 
-	    private fun ruleBelongsToVenue(
-	        connection: Connection,
-	        venueId: Long,
-	        ruleId: Long,
-	    ): Boolean =
-	        connection.prepareStatement(
-	            """
-	            SELECT 1
-	            FROM promotion_rules
-	            WHERE venue_id = ? AND id = ?
-	            """.trimIndent(),
-	        ).use { statement ->
-	            statement.setLong(1, venueId)
-	            statement.setLong(2, ruleId)
-	            statement.executeQuery().use { rs -> rs.next() }
-	        }
+    private fun ruleBelongsToVenue(
+        connection: Connection,
+        venueId: Long,
+        ruleId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM promotion_rules
+            WHERE venue_id = ? AND id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, ruleId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
 
-	    private fun promotionBelongsToVenue(
+    private fun promotionBelongsToVenue(
         connection: Connection,
         venueId: Long,
         promotionId: Long,

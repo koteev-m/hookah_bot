@@ -1,16 +1,16 @@
 package com.hookah.platform.backend.telegram
 
-import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.ai.AiAssistantAnswer
 import com.hookah.platform.backend.ai.AiAssistantService
 import com.hookah.platform.backend.ai.AiDraftTextCommand
 import com.hookah.platform.backend.ai.AiDraftTextType
 import com.hookah.platform.backend.ai.AiVenueSummaryCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryType
-import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderScheduleResult
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
+import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
@@ -25,23 +25,24 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
-import com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
-import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
-import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRecord
+import com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageRecord
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageSender
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRecord
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackStatus
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackThread
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
+import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitSource
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -66,17 +67,6 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableOwnerSummary
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
-import com.hookah.platform.backend.miniapp.venue.VenueStatus
-import com.hookah.platform.backend.platform.VenueOwnerAccount
-import com.hookah.platform.backend.platform.VenueOwnerAccountVenue
-import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
-import com.hookah.platform.backend.platform.VenueOwnerLimitRequestDecisionResult
-import com.hookah.platform.backend.platform.VenueOwnerLimitRequest
-import com.hookah.platform.backend.platform.VenueOwnerLimitRequestOwner
-import com.hookah.platform.backend.platform.VenueOwnerLimitRequestSummary
-import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
-import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
-import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.PlatformEffectivePrice
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettings
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
@@ -87,35 +77,69 @@ import com.hookah.platform.backend.platform.PlatformVenueFilter
 import com.hookah.platform.backend.platform.PlatformVenueOwner
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.PlatformVenueSummary
+import com.hookah.platform.backend.platform.VenueOwnerAccount
+import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
+import com.hookah.platform.backend.platform.VenueOwnerAccountVenue
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequest
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequestDecisionResult
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequestOwner
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequestSummary
+import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
+import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
+import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
-import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
+import com.hookah.platform.backend.telegram.db.CatalogVenueShort
+import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
+import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
+import com.hookah.platform.backend.telegram.db.GuestProfile
+import com.hookah.platform.backend.telegram.db.GuestPublicReviewCtaState
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
+import com.hookah.platform.backend.telegram.db.LoyaltyCartItem
+import com.hookah.platform.backend.telegram.db.LoyaltyProgram
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramTarget
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramTargetType
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramType
+import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
+import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrderBatchDetails
 import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
-import com.hookah.platform.backend.telegram.db.CatalogVenueShort
-import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.PromotionPlacement
+import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
+import com.hookah.platform.backend.telegram.db.PromotionPlacementStatus
+import com.hookah.platform.backend.telegram.db.PromotionPlacementSurface
+import com.hookah.platform.backend.telegram.db.PromotionPreview
+import com.hookah.platform.backend.telegram.db.PromotionRewardMode
+import com.hookah.platform.backend.telegram.db.PromotionRuleReward
+import com.hookah.platform.backend.telegram.db.PromotionRuleRewardOption
+import com.hookah.platform.backend.telegram.db.PromotionRuleTarget
+import com.hookah.platform.backend.telegram.db.PromotionRuleTargetMenuItem
+import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
+import com.hookah.platform.backend.telegram.db.PromotionRuleType
+import com.hookah.platform.backend.telegram.db.PromotionVenueFeedItem
+import com.hookah.platform.backend.telegram.db.PromotionVenuePlacement
+import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
 import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.StaffCallStatusUpdateResult
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StoredChatContext
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
+import com.hookah.platform.backend.telegram.db.TelegramUserContact
+import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
 import com.hookah.platform.backend.telegram.db.UserActiveOrderItemSummary
 import com.hookah.platform.backend.telegram.db.UserActiveOrderSummary
-import com.hookah.platform.backend.telegram.db.GuestProfile
-import com.hookah.platform.backend.telegram.db.GuestPublicReviewCtaState
-import com.hookah.platform.backend.telegram.db.TelegramUserContact
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
-import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHours
-import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
+import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRecord
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSection
@@ -123,48 +147,24 @@ import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaAttachment
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.VenuePromotionMedia
+import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionMediaType
+import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionRule
+import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
+import com.hookah.platform.backend.telegram.db.VenuePromotionTemplateType
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettings
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
-import com.hookah.platform.backend.telegram.db.VenuePromotion
-import com.hookah.platform.backend.telegram.db.PromotionPreview
-import com.hookah.platform.backend.telegram.db.PromotionVenueFeedItem
-import com.hookah.platform.backend.telegram.db.VenuePromotionMedia
-import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
-import com.hookah.platform.backend.telegram.db.VenuePromotionMediaType
-import com.hookah.platform.backend.telegram.db.PromotionPlacement
-import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
-import com.hookah.platform.backend.telegram.db.PromotionPlacementStatus
-import com.hookah.platform.backend.telegram.db.PromotionPlacementSurface
-import com.hookah.platform.backend.telegram.db.PromotionVenuePlacement
-import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
-import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
-import com.hookah.platform.backend.telegram.db.LoyaltyCartItem
-import com.hookah.platform.backend.telegram.db.LoyaltyProgram
-import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
-import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
-import com.hookah.platform.backend.telegram.db.LoyaltyProgramTarget
-import com.hookah.platform.backend.telegram.db.LoyaltyProgramTargetType
-import com.hookah.platform.backend.telegram.db.LoyaltyProgramType
-import com.hookah.platform.backend.telegram.db.LoyaltyRepository
-import com.hookah.platform.backend.telegram.db.VenuePromotionRule
-import com.hookah.platform.backend.telegram.db.PromotionRuleTarget
-import com.hookah.platform.backend.telegram.db.PromotionRuleTargetMenuItem
-import com.hookah.platform.backend.telegram.db.PromotionRuleReward
-import com.hookah.platform.backend.telegram.db.PromotionRuleRewardOption
-import com.hookah.platform.backend.telegram.db.PromotionRewardMode
-import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
-import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
-import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
-import com.hookah.platform.backend.telegram.db.VenuePromotionTemplateType
-import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
-import com.hookah.platform.backend.telegram.db.PromotionRuleType
 import com.hookah.platform.backend.telegram.db.VenueStatsReport
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
 import io.mockk.coEvery
-import io.mockk.coVerifyOrder
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
@@ -180,8 +180,6 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 class TelegramBotRouterTableTokenTest {
     private val apiClient: TelegramApiClient = mockk(relaxed = true)
@@ -323,7 +321,9 @@ class TelegramBotRouterTableTokenTest {
         coEvery { guestBookingRepository.listActiveByUser(any(), any()) } returns emptyList()
         coEvery { guestBookingRepository.scheduleRemindersForBooking(any(), any(), any()) } returns
             BookingReminderScheduleResult(pendingCount = 0, skippedCount = 0, canceledCount = 0)
-        coEvery { ordersRepository.listActiveOrderSummariesForUser(any(), any()) } returns emptyList<UserActiveOrderSummary>()
+        coEvery {
+            ordersRepository.listActiveOrderSummariesForUser(any(), any())
+        } returns emptyList<UserActiveOrderSummary>()
         coEvery { guestMenuRepository.getMenu(any()) } answers {
             MenuModel(
                 venueId = invocation.args[0] as Long,
@@ -346,8 +346,12 @@ class TelegramBotRouterTableTokenTest {
         coEvery { guestFavoritesRepository.removeItemFavorite(any(), any()) } returns true
         coEvery { venuePromotionRepository.listActivePromotionsForGuest(any(), any()) } returns emptyList()
         coEvery { venuePromotionRepository.listPromotionVenuesForGuest(any(), any(), any(), any()) } returns emptyList()
-        coEvery { venuePromotionRepository.listPromotionVenuesForGuest(any(), any(), any(), any(), any()) } returns emptyList()
-        coEvery { venuePromotionRepository.listPromotionVenueFeedItemsByVenueIds(any(), any(), any()) } returns emptyList()
+        coEvery {
+            venuePromotionRepository.listPromotionVenuesForGuest(any(), any(), any(), any(), any())
+        } returns emptyList()
+        coEvery {
+            venuePromotionRepository.listPromotionVenueFeedItemsByVenueIds(any(), any(), any())
+        } returns emptyList()
         coEvery { venuePromotionRepository.listActivePromotionsForVenue(any(), any(), any()) } returns emptyList()
         coEvery { venuePromotionRepository.getPromotionForGuest(any(), any()) } returns null
         coEvery { venuePromotionRepository.listVenuePromotionsForManagement(any(), any()) } returns emptyList()
@@ -378,9 +382,15 @@ class TelegramBotRouterTableTokenTest {
         coEvery { promotionVenuePlacementRepository.pause(any()) } returns null
         coEvery { promotionVenuePlacementRepository.archive(any()) } returns null
         coEvery { promotionVenuePlacementRepository.listActiveForPlatformManagement(any(), any()) } returns emptyList()
-        coEvery { promotionVenuePlacementRepository.listForVenueManagement(any(), any(), any(), any()) } returns emptyList()
-        coEvery { promotionVenuePlacementRepository.listFinishedForPlatformManagement(any(), any()) } returns emptyList()
-        coEvery { promotionVenuePlacementRepository.listFinishedForVenueManagement(any(), any(), any()) } returns emptyList()
+        coEvery {
+            promotionVenuePlacementRepository.listForVenueManagement(any(), any(), any(), any())
+        } returns emptyList()
+        coEvery {
+            promotionVenuePlacementRepository.listFinishedForPlatformManagement(any(), any())
+        } returns emptyList()
+        coEvery {
+            promotionVenuePlacementRepository.listFinishedForVenueManagement(any(), any(), any())
+        } returns emptyList()
         coEvery { promotionVenuePlacementRepository.getForVenueManagement(any(), any()) } returns null
         coEvery { promotionVenuePlacementRepository.listActiveForGlobalFeed(any(), any()) } returns emptyList()
         coEvery { loyaltyRepository.listProgramsForVenue(any()) } returns emptyList()
@@ -404,12 +414,18 @@ class TelegramBotRouterTableTokenTest {
         coEvery { loyaltyRepository.replaceEarnTargetsWithMenuItems(any(), any(), any()) } returns null
         coEvery { loyaltyRepository.replaceRewardTargetsWithAllHookahs(any(), any()) } returns null
         coEvery { loyaltyRepository.replaceRewardTargetsWithMenuItems(any(), any(), any()) } returns null
-        coEvery { aiAssistantService.diagnosePromotion(any()) } returns AiAssistantAnswer("🤖 Диагностика акции\n\nТестовый ответ.")
+        coEvery {
+            aiAssistantService.diagnosePromotion(any())
+        } returns AiAssistantAnswer("🤖 Диагностика акции\n\nТестовый ответ.")
         coEvery { venuePromotionMediaRepository.getPrimaryImage(any()) } returns null
         coEvery { venuePromotionMediaRepository.replacePrimaryImage(any(), any(), any(), any()) } returns null
         coEvery { venuePromotionMediaRepository.deletePrimaryImage(any(), any()) } returns false
-        coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = any(), now = any(), limit = any()) } returns emptyList()
-        coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(any(), any(), any()) } returns emptyList()
+        coEvery {
+            venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = any(), now = any(), limit = any())
+        } returns emptyList()
+        coEvery {
+            venuePromotionRuleRepository.listRulesForPromotionManagement(any(), any(), any())
+        } returns emptyList()
         coEvery { venuePromotionRuleRepository.getRuleForManagement(any(), any()) } returns null
         coEvery { venuePromotionRuleRepository.archiveRule(any(), any(), any()) } returns null
         coEvery {
@@ -1677,7 +1693,10 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().none { button -> button.text.startsWith("✏️ Изменить роль") } &&
-                            it.inlineKeyboard.flatten().none { button -> button.text.startsWith("🗑 Удалить доступ") } &&
+                            it.inlineKeyboard.flatten().none {
+                                    button ->
+                                button.text.startsWith("🗑 Удалить доступ")
+                            } &&
                             it.inlineKeyboard.flatten().any { button -> button.text == "➕ Добавить сотрудника" }
                     },
                 )
@@ -1844,7 +1863,10 @@ class TelegramBotRouterTableTokenTest {
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "🕓 На проверке" && it.callbackData == "platform_places_pending" } &&
                             buttons.any { it.text == "✅ Активные" && it.callbackData == "platform_places_active" } &&
-                            buttons.any { it.text == "🗄 Завершённые / Архив" && it.callbackData == "platform_places_finished" } &&
+                            buttons.any {
+                                it.text == "🗄 Завершённые / Архив" &&
+                                    it.callbackData == "platform_places_finished"
+                            } &&
                             buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "platform_promo_root" }
                     },
                 )
@@ -1875,7 +1897,10 @@ class TelegramBotRouterTableTokenTest {
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "🕓 Заявки" && it.callbackData == "platform_vtop_pending" } &&
                             buttons.any { it.text == "✅ Активные" && it.callbackData == "platform_vtop_active" } &&
-                            buttons.any { it.text == "🗄 Завершённые / Архив" && it.callbackData == "platform_vtop_finished" } &&
+                            buttons.any {
+                                it.text == "🗄 Завершённые / Архив" &&
+                                    it.callbackData == "platform_vtop_finished"
+                            } &&
                             buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "platform_promo_root" }
                     },
                 )
@@ -2001,7 +2026,10 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "7 дней" && it.callbackData == "platform_vtop_approve_days:801:7" } &&
-                            buttons.any { it.text == "📅 Задать период" && it.callbackData == "platform_vtop_approve_period:801" }
+                            buttons.any {
+                                it.text == "📅 Задать период" &&
+                                    it.callbackData == "platform_vtop_approve_period:801"
+                            }
                     },
                 )
             }
@@ -2049,7 +2077,12 @@ class TelegramBotRouterTableTokenTest {
                     expectedStartsAt,
                     expectedEndsAt,
                 )
-                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-platform-vtop-approve-7d", "Размещение одобрено.", false)
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-platform-vtop-approve-7d",
+                    "Размещение одобрено.",
+                    false,
+                )
                 outboxEnqueuer.enqueueSendMessage(
                     200,
                     match {
@@ -2327,7 +2360,10 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             val venueZone = ZoneId.of("Europe/Moscow")
             val expectedStartsAt = LocalDate.parse("2030-06-01").atStartOfDay(venueZone).toInstant()
-            val expectedEndsAt = LocalDate.parse("2030-06-08").plusDays(1).atStartOfDay(venueZone).toInstant().minusMillis(1)
+            val expectedEndsAt =
+                LocalDate.parse(
+                    "2030-06-08",
+                ).plusDays(1).atStartOfDay(venueZone).toInstant().minusMillis(1)
             val activePlacement =
                 testPromotionVenuePlacement(
                     id = 801L,
@@ -2455,9 +2491,18 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "1 день" && it.callbackData == "platform_place_approve_days:703:1" } &&
-                            buttons.any { it.text == "7 дней" && it.callbackData == "platform_place_approve_days:703:7" } &&
-                            buttons.any { it.text == "30 дней" && it.callbackData == "platform_place_approve_days:703:30" } &&
-                            buttons.any { it.text == "Ввести вручную" && it.callbackData == "platform_place_approve_manual:703" }
+                            buttons.any {
+                                it.text == "7 дней" &&
+                                    it.callbackData == "platform_place_approve_days:703:7"
+                            } &&
+                            buttons.any {
+                                it.text == "30 дней" &&
+                                    it.callbackData == "platform_place_approve_days:703:30"
+                            } &&
+                            buttons.any {
+                                it.text == "Ввести вручную" &&
+                                    it.callbackData == "platform_place_approve_manual:703"
+                            }
                     },
                 )
             }
@@ -2501,7 +2546,12 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                     match { endsAt -> endsAt.isAfter(Instant.now().plusSeconds(6 * 24 * 60 * 60)) },
                 )
-                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-platform-place-approve-7d", "Размещение одобрено.", false)
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-platform-place-approve-7d",
+                    "Размещение одобрено.",
+                    false,
+                )
                 outboxEnqueuer.enqueueSendMessage(100, "Размещение одобрено.", null)
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -2638,11 +2688,20 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("🖼 Баннеры / Афиши · Завершённые / Архив") && it.contains("Завершённые / архив:") },
+                    match {
+                        it.contains("🖼 Баннеры / Афиши · Завершённые / Архив") &&
+                            it.contains("Завершённые / архив:")
+                    },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.callbackData == "platform_place_open:705" && it.text.contains("Прошлая афиша") } &&
-                            buttons.any { it.callbackData == "platform_place_open:706" && it.text.contains("Отклонённая афиша") } &&
+                        buttons.any {
+                            it.callbackData == "platform_place_open:705" &&
+                                it.text.contains("Прошлая афиша")
+                        } &&
+                            buttons.any {
+                                it.callbackData == "platform_place_open:706" &&
+                                    it.text.contains("Отклонённая афиша")
+                            } &&
                             buttons.any { it.text == "↩️ Назад" && it.callbackData == "platform_places_root" }
                     },
                 )
@@ -4231,8 +4290,14 @@ class TelegramBotRouterTableTokenTest {
                         markup is InlineKeyboardMarkup &&
                             markup.inlineKeyboard.flatten().let { buttons ->
                                 buttons.any { it.text == "📊 Все заведения" && it.callbackData == "owner_stats_all" } &&
-                                    buttons.any { it.text == "Mix · Черновик" && it.callbackData == "owner_stats_venue:10" } &&
-                                    buttons.any { it.text == "✅ Особняк · Опубликовано" && it.callbackData == "owner_stats_venue:11" }
+                                    buttons.any {
+                                        it.text == "Mix · Черновик" &&
+                                            it.callbackData == "owner_stats_venue:10"
+                                    } &&
+                                    buttons.any {
+                                        it.text == "✅ Особняк · Опубликовано" &&
+                                            it.callbackData == "owner_stats_venue:11"
+                                    }
                             }
                     },
                 )
@@ -4485,7 +4550,10 @@ class TelegramBotRouterTableTokenTest {
                                 button.text == "📩 Запросить увеличение лимита" &&
                                     button.callbackData == "owner_quota_request_start"
                             } &&
-                            it.inlineKeyboard.flatten().none { button -> button.callbackData == "owner_quota_create_start" }
+                            it.inlineKeyboard.flatten().none {
+                                    button ->
+                                button.callbackData == "owner_quota_create_start"
+                            }
                     },
                 )
             }
@@ -4642,7 +4710,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
                 listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
             coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
-            coEvery { venueOwnerAccountRepository.createLimitRequest(303L, 2, "Хотим открыть второй филиал") } returns request
+            coEvery {
+                venueOwnerAccountRepository.createLimitRequest(303L, 2, "Хотим открыть второй филиал")
+            } returns request
             coEvery { venueOwnerAccountRepository.findLimitRequestSummary(901L) } returns summary
 
             router.process(
@@ -4912,8 +4982,14 @@ class TelegramBotRouterTableTokenTest {
                                 button.text == "Тестовая кальянная · Черновик" &&
                                     button.callbackData == "owner_venue_select:10"
                             } &&
-                            it.inlineKeyboard.flatten().none { button -> button.callbackData == "owner_quota_create_start" } &&
-                            it.inlineKeyboard.flatten().any { button -> button.callbackData == "owner_quota_request_start" }
+                            it.inlineKeyboard.flatten().none {
+                                    button ->
+                                button.callbackData == "owner_quota_create_start"
+                            } &&
+                            it.inlineKeyboard.flatten().any {
+                                    button ->
+                                button.callbackData == "owner_quota_request_start"
+                            }
                     },
                 )
             }
@@ -5126,7 +5202,8 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     "🍽 Заказное меню\n" +
-                        "Категории, позиции, цены и стоп-лист. Это меню гость видит по кнопке 🍽 Меню и использует для заказа по QR.\n\n" +
+                        "Категории, позиции, цены и стоп-лист. " +
+                        "Это меню гость видит по кнопке 🍽 Меню и использует для заказа по QR.\n\n" +
                         "Выберите раздел.",
                     match {
                         it is InlineKeyboardMarkup &&
@@ -5699,7 +5776,16 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueMenuRepository.getMenu(10L) } returnsMany
                 listOf(
                     listOf(hookahMenuCategoryWithOptions(emptyList())),
-                    listOf(hookahMenuCategoryWithOptions(baseFlavorProfiles.mapIndexed { index, name -> hookahFlavorOption(index + 1L, name) })),
+                    listOf(
+                        hookahMenuCategoryWithOptions(
+                            baseFlavorProfiles.mapIndexed {
+                                    index,
+                                    name,
+                                ->
+                                hookahFlavorOption(index + 1L, name)
+                            },
+                        ),
+                    ),
                 )
 
             router.process(
@@ -5796,7 +5882,10 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard
                                 .flatten()
-                                .filter { button -> button.callbackData?.startsWith("owner_venue_item_flavor_p:") == true }
+                                .filter {
+                                        button ->
+                                    button.callbackData?.startsWith("owner_venue_item_flavor_p:") == true
+                                }
                                 .map { button -> button.text } ==
                             listOf(
                                 "Фруктовый",
@@ -6067,7 +6156,8 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Сбросить варианты к базовым профилям?\nКастомные варианты будут сохранены, старые стандартные дубли будут убраны.",
+                    "Сбросить варианты к базовым профилям?\n" +
+                        "Кастомные варианты будут сохранены, старые стандартные дубли будут убраны.",
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
@@ -6080,7 +6170,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `owner normalize flavor profiles removes obsolete values keeps custom and canonical and adds missing profiles`() =
+    fun `owner normalize flavor profiles keeps custom canonical and adds missing profiles`() =
         runBlocking {
             val before =
                 listOf(
@@ -6169,7 +6259,10 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard
                                 .flatten()
-                                .none { button -> button.callbackData?.startsWith("owner_venue_item_flavor_p:") == true }
+                                .none {
+                                        button ->
+                                    button.callbackData?.startsWith("owner_venue_item_flavor_p:") == true
+                                }
                     },
                 )
             }
@@ -6327,7 +6420,8 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "✅ Да, удалить" &&
-                                    button.callbackData == "owner_venue_order_menu_item_option_delete_confirm:10:501:7001:1"
+                                    button.callbackData ==
+                                    "owner_venue_order_menu_item_option_delete_confirm:10:501:7001:1"
                             }
                     },
                 )
@@ -6868,7 +6962,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match {
-                            it.contains("Это предпросмотр. Заведение пока не опубликовано.") &&
+                        it.contains("Это предпросмотр. Заведение пока не опубликовано.") &&
                             it.contains("Тестовая кальянная") &&
                             it.contains("📍 Тверская, 1") &&
                             it.contains("☎️ Контакт: +7 999 000-00-00") &&
@@ -7671,7 +7765,8 @@ class TelegramBotRouterTableTokenTest {
                                 button.text.contains("Пн") && button.callbackData == "owner_venue_hours_day:10:1"
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.text == "📅 Исключения" && button.callbackData == "owner_venue_hours_overrides:10"
+                                button.text == "📅 Исключения" &&
+                                    button.callbackData == "owner_venue_hours_overrides:10"
                             }
                     },
                 )
@@ -7994,11 +8089,18 @@ class TelegramBotRouterTableTokenTest {
             coVerifyOrder {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Отправьте изображение или PDF для раздела «О заведении».\nМожно отправить несколько файлов подряд, затем нажмите «Готово».",
+                    "Отправьте изображение или PDF для раздела «О заведении».\n" +
+                        "Можно отправить несколько файлов подряд, затем нажмите «Готово».",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "✅ Готово" && it.callbackData == "owner_venue_description_media_done:10:101" } &&
-                            buttons.any { it.text == "⬅️ Назад" && it.callbackData == "owner_venue_description_media_back:10:101" }
+                        buttons.any {
+                            it.text == "✅ Готово" &&
+                                it.callbackData == "owner_venue_description_media_done:10:101"
+                        } &&
+                            buttons.any {
+                                it.text == "⬅️ Назад" &&
+                                    it.callbackData == "owner_venue_description_media_back:10:101"
+                            }
                     },
                 )
                 venueInfoSectionMediaRepository.addMediaAttachment(
@@ -8011,7 +8113,10 @@ class TelegramBotRouterTableTokenTest {
                     "✅ Медиа добавлено. Можно отправить ещё файл или нажать «Готово».",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "✅ Готово" && it.callbackData == "owner_venue_description_media_done:10:101" }
+                        buttons.any {
+                            it.text == "✅ Готово" &&
+                                it.callbackData == "owner_venue_description_media_done:10:101"
+                        }
                     },
                 )
                 venueInfoSectionMediaRepository.addMediaAttachment(
@@ -8091,7 +8196,7 @@ class TelegramBotRouterTableTokenTest {
                             text.contains("• PDF 1")
                     },
                     match {
-                            it is InlineKeyboardMarkup &&
+                        it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "🗑 Удалить изображение 1" &&
                                     button.callbackData == "owner_venue_description_media_delete:10:101:7001"
@@ -8409,7 +8514,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `empty table context history has back to table actions`() =
         runBlocking {
-            coEvery { visitRepository.listGuestVisitHistory(userId = 200, limit = 10, cursor = null) } returns emptyList()
+            coEvery {
+                visitRepository.listGuestVisitHistory(userId = 200, limit = 10, cursor = null)
+            } returns emptyList()
 
             router.process(
                 TelegramUpdate(
@@ -8958,7 +9065,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `high feedback rating saves rating without staff notification`() =
         runBlocking {
-            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any()) } returns
+            coEvery {
+                visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any())
+            } returns
                 VisitFeedbackRecord(
                     id = 91L,
                     visitId = 44L,
@@ -9003,7 +9112,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `rating five with configured public review link shows one time CTA`() =
         runBlocking {
-            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any()) } returns
+            coEvery {
+                visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any())
+            } returns
                 VisitFeedbackRecord(
                     id = 91L,
                     visitId = 44L,
@@ -9058,7 +9169,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `rating five does not show public review CTA twice for same venue`() =
         runBlocking {
-            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any()) } returns
+            coEvery {
+                visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any())
+            } returns
                 VisitFeedbackRecord(
                     id = 91L,
                     visitId = 44L,
@@ -9100,7 +9213,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `rating four never shows public review CTA`() =
         runBlocking {
-            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 4, now = any()) } returns
+            coEvery {
+                visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 4, now = any())
+            } returns
                 VisitFeedbackRecord(
                     id = 91L,
                     visitId = 44L,
@@ -9168,7 +9283,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `low feedback rating asks for comment without immediate staff alert`() =
         runBlocking {
-            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 2, now = any()) } returns
+            coEvery {
+                visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 2, now = any())
+            } returns
                 VisitFeedbackRecord(
                     id = 92L,
                     visitId = 44L,
@@ -9550,7 +9667,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `another user cannot rate someone elses visit`() =
         runBlocking {
-            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 201L, rating = 5, now = any()) } returns null
+            coEvery {
+                visitFeedbackRepository.submitRating(visitId = 44L, userId = 201L, rating = 5, now = any())
+            } returns null
 
             router.process(
                 TelegramUpdate(
@@ -9593,14 +9712,33 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     501L,
-                    match { it.contains("⭐ Оценки и отзывы") && it.contains("Mix") && it.contains("Выберите фильтр или настройку") },
+                    match {
+                        it.contains("⭐ Оценки и отзывы") &&
+                            it.contains("Mix") &&
+                            it.contains("Выберите фильтр или настройку")
+                    },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().any { it.text == "🔴 Требуют ответа" && it.callbackData == "vf_l:a:needs:0" } &&
-                            markup.inlineKeyboard.flatten().any { it.text == "⚠️ Низкие оценки" && it.callbackData == "vf_l:a:low:0" } &&
-                            markup.inlineKeyboard.flatten().any { it.text == "✅ Все отзывы" && it.callbackData == "vf_l:a:all:0" } &&
-                            markup.inlineKeyboard.flatten().any { it.text == "⭐ Ссылка на отзывы" && it.callbackData == "vfr_url:10" } &&
-                            markup.inlineKeyboard.flatten().any { it.text == "↩️ Назад" && it.callbackData == "owner_venue_stats_root:10" }
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "🔴 Требуют ответа" &&
+                                    it.callbackData == "vf_l:a:needs:0"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "⚠️ Низкие оценки" &&
+                                    it.callbackData == "vf_l:a:low:0"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "✅ Все отзывы" &&
+                                    it.callbackData == "vf_l:a:all:0"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "⭐ Ссылка на отзывы" &&
+                                    it.callbackData == "vfr_url:10"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "↩️ Назад" &&
+                                    it.callbackData == "owner_venue_stats_root:10"
+                            }
                     },
                 )
             }
@@ -9642,9 +9780,18 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().count { button -> button.callbackData?.startsWith("vf_o:a:") == true } == 5 &&
-                            markup.inlineKeyboard.flatten().any { button -> button.text == "▶️ Далее" && button.callbackData == "vf_l:a:needs:1" } &&
-                            markup.inlineKeyboard.flatten().any { button -> button.text == "↩️ К фильтрам" && button.callbackData == "venue_feedback_root:10" }
+                            markup.inlineKeyboard.flatten().count {
+                                    button ->
+                                button.callbackData?.startsWith("vf_o:a:") == true
+                            } == 5 &&
+                            markup.inlineKeyboard.flatten().any {
+                                    button ->
+                                button.text == "▶️ Далее" && button.callbackData == "vf_l:a:needs:1"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                    button ->
+                                button.text == "↩️ К фильтрам" && button.callbackData == "venue_feedback_root:10"
+                            }
                     },
                 )
             }
@@ -10104,7 +10251,9 @@ class TelegramBotRouterTableTokenTest {
                     now = any(),
                 )
             } returns feedbackMessage(VisitFeedbackMessageSender.GUEST, 200L, "Спасибо за ответ.")
-            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(id = 10L, name = "Mix", staffChatId = -777L)
+            coEvery {
+                venueRepository.findVenueById(10L)
+            } returns VenueShort(id = 10L, name = "Mix", staffChatId = -777L)
             coEvery { userRepository.findGuestProfile(200L) } returns
                 GuestProfile(
                     telegramUserId = 200L,
@@ -10253,7 +10402,9 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match {
-                        it.contains("Смена: ${bookingDate.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))}") &&
+                        val formattedDate =
+                            bookingDate.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+                        it.contains("Смена: $formattedDate") &&
                             it.contains("Ночные слоты после полуночи относятся к выбранной смене.")
                     },
                     match { markup ->
@@ -11451,8 +11602,12 @@ class TelegramBotRouterTableTokenTest {
                     displayNumber = 7,
                     displayDate = LocalDate.parse("2026-04-03"),
                 )
-            coEvery { guestBookingRepository.markGuestConfirmed(bookingId = 77L, userId = 555L, now = any()) } returns booking
-            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(id = 10L, name = "Mix", staffChatId = 900L)
+            coEvery {
+                guestBookingRepository.markGuestConfirmed(bookingId = 77L, userId = 555L, now = any())
+            } returns booking
+            coEvery {
+                venueRepository.findVenueById(10L)
+            } returns VenueShort(id = 10L, name = "Mix", staffChatId = 900L)
 
             router.process(
                 TelegramUpdate(
@@ -11727,7 +11882,11 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 0) {
-                    guestBookingRepository.updateByVenue(bookingId = 77L, venueId = 10L, nextStatus = BookingStatus.CANCELED)
+                guestBookingRepository.updateByVenue(
+                    bookingId = 77L,
+                    venueId = 10L,
+                    nextStatus = BookingStatus.CANCELED,
+                )
             }
             coVerify {
                 outboxEnqueuer.enqueueEditMessageText(
@@ -12043,7 +12202,11 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 0) {
-                guestBookingRepository.updateByVenue(bookingId = 77L, venueId = 10L, nextStatus = BookingStatus.CANCELED)
+                guestBookingRepository.updateByVenue(
+                    bookingId = 77L,
+                    venueId = 10L,
+                    nextStatus = BookingStatus.CANCELED,
+                )
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
@@ -12208,7 +12371,14 @@ class TelegramBotRouterTableTokenTest {
                         venueName = "Тестовая кальянная",
                         status = "ACTIVE",
                         tabType = "PERSONAL",
-                        items = listOf(UserActiveOrderItemSummary(itemId = 201L, itemName = "Кальян классический", qty = 1)),
+                        items =
+                            listOf(
+                                UserActiveOrderItemSummary(
+                                    itemId = 201L,
+                                    itemName = "Кальян классический",
+                                    qty = 1,
+                                ),
+                            ),
                     ),
                 )
 
@@ -12633,7 +12803,10 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.singleOrNull()?.let { it.text == "Подробнее" && it.callbackData == "gp_o:501:g" } == true
+                        buttons.singleOrNull()?.let {
+                            it.text == "Подробнее" &&
+                                it.callbackData == "gp_o:501:g"
+                        } == true
                     },
                 )
                 outboxEnqueuer.enqueueSendMessage(
@@ -12661,7 +12834,9 @@ class TelegramBotRouterTableTokenTest {
                 listOf(
                     testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix"),
                 )
-            coEvery { venuePromotionRepository.listPromotionVenueFeedItemsByVenueIds(listOf(10L), any(), any()) } returns
+            coEvery {
+                venuePromotionRepository.listPromotionVenueFeedItemsByVenueIds(listOf(10L), any(), any())
+            } returns
                 listOf(
                     testPromotionVenueFeedItem(
                         venueId = 10L,
@@ -12729,7 +12904,9 @@ class TelegramBotRouterTableTokenTest {
     fun `start menu promotions button shows empty state`() =
         runBlocking {
             coEvery { chatContextRepository.get(100) } returns null
-            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), any()) } returns emptyList()
+            coEvery {
+                venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), any())
+            } returns emptyList()
 
             router.process(
                 TelegramUpdate(
@@ -12888,7 +13065,10 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.singleOrNull()?.let { it.text == "Подробнее" && it.callbackData == "gp_o:501:v" } == true
+                        buttons.singleOrNull()?.let {
+                            it.text == "Подробнее" &&
+                                it.callbackData == "gp_o:501:v"
+                        } == true
                     },
                 )
                 outboxEnqueuer.enqueueSendMessage(
@@ -13702,9 +13882,18 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "🎁 Каждый N-й кальян" && it.callbackData == "vm_loyalty_program:10" } &&
-                            buttons.any { it.text == "➕ Настроить программу" && it.callbackData == "vm_loyalty_setup:10" } &&
-                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                        buttons.any {
+                            it.text == "🎁 Каждый N-й кальян" &&
+                                it.callbackData == "vm_loyalty_program:10"
+                        } &&
+                            buttons.any {
+                                it.text == "➕ Настроить программу" &&
+                                    it.callbackData == "vm_loyalty_setup:10"
+                            } &&
+                            buttons.any {
+                                it.text == "↩️ К продвижению" &&
+                                    it.callbackData == "venue_marketing_root:10"
+                            }
                     },
                 )
             }
@@ -13713,7 +13902,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `owner can create draft loyalty program with nth value`() =
         runBlocking {
-            val created = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
+            val created =
+                testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { loyaltyRepository.listProgramsForVenue(10L) } returns emptyList()
@@ -13752,10 +13942,22 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "🎯 Что засчитывается" && it.callbackData == "vm_loyalty_earn:10:301" } &&
-                            buttons.any { it.text == "🎁 Что можно получить бесплатно" && it.callbackData == "vm_loyalty_reward:10:301" } &&
-                            buttons.any { it.text == "▶️ Включить" && it.callbackData == "vm_loyalty_status:10:301:ACTIVE" } &&
-                            buttons.any { it.text == "🗄 Архивировать" && it.callbackData == "vm_loyalty_status:10:301:ARCHIVED" }
+                        buttons.any {
+                            it.text == "🎯 Что засчитывается" &&
+                                it.callbackData == "vm_loyalty_earn:10:301"
+                        } &&
+                            buttons.any {
+                                it.text == "🎁 Что можно получить бесплатно" &&
+                                    it.callbackData == "vm_loyalty_reward:10:301"
+                            } &&
+                            buttons.any {
+                                it.text == "▶️ Включить" &&
+                                    it.callbackData == "vm_loyalty_status:10:301:ACTIVE"
+                            } &&
+                            buttons.any {
+                                it.text == "🗄 Архивировать" &&
+                                    it.callbackData == "vm_loyalty_status:10:301:ARCHIVED"
+                            }
                     },
                 )
             }
@@ -13765,7 +13967,8 @@ class TelegramBotRouterTableTokenTest {
     fun `owner can enter custom loyalty nth value`() =
         runBlocking {
             val states = mutableMapOf<Long, DialogState>()
-            val created = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 7, status = LoyaltyProgramStatus.DRAFT)
+            val created =
+                testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 7, status = LoyaltyProgramStatus.DRAFT)
             coEvery { dialogStateRepository.get(any()) } answers {
                 states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
             }
@@ -13843,7 +14046,8 @@ class TelegramBotRouterTableTokenTest {
                             mapOf("venueId" to "10"),
                         ),
                 )
-            val updated = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 8, status = LoyaltyProgramStatus.ACTIVE)
+            val updated =
+                testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 8, status = LoyaltyProgramStatus.ACTIVE)
             coEvery { dialogStateRepository.get(any()) } answers {
                 states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
             }
@@ -13927,7 +14131,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `active loyalty program target update remains enabled in owner text`() =
         runBlocking {
-            val program = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.ACTIVE)
+            val program =
+                testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.ACTIVE)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { loyaltyRepository.getProgramForVenue(10L, 301L) } returns program
@@ -13978,7 +14183,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `owner can configure loyalty earn targets`() =
         runBlocking {
-            val program = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
+            val program =
+                testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { loyaltyRepository.getProgramForVenue(10L, 301L) } returns program
@@ -14060,7 +14266,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `owner can configure loyalty reward targets`() =
         runBlocking {
-            val program = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
+            val program =
+                testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
             coEvery { loyaltyRepository.getProgramForVenue(10L, 301L) } returns program
@@ -14200,7 +14407,10 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "📨 Отправить заявку" && it.callbackData == "vm_top_send:10" } &&
-                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                            buttons.any {
+                                it.text == "↩️ К продвижению" &&
+                                    it.callbackData == "venue_marketing_root:10"
+                            }
                     },
                 )
             }
@@ -14215,7 +14425,12 @@ class TelegramBotRouterTableTokenTest {
             coEvery { promotionVenuePlacementRepository.createRequest(10L, 200L) } returns
                 testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
             coEvery { userRepository.findTelegramUserContact(999L) } returns
-                TelegramUserContact(telegramUserId = 999L, username = "platform_owner", firstName = "Платформа", lastName = null)
+                TelegramUserContact(
+                    telegramUserId = 999L,
+                    username = "platform_owner",
+                    firstName = "Платформа",
+                    lastName = null,
+                )
 
             router.process(
                 TelegramUpdate(
@@ -14343,7 +14558,10 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" } &&
-                            buttons.any { it.text == "✏️ Добавить ссылку" && it.callbackData == "vm_review_url_edit:10" }
+                            buttons.any {
+                                it.text == "✏️ Добавить ссылку" &&
+                                    it.callbackData == "vm_review_url_edit:10"
+                            }
                     },
                 )
             }
@@ -14399,8 +14617,14 @@ class TelegramBotRouterTableTokenTest {
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "🕓 На проверке" && it.callbackData == "vm_places_pending:10" } &&
                             buttons.any { it.text == "✅ Активные" && it.callbackData == "vm_places_active:10" } &&
-                            buttons.any { it.text == "🗄 Завершённые / Архив" && it.callbackData == "vm_places_finished:10" } &&
-                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                            buttons.any {
+                                it.text == "🗄 Завершённые / Архив" &&
+                                    it.callbackData == "vm_places_finished:10"
+                            } &&
+                            buttons.any {
+                                it.text == "↩️ К продвижению" &&
+                                    it.callbackData == "venue_marketing_root:10"
+                            }
                     },
                 )
             }
@@ -14412,7 +14636,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
-            coEvery { promotionPlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.PENDING, 20, any()) } returns
+            coEvery {
+                promotionPlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.PENDING, 20, any())
+            } returns
                 listOf(
                     testPromotionPlacement(
                         id = 701L,
@@ -14456,7 +14682,14 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
-            coEvery { promotionVenuePlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.PENDING, 20, any()) } returns
+            coEvery {
+                promotionVenuePlacementRepository.listForVenueManagement(
+                    10L,
+                    PromotionPlacementStatus.PENDING,
+                    20,
+                    any(),
+                )
+            } returns
                 listOf(testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix"))
 
             router.process(
@@ -14493,7 +14726,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
-            coEvery { promotionPlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.ACTIVE, 20, any()) } returns
+            coEvery {
+                promotionPlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.ACTIVE, 20, any())
+            } returns
                 listOf(
                     testPromotionPlacement(
                         id = 702L,
@@ -14578,8 +14813,14 @@ class TelegramBotRouterTableTokenTest {
                     match { it.contains("📌 Размещения") && it.contains("Mix") && it.contains("Завершённые / архив") },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.callbackData == "vm_place_open:10:703:finished" && it.text.contains("Прошлая афиша") } &&
-                            buttons.any { it.callbackData == "vm_place_open:10:704:finished" && it.text.contains("Отклонённая афиша") } &&
+                        buttons.any {
+                            it.callbackData == "vm_place_open:10:703:finished" &&
+                                it.text.contains("Прошлая афиша")
+                        } &&
+                            buttons.any {
+                                it.callbackData == "vm_place_open:10:704:finished" &&
+                                    it.text.contains("Отклонённая афиша")
+                            } &&
                             buttons.any { it.text == "↩️ К размещениям" && it.callbackData == "vm_placements:10" }
                     },
                 )
@@ -14787,7 +15028,15 @@ class TelegramBotRouterTableTokenTest {
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
             coEvery { venuePromotionRepository.listVenuePromotionsForManagement(10L, any()) } returns
-                listOf(testPromotion(id = 503L, venueId = 10L, venueName = "Mix", title = "Сет", status = VenuePromotionStatus.DRAFT))
+                listOf(
+                    testPromotion(
+                        id = 503L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        title = "Сет",
+                        status = VenuePromotionStatus.DRAFT,
+                    ),
+                )
 
             router.process(
                 TelegramUpdate(
@@ -14813,8 +15062,14 @@ class TelegramBotRouterTableTokenTest {
                     match { text -> text.contains("📣 Акции") && text.contains("Mix") },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().any { it.text == "черновик · Сет" && it.callbackData == "vp_o:10:503" } &&
-                            markup.inlineKeyboard.flatten().any { it.text == "➕ Создать акцию" && it.callbackData == "vp_new:10" } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "черновик · Сет" &&
+                                    it.callbackData == "vp_o:10:503"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "➕ Создать акцию" &&
+                                    it.callbackData == "vp_new:10"
+                            } &&
                             markup.inlineKeyboard.flatten().any {
                                 it.text == "↩️ К продвижению" &&
                                     it.callbackData == "venue_marketing_root:10"
@@ -14860,7 +15115,10 @@ class TelegramBotRouterTableTokenTest {
                     match { it.contains("🗄 Архив акций") && it.contains("Mix") },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text.contains("Прошлая афиша") && it.callbackData == "vp_archive_open:10:530" } &&
+                        buttons.any {
+                            it.text.contains("Прошлая афиша") &&
+                                it.callbackData == "vp_archive_open:10:530"
+                        } &&
                             buttons.any { it.text == "↩️ К акциям" && it.callbackData == "vp_root:10" }
                     },
                 )
@@ -14905,7 +15163,10 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.singleOrNull()?.let { it.text == "↩️ К архиву" && it.callbackData == "vp_archive_root:10" } == true &&
+                        buttons.singleOrNull()?.let {
+                            it.text == "↩️ К архиву" &&
+                                it.callbackData == "vp_archive_root:10"
+                        } == true &&
                             buttons.none {
                                 it.text.contains("Включить") ||
                                     it.text.contains("Приостановить") ||
@@ -14933,7 +15194,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 532L) } returns archived
-            coEvery { venuePromotionMediaRepository.getPrimaryImage(532L) } returns testPromotionMedia(1L, 532L, "photo-file")
+            coEvery {
+                venuePromotionMediaRepository.getPrimaryImage(532L)
+            } returns testPromotionMedia(1L, 532L, "photo-file")
 
             router.process(
                 TelegramUpdate(
@@ -14982,7 +15245,10 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("Выберите тип акции") && it.contains("Комбо, промокоды и лояльность появятся позже.") },
+                    match {
+                        it.contains("Выберите тип акции") &&
+                            it.contains("Комбо, промокоды и лояльность появятся позже.")
+                    },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
                             markup.inlineKeyboard.flatten().any {
@@ -15006,7 +15272,14 @@ class TelegramBotRouterTableTokenTest {
     fun `owner can create venue promotion draft`() =
         runBlocking {
             val states = mutableMapOf<Long, DialogState>()
-            val created = testPromotion(id = 504L, venueId = 10L, venueName = "Mix", title = "Сет", status = VenuePromotionStatus.DRAFT)
+            val created =
+                testPromotion(
+                    id = 504L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Сет",
+                    status = VenuePromotionStatus.DRAFT,
+                )
             coEvery { dialogStateRepository.get(any()) } answers {
                 states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
             }
@@ -15059,7 +15332,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_005,
-                    message = Message(messageId = 20_005, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "Сет"),
+                    message =
+                        Message(
+                            messageId = 20_005,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Сет",
+                        ),
                 ),
             )
             router.process(
@@ -15161,7 +15440,9 @@ class TelegramBotRouterTableTokenTest {
                     createdByUserId = 200L,
                 )
             } returns created
-            coEvery { venuePromotionMediaRepository.replacePrimaryImage(10L, 520L, "large-photo-file-id", null) } returns media
+            coEvery {
+                venuePromotionMediaRepository.replacePrimaryImage(10L, 520L, "large-photo-file-id", null)
+            } returns media
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 520L) } returns created
             coEvery { venuePromotionMediaRepository.getPrimaryImage(520L) } returns media
 
@@ -15211,8 +15492,18 @@ class TelegramBotRouterTableTokenTest {
                             fromUser = User(id = 200),
                             photo =
                                 listOf(
-                                    PhotoSize(fileId = "small-photo-file-id", width = 320, height = 180, fileSize = 10_000),
-                                    PhotoSize(fileId = "large-photo-file-id", width = 1280, height = 720, fileSize = 150_000),
+                                    PhotoSize(
+                                        fileId = "small-photo-file-id",
+                                        width = 320,
+                                        height = 180,
+                                        fileSize = 10_000,
+                                    ),
+                                    PhotoSize(
+                                        fileId = "large-photo-file-id",
+                                        width = 1280,
+                                        height = 720,
+                                        fileSize = 150_000,
+                                    ),
                                 ),
                         ),
                 ),
@@ -15224,7 +15515,11 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     "Отправьте изображение для баннера.",
                     match { markup ->
-                        (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten()?.singleOrNull()?.callbackData == "vp_root:10"
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.singleOrNull()
+                            ?.callbackData == "vp_root:10"
                     },
                 )
                 venuePromotionMediaRepository.replacePrimaryImage(10L, 520L, "large-photo-file-id", null)
@@ -15239,7 +15534,10 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.any { it.text == "🖼 Заменить изображение" && it.callbackData == "vp_img:10:520" } &&
-                            buttons.any { it.text == "🗑 Удалить изображение" && it.callbackData == "vp_img_del:10:520" } &&
+                            buttons.any {
+                                it.text == "🗑 Удалить изображение" &&
+                                    it.callbackData == "vp_img_del:10:520"
+                            } &&
                             buttons.none { it.text == "✏️ Условия" } &&
                             buttons.none { it.text == "⚙️ Правила акции" }
                     },
@@ -15333,8 +15631,14 @@ class TelegramBotRouterTableTokenTest {
                     match { it.contains("📌 Разместить как баннер") && it.contains("Выберите место показа") },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "🎁 Вверху общих акций" && it.callbackData == "vp_place_new:10:520:G" } &&
-                            buttons.any { it.text == "🎁 Вверху акций заведения" && it.callbackData == "vp_place_new:10:520:V" }
+                        buttons.any {
+                            it.text == "🎁 Вверху общих акций" &&
+                                it.callbackData == "vp_place_new:10:520:G"
+                        } &&
+                            buttons.any {
+                                it.text == "🎁 Вверху акций заведения" &&
+                                    it.callbackData == "vp_place_new:10:520:V"
+                            }
                     },
                 )
                 promotionPlacementRepository.createRequest(
@@ -15513,7 +15817,10 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().any { it.text == "↩️ К акциям" && it.callbackData == "gp_all" }
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "↩️ К акциям" &&
+                                    it.callbackData == "gp_all"
+                            }
                     },
                 )
             }
@@ -15565,7 +15872,9 @@ class TelegramBotRouterTableTokenTest {
             val promotion = testPromotion(id = 505L, venueId = 10L, venueName = "Mix", title = "Сет")
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
-            coEvery { venuePromotionRepository.setPromotionStatus(10L, 505L, VenuePromotionStatus.ACTIVE) } returns promotion
+            coEvery {
+                venuePromotionRepository.setPromotionStatus(10L, 505L, VenuePromotionStatus.ACTIVE)
+            } returns promotion
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 505L) } returns promotion
 
             router.process(
@@ -15614,7 +15923,9 @@ class TelegramBotRouterTableTokenTest {
             }
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
-            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 513L) } returns basePromotion andThen updatedPromotion
+            coEvery {
+                venuePromotionRepository.getPromotionForManagement(10L, 513L)
+            } returns basePromotion andThen updatedPromotion
             coEvery {
                 venuePromotionRepository.updatePromotion(
                     venueId = 10L,
@@ -15639,7 +15950,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_031,
-                    message = Message(messageId = 20_031, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "До 18:00"),
+                    message =
+                        Message(
+                            messageId = 20_031,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "До 18:00",
+                        ),
                 ),
             )
 
@@ -15808,7 +16125,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_051,
-                    message = Message(messageId = 20_051, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "Чай к кальяну"),
+                    message =
+                        Message(
+                            messageId = 20_051,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Чай к кальяну",
+                        ),
                 ),
             )
             router.process(
@@ -15900,8 +16223,14 @@ class TelegramBotRouterTableTokenTest {
                     "На что действует подарок в категории «Кальяны»?",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "✅ Все позиции категории «Кальяны»" && it.callbackData == "vpg_tall:10:530:HOOKAH" } &&
-                            buttons.any { it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpg_titems:10:530:HOOKAH:0" }
+                        buttons.any {
+                            it.text == "✅ Все позиции категории «Кальяны»" &&
+                                it.callbackData == "vpg_tall:10:530:HOOKAH"
+                        } &&
+                            buttons.any {
+                                it.text == "🎯 Выбрать отдельные позиции" &&
+                                    it.callbackData == "vpg_titems:10:530:HOOKAH:0"
+                            }
                     },
                 )
                 outboxEnqueuer.enqueueSendMessage(100, "Условие подарка сохранено. Теперь выберите подарок.", null)
@@ -15935,11 +16264,11 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                            buttons.any { it.text == "⚙️ Правила акции" && it.callbackData == "vpr_root:10:530" } &&
-                                buttons.any { it.text == "▶️ Включить" && it.callbackData == "vp_on:10:530" } &&
-                                buttons.none { it.text == "🎯 Условие подарка" } &&
-                                buttons.none { it.text == "🎁 Подарок" } &&
-                                buttons.none { it.text == "⚖️ Совместимость акций" }
+                        buttons.any { it.text == "⚙️ Правила акции" && it.callbackData == "vpr_root:10:530" } &&
+                            buttons.any { it.text == "▶️ Включить" && it.callbackData == "vp_on:10:530" } &&
+                            buttons.none { it.text == "🎯 Условие подарка" } &&
+                            buttons.none { it.text == "🎁 Подарок" } &&
+                            buttons.none { it.text == "⚖️ Совместимость акций" }
                     },
                 )
             }
@@ -16003,7 +16332,9 @@ class TelegramBotRouterTableTokenTest {
                 giftRuleLookupCount += 1
                 if (giftRuleLookupCount >= 5) listOf(itemTargetRule) else emptyList()
             }
-            coEvery { venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.HOOKAH) } returns
+            coEvery {
+                venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.HOOKAH)
+            } returns
                 listOf(
                     PromotionRuleTargetMenuItem(701L, "Кальян обычный", MenuSemanticType.HOOKAH),
                     PromotionRuleTargetMenuItem(702L, "Премиум кальян", MenuSemanticType.HOOKAH),
@@ -16106,8 +16437,14 @@ class TelegramBotRouterTableTokenTest {
                     "Выберите позиции, которые дают подарок.",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "Кальян обычный" && it.callbackData == "vpg_itog:10:531:HOOKAH:701:0" } &&
-                            buttons.any { it.text == "Премиум кальян" && it.callbackData == "vpg_itog:10:531:HOOKAH:702:0" }
+                        buttons.any {
+                            it.text == "Кальян обычный" &&
+                                it.callbackData == "vpg_itog:10:531:HOOKAH:701:0"
+                        } &&
+                            buttons.any {
+                                it.text == "Премиум кальян" &&
+                                    it.callbackData == "vpg_itog:10:531:HOOKAH:702:0"
+                            }
                     },
                 )
                 outboxEnqueuer.enqueueSendMessage(
@@ -16115,7 +16452,10 @@ class TelegramBotRouterTableTokenTest {
                     "Выберите позиции, которые дают подарок.",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "✅ Кальян обычный" && it.callbackData == "vpg_itog:10:531:HOOKAH:701:0" }
+                        buttons.any {
+                            it.text == "✅ Кальян обычный" &&
+                                it.callbackData == "vpg_itog:10:531:HOOKAH:701:0"
+                        }
                     },
                 )
                 outboxEnqueuer.enqueueSendMessage(100, "Условие подарка сохранено. Теперь выберите подарок.", null)
@@ -16226,7 +16566,8 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Напишите описание и условия акции одним сообщением.\nНапример: скидка 20% на кальяны с 18:00 до 20:00 по будням.",
+                    "Напишите описание и условия акции одним сообщением.\n" +
+                        "Например: скидка 20% на кальяны с 18:00 до 20:00 по будням.",
                     match { markup ->
                         (markup as? InlineKeyboardMarkup)
                             ?.inlineKeyboard
@@ -16244,7 +16585,8 @@ class TelegramBotRouterTableTokenTest {
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Акция создана как черновик. Настройте правило Happy Hours в разделе «Правила акции»: скидку, дни и время проведения.",
+                    "Акция создана как черновик. Настройте правило Happy Hours в разделе «Правила акции»: " +
+                        "скидку, дни и время проведения.",
                     null,
                 )
                 outboxEnqueuer.enqueueSendMessage(
@@ -16274,7 +16616,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 506L) } returns promotion
-            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 506L, any()) } returns emptyList()
+            coEvery {
+                venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 506L, any())
+            } returns emptyList()
 
             router.process(
                 TelegramUpdate(
@@ -16306,71 +16650,73 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
-	        }
+        }
 
-	    @Test
-	    fun `owner sees clear labels for multiple promotion rules`() =
-	        runBlocking {
-	            val promotion =
-	                testPromotion(
-	                    id = 515L,
-	                    venueId = 10L,
-	                    venueName = "Mix",
-	                    title = "Счастливые часы",
-	                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
-	                )
-	            val hookahRule =
-	                testPromotionRule(
-	                    id = 609L,
-	                    venueId = 10L,
-	                    promotionId = 515L,
-	                    targetValue = MenuSemanticType.HOOKAH,
-	                    discountPercent = 20,
-	                    status = VenuePromotionStatus.ACTIVE,
-	                )
-	            val teaRule =
-	                testPromotionRule(
-	                    id = 610L,
-	                    venueId = 10L,
-	                    promotionId = 515L,
-	                    targetValue = MenuSemanticType.TEA,
-	                    discountPercent = 10,
-	                    status = VenuePromotionStatus.ACTIVE,
-	                )
-	            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
-	                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
-	            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 515L) } returns promotion
-	            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 515L, any()) } returns listOf(hookahRule, teaRule)
+    @Test
+    fun `owner sees clear labels for multiple promotion rules`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 515L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            val hookahRule =
+                testPromotionRule(
+                    id = 609L,
+                    venueId = 10L,
+                    promotionId = 515L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 20,
+                    status = VenuePromotionStatus.ACTIVE,
+                )
+            val teaRule =
+                testPromotionRule(
+                    id = 610L,
+                    venueId = 10L,
+                    promotionId = 515L,
+                    targetValue = MenuSemanticType.TEA,
+                    discountPercent = 10,
+                    status = VenuePromotionStatus.ACTIVE,
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 515L) } returns promotion
+            coEvery {
+                venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 515L, any())
+            } returns listOf(hookahRule, teaRule)
 
-	            router.process(
-	                TelegramUpdate(
-	                    updateId = 10_029,
-	                    callbackQuery =
-	                        CallbackQuery(
-	                            id = "cb-promo-rules-multiple",
-	                            from = User(id = 200),
-	                            message = Message(messageId = 20_029, chat = Chat(id = 100, type = "private")),
-	                            data = "vpr_root:10:515",
-	                        ),
-	                ),
-	            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_029,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rules-multiple",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_029, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_root:10:515",
+                        ),
+                ),
+            )
 
-	            coVerify {
-	                outboxEnqueuer.enqueueSendMessage(
-	                    100,
-	                    match { it.contains("Выберите правило или добавьте новое.") },
-	                    match { markup ->
-	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-	                        buttons.any { it.text == "20% · Кальяны" && it.callbackData == "vpr_o:10:515:609" } &&
-	                            buttons.any { it.text == "10% · Чай" && it.callbackData == "vpr_o:10:515:610" }
-	                    },
-	                )
-	            }
-	        }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Выберите правило или добавьте новое.") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "20% · Кальяны" && it.callbackData == "vpr_o:10:515:609" } &&
+                            buttons.any { it.text == "10% · Чай" && it.callbackData == "vpr_o:10:515:610" }
+                    },
+                )
+            }
+        }
 
-	    @Test
-	    fun `owner can create active promotion happy hours rule`() =
-	        runBlocking {
+    @Test
+    fun `owner can create active promotion happy hours rule`() =
+        runBlocking {
             val states = mutableMapOf<Long, DialogState>()
             val promotion =
                 testPromotion(
@@ -16380,7 +16726,8 @@ class TelegramBotRouterTableTokenTest {
                     title = "Счастливые часы",
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                 )
-            val rule = testPromotionRule(id = 601L, venueId = 10L, promotionId = 506L, status = VenuePromotionStatus.ACTIVE)
+            val rule =
+                testPromotionRule(id = 601L, venueId = 10L, promotionId = 506L, status = VenuePromotionStatus.ACTIVE)
             coEvery { dialogStateRepository.get(any()) } answers {
                 states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
             }
@@ -16433,7 +16780,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_010,
-                    message = Message(messageId = 20_010, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "20"),
+                    message =
+                        Message(
+                            messageId = 20_010,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "20",
+                        ),
                 ),
             )
 
@@ -16443,8 +16796,14 @@ class TelegramBotRouterTableTokenTest {
                     "На что действует скидка в категории «Кальяны»?",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "✅ Все позиции категории «Кальяны»" && it.callbackData == "vpr_tall_new:10:506:HOOKAH" } &&
-                            buttons.any { it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpr_titems_new:10:506:HOOKAH:0" }
+                        buttons.any {
+                            it.text == "✅ Все позиции категории «Кальяны»" &&
+                                it.callbackData == "vpr_tall_new:10:506:HOOKAH"
+                        } &&
+                            buttons.any {
+                                it.text == "🎯 Выбрать отдельные позиции" &&
+                                    it.callbackData == "vpr_titems_new:10:506:HOOKAH:0"
+                            }
                     },
                 )
                 outboxEnqueuer.enqueueSendMessage(
@@ -16465,23 +16824,27 @@ class TelegramBotRouterTableTokenTest {
                     createdByUserId = 200L,
                 )
                 outboxEnqueuer.enqueueSendMessage(100, "Правило создано.", null)
-	                outboxEnqueuer.enqueueSendMessage(
-	                    100,
-	                    match {
-	                            it.contains("⚙️ Правило акции") &&
-	                            it.contains("На что действует: Кальяны") &&
-	                            it.contains("Скидка: 20%") &&
-	                            it.contains("Это правило применяется, когда акция включена.") &&
-	                            !it.contains("preview-only")
-	                    },
-	                    match { markup ->
-	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-	                        buttons.any { it.text == "🎯 На что действует" && it.callbackData == "vpr_tedit:10:506:601" } &&
-	                            buttons.any { it.text == "✏️ Процент скидки" && it.callbackData == "vpr_pct:10:506:601" } &&
-	                            buttons.none { it.text == "▶️ Включить" || it.text == "⏸ Приостановить" || it.text == "🗄 Архивировать" } &&
-	                            buttons.any { it.text == "↩️ К правилам" && it.callbackData == "vpr_root:10:506" }
-	                    },
-	                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("⚙️ Правило акции") &&
+                            it.contains("На что действует: Кальяны") &&
+                            it.contains("Скидка: 20%") &&
+                            it.contains("Это правило применяется, когда акция включена.") &&
+                            !it.contains("preview-only")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎯 На что действует" && it.callbackData == "vpr_tedit:10:506:601" } &&
+                            buttons.any { it.text == "✏️ Процент скидки" && it.callbackData == "vpr_pct:10:506:601" } &&
+                            buttons.none {
+                                it.text == "▶️ Включить" ||
+                                    it.text == "⏸ Приостановить" ||
+                                    it.text == "🗄 Архивировать"
+                            } &&
+                            buttons.any { it.text == "↩️ К правилам" && it.callbackData == "vpr_root:10:506" }
+                    },
+                )
             }
         }
 
@@ -16509,7 +16872,8 @@ class TelegramBotRouterTableTokenTest {
                     title = "Счастливые часы",
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                 )
-            val duplicateRule = testPromotionRule(id = 601L, venueId = 10L, promotionId = 506L, status = VenuePromotionStatus.ACTIVE)
+            val duplicateRule =
+                testPromotionRule(id = 601L, venueId = 10L, promotionId = 506L, status = VenuePromotionStatus.ACTIVE)
             coEvery { dialogStateRepository.get(any()) } answers {
                 states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
             }
@@ -16534,7 +16898,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_133,
-                    message = Message(messageId = 20_133, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "20"),
+                    message =
+                        Message(
+                            messageId = 20_133,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "20",
+                        ),
                 ),
             )
 
@@ -16602,7 +16972,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 530L) } returns promotion
-            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 530L, any()) } returns emptyList()
+            coEvery {
+                venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 530L, any())
+            } returns emptyList()
             coEvery {
                 venuePromotionRuleRepository.findDuplicateGiftWithItemRule(
                     venueId = 10L,
@@ -16670,7 +17042,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `legacy rule lifecycle callback does not update rule and staff is denied`() =
         runBlocking {
-            val activeRule = testPromotionRule(id = 602L, venueId = 10L, promotionId = 507L, status = VenuePromotionStatus.ACTIVE)
+            val activeRule =
+                testPromotionRule(id = 602L, venueId = 10L, promotionId = 507L, status = VenuePromotionStatus.ACTIVE)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
             coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
@@ -16711,7 +17084,7 @@ class TelegramBotRouterTableTokenTest {
                 )
                 outboxEnqueuer.enqueueSendMessage(100, "Раздел «Акции» доступен менеджеру или владельцу.", any())
             }
-	        }
+        }
 
     @Test
     fun `owner deletes promotion rule with confirmation while staff is denied`() =
@@ -16724,7 +17097,8 @@ class TelegramBotRouterTableTokenTest {
                     title = "Счастливые часы",
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                 )
-            val rule = testPromotionRule(id = 624L, venueId = 10L, promotionId = 534L, status = VenuePromotionStatus.ACTIVE)
+            val rule =
+                testPromotionRule(id = 624L, venueId = 10L, promotionId = 534L, status = VenuePromotionStatus.ACTIVE)
             val archivedRule = rule.copy(status = VenuePromotionStatus.ARCHIVED)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
@@ -16733,7 +17107,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 534L) } returns promotion
             coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 624L) } returns rule
             coEvery { venuePromotionRuleRepository.archiveRule(10L, 534L, 624L) } returns archivedRule
-            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 534L, any()) } returns emptyList()
+            coEvery {
+                venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 534L, any())
+            } returns emptyList()
 
             router.process(
                 TelegramUpdate(
@@ -16775,10 +17151,14 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Удалить это правило акции?\n\nОно больше не будет применяться к новым заказам. История уже оформленных заказов сохранится.",
+                    "Удалить это правило акции?\n\n" +
+                        "Оно больше не будет применяться к новым заказам. История уже оформленных заказов сохранится.",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "✅ Да, удалить правило" && it.callbackData == "vpr_del_yes:10:534:624" } &&
+                        buttons.any {
+                            it.text == "✅ Да, удалить правило" &&
+                                it.callbackData == "vpr_del_yes:10:534:624"
+                        } &&
                             buttons.any { it.text == "↩️ Назад к правилу" && it.callbackData == "vpr_o:10:534:624" }
                     },
                 )
@@ -16793,307 +17173,345 @@ class TelegramBotRouterTableTokenTest {
             }
         }
 
-		    @Test
-		    fun `owner can edit promotion rule target and percent while staff is denied`() =
-		        runBlocking {
-	            val promotion =
-	                testPromotion(
-	                    id = 514L,
-	                    venueId = 10L,
-	                    venueName = "Mix",
-	                    title = "Счастливые часы",
-	                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
-	                )
-	            val baseRule = testPromotionRule(id = 608L, venueId = 10L, promotionId = 514L)
-	            val targetUpdatedRule = baseRule.copy(targetValue = MenuSemanticType.TEA)
-	            val percentUpdatedRule = targetUpdatedRule.copy(discountPercent = 10)
-	            val states = mutableMapOf<Long, DialogState>()
-	            coEvery { dialogStateRepository.get(any()) } answers {
-	                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
-	            }
-	            coEvery { dialogStateRepository.set(any(), any()) } answers {
-	                states[firstArg()] = secondArg()
-	                Unit
-	            }
-	            coEvery { dialogStateRepository.clear(any()) } answers {
-	                states.remove(firstArg<Long>())
-	                Unit
-	            }
-	            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
-	                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
-	            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
-	                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
-	            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 514L) } returns promotion
-	            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 608L) } returns
-	                baseRule andThen baseRule andThen targetUpdatedRule andThen targetUpdatedRule andThen targetUpdatedRule andThen percentUpdatedRule
-		            coEvery {
-		                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
-		                    venueId = 10L,
-		                    ruleId = 608L,
-		                    semanticType = MenuSemanticType.TEA,
-		                )
-		            } returns targetUpdatedRule
-	            coEvery {
-	                venuePromotionRuleRepository.updateHappyHoursRule(
-	                    venueId = 10L,
-	                    ruleId = 608L,
-	                    discountPercent = 10,
-	                )
-	            } returns percentUpdatedRule
+    @Test
+    fun `owner can edit promotion rule target and percent while staff is denied`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 514L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            val baseRule = testPromotionRule(id = 608L, venueId = 10L, promotionId = 514L)
+            val targetUpdatedRule = baseRule.copy(targetValue = MenuSemanticType.TEA)
+            val percentUpdatedRule = targetUpdatedRule.copy(discountPercent = 10)
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 514L) } returns promotion
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 608L) } returns
+                baseRule andThen
+                baseRule andThen
+                targetUpdatedRule andThen
+                targetUpdatedRule andThen
+                targetUpdatedRule andThen
+                percentUpdatedRule
+            coEvery {
+                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
+                    venueId = 10L,
+                    ruleId = 608L,
+                    semanticType = MenuSemanticType.TEA,
+                )
+            } returns targetUpdatedRule
+            coEvery {
+                venuePromotionRuleRepository.updateHappyHoursRule(
+                    venueId = 10L,
+                    ruleId = 608L,
+                    discountPercent = 10,
+                )
+            } returns percentUpdatedRule
 
-	            router.process(
-	                TelegramUpdate(
-	                    updateId = 10_022,
-	                    callbackQuery =
-	                        CallbackQuery(
-	                            id = "cb-promo-rule-target-edit",
-	                            from = User(id = 200),
-	                            message = Message(messageId = 20_022, chat = Chat(id = 100, type = "private")),
-	                            data = "vpr_tedit:10:514:608",
-	                        ),
-	                ),
-	            )
-	            router.process(
-	                TelegramUpdate(
-	                    updateId = 10_023,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-target-category",
-		                            from = User(id = 200),
-		                            message = Message(messageId = 20_023, chat = Chat(id = 100, type = "private")),
-		                            data = "vpr_tcat:10:514:608:TEA",
-		                        ),
-		                ),
-		            )
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_024,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-target-save",
-		                            from = User(id = 200),
-		                            message = Message(messageId = 20_024, chat = Chat(id = 100, type = "private")),
-		                            data = "vpr_tall:10:514:608:TEA",
-		                        ),
-		                ),
-		            )
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_025,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-target-staff",
-		                            from = User(id = 201),
-		                            message = Message(messageId = 20_025, chat = Chat(id = 101, type = "private")),
-		                            data = "vpr_tedit:10:514:608",
-		                        ),
-		                ),
-		            )
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_026,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-percent-staff",
-		                            from = User(id = 201),
-		                            message = Message(messageId = 20_026, chat = Chat(id = 101, type = "private")),
-		                            data = "vpr_pct:10:514:608",
-		                        ),
-		                ),
-		            )
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_027,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-percent-edit",
-		                            from = User(id = 200),
-		                            message = Message(messageId = 20_027, chat = Chat(id = 100, type = "private")),
-		                            data = "vpr_pct:10:514:608",
-		                        ),
-		                ),
-		            )
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_028,
-		                    message = Message(messageId = 20_028, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "abc"),
-		                ),
-		            )
-		            assertEquals(DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT, states[100]?.state)
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_029,
-		                    message = Message(messageId = 20_029, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "10"),
-		                ),
-		            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_022,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-target-edit",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_022, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_tedit:10:514:608",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_023,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-target-category",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_023, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_tcat:10:514:608:TEA",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_024,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-target-save",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_024, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_tall:10:514:608:TEA",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_025,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-target-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_025, chat = Chat(id = 101, type = "private")),
+                            data = "vpr_tedit:10:514:608",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_026,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-percent-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_026, chat = Chat(id = 101, type = "private")),
+                            data = "vpr_pct:10:514:608",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_027,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-percent-edit",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_027, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_pct:10:514:608",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_028,
+                    message =
+                        Message(
+                            messageId = 20_028,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "abc",
+                        ),
+                ),
+            )
+            assertEquals(DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT, states[100]?.state)
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_029,
+                    message =
+                        Message(
+                            messageId = 20_029,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "10",
+                        ),
+                ),
+            )
 
-	            assertEquals(null, states[100])
-	            coVerify {
-		                outboxEnqueuer.enqueueSendMessage(
-		                    100,
-		                    "Выберите категорию для скидки.",
-		                    match { markup ->
-		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-		                        buttons.any { it.text == "Чай" && it.callbackData == "vpr_tcat:10:514:608:TEA" } &&
-		                            buttons.any { it.text == "↩️ К правилу" && it.callbackData == "vpr_o:10:514:608" }
-		                    },
-		                )
-		                outboxEnqueuer.enqueueSendMessage(
-		                    100,
-		                    "На что действует скидка в категории «Чай»?",
-		                    match { markup ->
-		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-		                        buttons.any { it.text == "✅ Все позиции категории «Чай»" && it.callbackData == "vpr_tall:10:514:608:TEA" } &&
-		                            buttons.any { it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpr_titems:10:514:608:TEA:0" }
-		                    },
-		                )
-		                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
-		                    venueId = 10L,
-		                    ruleId = 608L,
-		                    semanticType = MenuSemanticType.TEA,
-		                )
-		                outboxEnqueuer.enqueueSendMessage(100, "Скидка будет действовать на все позиции категории «Чай».", null)
-	                outboxEnqueuer.enqueueSendMessage(
-	                    100,
-	                    "Введите процент скидки от 1 до 100.",
-	                    match { markup ->
-	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-	                        buttons.size == 1 &&
-	                            buttons.single().text == "↩️ К правилу" &&
-	                            buttons.single().callbackData == "vpr_o:10:514:608"
-	                    },
-	                )
-	                outboxEnqueuer.enqueueSendMessage(
-	                    100,
-	                    "Введите процент скидки числом от 1 до 100.",
-	                    match { markup ->
-	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-	                        buttons.size == 1 &&
-	                            buttons.single().text == "↩️ К правилу" &&
-	                            buttons.single().callbackData == "vpr_o:10:514:608"
-	                    },
-	                )
-	                venuePromotionRuleRepository.updateHappyHoursRule(
-	                    venueId = 10L,
-	                    ruleId = 608L,
-	                    discountPercent = 10,
-	                )
-	                outboxEnqueuer.enqueueSendMessage(100, "Процент скидки сохранён.", null)
-		                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
-		            }
-		        }
+            assertEquals(null, states[100])
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите категорию для скидки.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Чай" && it.callbackData == "vpr_tcat:10:514:608:TEA" } &&
+                            buttons.any { it.text == "↩️ К правилу" && it.callbackData == "vpr_o:10:514:608" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "На что действует скидка в категории «Чай»?",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "✅ Все позиции категории «Чай»" &&
+                                it.callbackData == "vpr_tall:10:514:608:TEA"
+                        } &&
+                            buttons.any {
+                                it.text == "🎯 Выбрать отдельные позиции" &&
+                                    it.callbackData == "vpr_titems:10:514:608:TEA:0"
+                            }
+                    },
+                )
+                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
+                    venueId = 10L,
+                    ruleId = 608L,
+                    semanticType = MenuSemanticType.TEA,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Скидка будет действовать на все позиции категории «Чай».",
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите процент скидки от 1 до 100.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилу" &&
+                            buttons.single().callbackData == "vpr_o:10:514:608"
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите процент скидки числом от 1 до 100.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилу" &&
+                            buttons.single().callbackData == "vpr_o:10:514:608"
+                    },
+                )
+                venuePromotionRuleRepository.updateHappyHoursRule(
+                    venueId = 10L,
+                    ruleId = 608L,
+                    discountPercent = 10,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Процент скидки сохранён.", null)
+                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+        }
 
-		    @Test
-		    fun `owner can choose specific menu items for promotion rule target`() =
-		        runBlocking {
-		            val promotion =
-		                testPromotion(
-		                    id = 516L,
-		                    venueId = 10L,
-		                    venueName = "Mix",
-		                    title = "Счастливые часы",
-		                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
-		                )
-		            val baseRule = testPromotionRule(id = 611L, venueId = 10L, promotionId = 516L)
-		            val itemTargetRule =
-		                baseRule.copy(
-		                    targets =
-		                        listOf(
-		                            PromotionRuleTarget(
-		                                id = 1L,
-		                                ruleId = 611L,
-		                                targetType = PromotionRuleTargetType.MENU_ITEM,
-		                                semanticType = null,
-		                                menuItemId = 701L,
-		                                menuItemName = "Кальян обычный",
-		                            ),
-		                        ),
-		                )
-		            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
-		                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
-		            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 516L) } returns promotion
-		            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 611L) } returns
-		                baseRule andThen baseRule andThen itemTargetRule
-		            coEvery { venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.HOOKAH) } returns
-		                listOf(
-		                    PromotionRuleTargetMenuItem(701L, "Кальян обычный", MenuSemanticType.HOOKAH),
-		                    PromotionRuleTargetMenuItem(702L, "Премиум кальян", MenuSemanticType.HOOKAH),
-		                )
-		            coEvery {
-		                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
-		                    venueId = 10L,
-		                    ruleId = 611L,
-		                    menuItemIds = listOf(701L),
-		                )
-		            } returns itemTargetRule
+    @Test
+    fun `owner can choose specific menu items for promotion rule target`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 516L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            val baseRule = testPromotionRule(id = 611L, venueId = 10L, promotionId = 516L)
+            val itemTargetRule =
+                baseRule.copy(
+                    targets =
+                        listOf(
+                            PromotionRuleTarget(
+                                id = 1L,
+                                ruleId = 611L,
+                                targetType = PromotionRuleTargetType.MENU_ITEM,
+                                semanticType = null,
+                                menuItemId = 701L,
+                                menuItemName = "Кальян обычный",
+                            ),
+                        ),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 516L) } returns promotion
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 611L) } returns
+                baseRule andThen baseRule andThen itemTargetRule
+            coEvery {
+                venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.HOOKAH)
+            } returns
+                listOf(
+                    PromotionRuleTargetMenuItem(701L, "Кальян обычный", MenuSemanticType.HOOKAH),
+                    PromotionRuleTargetMenuItem(702L, "Премиум кальян", MenuSemanticType.HOOKAH),
+                )
+            coEvery {
+                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+                    venueId = 10L,
+                    ruleId = 611L,
+                    menuItemIds = listOf(701L),
+                )
+            } returns itemTargetRule
 
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_030,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-items-open",
-		                            from = User(id = 200),
-		                            message = Message(messageId = 20_030, chat = Chat(id = 100, type = "private")),
-		                            data = "vpr_titems:10:516:611:HOOKAH:0",
-		                        ),
-		                ),
-		            )
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_031,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-items-toggle",
-		                            from = User(id = 200),
-		                            message = Message(messageId = 20_031, chat = Chat(id = 100, type = "private")),
-		                            data = "vpr_itog:10:516:611:HOOKAH:701:0",
-		                        ),
-		                ),
-		            )
-		            router.process(
-		                TelegramUpdate(
-		                    updateId = 10_032,
-		                    callbackQuery =
-		                        CallbackQuery(
-		                            id = "cb-promo-rule-items-done",
-		                            from = User(id = 200),
-		                            message = Message(messageId = 20_032, chat = Chat(id = 100, type = "private")),
-		                            data = "vpr_idone:10:516:611:HOOKAH",
-		                        ),
-		                ),
-		            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_030,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-items-open",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_030, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_titems:10:516:611:HOOKAH:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_031,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-items-toggle",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_031, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_itog:10:516:611:HOOKAH:701:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_032,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-items-done",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_032, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_idone:10:516:611:HOOKAH",
+                        ),
+                ),
+            )
 
-		            coVerify {
-		                outboxEnqueuer.enqueueSendMessage(
-		                    100,
-		                    "Выберите позиции категории «Кальяны».",
-		                    match { markup ->
-		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-		                        buttons.any { it.text == "Кальян обычный" && it.callbackData == "vpr_itog:10:516:611:HOOKAH:701:0" } &&
-		                            buttons.any { it.text == "Премиум кальян" && it.callbackData == "vpr_itog:10:516:611:HOOKAH:702:0" }
-		                    },
-		                )
-		                outboxEnqueuer.enqueueSendMessage(
-		                    100,
-		                    "Выберите позиции категории «Кальяны».",
-		                    match { markup ->
-		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-		                        buttons.any { it.text == "✅ Кальян обычный" && it.callbackData == "vpr_itog:10:516:611:HOOKAH:701:0" }
-		                    },
-		                )
-		                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
-		                    venueId = 10L,
-		                    ruleId = 611L,
-		                    menuItemIds = listOf(701L),
-		                )
-		                outboxEnqueuer.enqueueSendMessage(100, "Скидка будет действовать на выбранные позиции.", null)
-		            }
-		        }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите позиции категории «Кальяны».",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "Кальян обычный" &&
+                                it.callbackData == "vpr_itog:10:516:611:HOOKAH:701:0"
+                        } &&
+                            buttons.any {
+                                it.text == "Премиум кальян" &&
+                                    it.callbackData == "vpr_itog:10:516:611:HOOKAH:702:0"
+                            }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите позиции категории «Кальяны».",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "✅ Кальян обычный" &&
+                                it.callbackData == "vpr_itog:10:516:611:HOOKAH:701:0"
+                        }
+                    },
+                )
+                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+                    venueId = 10L,
+                    ruleId = 611L,
+                    menuItemIds = listOf(701L),
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Скидка будет действовать на выбранные позиции.", null)
+            }
+        }
 
-		    @Test
-		    fun `manager can update promotion rule schedule and staff is denied`() =
-		        runBlocking {
+    @Test
+    fun `manager can update promotion rule schedule and staff is denied`() =
+        runBlocking {
             val baseRule =
                 testPromotionRule(
                     id = 604L,
@@ -17120,7 +17538,9 @@ class TelegramBotRouterTableTokenTest {
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
             coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
-            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 604L) } returns baseRule andThen baseRule andThen updatedRule
+            coEvery {
+                venuePromotionRuleRepository.getRuleForManagement(10L, 604L)
+            } returns baseRule andThen baseRule andThen updatedRule
             coEvery {
                 venuePromotionRuleRepository.updateRuleSchedule(
                     venueId = 10L,
@@ -17146,7 +17566,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_013,
-                    message = Message(messageId = 20_013, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "15:00"),
+                    message =
+                        Message(
+                            messageId = 20_013,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "15:00",
+                        ),
                 ),
             )
             router.process(
@@ -17165,7 +17591,8 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Введите время начала акции в формате HH:mm, например 14:00. После этого бот спросит время окончания.",
+                    "Введите время начала акции в формате HH:mm, например 14:00. " +
+                        "После этого бот спросит время окончания.",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.size == 1 &&
@@ -17222,7 +17649,9 @@ class TelegramBotRouterTableTokenTest {
             }
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
-            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 606L) } returns baseRule andThen baseRule andThen updatedRule
+            coEvery {
+                venuePromotionRuleRepository.getRuleForManagement(10L, 606L)
+            } returns baseRule andThen baseRule andThen updatedRule
             coEvery {
                 venuePromotionRuleRepository.updateRuleSchedule(
                     venueId = 10L,
@@ -17248,7 +17677,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_019,
-                    message = Message(messageId = 20_019, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "17:00"),
+                    message =
+                        Message(
+                            messageId = 20_019,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "17:00",
+                        ),
                 ),
             )
 
@@ -17331,7 +17766,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_021,
-                    message = Message(messageId = 20_021, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "14:00"),
+                    message =
+                        Message(
+                            messageId = 20_021,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "14:00",
+                        ),
                 ),
             )
 
@@ -17402,13 +17843,25 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_016,
-                    message = Message(messageId = 20_016, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "abc"),
+                    message =
+                        Message(
+                            messageId = 20_016,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "abc",
+                        ),
                 ),
             )
             router.process(
                 TelegramUpdate(
                     updateId = 10_017,
-                    message = Message(messageId = 20_017, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "02:00"),
+                    message =
+                        Message(
+                            messageId = 20_017,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "02:00",
+                        ),
                 ),
             )
 
@@ -17522,8 +17975,14 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "✅ Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:0" } &&
-                            buttons.any { it.text == "Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:1" }
+                        buttons.any {
+                            it.text == "✅ Не суммировать с похожими акциями" &&
+                                it.callbackData == "vpr_cmp_set:10:534:624:0"
+                        } &&
+                            buttons.any {
+                                it.text == "Можно суммировать с другими акциями" &&
+                                    it.callbackData == "vpr_cmp_set:10:534:624:1"
+                            }
                     },
                 )
                 venuePromotionRuleRepository.updateRuleCompatibility(
@@ -17549,8 +18008,14 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:0" } &&
-                            buttons.any { it.text == "✅ Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:1" }
+                        buttons.any {
+                            it.text == "Не суммировать с похожими акциями" &&
+                                it.callbackData == "vpr_cmp_set:10:534:624:0"
+                        } &&
+                            buttons.any {
+                                it.text == "✅ Можно суммировать с другими акциями" &&
+                                    it.callbackData == "vpr_cmp_set:10:534:624:1"
+                            }
                     },
                 )
                 outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
@@ -17595,7 +18060,9 @@ class TelegramBotRouterTableTokenTest {
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 535L) } returns promotion
             coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 535L) } returns listOf(giftRule)
-            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 625L) } returns giftRule andThen stackableGiftRule
+            coEvery {
+                venuePromotionRuleRepository.getRuleForManagement(10L, 625L)
+            } returns giftRule andThen stackableGiftRule
             coEvery {
                 venuePromotionRuleRepository.updateRuleCompatibility(
                     venueId = 10L,
@@ -17816,7 +18283,9 @@ class TelegramBotRouterTableTokenTest {
             }
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
-            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 623L) } returns baseRule andThen baseRule andThen updatedRule
+            coEvery {
+                venuePromotionRuleRepository.getRuleForManagement(10L, 623L)
+            } returns baseRule andThen baseRule andThen updatedRule
             coEvery {
                 venuePromotionRuleRepository.updateRuleSchedule(
                     venueId = 10L,
@@ -17842,7 +18311,13 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 10_043,
-                    message = Message(messageId = 20_043, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "15:00"),
+                    message =
+                        Message(
+                            messageId = 20_043,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "15:00",
+                        ),
                 ),
             )
 
@@ -18784,7 +19259,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, any()) } returns ActiveOrderSummary(900L, "ACTIVE")
+            coEvery {
+                ordersRepository.findActiveOrderSummaryForTab(55L, any())
+            } returns ActiveOrderSummary(900L, "ACTIVE")
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -18973,7 +19450,7 @@ class TelegramBotRouterTableTokenTest {
                             from = User(id = 200),
                             message =
                                 Message(
-                            messageId = 28,
+                                    messageId = 28,
                                     chat = Chat(id = 100, type = "private"),
                                     text = null,
                                 ),
@@ -19008,7 +19485,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, any()) } returns ActiveOrderSummary(900L, "ACTIVE")
+            coEvery {
+                ordersRepository.findActiveOrderSummaryForTab(55L, any())
+            } returns ActiveOrderSummary(900L, "ACTIVE")
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -19423,8 +19902,17 @@ class TelegramBotRouterTableTokenTest {
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
             coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
-            coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any()) } returns
-                listOf(testPromotionRule(id = 603L, venueId = 10L, promotionId = 508L, status = VenuePromotionStatus.ACTIVE))
+            coEvery {
+                venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any())
+            } returns
+                listOf(
+                    testPromotionRule(
+                        id = 603L,
+                        venueId = 10L,
+                        promotionId = 508L,
+                        status = VenuePromotionStatus.ACTIVE,
+                    ),
+                )
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -19521,7 +20009,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
             coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
-            coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any()) } returns
+            coEvery {
+                venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any())
+            } returns
                 listOf(
                     testPromotionRule(
                         id = 603L,
@@ -19670,7 +20160,9 @@ class TelegramBotRouterTableTokenTest {
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
             coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
-            coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any()) } returns listOf(giftRule)
+            coEvery {
+                venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any())
+            } returns listOf(giftRule)
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -19828,7 +20320,10 @@ class TelegramBotRouterTableTokenTest {
                         (markup as? InlineKeyboardMarkup)
                             ?.inlineKeyboard
                             ?.flatten()
-                            ?.any { it.text == "🎁 Выбрать подарок" && it.callbackData == "bot_menu_gift_choice" } == true
+                            ?.any {
+                                it.text == "🎁 Выбрать подарок" &&
+                                    it.callbackData == "bot_menu_gift_choice"
+                            } == true
                     },
                 )
             }
@@ -20516,7 +21011,8 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Корзина была собрана для другого счёта, поэтому я очистил её. Соберите заказ заново для текущего счёта.",
+                    "Корзина была собрана для другого счёта, поэтому я очистил её. " +
+                        "Соберите заказ заново для текущего счёта.",
                     any(),
                 )
             }
@@ -20616,7 +21112,7 @@ class TelegramBotRouterTableTokenTest {
                             data = "bot_menu_item_cart",
                         ),
                 ),
-                )
+            )
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -22338,7 +22834,7 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                            text.contains("Новый заказ №12") &&
+                        text.contains("Новый заказ №12") &&
                             text.contains("Гость: Максим") &&
                             text.contains("✅ Принял: @waiter")
                     },
@@ -22413,7 +22909,7 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                            text.contains("Новый заказ №12") &&
+                        text.contains("Новый заказ №12") &&
                             text.contains("Гость: Максим") &&
                             text.contains("✅ Доставлено: Анна")
                     },
@@ -22770,7 +23266,11 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.DELIVERED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                )
             coEvery {
                 venueOrdersRepository.updateOrderStatus(
                     venueId = 10L,
@@ -22841,7 +23341,10 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetailWithAddOnBatch(addOnStatus = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.DELIVERED)
+                staffChatOrderDetailWithAddOnBatch(
+                    addOnStatus = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                )
             coEvery {
                 venueOrdersRepository.updateOrderStatus(
                     venueId = 10L,
@@ -22924,7 +23427,11 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.CLOSED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.CLOSED,
+                )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
 
             router.process(
@@ -22970,7 +23477,11 @@ class TelegramBotRouterTableTokenTest {
                     applied = false,
                 )
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.NEW, orderStatus = OrderWorkflowStatus.CLOSED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.NEW,
+                    orderStatus = OrderWorkflowStatus.CLOSED,
+                )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
 
             router.process(
@@ -23027,7 +23538,11 @@ class TelegramBotRouterTableTokenTest {
                     applied = false,
                 )
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED, orderStatus = OrderWorkflowStatus.CLOSED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.CLOSED,
+                )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
 
             router.process(
@@ -23796,7 +24311,11 @@ class TelegramBotRouterTableTokenTest {
     fun `personal staff delivered notifies guest and staff chat status update`() =
         runBlocking {
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED, orderStatus = OrderWorkflowStatus.ACCEPTED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
+                )
             coEvery {
                 venueOrdersRepository.updateOrderStatus(
                     venueId = 10L,
@@ -23850,7 +24369,11 @@ class TelegramBotRouterTableTokenTest {
     fun `personal staff close sends final guest message`() =
         runBlocking {
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.DELIVERED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                )
             coEvery {
                 venueOrdersRepository.updateOrderStatus(
                     venueId = 10L,

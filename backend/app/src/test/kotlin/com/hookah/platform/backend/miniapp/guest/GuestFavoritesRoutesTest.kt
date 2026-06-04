@@ -58,7 +58,10 @@ class GuestFavoritesRoutesTest {
                 }
             val venues = json.parseToJsonElement(listResponse.bodyAsText()).jsonObject.getValue("venues").jsonArray
             assertEquals(1, venues.size)
-            assertEquals(fixture.visibleVenueId, venues.first().jsonObject.getValue("venueId").jsonPrimitive.content.toLong())
+            assertEquals(
+                fixture.visibleVenueId,
+                venues.first().jsonObject.getValue("venueId").jsonPrimitive.content.toLong(),
+            )
 
             val deleteResponse =
                 client.delete("/api/guest/favorites/venues/${fixture.visibleVenueId}") {
@@ -70,7 +73,10 @@ class GuestFavoritesRoutesTest {
                 client.get("/api/guest/favorites/venues") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
-            val emptyVenues = json.parseToJsonElement(emptyResponse.bodyAsText()).jsonObject.getValue("venues").jsonArray
+            val emptyVenues =
+                json.parseToJsonElement(
+                    emptyResponse.bodyAsText(),
+                ).jsonObject.getValue("venues").jsonArray
             assertEquals(0, emptyVenues.size)
         }
 
@@ -90,7 +96,9 @@ class GuestFavoritesRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             val addUnavailable =
-                client.post("/api/guest/favorites/items/${fixture.unavailableItemId}?venueId=${fixture.visibleVenueId}") {
+                client.post(
+                    "/api/guest/favorites/items/${fixture.unavailableItemId}?venueId=${fixture.visibleVenueId}",
+                ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
 
@@ -104,7 +112,10 @@ class GuestFavoritesRoutesTest {
                 }
             val items = json.parseToJsonElement(listResponse.bodyAsText()).jsonObject.getValue("items").jsonArray
             assertEquals(1, items.size)
-            assertEquals(fixture.availableItemId, items.first().jsonObject.getValue("itemId").jsonPrimitive.content.toLong())
+            assertEquals(
+                fixture.availableItemId,
+                items.first().jsonObject.getValue("itemId").jsonPrimitive.content.toLong(),
+            )
         }
 
     private fun buildJdbcUrl(name: String): String =
@@ -191,7 +202,8 @@ class GuestFavoritesRoutesTest {
         available: Boolean,
     ): Long =
         connection.prepareStatement(
-            "INSERT INTO menu_items (venue_id, category_id, name, price_minor, currency, is_available) VALUES (?, ?, ?, 1000, 'RUB', ?)",
+            "INSERT INTO menu_items (venue_id, category_id, name, price_minor, currency, is_available) " +
+                "VALUES (?, ?, ?, 1000, 'RUB', ?)",
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             statement.setLong(1, venueId)
