@@ -58,6 +58,17 @@ body {
   text-align: left;
 }
 
+.table-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.table-actions button {
+  text-align: left;
+}
+
 .app-shell[data-table-severity="ok"] .table-status {
   background: #ecfdf3;
   border-color: #86efac;
@@ -334,9 +345,62 @@ input[type="number"] {
   gap: 1rem;
 }
 
+.venue-info-media-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.venue-info-media-image {
+  overflow: hidden;
+  border: 1px solid #e5e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-info-media-image .status {
+  padding: 0.75rem;
+}
+
+.venue-info-media-image img {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+}
+
+.venue-info-media-list a {
+  width: fit-content;
+  text-decoration: none;
+}
+
 .menu-category {
   display: grid;
   gap: 0.5rem;
+}
+
+.menu-category-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.menu-category-button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #d7dce8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  text-align: left;
+}
+
+.menu-category-note {
+  color: #8a5a00;
+  font-size: 0.8rem;
 }
 
 .menu-items {
@@ -552,6 +616,19 @@ input[type="number"] {
   gap: 0.5rem;
 }
 
+.order-refresh-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.order-updated-at {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
 .order-status {
   margin: 0.35rem 0 0;
   color: #475569;
@@ -602,6 +679,28 @@ input[type="number"] {
   color: #52617d;
 }
 
+.order-bill-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+  color: #1f2a44;
+}
+
+.order-bill-total {
+  margin-top: 0.35rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid #e5e7f2;
+  font-size: 1.05rem;
+}
+
+.order-discount-list,
+.order-excluded-list {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
 .order-items {
   display: grid;
   gap: 0.35rem;
@@ -616,6 +715,18 @@ input[type="number"] {
 
 .order-item-name {
   font-weight: 600;
+}
+
+.order-item-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.order-item-details {
+  color: #64748b;
+  font-size: 0.88rem;
+  line-height: 1.35;
 }
 
 .order-item-qty {
@@ -780,6 +891,16 @@ input[type="number"] {
   gap: 0.4rem;
 }
 
+.platform-readiness-list {
+  margin: 0.75rem 0;
+  padding-left: 1.25rem;
+  color: #475569;
+}
+
+.platform-readiness-list li + li {
+  margin-top: 0.35rem;
+}
+
 .venue-menu-item {
   display: flex;
   justify-content: space-between;
@@ -797,6 +918,37 @@ input[type="number"] {
 
 .venue-menu-item-price {
   color: #475569;
+}
+
+.venue-menu-options-title {
+  margin-top: 0.35rem;
+  color: #475569;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.venue-menu-options {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.venue-menu-option {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.venue-menu-option-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
 }
 
 .venue-menu-item-actions {

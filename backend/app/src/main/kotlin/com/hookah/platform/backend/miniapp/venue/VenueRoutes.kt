@@ -25,6 +25,9 @@ data class VenueMeResponse(
 @Serializable
 data class VenueAccessDto(
     val venueId: Long,
+    val venueName: String? = null,
+    val venueCity: String? = null,
+    val venueStatus: String? = null,
     val role: String,
     val permissions: List<String>,
 )
@@ -71,6 +74,9 @@ fun Route.venueRoutes(
                     val permissions = VenuePermissions.forRole(role)
                     VenueAccessDto(
                         venueId = membership.venueId,
+                        venueName = membership.venueName,
+                        venueCity = membership.venueCity,
+                        venueStatus = membership.venueStatus,
                         role = role.name,
                         permissions = permissions.map { it.name },
                     )
@@ -123,7 +129,12 @@ fun Route.venueRoutes(
                 venueAccessRepository = venueAccessRepository,
                 userId = userId,
                 venueId = venueId,
-            )
+            ).let { role ->
+                val permissions = VenuePermissions.forRole(role)
+                if (!permissions.contains(VenuePermission.STAFF_CHAT_LINK)) {
+                    throw ForbiddenException()
+                }
+            }
             val status = venueRepository.findStaffChatStatus(venueId) ?: throw NotFoundException()
             val activeCode = staffChatLinkCodeRepository.findActiveCodeForVenue(venueId)
             call.respond(
@@ -148,8 +159,7 @@ fun Route.venueRoutes(
                     userId = userId,
                     venueId = venueId,
                 )
-            val permissions = VenuePermissions.forRole(role)
-            if (!permissions.contains(VenuePermission.STAFF_CHAT_LINK)) {
+            if (role != VenueRole.OWNER) {
                 throw ForbiddenException()
             }
             val venueExists = venueRepository.findVenueById(venueId) != null

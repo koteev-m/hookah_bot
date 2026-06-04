@@ -4,6 +4,7 @@ export type CartSnapshot = {
   items: Map<number, number>
   totalQty: number
   distinctCount: number
+  commentDraft: string
 }
 
 type CartListener = (snapshot: CartSnapshot) => void
@@ -19,12 +20,14 @@ const cartDraftLocalStoragePrefix = 'hookah_guest_cart_draft:'
 const listeners = new Set<CartListener>()
 let items = new Map<number, number>()
 let totalQty = 0
+let commentDraft = ''
 let activeTableToken: string | null = null
 let activeDraftStorageKey: string | null = null
 
 type PersistedDraft = {
   items: Array<[number, number]>
   itemMeta?: ItemMeta[]
+  commentDraft?: string
 }
 
 function clampQty(qty: number): number {
@@ -84,7 +87,7 @@ function persistActiveDraft(): void {
   if (!activeDraftStorageKey) {
     return
   }
-  if (items.size === 0) {
+  if (items.size === 0 && commentDraft.trim() === '') {
     removeLocalStorageItem(activeDraftStorageKey)
     return
   }
@@ -99,19 +102,22 @@ function persistActiveDraft(): void {
   if (itemMeta.length > 0) {
     payload.itemMeta = itemMeta
   }
+  if (commentDraft) {
+    payload.commentDraft = commentDraft
+  }
   const serialized = JSON.stringify(payload)
   setLocalStorageItem(activeDraftStorageKey, serialized)
 }
 
-function loadDraftFromStorage(storageKey: string): { items: Map<number, number>; itemMeta: ItemMeta[] } {
+function loadDraftFromStorage(storageKey: string): { items: Map<number, number>; itemMeta: ItemMeta[]; commentDraft: string } {
   const raw = getLocalStorageItem(storageKey)
   if (!raw) {
-    return { items: new Map(), itemMeta: [] }
+    return { items: new Map(), itemMeta: [], commentDraft: '' }
   }
   try {
     const parsed = JSON.parse(raw) as PersistedDraft
     if (!Array.isArray(parsed.items)) {
-      return { items: new Map(), itemMeta: [] }
+      return { items: new Map(), itemMeta: [], commentDraft: '' }
     }
     const restored = new Map<number, number>()
     for (const entry of parsed.items) {
@@ -126,9 +132,10 @@ function loadDraftFromStorage(storageKey: string): { items: Map<number, number>;
       restored.set(itemId, qty)
     }
     const restoredMeta = Array.isArray(parsed.itemMeta) ? parsed.itemMeta : []
-    return { items: restored, itemMeta: restoredMeta }
+    const restoredComment = typeof parsed.commentDraft === 'string' ? parsed.commentDraft : ''
+    return { items: restored, itemMeta: restoredMeta, commentDraft: restoredComment }
   } catch {
-    return { items: new Map(), itemMeta: [] }
+    return { items: new Map(), itemMeta: [], commentDraft: '' }
   }
 }
 
@@ -136,7 +143,8 @@ function buildSnapshot(): CartSnapshot {
   return {
     items: new Map(items),
     totalQty,
-    distinctCount: items.size
+    distinctCount: items.size,
+    commentDraft
   }
 }
 
@@ -168,11 +176,13 @@ export function setCartTableToken(tableToken: string | null): void {
   if (!activeDraftStorageKey) {
     items = new Map()
     totalQty = 0
+    commentDraft = ''
     notify()
     return
   }
   const restoredDraft = loadDraftFromStorage(activeDraftStorageKey)
   items = restoredDraft.items
+  commentDraft = restoredDraft.commentDraft
   if (restoredDraft.itemMeta.length > 0) {
     updateItemCache(restoredDraft.itemMeta)
   }
@@ -251,9 +261,16 @@ export function setCartQty(itemId: number, qty: number): SetQtyResult {
   return { ok: true }
 }
 
+export function setCartCommentDraft(value: string): void {
+  commentDraft = value
+  persistActiveDraft()
+  notify()
+}
+
 export function clearCart(): void {
   items = new Map()
   totalQty = 0
+  commentDraft = ''
   persistActiveDraft()
   notify()
 }

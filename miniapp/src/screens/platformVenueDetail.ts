@@ -89,7 +89,7 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   const summaryCard = el('div', { className: 'card' })
   const summaryTitle = el('h2', { text: 'Заведение' })
   const summaryInfo = el('div', { className: 'venue-summary' })
-  const ownersTitle = el('h3', { text: 'Owners' })
+  const ownersTitle = el('h3', { text: 'Владельцы' })
   const ownersList = el('div', { className: 'venue-staff-list' })
   append(summaryCard, summaryTitle, summaryInfo, ownersTitle, ownersList)
 
@@ -99,7 +99,7 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   append(statusCard, statusTitle, statusButtons)
 
   const ownersCard = el('div', { className: 'card' })
-  const ownersHeader = el('h3', { text: 'Назначить owner' })
+  const ownersHeader = el('h3', { text: 'Назначить владельца' })
   const searchRow = el('div', { className: 'venue-form-row' })
   const userSearch = document.createElement('input')
   userSearch.className = 'venue-input'
@@ -113,20 +113,20 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   ownerRoleSelect.appendChild(new Option('OWNER', 'OWNER'))
   ownerRoleSelect.appendChild(new Option('ADMIN', 'ADMIN'))
 
-  const assignButton = el('button', { text: 'Назначить owner' }) as HTMLButtonElement
+  const assignButton = el('button', { text: 'Назначить владельца' }) as HTMLButtonElement
   const assignRow = el('div', { className: 'venue-inline-actions' })
   append(assignRow, ownerRoleSelect, assignButton)
   append(ownersCard, ownersHeader, searchRow, selectedUserLabel, userResults, assignRow)
 
   const inviteCard = el('div', { className: 'card' })
-  const inviteTitle = el('h3', { text: 'Owner invite' })
+  const inviteTitle = el('h3', { text: 'Инвайт владельца' })
   const inviteRow = el('div', { className: 'venue-form-row' })
   const inviteTtlInput = document.createElement('input')
   inviteTtlInput.className = 'venue-input'
   inviteTtlInput.type = 'number'
   inviteTtlInput.min = '60'
   inviteTtlInput.placeholder = 'TTL (сек), минимум 60'
-  const inviteButton = el('button', { text: 'Сгенерировать owner invite' }) as HTMLButtonElement
+  const inviteButton = el('button', { text: 'Сгенерировать инвайт' }) as HTMLButtonElement
   append(inviteRow, inviteTtlInput, inviteButton)
   const inviteResult = el('div', { className: 'venue-invite-result' })
   inviteResult.hidden = true
@@ -151,7 +151,7 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   append(inviteCard, inviteTitle, inviteRow, inviteResult)
 
   const subscriptionCard = el('div', { className: 'card' })
-  const subscriptionTitle = el('h3', { text: 'Subscription & Pricing' })
+  const subscriptionTitle = el('h3', { text: 'Подписка и цены' })
   const subscriptionForm = el('div', { className: 'venue-form-grid' })
   const trialEndInput = document.createElement('input')
   trialEndInput.className = 'venue-input'
@@ -163,12 +163,12 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   basePriceInput.className = 'venue-input'
   basePriceInput.type = 'number'
   basePriceInput.min = '1'
-  basePriceInput.placeholder = 'Base price (minor units)'
+  basePriceInput.placeholder = 'Базовая цена, копейки'
   const overridePriceInput = document.createElement('input')
   overridePriceInput.className = 'venue-input'
   overridePriceInput.type = 'number'
   overridePriceInput.min = '1'
-  overridePriceInput.placeholder = 'Override price (minor units)'
+  overridePriceInput.placeholder = 'Индивидуальная цена, копейки'
   const currencyLabel = el('span', { text: '' })
   const saveSubscriptionButton = el('button', { text: 'Сохранить настройки' }) as HTMLButtonElement
   append(
@@ -181,7 +181,7 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
     saveSubscriptionButton
   )
 
-  const scheduleTitle = el('h4', { text: 'Price schedule' })
+  const scheduleTitle = el('h4', { text: 'Расписание цен' })
   const scheduleList = el('div', { className: 'venue-menu-categories' })
   const scheduleActions = el('div', { className: 'venue-inline-actions' })
   const addScheduleButton = el('button', { text: 'Добавить строку' }) as HTMLButtonElement
@@ -362,7 +362,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     )
     refs.ownersList.replaceChildren()
     if (!currentVenue.owners.length) {
-      refs.ownersList.appendChild(el('p', { className: 'venue-empty', text: 'Owners не назначены.' }))
+      refs.ownersList.appendChild(el('p', { className: 'venue-empty', text: 'Владельцы не назначены.' }))
     } else {
       currentVenue.owners.forEach((owner) => {
         const row = el('div', { className: 'venue-staff-row' })
@@ -408,7 +408,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.overridePriceInput.value = currentSubscription.settings.priceOverrideMinor
       ? String(currentSubscription.settings.priceOverrideMinor)
       : ''
-    refs.currencyLabel.textContent = `Currency: ${currentSubscription.settings.currency}`
+    refs.currencyLabel.textContent = `Валюта: ${currentSubscription.settings.currency}`
     scheduleItems = currentSubscription.schedule.map((item) => ({ ...item }))
     renderSchedule()
   }
@@ -430,17 +430,33 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
 
   const renderStatusButtons = () => {
     refs.statusButtons.replaceChildren()
+    const status = currentVenue?.venue.status.toUpperCase()
+    if (!status || status === 'DELETED') {
+      refs.statusButtons.appendChild(
+        el('p', {
+          className: 'venue-empty',
+          text: status === 'DELETED' ? 'Заведение удалено. Действия недоступны.' : 'Статус не загружен.'
+        })
+      )
+      return
+    }
     const actions: Array<{ action: string; label: string; confirm: boolean }> = [
-      { action: 'publish', label: 'Publish', confirm: false },
-      { action: 'hide', label: 'Hide', confirm: true },
-      { action: 'pause', label: 'Pause', confirm: true },
-      { action: 'suspend', label: 'Suspend', confirm: true },
-      { action: 'archive', label: 'Archive', confirm: true },
-      { action: 'delete', label: 'Delete', confirm: true }
+      ...(status === 'DRAFT' ? [{ action: 'publish', label: 'Опубликовать', confirm: false }] : []),
+      ...(status === 'HIDDEN' ? [{ action: 'publish', label: 'Опубликовать', confirm: false }] : []),
+      ...(status === 'PAUSED' ? [{ action: 'publish', label: 'Вернуть в работу', confirm: true }] : []),
+      ...(status === 'SUSPENDED' ? [{ action: 'publish', label: 'Разблокировать и опубликовать', confirm: true }] : []),
+      ...(status === 'ARCHIVED' ? [{ action: 'publish', label: 'Восстановить и опубликовать', confirm: true }] : []),
+      ...(status === 'PUBLISHED' ? [{ action: 'hide', label: 'Скрыть', confirm: true }] : []),
+      ...(status === 'PUBLISHED' ? [{ action: 'pause', label: 'Приостановить', confirm: true }] : []),
+      ...(status !== 'SUSPENDED' && status !== 'ARCHIVED'
+        ? [{ action: 'suspend', label: 'Заблокировать', confirm: true }]
+        : []),
+      ...(status !== 'ARCHIVED' ? [{ action: 'archive', label: 'Архивировать', confirm: true }] : []),
+      { action: 'delete', label: 'Удалить', confirm: true }
     ]
     actions.forEach((item) => {
       const button = el('button', { className: 'button-small', text: item.label }) as HTMLButtonElement
-      button.addEventListener('click', () => void handleStatusChange(item.action, item.confirm))
+      button.addEventListener('click', () => void handleStatusChange(item.action, item.confirm, item.label))
       refs.statusButtons.appendChild(button)
     })
   }
@@ -487,10 +503,10 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     setLoadingState(false)
   }
 
-  const handleStatusChange = async (action: string, confirmAction: boolean) => {
+  const handleStatusChange = async (action: string, confirmAction: boolean, label: string) => {
     if (isUpdatingStatus) return
     if (confirmAction) {
-      const ok = window.confirm(`Подтвердите действие: ${action}.`)
+      const ok = window.confirm(`Подтвердите действие: ${label}.`)
       if (!ok) return
     }
     isUpdatingStatus = true
@@ -500,12 +516,14 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     updateActionButtons()
     if (disposed) return
     if (!result.ok) {
-      showError(result.error, () => void handleStatusChange(action, confirmAction))
+      showError(result.error, () => void handleStatusChange(action, confirmAction, label))
       return
     }
     showToast('Статус обновлён')
     currentVenue = { ...currentVenue!, venue: result.data.venue }
     renderSummary()
+    renderStatusButtons()
+    updateActionButtons()
   }
 
   const renderUserResults = (users: PlatformUserDto[], query: string) => {
@@ -583,7 +601,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       showError(result.error, handleAssignOwner)
       return
     }
-    showToast(result.data.alreadyMember ? 'Owner уже назначен' : 'Owner назначен')
+    showToast(result.data.alreadyMember ? 'Владелец уже назначен' : 'Владелец назначен')
     await loadVenue()
   }
 
@@ -641,11 +659,11 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     const basePriceMinor = parsePrice(refs.basePriceInput.value)
     const priceOverrideMinor = parsePrice(refs.overridePriceInput.value)
     if (refs.basePriceInput.value.trim() && basePriceMinor === null) {
-      showToast('Base price должен быть > 0')
+      showToast('Базовая цена должна быть больше 0')
       return
     }
     if (refs.overridePriceInput.value.trim() && priceOverrideMinor === null) {
-      showToast('Override price должен быть > 0')
+      showToast('Индивидуальная цена должна быть больше 0')
       return
     }
     isUpdatingSettings = true

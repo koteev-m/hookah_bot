@@ -1,8 +1,15 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestGetVenue, guestGetVenueMenu, guestStaffCall } from '../shared/api/guestApi'
-import type { MenuCategoryDto, MenuItemDto, VenueDto } from '../shared/api/guestDtos'
+import { guestGetVenue, guestGetVenueInfoSections, guestGetVenueMenu, guestStaffCall } from '../shared/api/guestApi'
+import type {
+  MenuCategoryDto,
+  MenuItemDto,
+  MenuResponse,
+  VenueDto,
+  VenueInfoSectionDto,
+  VenueInfoSectionsResponse
+} from '../shared/api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { updateItemCache } from '../shared/state/itemCache'
 import { addToCart, getCartSnapshot, removeFromCart, subscribeCart } from '../shared/state/cartStore'
@@ -21,6 +28,8 @@ type VenueScreenOptions = {
   backendUrl: string
   isDebug: boolean
   venueId: number | null
+  openStaffCall?: boolean
+  onBookVenue?: (venueId: number) => void
 }
 
 type MenuItemRefs = {
@@ -41,13 +50,17 @@ type VenueRefs = {
   errorDetails: HTMLDivElement
   venueTitle: HTMLHeadingElement
   venueLocation: HTMLParagraphElement
+  bookingButton: HTMLButtonElement
   menuBody: HTMLDivElement
   message: HTMLParagraphElement
   retryButton: HTMLButtonElement
+  staffSlot: HTMLDivElement
+  staffCard: HTMLDivElement
   staffReason: HTMLSelectElement
   staffComment: HTMLTextAreaElement
   staffCounter: HTMLParagraphElement
   staffButton: HTMLButtonElement
+  staffCloseButton: HTMLButtonElement
   staffMessage: HTMLParagraphElement
   staffError: HTMLDivElement
   staffErrorTitle: HTMLHeadingElement
@@ -104,7 +117,8 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const header = el('div', { className: 'venue-header' })
   const venueTitle = el('h3', { text: 'Загрузка...' })
   const venueLocation = el('p', { className: 'venue-location', text: '' })
-  append(header, venueTitle, venueLocation)
+  const bookingButton = el('button', { className: 'button-secondary button-small', text: 'Забронировать' }) as HTMLButtonElement
+  append(header, venueTitle, venueLocation, bookingButton)
 
   const status = el('p', { className: 'status', text: '' })
   const message = el('p', { className: 'status menu-message', text: '' })
@@ -119,14 +133,16 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const errorDetails = el('div')
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
-  const staffCard = el('div', { className: 'card staff-call' })
+  const staffSlot = el('div', { className: 'staff-call-slot' }) as HTMLDivElement
+  const staffCard = el('div', { className: 'card staff-call' }) as HTMLDivElement
   const staffTitle = el('p', { className: 'field-label', text: 'Вызвать персонал' })
+  const staffCloseButton = el('button', { className: 'button-secondary button-small', text: '← К меню' }) as HTMLButtonElement
   const staffReasonLabel = el('p', { className: 'field-label', text: 'Причина' })
   const staffReason = document.createElement('select')
   staffReason.className = 'staff-select'
   staffReason.appendChild(new Option('Замена углей', 'COALS'))
   staffReason.appendChild(new Option('Счёт', 'BILL'))
-  staffReason.appendChild(new Option('Подойти к столу', 'COME'))
+  staffReason.appendChild(new Option('Консультация', 'COME'))
   staffReason.appendChild(new Option('Другое', 'OTHER'))
   const staffCommentLabel = el('p', { className: 'field-label', text: 'Комментарий (необязательно)' })
   const staffComment = document.createElement('textarea')
@@ -150,6 +166,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   append(
     staffCard,
     staffTitle,
+    staffCloseButton,
     staffReasonLabel,
     staffReason,
     staffCommentLabel,
@@ -163,7 +180,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
 
   const menuBody = el('div', { className: 'menu-body' })
 
-  append(wrapper, header, staffCard, status, message, retryButton, error, menuBody)
+  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody)
   root.replaceChildren(wrapper)
 
   return {
@@ -175,13 +192,17 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     errorDetails,
     venueTitle,
     venueLocation,
+    bookingButton,
     menuBody,
     message,
     retryButton,
+    staffSlot,
+    staffCard,
     staffReason,
     staffComment,
     staffCounter,
     staffButton,
+    staffCloseButton,
     staffMessage,
     staffError,
     staffErrorTitle,
@@ -238,6 +259,82 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
   return categorySection
 }
 
+function resolveInfoMediaUrl(backendUrl: string, mediaUrl: string) {
+  try {
+    return new URL(mediaUrl, backendUrl).toString()
+  } catch {
+    return mediaUrl
+  }
+}
+
+function renderInfoSection(section: VenueInfoSectionDto, backendUrl: string) {
+  const sectionCard = el('section', { className: 'card venue-info-section' })
+  const title = el('h4', { text: section.displayTitle || section.title })
+  sectionCard.appendChild(title)
+
+  const text = section.text?.trim()
+  if (text) {
+    sectionCard.appendChild(el('p', { text }))
+  }
+  if (section.media.length > 0) {
+    const mediaList = el('div', { className: 'venue-info-media-list' })
+    section.media.forEach((media) => {
+      const mediaUrl = resolveInfoMediaUrl(backendUrl, media.url)
+      const mediaType = media.mediaType.toLowerCase()
+      if (mediaType === 'image') {
+        const frame = el('div', { className: 'venue-info-media-image' })
+        const loading = el('p', { className: 'status', text: 'Загрузка изображения…' })
+        const image = el('img')
+        image.src = mediaUrl
+        image.alt = `${section.displayTitle || section.title} ${media.sortOrder + 1}`
+        image.loading = 'lazy'
+        let settled = false
+        const failImage = () => {
+          if (settled) return
+          settled = true
+          frame.replaceChildren(
+            el('p', {
+              className: 'status',
+              text: 'Не удалось загрузить изображение. Файл можно открыть в Telegram-боте.'
+            })
+          )
+        }
+        const timeoutId = window.setTimeout(failImage, 12000)
+        image.addEventListener('load', () => {
+          if (settled) return
+          settled = true
+          window.clearTimeout(timeoutId)
+          loading.remove()
+        })
+        image.addEventListener('error', () => {
+          window.clearTimeout(timeoutId)
+          failImage()
+        })
+        frame.appendChild(loading)
+        frame.appendChild(image)
+        mediaList.appendChild(frame)
+        return
+      }
+
+      if (mediaType === 'pdf') {
+        const link = el('a', { className: 'button-small button-secondary', text: 'Открыть PDF' })
+        link.href = mediaUrl
+        link.target = '_blank'
+        link.rel = 'noopener noreferrer'
+        mediaList.appendChild(link)
+        return
+      }
+
+      mediaList.appendChild(el('p', { className: 'status', text: 'Файл можно открыть в Telegram-боте.' }))
+    })
+    sectionCard.appendChild(mediaList)
+  } else if (section.mediaCount > 0) {
+    sectionCard.appendChild(el('p', { className: 'status', text: 'Файлы можно открыть в Telegram-боте.' }))
+  }
+
+  return sectionCard
+}
+
 function updateItemControls(refs: MenuItemRefs, qty: number, canOrder: boolean) {
   refs.qtyLabel.textContent = String(qty)
   if (!canOrder) {
@@ -256,19 +353,23 @@ function updateItemControls(refs: MenuItemRefs, qty: number, canOrder: boolean) 
 }
 
 export function renderGuestVenueScreen(options: VenueScreenOptions) {
-  const { root, backendUrl, isDebug, venueId } = options
+  const { root, backendUrl, isDebug, venueId, onBookVenue } = options
   if (!root) return () => undefined
 
   const refs = buildVenueDom(root)
+  refs.bookingButton.disabled = !venueId
   refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
   let disposed = false
   let menuAbort: AbortController | null = null
   let staffAbort: AbortController | null = null
   let isStaffCalling = false
+  let staffFormOpen = options.openStaffCall === true
   let messageTimer: number | null = null
   const itemRefs = new Map<number, MenuItemRefs>()
   let itemDisposables: Array<() => void> = []
   let tableSnapshot = getTableContext()
+  let renderedOrderMenuMode: boolean | null = null
+  let selectedCategoryId: number | null = null
   const disposables: Array<() => void> = []
 
   const setStatus = (text: string) => {
@@ -332,13 +433,42 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.error.hidden = false
   }
 
-  const canCallStaff = () => tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken)
+  const canCallStaff = () =>
+    tableSnapshot.status === 'resolved' &&
+    Boolean(tableSnapshot.tableToken) &&
+    tableSnapshot.venueId === venueId &&
+    tableSnapshot.tableSessionActive &&
+    tableSnapshot.available === true
   const canPlaceOrders = () =>
-    tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
+    tableSnapshot.status === 'resolved' &&
+    Boolean(tableSnapshot.tableToken) &&
+    tableSnapshot.venueId === venueId &&
+    tableSnapshot.orderAllowed
+  const shouldShowOrderMenu = () => canPlaceOrders()
+
+  const updateBookingButtonVisibility = () => {
+    const inTableContext = tableSnapshot.status === 'resolved' && tableSnapshot.venueId === venueId
+    refs.bookingButton.hidden = inTableContext || !onBookVenue
+    refs.bookingButton.disabled = !venueId || inTableContext
+  }
 
   const updateStaffState = () => {
+    updateBookingButtonVisibility()
     const canStaff = canCallStaff()
+    if (!canStaff) {
+      staffFormOpen = false
+    }
+    if (canStaff && staffFormOpen) {
+      if (!refs.staffCard.isConnected) {
+        refs.staffSlot.replaceChildren(refs.staffCard)
+      }
+    } else {
+      refs.staffCard.remove()
+    }
     const staffDisabledReason = canStaff ? null : resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR'
+    refs.staffButton.textContent = tableSnapshot.tableNumber
+      ? `Вызвать персонал к столу №${tableSnapshot.tableNumber}`
+      : 'Вызвать персонал'
     refs.staffDisabledReason.textContent = staffDisabledReason ?? ''
     refs.staffDisabledReason.hidden = !staffDisabledReason
     refs.staffButton.disabled = isStaffCalling || !canStaff
@@ -379,18 +509,91 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.venueLocation.textContent = locationParts.length ? locationParts.join(', ') : 'Адрес не указан'
   }
 
+  const renderPreQrInfo = (venue: VenueDto, sections: VenueInfoSectionDto[]) => {
+    refs.menuBody.replaceChildren()
+    itemRefs.clear()
+    itemDisposables.forEach((dispose) => dispose())
+    itemDisposables = []
+
+    const intro = el('section', { className: 'card venue-info-section' })
+    intro.appendChild(el('h4', { text: 'ℹ️ Информация' }))
+    const description = venue.cardDescription?.trim()
+    if (description) {
+      intro.appendChild(el('p', { text: description }))
+    }
+    const contact = venue.guestContact?.trim()
+    if (contact) {
+      intro.appendChild(el('p', { className: 'status', text: `Контакт: ${contact}` }))
+    }
+    intro.appendChild(
+      el('p', {
+        className: 'status',
+        text: 'Заказное меню и корзина доступны после сканирования QR-кода на столе.'
+      })
+    )
+    refs.menuBody.appendChild(intro)
+
+    if (!sections.length) {
+      refs.menuBody.appendChild(el('p', { text: 'Информация пока не заполнена.' }))
+      return
+    }
+
+    sections.forEach((section) => {
+      refs.menuBody.appendChild(renderInfoSection(section, backendUrl))
+    })
+  }
+
+  const renderMenuCategoryList = (categories: MenuCategoryDto[]) => {
+    const list = el('section', { className: 'card menu-category-list' })
+    list.appendChild(el('h4', { text: 'Выберите раздел меню' }))
+    categories.forEach((category) => {
+      const availableCount = category.items.filter((item) => item.isAvailable).length
+      const button = el('button', {
+        className: 'menu-category-button',
+        text: `${category.name} · ${category.items.length} позиций`
+      }) as HTMLButtonElement
+      if (availableCount === 0) {
+        button.appendChild(el('span', { className: 'menu-category-note', text: 'Нет доступных позиций' }))
+      }
+      const handler = () => {
+        selectedCategoryId = category.id
+        renderMenu(categories)
+        bindItemActions()
+      }
+      button.addEventListener('click', handler)
+      itemDisposables.push(() => button.removeEventListener('click', handler))
+      list.appendChild(button)
+    })
+    return list
+  }
+
   const renderMenu = (categories: MenuCategoryDto[]) => {
     refs.menuBody.replaceChildren()
     itemRefs.clear()
     itemDisposables.forEach((dispose) => dispose())
     itemDisposables = []
     if (!categories.length) {
-      refs.menuBody.appendChild(el('p', { text: 'Меню пока пустое.' }))
+      refs.menuBody.appendChild(el('p', { text: 'Меню заведения пока не загружено.' }))
       return
     }
-    categories.forEach((category) => {
-      refs.menuBody.appendChild(renderMenuCategory(category, itemRefs))
-    })
+    const selectedCategory = selectedCategoryId
+      ? categories.find((category) => category.id === selectedCategoryId) ?? null
+      : null
+    if (!selectedCategory) {
+      selectedCategoryId = null
+      refs.menuBody.appendChild(renderMenuCategoryList(categories))
+      return
+    }
+
+    const backButton = el('button', { className: 'button-small button-secondary', text: '← К разделам меню' }) as HTMLButtonElement
+    const backHandler = () => {
+      selectedCategoryId = null
+      renderMenu(categories)
+    }
+    backButton.addEventListener('click', backHandler)
+    itemDisposables.push(() => backButton.removeEventListener('click', backHandler))
+    refs.menuBody.appendChild(backButton)
+    refs.menuBody.appendChild(renderMenuCategory(selectedCategory, itemRefs))
 
     updateMenuOrderState(getCartSnapshot())
   }
@@ -445,6 +648,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       setStaffMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
       return
     }
+    const tableSessionId = tableSnapshot.tableSessionId
+    if (typeof tableSessionId !== 'number' || !Number.isFinite(tableSessionId)) {
+      setStaffMessage('Не удалось определить сессию стола. Обновите QR и попробуйте снова.')
+      return
+    }
     const commentValue = refs.staffComment.value.trim()
     if (commentValue.length > MAX_STAFF_COMMENT_LENGTH) {
       setStaffMessage('Комментарий должен быть не длиннее 500 символов.')
@@ -452,6 +660,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
     const payload = {
       tableToken,
+      tableSessionId,
       reason: refs.staffReason.value,
       comment: commentValue ? commentValue : null
     }
@@ -510,7 +719,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       return
     }
 
-    setStatus('Загрузка меню...')
+    const orderMenuMode = shouldShowOrderMenu()
+    updateBookingButtonVisibility()
+    setStatus(orderMenuMode ? 'Загрузка меню...' : 'Загрузка информации...')
     hideError()
     setMessage('')
     refs.menuBody.replaceChildren()
@@ -522,18 +733,37 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     menuAbort = controller
 
     const deps = buildApiDeps(isDebug)
-    const [venueResult, menuResult] = await Promise.all([
+    let didTimeout = false
+    const timeoutId = window.setTimeout(() => {
+      didTimeout = true
+      controller.abort()
+    }, 15000)
+    const [venueResult, detailsResult] = await Promise.all([
       guestGetVenue(backendUrl, venueId, deps, controller.signal),
-      guestGetVenueMenu(backendUrl, venueId, deps, controller.signal)
+      orderMenuMode
+        ? guestGetVenueMenu(backendUrl, venueId, deps, controller.signal)
+        : guestGetVenueInfoSections(backendUrl, venueId, deps, controller.signal)
     ])
+    window.clearTimeout(timeoutId)
 
     if (disposed || menuAbort !== controller) {
       return
     }
     if (
       (!venueResult.ok && venueResult.error.code === REQUEST_ABORTED_CODE) ||
-      (!menuResult.ok && menuResult.error.code === REQUEST_ABORTED_CODE)
+      (!detailsResult.ok && detailsResult.error.code === REQUEST_ABORTED_CODE)
     ) {
+      if (didTimeout && menuAbort === controller) {
+        setStatus('')
+        refs.menuBody.replaceChildren(
+          el('p', {
+            className: 'status',
+            text: orderMenuMode
+              ? 'Не удалось загрузить меню. Нажмите «Обновить».'
+              : 'Не удалось загрузить информацию. Нажмите «Обновить».'
+          })
+        )
+      }
       return
     }
     if (!venueResult.ok) {
@@ -541,25 +771,37 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       showError(venueResult.error)
       return
     }
-    if (!menuResult.ok) {
+    if (!detailsResult.ok) {
       setStatus('')
-      showError(menuResult.error)
+      showError(detailsResult.error)
       return
     }
 
     renderVenueInfo(venueResult.data.venue)
-    renderMenu(menuResult.data.categories ?? [])
-    bindItemActions()
+    updateBookingButtonVisibility()
+    renderedOrderMenuMode = orderMenuMode
+    if (orderMenuMode) {
+      const menuData = detailsResult.data as MenuResponse
+      const categories = menuData.categories ?? []
+      if (!categories.some((category) => category.id === selectedCategoryId)) {
+        selectedCategoryId = null
+      }
+      renderMenu(categories)
+      bindItemActions()
 
-    const itemsToCache: MenuItemDto[] = menuResult.data.categories.flatMap((category) => category.items)
-    updateItemCache(
-      itemsToCache.map((item) => ({
-        itemId: item.id,
-        name: item.name,
-        priceMinor: item.priceMinor,
-        currency: item.currency
-      }))
-    )
+      const itemsToCache: MenuItemDto[] = categories.flatMap((category) => category.items)
+      updateItemCache(
+        itemsToCache.map((item) => ({
+          itemId: item.id,
+          name: item.name,
+          priceMinor: item.priceMinor,
+          currency: item.currency
+        }))
+      )
+    } else {
+      const infoData = detailsResult.data as VenueInfoSectionsResponse
+      renderPreQrInfo(venueResult.data.venue, infoData.sections ?? [])
+    }
 
     setStatus('')
   }
@@ -572,11 +814,31 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     tableSnapshot = snapshot
     updateStaffState()
     updateMenuOrderState()
+    const nextOrderMenuMode = shouldShowOrderMenu()
+    if (renderedOrderMenuMode !== null && nextOrderMenuMode !== renderedOrderMenuMode) {
+      void loadVenue()
+    }
   })
 
   disposables.push(
+    on(refs.bookingButton, 'click', () => {
+      if (venueId) {
+        onBookVenue?.(venueId)
+      }
+    }),
     on(refs.retryButton, 'click', () => void loadVenue()),
     on(refs.staffButton, 'click', () => void handleStaffCall()),
+    on(refs.staffCloseButton, 'click', () => {
+      staffFormOpen = false
+      hideStaffError()
+      setStaffMessage('', 'default')
+      updateStaffState()
+      if (typeof window !== 'undefined' && venueId) {
+        const nextUrl = new URL(window.location.href)
+        nextUrl.hash = `#/venue/${venueId}`
+        window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+      }
+    }),
     on(refs.staffComment, 'input', () => {
       if (refs.staffComment.value.length > MAX_STAFF_COMMENT_LENGTH) {
         refs.staffComment.value = refs.staffComment.value.slice(0, MAX_STAFF_COMMENT_LENGTH)

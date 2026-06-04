@@ -9,6 +9,9 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
     data class VenueMembership(
         val venueId: Long,
         val role: String,
+        val venueName: String? = null,
+        val venueCity: String? = null,
+        val venueStatus: String? = null,
     )
 
     data class VenueMemberSummary(
@@ -23,7 +26,16 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
-                connection.prepareStatement("SELECT 1 FROM venue_members WHERE user_id = ? LIMIT 1").use { statement ->
+                connection.prepareStatement(
+                    """
+                    SELECT 1
+                    FROM venue_members vm
+                    JOIN venues v ON v.id = vm.venue_id
+                    WHERE vm.user_id = ?
+                      AND COALESCE(v.status, 'DRAFT') <> 'DELETED'
+                    LIMIT 1
+                    """.trimIndent(),
+                ).use { statement ->
                     statement.setLong(1, userId)
                     statement.executeQuery().use { rs -> rs.next() }
                 }
@@ -41,6 +53,37 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun hasVenueOwner(
+        userId: Long,
+        venueId: Long,
+    ): Boolean {
+        val ds = dataSource ?: return false
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection -> hasVenueOwner(connection, userId, venueId) }
+        }
+    }
+
+    fun hasVenueOwner(
+        connection: Connection,
+        userId: Long,
+        venueId: Long,
+    ): Boolean {
+        return connection.prepareStatement(
+            """
+            SELECT 1
+            FROM venue_members vm
+            JOIN venues v ON v.id = vm.venue_id
+            WHERE vm.user_id = ? AND vm.venue_id = ? AND vm.role = 'OWNER'
+              AND COALESCE(v.status, 'DRAFT') <> 'DELETED'
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
     fun hasVenueAdminOrOwner(
         connection: Connection,
         userId: Long,
@@ -48,8 +91,11 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
     ): Boolean {
         return connection.prepareStatement(
             """
-            SELECT 1 FROM venue_members
-            WHERE user_id = ? AND venue_id = ? AND role IN ('OWNER', 'ADMIN', 'MANAGER')
+            SELECT 1
+            FROM venue_members vm
+            JOIN venues v ON v.id = vm.venue_id
+            WHERE vm.user_id = ? AND vm.venue_id = ? AND vm.role IN ('OWNER', 'ADMIN', 'MANAGER')
+              AND COALESCE(v.status, 'DRAFT') <> 'DELETED'
             LIMIT 1
             """.trimIndent(),
         ).use { statement ->
@@ -65,10 +111,16 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    SELECT venue_id, role
-                    FROM venue_members
-                    WHERE user_id = ?
-                    ORDER BY venue_id
+                    SELECT vm.venue_id,
+                           vm.role,
+                           v.name AS venue_name,
+                           v.city AS venue_city,
+                           v.status AS venue_status
+                    FROM venue_members vm
+                    JOIN venues v ON v.id = vm.venue_id
+                    WHERE vm.user_id = ?
+                      AND COALESCE(v.status, 'DRAFT') <> 'DELETED'
+                    ORDER BY vm.venue_id
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, userId)
@@ -79,6 +131,9 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
                                 VenueMembership(
                                     venueId = rs.getLong("venue_id"),
                                     role = rs.getString("role"),
+                                    venueName = rs.getString("venue_name"),
+                                    venueCity = rs.getString("venue_city"),
+                                    venueStatus = rs.getString("venue_status"),
                                 ),
                             )
                         }
@@ -98,9 +153,15 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    SELECT venue_id, role
-                    FROM venue_members
-                    WHERE user_id = ? AND venue_id = ?
+                    SELECT vm.venue_id,
+                           vm.role,
+                           v.name AS venue_name,
+                           v.city AS venue_city,
+                           v.status AS venue_status
+                    FROM venue_members vm
+                    JOIN venues v ON v.id = vm.venue_id
+                    WHERE vm.user_id = ? AND vm.venue_id = ?
+                      AND COALESCE(v.status, 'DRAFT') <> 'DELETED'
                     LIMIT 1
                     """.trimIndent(),
                 ).use { statement ->
@@ -113,6 +174,9 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
                         VenueMembership(
                             venueId = rs.getLong("venue_id"),
                             role = rs.getString("role"),
+                            venueName = rs.getString("venue_name"),
+                            venueCity = rs.getString("venue_city"),
+                            venueStatus = rs.getString("venue_status"),
                         )
                     }
                 }

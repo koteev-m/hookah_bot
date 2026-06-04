@@ -1,16 +1,18 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestAddBatch, guestCreateSharedTab, guestCreateTabInvite, guestGetTabs, guestJoinTab } from '../shared/api/guestApi'
+import { guestAddBatch, guestCreateSharedTab, guestCreateTabInvite, guestGetTabs, guestJoinTab, guestPreviewCart } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { CreateTabInviteResponse, GuestTabDto } from '../shared/api/guestDtos'
+import type { CartPreviewDto, CreateTabInviteResponse, GuestTabDto } from '../shared/api/guestDtos'
 import {
   addToCart,
   clearCart,
   getCartSnapshot,
   removeFromCart,
+  setCartCommentDraft,
   setCartQty,
   subscribeCart
 } from '../shared/state/cartStore'
+import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { getItemMeta } from '../shared/state/itemCache'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { getTelegramContext } from '../shared/telegram'
@@ -36,6 +38,8 @@ type CartScreenOptions = {
 type CartRefs = {
   items: HTMLDivElement
   emptyState: HTMLParagraphElement
+  previewCard: HTMLDivElement
+  previewContent: HTMLDivElement
   commentInput: HTMLTextAreaElement
   commentCounter: HTMLParagraphElement
   sendButton: HTMLButtonElement
@@ -113,6 +117,11 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
 
   const items = el('div', { className: 'cart-items' })
   const emptyState = el('p', { className: 'cart-empty', text: 'Корзина пуста.' })
+  const previewCard = el('div', { className: 'card cart-preview-card' })
+  previewCard.hidden = true
+  const previewTitle = el('h3', { text: 'Итого' })
+  const previewContent = el('div', { className: 'cart-preview-content' })
+  append(previewCard, previewTitle, previewContent)
 
   const commentCard = el('div', { className: 'card' })
   const tabLabel = el('p', { className: 'field-label', text: 'Счёт для заказа' })
@@ -178,12 +187,14 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   chatMessage.hidden = true
   const chatButton = el('button', { className: 'button-secondary', text: 'Оформить в чате' }) as HTMLButtonElement
   append(actionCard, message, submitError, sendButton, disabledReason, chatMessage, chatButton)
-  append(wrapper, header, items, commentCard, actionCard)
+  append(wrapper, header, items, previewCard, commentCard, actionCard)
   root.replaceChildren(wrapper)
 
   return {
     items,
     emptyState,
+    previewCard,
+    previewContent,
     commentInput,
     commentCounter,
     sendButton,
@@ -238,11 +249,30 @@ function formatItemPrice(itemId: number): string | null {
   return formatPrice(meta.priceMinor, meta.currency)
 }
 
+function formatMoney(amountMinor: number, currency: string) {
+  return formatPrice(amountMinor, currency || 'RUB')
+}
+
+function formatDiscount(amountMinor: number, currency: string) {
+  return `−${formatMoney(amountMinor, currency)}`
+}
+
+function isLoyaltyDiscount(ruleType: string | null | undefined, label: string) {
+  return ruleType?.toUpperCase() === 'LOYALTY_NTH_HOOKAH' || label.toLowerCase().includes('лояльность')
+}
+
+function appendPreviewRow(container: HTMLElement, label: string, value: string, isTotal = false) {
+  const row = el('div', { className: isTotal ? 'order-bill-row order-bill-total' : 'order-bill-row' })
+  append(row, el('span', { text: label }), el('strong', { text: value }))
+  container.appendChild(row)
+}
+
 export function renderCartScreen(options: CartScreenOptions) {
   const { root, backendUrl, isDebug, onNavigateOrder } = options
   if (!root) return () => undefined
 
   const refs = buildCartDom(root)
+  refs.commentInput.value = getCartSnapshot().commentDraft
   refs.commentCounter.textContent = `${refs.commentInput.value.length}/${MAX_COMMENT_LENGTH}`
   let disposed = false
   let isSubmitting = false
@@ -267,6 +297,12 @@ export function renderCartScreen(options: CartScreenOptions) {
   let inviteRestoreAbort: AbortController | null = null
   let inviteRestoreTabId: number | null = null
   let tabsAbort: AbortController | null = null
+  let previewAbort: AbortController | null = null
+  let previewTimer: number | null = null
+  let previewFingerprint: string | null = null
+  let previewData: CartPreviewDto | null = null
+  let previewLoading = false
+  let previewMessage = ''
   let itemDisposables: Array<() => void> = []
   const disposables: Array<() => void> = []
 
@@ -366,6 +402,11 @@ export function renderCartScreen(options: CartScreenOptions) {
     tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
 
   const findPersonalTab = () => tabState.tabs.find((tab) => tab.type === 'PERSONAL' && tab.status === 'ACTIVE') ?? null
+
+  const setSelectedTabId = (tabId: number | null) => {
+    tabState.selectedTabId = tabId
+    setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
+  }
 
   const getSelectedTab = () =>
     tabState.tabs.find(
@@ -520,10 +561,19 @@ export function renderCartScreen(options: CartScreenOptions) {
   const syncDefaultTabSelection = () => {
     const selectedTab = getSelectedTab()
     if (selectedTab) {
+      setSelectedGuestTabId(tableSnapshot.tableSessionId, selectedTab.id)
       return
     }
+    const storedTabId = getSelectedGuestTabId(tableSnapshot.tableSessionId)
+    const storedTab =
+      storedTabId != null
+        ? tabState.tabs.find(
+            (tab) =>
+              tab.id === storedTabId && tab.status === 'ACTIVE' && tab.tableSessionId === tableSnapshot.tableSessionId
+          ) ?? null
+        : null
     const personal = findPersonalTab()
-    tabState.selectedTabId = personal?.id ?? tabState.tabs[0]?.id ?? null
+    setSelectedTabId(storedTab?.id ?? personal?.id ?? tabState.tabs[0]?.id ?? null)
   }
 
   const reloadTabs = async () => {
@@ -576,6 +626,154 @@ export function renderCartScreen(options: CartScreenOptions) {
     initialTabsLoadedForSession.add(tableSessionId)
   }
 
+  const buildPreviewItems = () =>
+    Array.from(cartSnapshot.items.entries())
+      .map(([itemId, qty]) => ({ itemId, qty }))
+      .sort((left, right) => left.itemId - right.itemId)
+
+  const buildPreviewFingerprint = (tableToken: string, tableSessionId: number, tabId: number) =>
+    JSON.stringify({
+      tableToken,
+      tableSessionId,
+      tabId,
+      items: buildPreviewItems().map((item) => [item.itemId, item.qty])
+    })
+
+  const resetCartPreview = (message = '') => {
+    previewAbort?.abort()
+    previewAbort = null
+    if (previewTimer !== null) {
+      window.clearTimeout(previewTimer)
+      previewTimer = null
+    }
+    previewFingerprint = null
+    previewData = null
+    previewLoading = false
+    previewMessage = message
+    renderCartPreview()
+  }
+
+  const renderCartPreview = () => {
+    const hasItems = cartSnapshot.items.size > 0
+    refs.previewCard.hidden = !hasItems
+    refs.previewContent.replaceChildren()
+    if (!hasItems) {
+      return
+    }
+    if (previewLoading) {
+      refs.previewContent.appendChild(el('p', { className: 'cart-summary', text: 'Считаем итог…' }))
+      return
+    }
+    if (previewData) {
+      const promoDiscounts = previewData.discounts.filter((discount) => !isLoyaltyDiscount(discount.ruleType, discount.label))
+      const loyaltyDiscounts = previewData.discounts.filter((discount) => isLoyaltyDiscount(discount.ruleType, discount.label))
+      if (promoDiscounts.length || loyaltyDiscounts.length) {
+        appendPreviewRow(refs.previewContent, 'Сумма до скидок', formatMoney(previewData.grossTotalMinor, previewData.currency))
+        promoDiscounts.forEach((discount) => {
+          appendPreviewRow(
+            refs.previewContent,
+            discount.label || 'Акция',
+            formatDiscount(discount.discountMinor, discount.currency)
+          )
+        })
+        loyaltyDiscounts.forEach((discount) => {
+          appendPreviewRow(
+            refs.previewContent,
+            discount.label || 'Лояльность',
+            formatDiscount(discount.discountMinor, discount.currency)
+          )
+        })
+      }
+      appendPreviewRow(
+        refs.previewContent,
+        'К оплате',
+        formatMoney(previewData.finalPayableTotalMinor, previewData.currency),
+        true
+      )
+      return
+    }
+    refs.previewContent.appendChild(
+      el('p', {
+        className: 'cart-summary',
+        text: previewMessage || 'Итог будет рассчитан при отправке заказа.'
+      })
+    )
+  }
+
+  const loadCartPreview = async (fingerprint: string, tableToken: string, tableSessionId: number, tabId: number) => {
+    previewAbort?.abort()
+    const controller = new AbortController()
+    previewAbort = controller
+    previewLoading = true
+    previewMessage = ''
+    renderCartPreview()
+    const deps = buildApiDeps(isDebug)
+    const result = await guestPreviewCart(
+      backendUrl,
+      {
+        tableToken,
+        tableSessionId,
+        tabId,
+        items: buildPreviewItems()
+      },
+      deps,
+      controller.signal
+    )
+    if (disposed || controller.signal.aborted || previewAbort !== controller || previewFingerprint !== fingerprint) {
+      return
+    }
+    previewAbort = null
+    previewLoading = false
+    if (!result.ok) {
+      const code = normalizeErrorCode(result.error)
+      if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
+        clearSession()
+      }
+      if (code === ApiErrorCodes.REQUEST_ABORTED) {
+        renderCartPreview()
+        return
+      }
+      previewData = null
+      previewMessage = 'Итог будет рассчитан при отправке заказа.'
+      renderCartPreview()
+      return
+    }
+    previewData = result.data.preview
+    previewMessage = ''
+    renderCartPreview()
+  }
+
+  const scheduleCartPreview = () => {
+    if (disposed) return
+    if (!cartSnapshot.items.size) {
+      resetCartPreview()
+      return
+    }
+    const selectedTab = getSelectedTab()
+    const tableToken = tableSnapshot.tableToken
+    const tableSessionId = tableSnapshot.tableSessionId
+    if (!isTableReady() || !tableToken || !tableSessionId || !selectedTab) {
+      resetCartPreview('Итог будет рассчитан при отправке заказа.')
+      return
+    }
+    const fingerprint = buildPreviewFingerprint(tableToken, tableSessionId, selectedTab.id)
+    if (fingerprint === previewFingerprint && (previewLoading || previewData)) {
+      renderCartPreview()
+      return
+    }
+    previewFingerprint = fingerprint
+    previewData = null
+    previewMessage = ''
+    if (previewTimer !== null) {
+      window.clearTimeout(previewTimer)
+    }
+    previewTimer = window.setTimeout(() => {
+      previewTimer = null
+      void loadCartPreview(fingerprint, tableToken, tableSessionId, selectedTab.id)
+    }, 250)
+    renderCartPreview()
+  }
+
   const updateSubmitState = () => {
     const hasItems = cartSnapshot.items.size > 0
     const tableReady = isTableReady()
@@ -591,6 +789,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.sendButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady || !selectedTab
     refs.chatButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady
     updateTabsUi()
+    scheduleCartPreview()
   }
 
   const renderItems = () => {
@@ -828,13 +1027,8 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const payload = {
-      type: 'CHAT_ORDER',
-      tableToken,
-      items: Array.from(cartSnapshot.items.entries()).map(([itemId, qty]) => ({
-        itemId,
-        qty
-      })),
-      comment: validation.comment
+      cmd: 'start_quick_order',
+      table_token: tableToken
     }
     isChatSending = true
     updateSubmitState()
@@ -906,7 +1100,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       updateSubmitState()
       return
     }
-    tabState.selectedTabId = result.data.tab.id
+    setSelectedTabId(result.data.tab.id)
     hasSharedAccess = true
     const inviteResult = await guestCreateTabInvite(
       backendUrl,
@@ -1010,7 +1204,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       updateSubmitState()
       return
     }
-    tabState.selectedTabId = result.data.tab.id
+    setSelectedTabId(result.data.tab.id)
     hasSharedAccess = true
     isJoinMode = false
     refs.joinTokenInput.value = ''
@@ -1034,7 +1228,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     }),
     on(refs.tabSelector, 'change', () => {
       const parsed = Number(refs.tabSelector.value)
-      tabState.selectedTabId = Number.isFinite(parsed) && parsed > 0 ? parsed : null
+      setSelectedTabId(Number.isFinite(parsed) && parsed > 0 ? parsed : null)
       setTabMessage('')
       updateSubmitState()
     }),
@@ -1047,7 +1241,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       if (!selectedTab || !toggleTabs) {
         return
       }
-      tabState.selectedTabId = selectedTab.type === 'PERSONAL' ? toggleTabs.sharedTab.id : toggleTabs.personalTab.id
+      setSelectedTabId(selectedTab.type === 'PERSONAL' ? toggleTabs.sharedTab.id : toggleTabs.personalTab.id)
       setTabMessage('')
       updateSubmitState()
     }),
@@ -1072,11 +1266,16 @@ export function renderCartScreen(options: CartScreenOptions) {
         refs.commentInput.value = refs.commentInput.value.slice(0, MAX_COMMENT_LENGTH)
       }
       refs.commentCounter.textContent = `${refs.commentInput.value.length}/${MAX_COMMENT_LENGTH}`
+      setCartCommentDraft(refs.commentInput.value)
     })
   )
 
   const cartSubscription = subscribeCart((snapshot) => {
     cartSnapshot = snapshot
+    if (refs.commentInput.value !== snapshot.commentDraft) {
+      refs.commentInput.value = snapshot.commentDraft
+      refs.commentCounter.textContent = `${refs.commentInput.value.length}/${MAX_COMMENT_LENGTH}`
+    }
     renderItems()
     updateSubmitState()
   })
@@ -1128,6 +1327,11 @@ export function renderCartScreen(options: CartScreenOptions) {
     tabsAbort?.abort()
     tabActionAbort?.abort()
     inviteRestoreAbort?.abort()
+    previewAbort?.abort()
+    if (previewTimer !== null) {
+      window.clearTimeout(previewTimer)
+      previewTimer = null
+    }
     tabActionAbort = null
     cartSubscription()
     tableSubscription()

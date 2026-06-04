@@ -1,6 +1,10 @@
 import { requestApi, requestBinary, type RequestDependencies } from './request'
 import type {
   VenueAvailabilityRequest,
+  VenueBookingChangeRequest,
+  VenueBookingCancelRequest,
+  VenueBookingListResponse,
+  VenueBookingStatusResponse,
   VenueCreateCategoryRequest,
   VenueCreateItemRequest,
   VenueCreateOptionRequest,
@@ -20,12 +24,17 @@ import type {
   VenueUpdateItemRequest,
   VenueUpdateOptionRequest,
   OrderAuditResponse,
+  OrderBillItemAdjustmentResponse,
+  OrderBillItemDiscountRequest,
+  OrderBillItemExcludeRequest,
   OrderDetailResponse,
   OrdersQueueResponse,
   OrderRejectRequest,
   OrderStatusRequest,
   OrderStatusResponse,
   StaffChatLinkCodeResponse,
+  VenueStaffCallActionResponse,
+  VenueStaffCallsResponse,
   VenueMeResponse,
   VenueStaffChatStatusResponse,
   VenueStaffInviteAcceptRequest,
@@ -55,6 +64,106 @@ export async function venueGetMenu(
     backendUrl,
     `/api/venue/menu?${search.toString()}`,
     { signal },
+    deps
+  )
+}
+
+export async function venueGetBookings(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueBookingListResponse>(
+    backendUrl,
+    `/api/venue/bookings?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueConfirmBooking(
+  backendUrl: string,
+  params: { venueId: number; bookingId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueBookingStatusResponse>(
+    backendUrl,
+    `/api/venue/bookings/${params.bookingId}/confirm?${search.toString()}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueCancelBooking(
+  backendUrl: string,
+  params: { venueId: number; bookingId: number; body?: VenueBookingCancelRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueBookingStatusResponse>(
+    backendUrl,
+    `/api/venue/bookings/${params.bookingId}/cancel?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: params.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: params.body ? JSON.stringify(params.body) : undefined,
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueSeatBooking(
+  backendUrl: string,
+  params: { venueId: number; bookingId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueBookingStatusResponse>(
+    backendUrl,
+    `/api/venue/bookings/${params.bookingId}/seat?${search.toString()}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueNoShowBooking(
+  backendUrl: string,
+  params: { venueId: number; bookingId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueBookingStatusResponse>(
+    backendUrl,
+    `/api/venue/bookings/${params.bookingId}/no-show?${search.toString()}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueChangeBooking(
+  backendUrl: string,
+  params: { venueId: number; bookingId: number; body: VenueBookingChangeRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueBookingStatusResponse>(
+    backendUrl,
+    `/api/venue/bookings/${params.bookingId}/change?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
     deps
   )
 }
@@ -337,6 +446,53 @@ export async function venueGetStaffChatStatus(
     backendUrl,
     `/api/venue/${venueId}/staff-chat`,
     { signal },
+    deps
+  )
+}
+
+export async function venueGetStaffCalls(
+  backendUrl: string,
+  params: { venueId: number; limit?: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams()
+  if (params.limit) {
+    search.set('limit', String(params.limit))
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return requestApi<VenueStaffCallsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff-calls${suffix}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueAckStaffCall(
+  backendUrl: string,
+  params: { venueId: number; staffCallId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffCallActionResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff-calls/${params.staffCallId}/ack`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueDoneStaffCall(
+  backendUrl: string,
+  params: { venueId: number; staffCallId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffCallActionResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff-calls/${params.staffCallId}/done`,
+    { method: 'POST', signal },
     deps
   )
 }
@@ -630,6 +786,76 @@ export async function venueRejectOrder(
   return requestApi<OrderStatusResponse>(
     backendUrl,
     `/api/venue/orders/${params.orderId}/reject?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueCloseOrder(
+  backendUrl: string,
+  params: { venueId: number; orderId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<OrderStatusResponse>(
+    backendUrl,
+    `/api/venue/orders/${params.orderId}/close?${search.toString()}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueExcludeOrderItem(
+  backendUrl: string,
+  params: { venueId: number; orderId: number; batchItemId: number; body: OrderBillItemExcludeRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<OrderBillItemAdjustmentResponse>(
+    backendUrl,
+    `/api/venue/orders/${params.orderId}/items/${params.batchItemId}/exclude?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueRestoreOrderItem(
+  backendUrl: string,
+  params: { venueId: number; orderId: number; batchItemId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<OrderBillItemAdjustmentResponse>(
+    backendUrl,
+    `/api/venue/orders/${params.orderId}/items/${params.batchItemId}/restore?${search.toString()}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueSetOrderItemDiscount(
+  backendUrl: string,
+  params: { venueId: number; orderId: number; batchItemId: number; body: OrderBillItemDiscountRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<OrderBillItemAdjustmentResponse>(
+    backendUrl,
+    `/api/venue/orders/${params.orderId}/items/${params.batchItemId}/discount?${search.toString()}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

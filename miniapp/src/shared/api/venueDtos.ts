@@ -1,5 +1,8 @@
 export type VenueAccessDto = {
   venueId: number
+  venueName?: string | null
+  venueCity?: string | null
+  venueStatus?: string | null
   role: 'OWNER' | 'MANAGER' | 'STAFF'
   permissions: string[]
 }
@@ -60,6 +63,57 @@ export type VenueStaffChatStatusResponse = {
   linkedByUserId?: number | null
   activeCodeHint?: string | null
   activeCodeExpiresAt?: string | null
+}
+
+export type VenueStaffCallDto = {
+  id: number
+  tableId?: number | null
+  tableNumber: number
+  reason: string
+  reasonLabel: string
+  comment?: string | null
+  status: 'NEW' | 'ACK' | 'DONE' | 'CANCELLED' | string
+  statusLabel: string
+  createdAt?: string | null
+  guestDisplayName?: string | null
+}
+
+export type VenueStaffCallsResponse = {
+  items: VenueStaffCallDto[]
+}
+
+export type VenueStaffCallActionResponse = {
+  call: VenueStaffCallDto
+  applied: boolean
+}
+
+export type VenueBookingDto = {
+  bookingId: number
+  displayNumber?: number | null
+  status: 'pending' | 'confirmed' | 'changed' | 'canceled' | 'expired' | 'no_show' | 'seated' | string
+  scheduledAt: string
+  partySize?: number | null
+  comment?: string | null
+  guestDisplayName?: string | null
+  lastGuestConfirmationAt?: string | null
+}
+
+export type VenueBookingListResponse = {
+  items: VenueBookingDto[]
+}
+
+export type VenueBookingChangeRequest = {
+  scheduledAt: string
+}
+
+export type VenueBookingCancelRequest = {
+  reasonText?: string | null
+}
+
+export type VenueBookingStatusResponse = {
+  bookingId: number
+  status: string
+  scheduledAt?: string | null
 }
 
 export type VenueTableDto = {
@@ -193,6 +247,8 @@ export type VenueUpdateOptionRequest = {
 export type OrderQueueItemDto = {
   orderId: number
   batchId: number
+  displayNumber?: number | null
+  activeBatchesCount?: number | null
   tableNumber: string
   tableLabel: string
   createdAt: string
@@ -207,9 +263,59 @@ export type OrdersQueueResponse = {
 }
 
 export type OrderBatchItemDto = {
+  batchItemId: number
   itemId: number
   name: string
   qty: number
+  priceMinor?: number | null
+  currency?: string | null
+  lineGrossMinor: number
+  manualDiscountMinor: number
+  promoDiscountMinor: number
+  linePayableMinor: number
+  isExcluded: boolean
+  excludedReasonText?: string | null
+  discountPercent?: number | null
+  itemStatus: 'active' | 'canceled'
+  canceledReasonCode?: string | null
+  canceledReasonText?: string | null
+  canceledAt?: string | null
+  canceledByUserId?: number | null
+}
+
+export type OrderBillDiscountDto = {
+  label: string
+  discountMinor: number
+  currency: string
+  ruleType?: string | null
+}
+
+export type OrderBillExcludedItemDto = {
+  batchId: number
+  batchLabel: string
+  batchItemId: number
+  itemId: number
+  name: string
+  qty: number
+  lineGrossMinor: number
+  currency: string
+  status: 'excluded' | 'canceled' | 'rejected_batch'
+  reason?: string | null
+}
+
+export type OrderBillDto = {
+  grossTotalMinor: number
+  manualDiscountTotalMinor: number
+  promoDiscountTotalMinor: number
+  loyaltyDiscountTotalMinor: number
+  excludedTotalMinor: number
+  canceledTotalMinor: number
+  rejectedTotalMinor: number
+  finalPayableTotalMinor: number
+  currency: string
+  promoDiscounts: OrderBillDiscountDto[]
+  loyaltyDiscounts: OrderBillDiscountDto[]
+  excludedItems: OrderBillExcludedItemDto[]
 }
 
 export type OrderBatchDto = {
@@ -221,11 +327,14 @@ export type OrderBatchDto = {
   updatedAt: string
   rejectedReasonCode?: string | null
   rejectedReasonText?: string | null
+  promotionDiscounts: OrderBillDiscountDto[]
   items: OrderBatchItemDto[]
 }
 
 export type OrderDetailDto = {
   orderId: number
+  displayNumber?: number | null
+  displayDate?: string | null
   venueId: number
   tableId: number
   tableNumber: string
@@ -233,6 +342,7 @@ export type OrderDetailDto = {
   status: 'new' | 'accepted' | 'cooking' | 'delivering' | 'delivered' | 'closed'
   createdAt: string
   updatedAt: string
+  bill: OrderBillDto
   batches: OrderBatchDto[]
 }
 
@@ -253,6 +363,18 @@ export type OrderStatusResponse = {
 export type OrderRejectRequest = {
   reasonCode: string
   reasonText?: string
+}
+
+export type OrderBillItemExcludeRequest = {
+  reasonText: string
+}
+
+export type OrderBillItemDiscountRequest = {
+  discountPercent: number
+}
+
+export type OrderBillItemAdjustmentResponse = {
+  order: OrderDetailDto
 }
 
 export type OrderAuditEntryDto = {

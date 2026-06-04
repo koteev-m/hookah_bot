@@ -7,17 +7,21 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { isDebugEnabled } from '../shared/debug'
 import { parsePositiveInt } from '../shared/parse'
 import { getTelegramContext } from '../shared/telegram'
+import { openBotChat } from '../shared/telegramActions'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { renderVenueChatLinkScreen } from './venueChatLink'
+import { renderVenueCallsScreen } from './venueCalls'
+import { renderVenueBookingsScreen } from './venueBookings'
 import { renderVenueDashboardScreen } from './venueDashboard'
 import { renderVenueMenuScreen } from './venueMenu'
 import { renderVenueOrderDetailScreen } from './venueOrderDetail'
 import { renderVenueOrdersScreen } from './venueOrders'
 import { renderVenueSettingsScreen } from './venueSettings'
 import { renderVenueStaffScreen } from './venueStaff'
+import { renderVenueSupportScreen } from './supportScreens'
 import { renderVenueTablesScreen } from './venueTables'
 
 export type VenueAppOptions = {
@@ -29,11 +33,14 @@ type RouteName =
   | 'dashboard'
   | 'orders'
   | 'order'
+  | 'calls'
   | 'menu'
   | 'tables'
   | 'staff'
   | 'settings'
+  | 'bookings'
   | 'chat'
+  | 'support'
 
 type Route = {
   name: RouteName
@@ -77,7 +84,9 @@ function resolveRoute(): Route {
   const route = segments[0] as RouteName | undefined
   if (
     !route ||
-    !['dashboard', 'orders', 'order', 'menu', 'tables', 'staff', 'settings', 'chat'].includes(route)
+    !['dashboard', 'orders', 'order', 'calls', 'menu', 'tables', 'staff', 'settings', 'bookings', 'chat', 'support'].includes(
+      route
+    )
   ) {
     return { name: 'dashboard', orderId: null }
   }
@@ -105,8 +114,8 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
   const app = el('div', { className: 'venue-shell' })
   const header = el('header', { className: 'venue-header' })
   const brand = el('div', { className: 'app-brand' })
-  const title = el('h1', { text: 'Hookah Mini App' })
-  const subtitle = el('p', { className: 'app-subtitle', text: 'Режим заведения' })
+  const title = el('h1', { text: 'Панель заведения' })
+  const subtitle = el('p', { className: 'app-subtitle', text: 'Операционный режим' })
   append(brand, title, subtitle)
 
   const controls = el('div', { className: 'venue-controls' })
@@ -118,23 +127,30 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
 
   const nav = el('nav', { className: 'venue-nav' })
   const navButtons = {
-    dashboard: el('button', { className: 'nav-button', text: 'Dashboard' }) as HTMLButtonElement,
-    orders: el('button', { className: 'nav-button', text: 'Очередь' }) as HTMLButtonElement,
+    dashboard: el('button', { className: 'nav-button', text: 'Обзор' }) as HTMLButtonElement,
+    orders: el('button', { className: 'nav-button', text: 'Заказы' }) as HTMLButtonElement,
+    bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
+    calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Меню' }) as HTMLButtonElement,
-    tables: el('button', { className: 'nav-button', text: 'Столы & QR' }) as HTMLButtonElement,
+    tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
     settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
-    chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement
+    chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement,
+    support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
   }
+  navButtons.settings.hidden = true
   append(
     nav,
     navButtons.dashboard,
     navButtons.orders,
+    navButtons.bookings,
+    navButtons.calls,
     navButtons.menu,
     navButtons.tables,
     navButtons.staff,
     navButtons.settings,
-    navButtons.chat
+    navButtons.chat,
+    navButtons.support
   )
 
   const errorCard = el('div', { className: 'error-card venue-error' }) as HTMLDivElement
@@ -182,6 +198,25 @@ function maskErrorActions(presentation: ReturnType<typeof presentApiError>, retr
   return [{ label: 'Повторить', kind: 'primary' as const, onClick: retry }]
 }
 
+function venueRoleLabel(role: VenueAccessDto['role']) {
+  switch (role) {
+    case 'OWNER':
+      return 'владелец'
+    case 'MANAGER':
+      return 'менеджер'
+    case 'STAFF':
+      return 'персонал'
+    default:
+      return role
+  }
+}
+
+function venueSelectorLabel(venue: VenueAccessDto): string {
+  const base = venue.venueName?.trim() || `Заведение #${venue.venueId}`
+  const meta = [venue.venueCity?.trim(), venue.venueStatus?.trim()].filter(Boolean)
+  return meta.length ? `${base} · ${meta.join(' · ')}` : base
+}
+
 export function mountVenueApp(options: VenueAppOptions) {
   const { root, backendUrl } = options
   if (!root) return () => undefined
@@ -200,7 +235,7 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   const updateAccessState = () => {
     if (selectedVenueId && currentRole) {
-      refs.accessState.textContent = `Роль: ${currentRole} · Venue #${selectedVenueId}`
+      refs.accessState.textContent = `Роль: ${venueRoleLabel(currentRole)}`
     } else {
       refs.accessState.textContent = 'Выберите заведение'
     }
@@ -249,10 +284,11 @@ export function mountVenueApp(options: VenueAppOptions) {
     accessList = result.data.venues
     currentUserId = result.data.userId
     const telegramContext = getTelegramContext()
-    const startParamId = parsePositiveInt(telegramContext.startParam)
+    const params = new URLSearchParams(window.location.search)
+    const requestedVenueId = parsePositiveInt(params.get('venueId')) ?? parsePositiveInt(telegramContext.startParam)
     selectedVenueId = null
-    if (startParamId && accessList.some((venue) => venue.venueId === startParamId)) {
-      selectedVenueId = startParamId
+    if (requestedVenueId && accessList.some((venue) => venue.venueId === requestedVenueId)) {
+      selectedVenueId = requestedVenueId
     } else if (accessList.length === 1) {
       selectedVenueId = accessList[0].venueId
     } else if (accessList.length > 0) {
@@ -260,13 +296,14 @@ export function mountVenueApp(options: VenueAppOptions) {
     }
     refs.venueSelect.replaceChildren()
     accessList.forEach((venue) => {
-      const option = new Option(`Venue #${venue.venueId}`, String(venue.venueId))
+      const option = new Option(venueSelectorLabel(venue), String(venue.venueId))
       refs.venueSelect.appendChild(option)
     })
     if (selectedVenueId) {
       refs.venueSelect.value = String(selectedVenueId)
     }
-    refs.venueSelect.disabled = accessList.length === 0
+    refs.venueSelect.hidden = accessList.length <= 1
+    refs.venueSelect.disabled = accessList.length <= 1
     updateAccessFromSelection()
     render()
   }
@@ -278,21 +315,40 @@ export function mountVenueApp(options: VenueAppOptions) {
     currentRole = access?.role ?? null
     currentPermissions = access?.permissions ?? []
     updateAccessState()
+    updateNavVisibility()
   }
 
   const hasPermission = (permission: string) => currentPermissions.includes(permission)
+
+  const updateNavVisibility = () => {
+    refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
+    refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
+    refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
+    refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
+    refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
+    refs.navButtons.staff.hidden = currentRole === 'STAFF'
+    refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
+    refs.navButtons.settings.hidden = true
+  }
 
   const canAccessRoute = (route: RouteName) => {
     switch (route) {
       case 'orders':
       case 'order':
+      case 'calls':
         return hasPermission('ORDER_QUEUE_VIEW')
+      case 'bookings':
+        return hasPermission('BOOKING_VIEW')
       case 'menu':
         return hasPermission('MENU_VIEW')
       case 'tables':
         return hasPermission('TABLE_VIEW')
       case 'settings':
         return hasPermission('VENUE_SETTINGS')
+      case 'staff':
+        return currentRole !== 'STAFF'
+      case 'chat':
+        return hasPermission('STAFF_CHAT_LINK')
       default:
         return true
     }
@@ -341,6 +397,10 @@ export function mountVenueApp(options: VenueAppOptions) {
           access,
           onBack: () => navigate('#/orders')
         })
+      case 'calls':
+        return renderVenueCallsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+      case 'bookings':
+        return renderVenueBookingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'menu':
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'tables':
@@ -358,6 +418,24 @@ export function mountVenueApp(options: VenueAppOptions) {
         return renderVenueSettingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'chat':
         return renderVenueChatLinkScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+      case 'support':
+        return renderVenueSupportScreen({
+          root: screenRoot,
+          onBack: () => navigate('#/dashboard'),
+          onOpenBot: () => {
+            const telegramContext = getTelegramContext()
+            const result = openBotChat(telegramContext)
+            if (result.ok) {
+              return { ok: true }
+            }
+            return {
+              ok: false,
+              message: telegramContext.botUsername
+                ? `Не удалось открыть чат автоматически. Откройте @${telegramContext.botUsername} вручную.`
+                : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
+            }
+          }
+        })
       default:
         return () => undefined
     }
@@ -372,11 +450,14 @@ export function mountVenueApp(options: VenueAppOptions) {
   const disposables: Array<() => void> = []
   disposables.push(on(refs.navButtons.dashboard, 'click', () => navigate('#/dashboard')))
   disposables.push(on(refs.navButtons.orders, 'click', () => navigate('#/orders')))
+  disposables.push(on(refs.navButtons.bookings, 'click', () => navigate('#/bookings')))
+  disposables.push(on(refs.navButtons.calls, 'click', () => navigate('#/calls')))
   disposables.push(on(refs.navButtons.menu, 'click', () => navigate('#/menu')))
   disposables.push(on(refs.navButtons.tables, 'click', () => navigate('#/tables')))
   disposables.push(on(refs.navButtons.staff, 'click', () => navigate('#/staff')))
   disposables.push(on(refs.navButtons.settings, 'click', () => navigate('#/settings')))
   disposables.push(on(refs.navButtons.chat, 'click', () => navigate('#/chat')))
+  disposables.push(on(refs.navButtons.support, 'click', () => navigate('#/support')))
   disposables.push(
     on(refs.venueSelect, 'change', () => {
       updateAccessFromSelection()
