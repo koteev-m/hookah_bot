@@ -116,7 +116,7 @@ class TableSessionsMigrationV28PostgresTest {
     ) {
         Flyway.configure()
             .dataSource(jdbcUrl, user, password)
-            .locations("classpath:db/migration")
+            .locations("classpath:db/migration/postgresql")
             .target("27")
             .load()
             .migrate()
@@ -129,7 +129,7 @@ class TableSessionsMigrationV28PostgresTest {
     ) {
         Flyway.configure()
             .dataSource(jdbcUrl, user, password)
-            .locations("classpath:db/migration")
+            .locations("classpath:db/migration/postgresql")
             .load()
             .migrate()
     }

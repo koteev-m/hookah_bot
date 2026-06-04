@@ -283,19 +283,30 @@ class VenueBookingRoutesTest {
 
     private fun seedVenue(jdbcUrl: String): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val venueId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venues (name, city, address, status)
+                    VALUES ('Booking Venue', 'City', 'Address', 'PUBLISHED')
+                    """.trimIndent(),
+                    java.sql.Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
             connection.prepareStatement(
                 """
-                INSERT INTO venues (name, city, address, status)
-                VALUES ('Booking Venue', 'City', 'Address', 'PUBLISHED')
+                INSERT INTO venue_settings (venue_id, timezone)
+                VALUES (?, 'Europe/Moscow')
                 """.trimIndent(),
-                java.sql.Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
+                statement.setLong(1, venueId)
                 statement.executeUpdate()
-                statement.generatedKeys.use { keys ->
-                    keys.next()
-                    keys.getLong(1)
-                }
             }
+            venueId
         }
 
     private fun seedSubscription(
