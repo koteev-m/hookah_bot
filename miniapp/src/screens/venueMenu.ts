@@ -10,10 +10,11 @@ import {
   venueReorderCategories,
   venueReorderItems,
   venueSetItemAvailability,
+  venueSetOptionAvailability,
   venueUpdateCategory,
   venueUpdateItem
 } from '../shared/api/venueApi'
-import type { VenueAccessDto, VenueMenuCategoryDto, VenueMenuItemDto } from '../shared/api/venueDtos'
+import type { VenueAccessDto, VenueMenuCategoryDto, VenueMenuItemDto, VenueMenuOptionDto } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -110,13 +111,54 @@ function parsePriceMinor(raw: string): number | null {
   return Math.round(value * 100)
 }
 
+function formatOptionPrice(option: VenueMenuOptionDto, currency: string) {
+  if (option.priceDeltaMinor <= 0) {
+    return ''
+  }
+  return `+${formatPrice(option.priceDeltaMinor, currency)}`
+}
+
+function renderOptionRow(
+  option: VenueMenuOptionDto,
+  currency: string,
+  canManageAvailability: boolean,
+  onToggle: (option: VenueMenuOptionDto) => void
+) {
+  const row = el('div', { className: 'venue-menu-option' })
+  const info = el('div', { className: 'venue-menu-option-info' })
+  const name = el('span', { text: option.name })
+  append(info, name)
+  const price = formatOptionPrice(option, currency)
+  if (price) {
+    info.appendChild(el('span', { className: 'venue-menu-item-price', text: price }))
+  }
+  if (!option.isAvailable) {
+    info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
+  }
+
+  const toggleButton = el('button', {
+    className: 'button-small button-secondary',
+    text: option.isAvailable ? 'В стоп-лист' : 'Включить'
+  }) as HTMLButtonElement
+  toggleButton.addEventListener('click', () => onToggle(option))
+
+  if (canManageAvailability) {
+    append(row, info, toggleButton)
+  } else {
+    append(row, info)
+  }
+  return row
+}
+
 function renderItemRow(
   item: VenueMenuItemDto,
   canManage: boolean,
+  canManageAvailability: boolean,
   onEdit: (item: VenueMenuItemDto) => void,
   onDelete: (item: VenueMenuItemDto) => void,
   onToggle: (item: VenueMenuItemDto) => void,
-  onMove: (item: VenueMenuItemDto, direction: 'up' | 'down') => void
+  onMove: (item: VenueMenuItemDto, direction: 'up' | 'down') => void,
+  onToggleOption: (option: VenueMenuOptionDto) => void
 ) {
   const row = el('div', { className: 'venue-menu-item' })
   const info = el('div', { className: 'venue-menu-item-info' })
@@ -126,6 +168,14 @@ function renderItemRow(
   if (!item.isAvailable) {
     info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
   }
+  if (item.options.length) {
+    const optionsTitle = el('span', { className: 'venue-menu-options-title', text: 'Опции / вкусы' })
+    const optionsList = el('div', { className: 'venue-menu-options' })
+    item.options.forEach((option) => {
+      optionsList.appendChild(renderOptionRow(option, item.currency, canManageAvailability, onToggleOption))
+    })
+    append(info, optionsTitle, optionsList)
+  }
 
   const actions = el('div', { className: 'venue-menu-item-actions' })
   const editButton = el('button', { className: 'button-small', text: 'Править' }) as HTMLButtonElement
@@ -134,26 +184,30 @@ function renderItemRow(
   const upButton = el('button', { className: 'button-small button-secondary', text: '↑' }) as HTMLButtonElement
   const downButton = el('button', { className: 'button-small button-secondary', text: '↓' }) as HTMLButtonElement
 
-  const disableManage = !canManage
-  ;[editButton, toggleButton, deleteButton, upButton, downButton].forEach((button) => {
-    button.disabled = disableManage
-    button.title = disableManage ? 'Недостаточно прав' : ''
-  })
-
   editButton.addEventListener('click', () => onEdit(item))
   toggleButton.addEventListener('click', () => onToggle(item))
   deleteButton.addEventListener('click', () => onDelete(item))
   upButton.addEventListener('click', () => onMove(item, 'up'))
   downButton.addEventListener('click', () => onMove(item, 'down'))
 
-  append(actions, editButton, toggleButton, upButton, downButton, deleteButton)
-  append(row, info, actions)
+  if (canManage) {
+    append(actions, editButton, upButton, downButton, deleteButton)
+  }
+  if (canManageAvailability) {
+    actions.insertBefore(toggleButton, actions.children[1] ?? null)
+  }
+  if (actions.childElementCount > 0) {
+    append(row, info, actions)
+  } else {
+    append(row, info)
+  }
   return row
 }
 
 function renderCategoryCard(
   category: VenueMenuCategoryDto,
   canManage: boolean,
+  canManageAvailability: boolean,
   handlers: {
     onRename: (category: VenueMenuCategoryDto) => void
     onDelete: (category: VenueMenuCategoryDto) => void
@@ -163,6 +217,7 @@ function renderCategoryCard(
     onDeleteItem: (item: VenueMenuItemDto) => void
     onToggleItem: (item: VenueMenuItemDto) => void
     onMoveItem: (item: VenueMenuItemDto, direction: 'up' | 'down') => void
+    onToggleOption: (option: VenueMenuOptionDto) => void
   }
 ) {
   const card = el('div', { className: 'card venue-menu-category' })
@@ -174,18 +229,17 @@ function renderCategoryCard(
   const upButton = el('button', { className: 'button-small button-secondary', text: '↑' }) as HTMLButtonElement
   const downButton = el('button', { className: 'button-small button-secondary', text: '↓' }) as HTMLButtonElement
 
-  ;[renameButton, deleteButton, upButton, downButton].forEach((button) => {
-    button.disabled = !canManage
-    button.title = canManage ? '' : 'Недостаточно прав'
-  })
-
   renameButton.addEventListener('click', () => handlers.onRename(category))
   deleteButton.addEventListener('click', () => handlers.onDelete(category))
   upButton.addEventListener('click', () => handlers.onMoveCategory(category, 'up'))
   downButton.addEventListener('click', () => handlers.onMoveCategory(category, 'down'))
 
-  append(controls, renameButton, upButton, downButton, deleteButton)
-  append(header, title, controls)
+  if (canManage) {
+    append(controls, renameButton, upButton, downButton, deleteButton)
+    append(header, title, controls)
+  } else {
+    append(header, title)
+  }
 
   const list = el('div', { className: 'venue-menu-items' })
   if (!category.items.length) {
@@ -193,7 +247,16 @@ function renderCategoryCard(
   }
   category.items.forEach((item) => {
     list.appendChild(
-      renderItemRow(item, canManage, handlers.onEditItem, handlers.onDeleteItem, handlers.onToggleItem, handlers.onMoveItem)
+      renderItemRow(
+        item,
+        canManage,
+        canManageAvailability,
+        handlers.onEditItem,
+        handlers.onDeleteItem,
+        handlers.onToggleItem,
+        handlers.onMoveItem,
+        handlers.onToggleOption
+      )
     )
   })
 
@@ -209,8 +272,6 @@ function renderCategoryCard(
   currencySelect.className = 'venue-select'
   currencySelect.appendChild(new Option(DEFAULT_CURRENCY, DEFAULT_CURRENCY))
   const createButton = el('button', { className: 'button-small', text: 'Добавить позицию' }) as HTMLButtonElement
-  createButton.disabled = !canManage
-  createButton.title = canManage ? '' : 'Недостаточно прав'
   createButton.addEventListener('click', () => {
     const priceMinor = parsePriceMinor(priceInput.value)
     const trimmed = nameInput.value.trim()
@@ -224,9 +285,10 @@ function renderCategoryCard(
   })
   append(createRow, nameInput, priceInput, currencySelect, createButton)
 
-  const optionsHint = el('p', { className: 'venue-help', text: 'Опции: MVP позже' })
-
-  append(card, header, list, createRow, optionsHint)
+  append(card, header, list)
+  if (canManage) {
+    card.appendChild(createRow)
+  }
   return card
 }
 
@@ -243,6 +305,10 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
 
   const canView = access.permissions.includes('MENU_VIEW')
   const canManage = access.permissions.includes('MENU_MANAGE')
+  const canManageAvailability = access.permissions.includes('MENU_AVAILABILITY_MANAGE')
+  if (!canManage) {
+    refs.createCategoryInput.closest('.venue-form-row')?.remove()
+  }
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -279,7 +345,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     }
     menu.forEach((category) => {
       refs.categories.appendChild(
-        renderCategoryCard(category, canManage, {
+        renderCategoryCard(category, canManage, canManageAvailability, {
           onRename: async (target) => {
             const nextName = window.prompt('Новое имя категории', target.name)
             if (!nextName) return
@@ -416,6 +482,20 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               return
             }
             showToast('Порядок позиций обновлён')
+            void loadMenu()
+          },
+          onToggleOption: async (option) => {
+            const result = await venueSetOptionAvailability(
+              backendUrl,
+              { venueId, optionId: option.id, body: { isAvailable: !option.isAvailable } },
+              deps
+            )
+            if (disposed) return
+            if (!result.ok) {
+              showError(result.error)
+              return
+            }
+            showToast(option.isAvailable ? 'Опция в стоп-листе' : 'Опция возвращена')
             void loadMenu()
           }
         })

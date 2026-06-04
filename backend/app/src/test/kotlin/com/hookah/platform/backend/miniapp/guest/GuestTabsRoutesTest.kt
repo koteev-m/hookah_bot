@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.CreateSharedTabRequest
@@ -62,7 +63,7 @@ class GuestTabsRoutesTest {
 
             val token = issueToken(config, userId = 10101)
             val resolveResponse =
-                client.get("/api/guest/table/resolve?tableToken=tabs-resolve-token") {
+                client.get("/api/guest/table/resolve?tableToken=tabs-resolve-token&resolveMode=create") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             assertEquals(HttpStatusCode.OK, resolveResponse.status)
@@ -258,6 +259,81 @@ class GuestTabsRoutesTest {
             assertEquals(HttpStatusCode.OK, tabsResponse.status)
             val tabsPayload = json.decodeFromString(GuestTabsResponse.serializer(), tabsResponse.bodyAsText())
             assertEquals(1, tabsPayload.tabs.count { it.type == "SHARED" && it.status == "ACTIVE" })
+        }
+
+    @Test
+    fun `active order lookup does not leak shared tab batches across table sessions`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-tabs-session-active-isolation")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 38)
+            seedTableToken(jdbcUrl, tableId, "tabs-session-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val firstSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val secondSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Session item")
+
+            val ownerToken = issueToken(config, userId = 81818)
+            val firstSharedTabId = createSharedTab(client, ownerToken, firstSessionId)
+            val secondSharedTabId = createSharedTab(client, ownerToken, secondSessionId)
+
+            val addBatchResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "tabs-session-token",
+                                tableSessionId = firstSessionId,
+                                tabId = firstSharedTabId,
+                                idempotencyKey = "tabs-session-active-1",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                                comment = "session one",
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, addBatchResponse.status)
+
+            val firstActiveResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=tabs-session-token&tableSessionId=$firstSessionId&tabId=$firstSharedTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            val secondActiveResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=tabs-session-token&tableSessionId=$secondSessionId&tabId=$secondSharedTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            val crossSessionResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=tabs-session-token&tableSessionId=$secondSessionId&tabId=$firstSharedTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, firstActiveResponse.status)
+            assertEquals(HttpStatusCode.OK, secondActiveResponse.status)
+            assertEquals(HttpStatusCode.Forbidden, crossSessionResponse.status)
+            assertTrue(
+                json.decodeFromString(ActiveOrderResponse.serializer(), firstActiveResponse.bodyAsText()).order != null,
+            )
+            assertEquals(
+                null,
+                json.decodeFromString(ActiveOrderResponse.serializer(), secondActiveResponse.bodyAsText()).order,
+            )
         }
 
     @Test
@@ -630,13 +706,14 @@ class GuestTabsRoutesTest {
             val orderId =
                 connection.prepareStatement(
                     """
-                    INSERT INTO orders (venue_id, table_id, status)
-                    VALUES (?, ?, 'ACTIVE')
+                    INSERT INTO orders (venue_id, table_id, table_session_id, status)
+                    VALUES (?, ?, (SELECT table_session_id FROM tab WHERE id = ?), 'ACTIVE')
                     """.trimIndent(),
                     Statement.RETURN_GENERATED_KEYS,
                 ).use { statement ->
                     statement.setLong(1, venueId)
                     statement.setLong(2, tableId)
+                    statement.setLong(3, tabId)
                     statement.executeUpdate()
                     statement.generatedKeys.use { rs ->
                         if (rs.next()) {

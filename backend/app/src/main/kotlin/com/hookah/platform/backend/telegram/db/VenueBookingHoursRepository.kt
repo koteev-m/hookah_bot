@@ -15,6 +15,7 @@ data class VenueBookingHours(
     val weekday: Int,
     val opensAt: LocalTime,
     val closesAt: LocalTime,
+    val isClosed: Boolean = false,
 )
 
 data class VenueBookingDateOverride(
@@ -22,6 +23,7 @@ data class VenueBookingDateOverride(
     val serviceDate: LocalDate,
     val opensAt: LocalTime,
     val closesAt: LocalTime,
+    val isClosed: Boolean = false,
 )
 
 class VenueBookingHoursRepository(private val dataSource: DataSource?) {
@@ -48,7 +50,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                     val overrideHours =
                         connection.prepareStatement(
                             """
-                            SELECT opens_at, closes_at
+                            SELECT opens_at, closes_at, is_closed
                             FROM venue_booking_hours_overrides
                             WHERE venue_id = ? AND service_date = ?
                             LIMIT 1
@@ -70,6 +72,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                                             weekday = weekday,
                                             opensAt = opensAt,
                                             closesAt = closesAt,
+                                            isClosed = rs.getBoolean("is_closed"),
                                         )
                                     }
                                 }
@@ -80,7 +83,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                     }
                     connection.prepareStatement(
                         """
-                        SELECT venue_id, weekday, opens_at, closes_at
+                        SELECT venue_id, weekday, opens_at, closes_at, is_closed
                         FROM venue_booking_hours
                         WHERE venue_id = ? AND weekday = ?
                         LIMIT 1
@@ -102,6 +105,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                                         weekday = rs.getInt("weekday"),
                                         opensAt = opensAt,
                                         closesAt = closesAt,
+                                        isClosed = rs.getBoolean("is_closed"),
                                     )
                                 }
                             }
@@ -145,7 +149,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT venue_id, weekday, opens_at, closes_at
+                        SELECT venue_id, weekday, opens_at, closes_at, is_closed
                         FROM venue_booking_hours
                         WHERE venue_id = ?
                         ORDER BY weekday
@@ -164,6 +168,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                                             weekday = rs.getInt("weekday"),
                                             opensAt = opensAt,
                                             closesAt = closesAt,
+                                            isClosed = rs.getBoolean("is_closed"),
                                         )
                                 }
                             }
@@ -182,6 +187,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
         weekday: Int,
         opensAt: LocalTime,
         closesAt: LocalTime,
+        isClosed: Boolean = false,
     ): Boolean {
         if (weekday !in 1..7) return false
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -199,27 +205,29 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                             connection.prepareStatement(
                                 """
                                 UPDATE venue_booking_hours
-                                SET opens_at = ?, closes_at = ?, updated_at = CURRENT_TIMESTAMP
+                                SET opens_at = ?, closes_at = ?, is_closed = ?, updated_at = CURRENT_TIMESTAMP
                                 WHERE venue_id = ? AND weekday = ?
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setTime(1, Time.valueOf(opensAt))
                                 statement.setTime(2, Time.valueOf(closesAt))
-                                statement.setLong(3, venueId)
-                                statement.setInt(4, weekday)
+                                statement.setBoolean(3, isClosed)
+                                statement.setLong(4, venueId)
+                                statement.setInt(5, weekday)
                                 statement.executeUpdate()
                             }
                         if (updatedRows == 0) {
                             connection.prepareStatement(
                                 """
-                                INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at)
-                                VALUES (?, ?, ?, ?)
+                                INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at, is_closed)
+                                VALUES (?, ?, ?, ?, ?)
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setLong(1, venueId)
                                 statement.setInt(2, weekday)
                                 statement.setTime(3, Time.valueOf(opensAt))
                                 statement.setTime(4, Time.valueOf(closesAt))
+                                statement.setBoolean(5, isClosed)
                                 statement.executeUpdate()
                             }
                         }
@@ -247,6 +255,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
             weekday = weekday,
             opensAt = closedDayTimeMarker,
             closesAt = closedDayTimeMarker,
+            isClosed = true,
         )
 
     suspend fun listDateOverrides(
@@ -259,7 +268,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT venue_id, service_date, opens_at, closes_at
+                        SELECT venue_id, service_date, opens_at, closes_at, is_closed
                         FROM venue_booking_hours_overrides
                         WHERE venue_id = ?
                         ORDER BY service_date
@@ -281,6 +290,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                                             serviceDate = serviceDate,
                                             opensAt = opensAt,
                                             closesAt = closesAt,
+                                            isClosed = rs.getBoolean("is_closed"),
                                         )
                                 }
                             }
@@ -304,7 +314,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT venue_id, service_date, opens_at, closes_at
+                        SELECT venue_id, service_date, opens_at, closes_at, is_closed
                         FROM venue_booking_hours_overrides
                         WHERE venue_id = ? AND service_date = ?
                         LIMIT 1
@@ -327,6 +337,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                                         serviceDate = date,
                                         opensAt = opensAt,
                                         closesAt = closesAt,
+                                        isClosed = rs.getBoolean("is_closed"),
                                     )
                                 }
                             }
@@ -344,6 +355,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
         serviceDate: LocalDate,
         opensAt: LocalTime,
         closesAt: LocalTime,
+        isClosed: Boolean = false,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -360,27 +372,29 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                             connection.prepareStatement(
                                 """
                                 UPDATE venue_booking_hours_overrides
-                                SET opens_at = ?, closes_at = ?, updated_at = CURRENT_TIMESTAMP
+                                SET opens_at = ?, closes_at = ?, is_closed = ?, updated_at = CURRENT_TIMESTAMP
                                 WHERE venue_id = ? AND service_date = ?
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setTime(1, Time.valueOf(opensAt))
                                 statement.setTime(2, Time.valueOf(closesAt))
-                                statement.setLong(3, venueId)
-                                statement.setDate(4, SqlDate.valueOf(serviceDate))
+                                statement.setBoolean(3, isClosed)
+                                statement.setLong(4, venueId)
+                                statement.setDate(5, SqlDate.valueOf(serviceDate))
                                 statement.executeUpdate()
                             }
                         if (updatedRows == 0) {
                             connection.prepareStatement(
                                 """
-                                INSERT INTO venue_booking_hours_overrides (venue_id, service_date, opens_at, closes_at)
-                                VALUES (?, ?, ?, ?)
+                                INSERT INTO venue_booking_hours_overrides (venue_id, service_date, opens_at, closes_at, is_closed)
+                                VALUES (?, ?, ?, ?, ?)
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setLong(1, venueId)
                                 statement.setDate(2, SqlDate.valueOf(serviceDate))
                                 statement.setTime(3, Time.valueOf(opensAt))
                                 statement.setTime(4, Time.valueOf(closesAt))
+                                statement.setBoolean(5, isClosed)
                                 statement.executeUpdate()
                             }
                         }
@@ -451,8 +465,8 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                         }
                         connection.prepareStatement(
                             """
-                            INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at)
-                            VALUES (?, ?, ?, ?)
+                            INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at, is_closed)
+                            VALUES (?, ?, ?, ?, FALSE)
                             """.trimIndent(),
                         ).use { statement ->
                             (1..7).forEach { weekday ->
@@ -492,8 +506,8 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                                 (1..7).forEach { weekday ->
                                     connection.prepareStatement(
                                         """
-                                        INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at)
-                                        SELECT ?, ?, ?, ?
+                                        INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at, is_closed)
+                                        SELECT ?, ?, ?, ?, FALSE
                                         WHERE NOT EXISTS (
                                             SELECT 1
                                             FROM venue_booking_hours

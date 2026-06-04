@@ -70,6 +70,117 @@ class PlatformRoutesTest {
         }
 
     @Test
+    fun `owner can access platform me with telegram owner id and empty platform owner user id`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-telegram-id")
+            val ownerId = 368302658L
+            val config =
+                buildConfig(
+                    jdbcUrl = jdbcUrl,
+                    platformOwnerId = null,
+                    telegramPlatformOwnerId = ownerId,
+                    includeEmptyPlatformOwnerUserId = true,
+                )
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, ownerId, "Platform", "Owner")
+            val token = issueToken(config, userId = ownerId)
+            val response =
+                client.get("/api/platform/me") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(PlatformMeResponse.serializer(), response.bodyAsText())
+            assertEquals(true, payload.ok)
+            assertEquals(ownerId, payload.ownerUserId)
+        }
+
+    @Test
+    fun `telegram owner id has priority over platform owner user id`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-priority")
+            val ownerId = 8080L
+            val legacyOwnerId = 9090L
+            val config =
+                buildConfig(
+                    jdbcUrl = jdbcUrl,
+                    platformOwnerId = legacyOwnerId,
+                    telegramPlatformOwnerId = ownerId,
+                )
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val legacyToken = issueToken(config, userId = legacyOwnerId)
+            val denied =
+                client.get("/api/platform/me") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $legacyToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, denied.status)
+
+            val ownerToken = issueToken(config, userId = ownerId)
+            val allowed =
+                client.get("/api/platform/me") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, allowed.status)
+        }
+
+    @Test
+    fun `platform owner user id remains backward compatible`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-user-id-compat")
+            val ownerId = 5151L
+            val config = buildConfig(jdbcUrl, platformOwnerId = ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val token = issueToken(config, userId = ownerId)
+            val response =
+                client.get("/api/platform/me") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
+
+    @Test
+    fun `legacy owner telegram id remains backward compatible`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-legacy-env")
+            val ownerId = 6161L
+            val config =
+                buildConfig(
+                    jdbcUrl = jdbcUrl,
+                    platformOwnerId = null,
+                    legacyOwnerTelegramId = ownerId,
+                )
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val token = issueToken(config, userId = ownerId)
+            val response =
+                client.get("/api/platform/me") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
+
+    @Test
     fun `missing owner config cannot access platform me`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-missing-owner")
@@ -145,6 +256,9 @@ class PlatformRoutesTest {
     private fun buildConfig(
         jdbcUrl: String,
         platformOwnerId: Long?,
+        telegramPlatformOwnerId: Long? = null,
+        legacyOwnerTelegramId: Long? = null,
+        includeEmptyPlatformOwnerUserId: Boolean = false,
     ): MapApplicationConfig {
         val values =
             mutableListOf(
@@ -156,8 +270,16 @@ class PlatformRoutesTest {
                 "venue.staffInviteSecretPepper" to "invite-pepper",
             )
 
+        if (telegramPlatformOwnerId != null) {
+            values.add("telegram.platformOwnerId" to telegramPlatformOwnerId.toString())
+        }
         if (platformOwnerId != null) {
             values.add("platform.ownerUserId" to platformOwnerId.toString())
+        } else if (includeEmptyPlatformOwnerUserId) {
+            values.add("platform.ownerUserId" to "")
+        }
+        if (legacyOwnerTelegramId != null) {
+            values.add("platform.legacyOwnerTelegramId" to legacyOwnerTelegramId.toString())
         }
 
         return MapApplicationConfig(*values.toTypedArray())

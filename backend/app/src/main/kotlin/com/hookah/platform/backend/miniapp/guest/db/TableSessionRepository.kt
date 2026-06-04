@@ -216,6 +216,36 @@ class TableSessionRepository(
         }
     }
 
+    suspend fun findSessionForTable(
+        tableSessionId: Long,
+        venueId: Long,
+        tableId: Long,
+    ): TableSessionRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT id, venue_id, table_id, started_at, last_activity_at, expires_at, ended_at, status
+                        FROM table_sessions
+                        WHERE id = ?
+                          AND venue_id = ?
+                          AND table_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, tableSessionId)
+                        statement.setLong(2, venueId)
+                        statement.setLong(3, tableId)
+                        statement.executeQuery().use { rs -> if (rs.next()) rs.toRecord() else null }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     private fun insertSession(
         connection: Connection,
         venueId: Long,

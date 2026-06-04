@@ -1,16 +1,21 @@
 package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
+import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionsResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
+import com.hookah.platform.backend.telegram.TelegramDownloadedFile
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
@@ -21,6 +26,7 @@ import java.sql.Statement
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class GuestVenueRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -69,6 +75,7 @@ class GuestVenueRoutesTest {
             val payload = json.decodeFromString(CatalogResponse.serializer(), response.bodyAsText())
             assertEquals(1, payload.venues.size)
             assertEquals(venues.publishedId, payload.venues.first().id)
+            assertEquals(false, payload.venues.any { it.id == venues.deletedId })
         }
 
     @Test
@@ -176,6 +183,14 @@ class GuestVenueRoutesTest {
 
             assertEquals(HttpStatusCode.NotFound, suspendedResponse.status)
             assertApiErrorEnvelope(suspendedResponse, ApiErrorCodes.NOT_FOUND)
+
+            val deletedResponse =
+                client.get("/api/guest/venue/${venues.deletedId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.NotFound, deletedResponse.status)
+            assertApiErrorEnvelope(deletedResponse, ApiErrorCodes.NOT_FOUND)
         }
 
     @Test
@@ -203,6 +218,254 @@ class GuestVenueRoutesTest {
 
             assertEquals(HttpStatusCode.NotFound, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
+        }
+
+    @Test
+    fun `venue by id returns guest contact and card description`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-profile")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val id = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    connection.prepareStatement(
+                        """
+                        UPDATE venues
+                        SET guest_contact = ?, card_description = ?
+                        WHERE id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, "+7 999 000-00-00")
+                        statement.setString(2, "Авторские чаши и спокойная посадка.")
+                        statement.setLong(3, id)
+                        statement.executeUpdate()
+                    }
+                    id
+                }
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/venue/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(VenueResponse.serializer(), response.bodyAsText())
+            assertEquals("+7 999 000-00-00", payload.venue.guestContact)
+            assertEquals("Авторские чаши и спокойная посадка.", payload.venue.cardDescription)
+        }
+
+    @Test
+    fun `venue info sections returns only visible filled sections with safe media metadata`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-info-sections")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val seeded =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val venueId = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    val aboutId =
+                        insertInfoSection(
+                            connection = connection,
+                            venueId = venueId,
+                            title = "О заведении",
+                            sectionType = "about",
+                            sortOrder = 10,
+                            isVisible = true,
+                            textContent = "Авторские чаши",
+                        )
+                    insertInfoSection(
+                        connection = connection,
+                        venueId = venueId,
+                        title = "Пустой раздел",
+                        sectionType = "rules",
+                        sortOrder = 20,
+                        isVisible = true,
+                        textContent = "   ",
+                    )
+                    insertInfoSection(
+                        connection = connection,
+                        venueId = venueId,
+                        title = "Скрытый FAQ",
+                        sectionType = "faq",
+                        sortOrder = 30,
+                        isVisible = false,
+                        textContent = "Есть текст",
+                    )
+                    val menuId =
+                        insertInfoSection(
+                            connection = connection,
+                            venueId = venueId,
+                            title = "Меню",
+                            sectionType = "menu",
+                            sortOrder = 40,
+                            isVisible = true,
+                            textContent = null,
+                        )
+                    insertInfoMedia(connection, menuId, "pdf", "telegram-file-id", 0)
+                    SeededInfoSections(venueId = venueId, aboutId = aboutId, menuId = menuId)
+                }
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/venue/${seeded.venueId}/info-sections") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val responseBody = response.bodyAsText()
+            val payload =
+                json.decodeFromString(VenueInfoSectionsResponse.serializer(), responseBody)
+            assertEquals(seeded.venueId, payload.venueId)
+            assertEquals(listOf(seeded.aboutId, seeded.menuId), payload.sections.map { it.id })
+            val about = payload.sections[0]
+            assertEquals("О заведении", about.displayTitle)
+            assertEquals("Авторские чаши", about.text)
+            assertEquals(0, about.mediaCount)
+            assertTrue(responseBody.contains("\"media\":[]"))
+            val menu = payload.sections[1]
+            assertEquals("menu", menu.type)
+            assertEquals("📖 Фото-меню", menu.displayTitle)
+            assertEquals(null, menu.text)
+            assertEquals(1, menu.mediaCount)
+            assertEquals("pdf", menu.media.single().mediaType)
+            assertEquals(
+                "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.menuId}/media/${menu.media.single().id}",
+                menu.media.single().url,
+            )
+        }
+
+    @Test
+    fun `venue info media endpoint streams visible image media without auth`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-info-media")
+            val config = buildConfig(jdbcUrl)
+            var requestedFileId: String? = null
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(
+                        telegramFileDownloader = { fileId ->
+                            requestedFileId = fileId
+                            TelegramDownloadedFile(
+                                bytes = "image-bytes".toByteArray(),
+                                contentType = ContentType.Image.PNG,
+                            )
+                        },
+                    ),
+                )
+            }
+
+            client.get("/health")
+
+            val seeded =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val venueId = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    val sectionId =
+                        insertInfoSection(
+                            connection = connection,
+                            venueId = venueId,
+                            title = "Фото",
+                            sectionType = "custom",
+                            sortOrder = 10,
+                            isVisible = true,
+                            textContent = null,
+                        )
+                    val mediaId = insertInfoMedia(connection, sectionId, "image", "telegram-image-file-id", 0)
+                    SeededInfoMedia(venueId = venueId, sectionId = sectionId, mediaId = mediaId)
+                }
+            val response =
+                client.get(
+                    "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.sectionId}/media/${seeded.mediaId}",
+                )
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals("telegram-image-file-id", requestedFileId)
+            assertTrue(response.headers[HttpHeaders.ContentType].orEmpty().startsWith("image/png"))
+            assertEquals("image-bytes", response.bodyAsText())
+        }
+
+    @Test
+    fun `venue info media endpoint rejects hidden section and media mismatch`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-info-media-hidden")
+            val config = buildConfig(jdbcUrl)
+            var downloadAttempts = 0
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(
+                        telegramFileDownloader = {
+                            downloadAttempts += 1
+                            TelegramDownloadedFile(
+                                bytes = "unexpected".toByteArray(),
+                                contentType = ContentType.Text.Plain,
+                            )
+                        },
+                    ),
+                )
+            }
+
+            client.get("/health")
+
+            val seeded =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val venueId = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    val visibleSectionId =
+                        insertInfoSection(
+                            connection = connection,
+                            venueId = venueId,
+                            title = "Фото",
+                            sectionType = "custom",
+                            sortOrder = 10,
+                            isVisible = true,
+                            textContent = null,
+                        )
+                    val hiddenSectionId =
+                        insertInfoSection(
+                            connection = connection,
+                            venueId = venueId,
+                            title = "Скрыто",
+                            sectionType = "custom",
+                            sortOrder = 20,
+                            isVisible = false,
+                            textContent = null,
+                        )
+                    val visibleMediaId = insertInfoMedia(connection, visibleSectionId, "image", "visible-file-id", 0)
+                    val hiddenMediaId = insertInfoMedia(connection, hiddenSectionId, "image", "hidden-file-id", 0)
+                    SeededHiddenInfoMedia(
+                        venueId = venueId,
+                        visibleSectionId = visibleSectionId,
+                        visibleMediaId = visibleMediaId,
+                        hiddenSectionId = hiddenSectionId,
+                        hiddenMediaId = hiddenMediaId,
+                    )
+                }
+            val hiddenResponse =
+                client.get(
+                    "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.hiddenSectionId}/media/${seeded.hiddenMediaId}",
+                )
+            val mismatchResponse =
+                client.get(
+                    "/api/guest/venue/${seeded.venueId}/info-sections/${seeded.visibleSectionId}/media/${seeded.hiddenMediaId}",
+                )
+
+            assertEquals(HttpStatusCode.NotFound, hiddenResponse.status)
+            assertEquals(HttpStatusCode.NotFound, mismatchResponse.status)
+            assertEquals(0, downloadAttempts)
         }
 
     @Test
@@ -324,7 +587,8 @@ class GuestVenueRoutesTest {
             val publishedId = insertVenue(connection, "Published", "City", "Address", VenueStatus.PUBLISHED.dbValue)
             val hiddenId = insertVenue(connection, "Hidden", "City", "Address", VenueStatus.HIDDEN.dbValue)
             val suspendedId = insertVenue(connection, "Suspended", "City", "Address", VenueStatus.SUSPENDED.dbValue)
-            return SeededVenues(publishedId, hiddenId, suspendedId)
+            val deletedId = insertVenue(connection, "Deleted", "City", "Address", VenueStatus.DELETED.dbValue)
+            return SeededVenues(publishedId, hiddenId, suspendedId, deletedId)
         }
     }
 
@@ -354,6 +618,66 @@ class GuestVenueRoutesTest {
             }
         }
         error("Failed to insert venue")
+    }
+
+    private fun insertInfoSection(
+        connection: java.sql.Connection,
+        venueId: Long,
+        title: String,
+        sectionType: String,
+        sortOrder: Int,
+        isVisible: Boolean,
+        textContent: String?,
+    ): Long {
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_info_sections (venue_id, title, section_type, sort_order, is_visible, text_content)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, title)
+            statement.setString(3, sectionType)
+            statement.setInt(4, sortOrder)
+            statement.setBoolean(5, isVisible)
+            statement.setString(6, textContent)
+            statement.executeUpdate()
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) {
+                    return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert venue info section")
+    }
+
+    private fun insertInfoMedia(
+        connection: java.sql.Connection,
+        sectionId: Long,
+        mediaType: String,
+        telegramFileId: String,
+        sortOrder: Int,
+    ): Long {
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_info_section_media (section_id, media_type, telegram_file_id, sort_order)
+            VALUES (?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, sectionId)
+            statement.setString(2, mediaType)
+            statement.setString(3, telegramFileId)
+            statement.setInt(4, sortOrder)
+            statement.executeUpdate()
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) {
+                    return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert venue info media")
     }
 
     private fun seedSubscription(
@@ -389,6 +713,27 @@ class GuestVenueRoutesTest {
         val publishedId: Long,
         val hiddenId: Long,
         val suspendedId: Long,
+        val deletedId: Long,
+    )
+
+    private data class SeededInfoSections(
+        val venueId: Long,
+        val aboutId: Long,
+        val menuId: Long,
+    )
+
+    private data class SeededInfoMedia(
+        val venueId: Long,
+        val sectionId: Long,
+        val mediaId: Long,
+    )
+
+    private data class SeededHiddenInfoMedia(
+        val venueId: Long,
+        val visibleSectionId: Long,
+        val visibleMediaId: Long,
+        val hiddenSectionId: Long,
+        val hiddenMediaId: Long,
     )
 
     private companion object {

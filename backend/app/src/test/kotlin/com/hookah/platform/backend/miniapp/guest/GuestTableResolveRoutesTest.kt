@@ -208,7 +208,7 @@ class GuestTableResolveRoutesTest {
             val token = issueToken(config)
 
             val response =
-                client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
 
@@ -235,6 +235,45 @@ class GuestTableResolveRoutesTest {
             val token = issueToken(config)
 
             val response =
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
+            assertEquals(venueId, payload.venueId)
+            assertEquals("Venue", payload.venueName)
+            assertEquals(tableId, payload.tableId)
+            assertEquals("3", payload.tableNumber)
+            assertEquals(VenueStatus.PUBLISHED.dbValue, payload.venueStatus)
+            assertTrue(payload.tableSessionId > 0)
+            assertEquals("ACTIVE", payload.tableSessionStatus)
+            assertEquals(true, payload.tableSessionActive)
+            assertNull(payload.tableSessionInactiveReason)
+            assertEquals("trial", payload.subscriptionStatus)
+            assertEquals(true, payload.available)
+            assertEquals(1, countTableSessions(jdbcUrl))
+            assertNull(payload.unavailableReason)
+        }
+
+    @Test
+    fun `table token without session id and without create mode does not create table session`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-no-create")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val tokenValue = "no-create-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 104)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            val token = issueToken(config)
+
+            val response =
                 client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
@@ -243,13 +282,132 @@ class GuestTableResolveRoutesTest {
             val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
             assertEquals(venueId, payload.venueId)
             assertEquals(tableId, payload.tableId)
-            assertEquals("3", payload.tableNumber)
-            assertEquals(VenueStatus.PUBLISHED.dbValue, payload.venueStatus)
-            assertTrue(payload.tableSessionId > 0)
-            assertEquals("trial", payload.subscriptionStatus)
+            assertEquals(0L, payload.tableSessionId)
+            assertEquals("UNKNOWN", payload.tableSessionStatus)
+            assertEquals(false, payload.tableSessionActive)
+            assertEquals("TABLE_SESSION_MISSING", payload.tableSessionInactiveReason)
+            assertEquals(true, payload.available)
+            assertEquals(0, countTableSessions(jdbcUrl))
+        }
+
+    @Test
+    fun `requested ended table session resolves to inactive without creating new session`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-ended-session")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val tokenValue = "ended-session-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 104)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            val endedSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ENDED",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = Instant.now(),
+                )
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&tableSessionId=$endedSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
+            assertEquals(endedSessionId, payload.tableSessionId)
+            assertEquals("ENDED", payload.tableSessionStatus)
+            assertEquals(false, payload.tableSessionActive)
+            assertEquals("TABLE_SESSION_ENDED", payload.tableSessionInactiveReason)
             assertEquals(true, payload.available)
             assertEquals(1, countTableSessions(jdbcUrl))
-            assertNull(payload.unavailableReason)
+        }
+
+    @Test
+    fun `requested expired table session resolves to inactive without creating new session`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-expired-session")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val tokenValue = "expired-session-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 104)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            val expiredSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().minus(1, ChronoUnit.MINUTES),
+                    endedAt = null,
+                )
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&tableSessionId=$expiredSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
+            assertEquals(expiredSessionId, payload.tableSessionId)
+            assertEquals("EXPIRED", payload.tableSessionStatus)
+            assertEquals(false, payload.tableSessionActive)
+            assertEquals("TABLE_SESSION_EXPIRED", payload.tableSessionInactiveReason)
+            assertEquals(true, payload.available)
+            assertEquals(1, countTableSessions(jdbcUrl))
+        }
+
+    @Test
+    fun `fresh qr resolve creates a new active session after previous session ended`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-fresh-session")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val tokenValue = "fresh-session-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 104)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            seedTableSession(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                tableId = tableId,
+                status = "ENDED",
+                expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                endedAt = Instant.now(),
+            )
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableResolveResponse.serializer(), response.bodyAsText())
+            assertEquals("ACTIVE", payload.tableSessionStatus)
+            assertEquals(true, payload.tableSessionActive)
+            assertNull(payload.tableSessionInactiveReason)
+            assertEquals(2, countTableSessions(jdbcUrl))
         }
 
     @Test
@@ -271,7 +429,7 @@ class GuestTableResolveRoutesTest {
 
             repeat(2) {
                 val response =
-                    client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
+                    client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
                         headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     }
                 assertEquals(HttpStatusCode.OK, response.status)
@@ -300,7 +458,7 @@ class GuestTableResolveRoutesTest {
             val token = issueToken(config)
 
             val response =
-                client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
 
@@ -335,7 +493,7 @@ class GuestTableResolveRoutesTest {
             val token = issueToken(config)
 
             val response =
-                client.get("/api/guest/table/resolve?tableToken=$tokenValue") {
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
 
@@ -440,6 +598,49 @@ class GuestTableResolveRoutesTest {
                 statement.executeUpdate()
             }
         }
+    }
+
+    private fun seedTableSession(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        status: String,
+        expiresAt: Instant,
+        endedAt: Instant?,
+    ): Long {
+        val now = Instant.now()
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO table_sessions (
+                    venue_id,
+                    table_id,
+                    started_at,
+                    last_activity_at,
+                    expires_at,
+                    ended_at,
+                    status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableId)
+                statement.setTimestamp(3, Timestamp.from(now.minus(2, ChronoUnit.HOURS)))
+                statement.setTimestamp(4, Timestamp.from(now.minus(1, ChronoUnit.HOURS)))
+                statement.setTimestamp(5, Timestamp.from(expiresAt))
+                statement.setTimestamp(6, endedAt?.let { Timestamp.from(it) })
+                statement.setString(7, status)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong(1)
+                    }
+                }
+            }
+        }
+        error("Failed to insert table session")
     }
 
     private fun countTableSessions(jdbcUrl: String): Int {

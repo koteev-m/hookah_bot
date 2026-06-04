@@ -2,6 +2,14 @@ package com.hookah.platform.backend
 
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
+import com.hookah.platform.backend.ai.AiAssistantConfig
+import com.hookah.platform.backend.ai.AiAssistantService
+import com.hookah.platform.backend.ai.AiContextAssembler
+import com.hookah.platform.backend.ai.AiToolRegistry
+import com.hookah.platform.backend.ai.AuditLogAiAuditLogger
+import com.hookah.platform.backend.ai.PromotionDiagnosticsTool
+import com.hookah.platform.backend.ai.VenueSummaryTool
+import com.hookah.platform.backend.ai.createAiAssistantClient
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.api.ApiError
 import com.hookah.platform.backend.api.ApiErrorCodes
@@ -30,19 +38,31 @@ import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
+import com.hookah.platform.backend.miniapp.guest.BookingExpiryWorker
+import com.hookah.platform.backend.miniapp.guest.BookingExpiryWorkerConfig
+import com.hookah.platform.backend.miniapp.guest.BookingReminderWorker
+import com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
+import com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorker
+import com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
+import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
+import com.hookah.platform.backend.miniapp.guest.guestFavoritesRoutes
 import com.hookah.platform.backend.miniapp.guest.guestBookingRoutes
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTabsRoutes
+import com.hookah.platform.backend.miniapp.guest.guestVenueInfoMediaRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
+import com.hookah.platform.backend.miniapp.guest.guestVisitRoutes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -58,12 +78,14 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
+import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
 import com.hookah.platform.backend.platform.PlatformConfig
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformUserRepository
 import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
+import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.platform.platformRoutes
 import com.hookah.platform.backend.security.constantTimeEquals
 import com.hookah.platform.backend.telegram.InMemoryTelegramRateLimiter
@@ -73,6 +95,7 @@ import com.hookah.platform.backend.telegram.TelegramApiClient
 import com.hookah.platform.backend.telegram.TelegramBotConfig
 import com.hookah.platform.backend.telegram.TelegramBotRouter
 import com.hookah.platform.backend.telegram.TelegramCallResult
+import com.hookah.platform.backend.telegram.TelegramDownloadedFile
 import com.hookah.platform.backend.telegram.TelegramInboundUpdateWorker
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.TelegramOutboxWorker
@@ -81,12 +104,16 @@ import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.PromotionApplicationRepository
+import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
+import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateQueueRepository
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
+import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
@@ -94,6 +121,10 @@ import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
+import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
@@ -140,6 +171,7 @@ import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
@@ -169,6 +201,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.net.URI
 import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -197,6 +230,7 @@ private data class VersionResponse(
 
 internal data class ModuleOverrides(
     val tableTokenResolver: (suspend (String) -> TableContext?)? = null,
+    val telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean {
@@ -262,6 +296,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
     val guestRateLimitConfig = GuestRateLimitConfig.from(appConfig)
     val tableSessionConfig = TableSessionConfig.from(appConfig)
+    val bookingExpiryWorkerConfig = BookingExpiryWorkerConfig.from(appConfig)
+    val bookingReminderWorkerConfig = BookingReminderWorkerConfig.from(appConfig)
+    val visitFeedbackWorkerConfig = VisitFeedbackWorkerConfig.from(appConfig)
+    val aiAssistantConfig = AiAssistantConfig.from(appConfig)
     val guestRateLimiter = InMemoryRateLimiter()
     val platformConfig = PlatformConfig.from(appConfig)
     val appMetrics = AppMetrics()
@@ -282,13 +320,38 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val venueConnectionRequestRepository = VenueConnectionRequestRepository(dataSource)
     val userRepository = UserRepository(dataSource)
     val guestVenueRepository = GuestVenueRepository(dataSource)
-    val guestBookingRepository = GuestBookingRepository(dataSource)
+    val guestFavoritesRepository = GuestFavoritesRepository(dataSource)
+    val visitRepository = VisitRepository(dataSource)
+    val visitFeedbackRepository = VisitFeedbackRepository(dataSource)
+    val guestBookingRepository = GuestBookingRepository(dataSource, visitRepository)
     val guestMenuRepository = GuestMenuRepository(dataSource)
     val guestTabsRepository = GuestTabsRepository(dataSource)
     val analyticsEventRepository = AnalyticsEventRepository(dataSource)
     val subscriptionRepository = SubscriptionRepository(dataSource, analyticsEventRepository)
-    val ordersRepository = OrdersRepository(dataSource, analyticsEventRepository)
-    val venueOrdersRepository = VenueOrdersRepository(dataSource, analyticsEventRepository)
+    val venuePromotionRepository = VenuePromotionRepository(dataSource)
+    val venuePromotionMediaRepository = VenuePromotionMediaRepository(dataSource)
+    val venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource)
+    val promotionPlacementRepository = PromotionPlacementRepository(dataSource)
+    val promotionVenuePlacementRepository = PromotionVenuePlacementRepository(dataSource)
+    val promotionApplicationRepository = PromotionApplicationRepository(dataSource)
+    val loyaltyRepository = LoyaltyRepository(dataSource)
+    val ordersRepository =
+        OrdersRepository(
+            dataSource = dataSource,
+            analyticsEventRepository = analyticsEventRepository,
+            promotionApplicationRepository = promotionApplicationRepository,
+            venuePromotionRuleRepository = venuePromotionRuleRepository,
+            loyaltyRepository = loyaltyRepository,
+        )
+    val venueOrdersRepository =
+        VenueOrdersRepository(
+            dataSource,
+            analyticsEventRepository,
+            visitRepository,
+            visitFeedbackRepository,
+            loyaltyRepository,
+        )
+    val venueSettingsRepository = VenueSettingsRepository(dataSource)
     val venueStatsRepository = VenueStatsRepository(dataSource)
     val venueMenuRepository = VenueMenuRepository(dataSource)
     val venueTableRepository = VenueTableRepository(dataSource)
@@ -296,10 +359,38 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val tableSessionRepository = TableSessionRepository(dataSource, analyticsEventRepository)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val auditLogRepository = AuditLogRepository(dataSource, json)
+    val aiAssistantService =
+        AiAssistantService(
+            config = aiAssistantConfig,
+            client = createAiAssistantClient(aiAssistantConfig, httpClient, json),
+            toolRegistry =
+                AiToolRegistry(
+                    promotionDiagnosticsTool =
+                        PromotionDiagnosticsTool(
+                            promotionRepository = venuePromotionRepository,
+                            ruleRepository = venuePromotionRuleRepository,
+                        ),
+                    venueSummaryTool =
+                        VenueSummaryTool(
+                            venuePromotionRepository = venuePromotionRepository,
+                            promotionPlacementRepository = promotionPlacementRepository,
+                            promotionVenuePlacementRepository = promotionVenuePlacementRepository,
+                            loyaltyRepository = loyaltyRepository,
+                            venueSettingsRepository = venueSettingsRepository,
+                            visitFeedbackRepository = visitFeedbackRepository,
+                            venueStatsRepository = venueStatsRepository,
+                            venueOrdersRepository = venueOrdersRepository,
+                            staffCallRepository = staffCallRepository,
+                        ),
+                ),
+            contextAssembler = AiContextAssembler(),
+            auditLogger = AuditLogAiAuditLogger(auditLogRepository),
+        )
     val platformVenueRepository = PlatformVenueRepository(dataSource)
     val subscriptionSettingsRepository = PlatformSubscriptionSettingsRepository(dataSource)
     val platformUserRepository = PlatformUserRepository(dataSource)
     val platformVenueMemberRepository = PlatformVenueMemberRepository(dataSource)
+    val venueOwnerAccountRepository = VenueOwnerAccountRepository(dataSource)
     val billingInvoiceRepository = BillingInvoiceRepository(dataSource)
     val billingPaymentRepository = BillingPaymentRepository(dataSource)
     val billingNotificationRepository = BillingNotificationRepository(dataSource)
@@ -387,6 +478,18 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineName("table-session-cleanup"),
         )
+    val bookingExpiryScope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO + CoroutineName("booking-expiry"),
+        )
+    val bookingReminderScope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO + CoroutineName("booking-reminders"),
+        )
+    val visitFeedbackScope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.IO + CoroutineName("visit-feedback"),
+        )
     val tableSessionCleanupWorker =
         TableSessionCleanupWorker(
             repository = tableSessionRepository,
@@ -394,6 +497,16 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             scope = tableSessionCleanupScope,
         )
     var tableSessionCleanupJob: Job? = null
+    val bookingExpiryWorker =
+        BookingExpiryWorker(
+            repository = guestBookingRepository,
+            interval = bookingExpiryWorkerConfig.interval,
+            batchSize = bookingExpiryWorkerConfig.batchSize,
+            scope = bookingExpiryScope,
+        )
+    var bookingExpiryJob: Job? = null
+    var bookingReminderJob: Job? = null
+    var visitFeedbackJob: Job? = null
     val staffChatLinkCodeRepository =
         StaffChatLinkCodeRepository(
             dataSource = dataSource,
@@ -401,8 +514,25 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             ttlSeconds = telegramConfig.staffChatLinkTtlSeconds,
         )
     val venueAccessRepository = VenueAccessRepository(dataSource)
+    val telegramVenueContextRepository = TelegramVenueContextRepository(dataSource)
     val venueStaffRepository = VenueStaffRepository(dataSource)
-    val venueSettingsRepository = VenueSettingsRepository(dataSource)
+    val bookingReminderWorker =
+        BookingReminderWorker(
+            repository = guestBookingRepository,
+            outboxEnqueuer = telegramOutboxEnqueuer,
+            venueSettingsRepository = venueSettingsRepository,
+            interval = bookingReminderWorkerConfig.interval,
+            batchSize = bookingReminderWorkerConfig.batchSize,
+            scope = bookingReminderScope,
+        )
+    val visitFeedbackWorker =
+        VisitFeedbackWorker(
+            repository = visitFeedbackRepository,
+            outboxEnqueuer = telegramOutboxEnqueuer,
+            interval = visitFeedbackWorkerConfig.interval,
+            batchSize = visitFeedbackWorkerConfig.batchSize,
+            scope = visitFeedbackScope,
+        )
     val staffInviteRepository =
         StaffInviteRepository(
             dataSource = dataSource,
@@ -413,10 +543,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         StaffChatNotifier(
             venueRepository = venueRepository,
             notificationRepository = staffChatNotificationRepository,
-            outboxEnqueuer = telegramOutboxEnqueuer,
             venueSettingsRepository = venueSettingsRepository,
             isTelegramActive = { telegramConfig.enabled && !telegramConfig.token.isNullOrBlank() },
             scope = staffChatNotifierScope,
+            json = telegramJson,
         )
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
         telegramScope =
@@ -460,6 +590,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueMenuRepository = venueMenuRepository,
                 venueTableRepository = venueTableRepository,
                 venueAccessRepository = venueAccessRepository,
+                venueContextRepository = telegramVenueContextRepository,
                 venueStaffRepository = venueStaffRepository,
                 staffInviteRepository = staffInviteRepository,
                 staffInviteConfig = staffInviteConfig,
@@ -468,7 +599,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 tableSessionRepository = tableSessionRepository,
                 guestTabsRepository = guestTabsRepository,
                 platformVenueRepository = platformVenueRepository,
+                platformSubscriptionSettingsRepository = subscriptionSettingsRepository,
                 platformVenueMemberRepository = platformVenueMemberRepository,
+                venueOwnerAccountRepository = venueOwnerAccountRepository,
                 tableSessionTtl = tableSessionConfig.ttl,
                 json = telegramJson,
                 venueConnectionRequestRepository = venueConnectionRequestRepository,
@@ -477,7 +610,19 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                 venueOrdersRepository = venueOrdersRepository,
                 venueStatsRepository = venueStatsRepository,
+                venuePromotionRepository = venuePromotionRepository,
+                venuePromotionMediaRepository = venuePromotionMediaRepository,
+                venuePromotionRuleRepository = venuePromotionRuleRepository,
+                promotionPlacementRepository = promotionPlacementRepository,
+                promotionVenuePlacementRepository = promotionVenuePlacementRepository,
+                loyaltyRepository = loyaltyRepository,
                 venueSettingsRepository = venueSettingsRepository,
+                visitRepository = visitRepository,
+                guestFavoritesRepository = guestFavoritesRepository,
+                visitFeedbackRepository = visitFeedbackRepository,
+                aiAssistantService = aiAssistantService,
+                staffChatNotifier = staffChatNotifier,
+                auditLogRepository = auditLogRepository,
             )
 
         if (dataSource != null) {
@@ -583,9 +728,27 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         if (dataSource != null) {
             subscriptionBillingJob.start(subscriptionBillingScope)
             tableSessionCleanupJob = tableSessionCleanupWorker.start()
+            if (bookingExpiryWorkerConfig.enabled) {
+                bookingExpiryJob = bookingExpiryWorker.start()
+            } else {
+                logger.info("Booking expiry worker disabled by config")
+            }
+            if (bookingReminderWorkerConfig.enabled) {
+                bookingReminderJob = bookingReminderWorker.start()
+            } else {
+                logger.info("Booking reminder worker disabled by config")
+            }
+            if (visitFeedbackWorkerConfig.enabled) {
+                visitFeedbackJob = visitFeedbackWorker.start()
+            } else {
+                logger.info("Visit feedback worker disabled by config")
+            }
         } else {
             logger.info("Subscription billing job disabled: database is not configured")
             logger.info("Table session cleanup worker disabled: database is not configured")
+            logger.info("Booking expiry worker disabled: database is not configured")
+            logger.info("Booking reminder worker disabled: database is not configured")
+            logger.info("Visit feedback worker disabled: database is not configured")
         }
         if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
             val apiClient = telegramApiClient
@@ -601,6 +764,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         logger.info("Application stopping, closing resources")
         subscriptionBillingJob.stop()
         tableSessionCleanupJob?.cancel()
+        bookingExpiryJob?.cancel()
+        bookingReminderJob?.cancel()
+        visitFeedbackJob?.cancel()
         httpClient.close()
         telegramApiClient?.close()
         telegramScope?.cancel()
@@ -611,6 +777,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         staffChatNotifierScope.cancel()
         subscriptionBillingScope.cancel()
         tableSessionCleanupScope.cancel()
+        bookingExpiryScope.cancel()
+        bookingReminderScope.cancel()
+        visitFeedbackScope.cancel()
         DatabaseFactory.close(dataSource)
     }
     monitor.subscribe(ApplicationStopped) {
@@ -632,10 +801,14 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         allowMethod(HttpMethod.Options)
         allowMethod(HttpMethod.Get)
         allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Put)
+        allowMethod(HttpMethod.Patch)
+        allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.ContentType)
         allowHeader(HttpHeaders.Authorization)
-        allowHost("talk-overview-honor-plains.trycloudflare.com", schemes = listOf("https"))
-        allowHost("localhost:5173", schemes = listOf("http"))
+        appConfig.corsAllowedHosts().forEach { spec ->
+            allowHost(spec.host, schemes = spec.schemes)
+        }
     }
 
     install(MicrometerMetrics) {
@@ -833,13 +1006,35 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
 
         miniAppAuthRoutes(appConfig, sessionTokenService, userRepository)
 
+        val guestInfoMediaDownloader: (suspend (String) -> TelegramDownloadedFile?)? =
+            overrides.telegramFileDownloader ?: telegramApiClient?.let { client ->
+                { fileId -> client.downloadFile(fileId) }
+            }
+
+        route("/api") {
+            route("/guest") {
+                guestVenueInfoMediaRoutes(
+                    guestVenueRepository = guestVenueRepository,
+                    venueInfoSectionsRepository = venueInfoSectionsRepository,
+                    venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
+                    subscriptionRepository = subscriptionRepository,
+                    telegramFileDownloader = guestInfoMediaDownloader,
+                )
+            }
+        }
+
         authenticate("miniapp-session") {
             route("/api") {
                 route("/guest") {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
                         guestMenuRepository = guestMenuRepository,
+                        venueInfoSectionsRepository = venueInfoSectionsRepository,
+                        venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                         subscriptionRepository = subscriptionRepository,
+                    )
+                    guestFavoritesRoutes(
+                        guestFavoritesRepository = guestFavoritesRepository,
                     )
                     guestTableResolveRoutes(
                         tableTokenResolver = tableTokenResolver,
@@ -866,6 +1061,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         tableSessionConfig = tableSessionConfig,
                         guestTabsRepository = guestTabsRepository,
                         staffChatNotifier = staffChatNotifier,
+                        userRepository = userRepository,
+                        venueSettingsRepository = venueSettingsRepository,
                     )
                     guestBookingRoutes(
                         guestVenueRepository = guestVenueRepository,
@@ -873,7 +1070,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestBookingRepository = guestBookingRepository,
                         venueRepository = venueRepository,
                         outboxEnqueuer = telegramOutboxEnqueuer,
+                        staffChatNotifier = staffChatNotifier,
+                        userRepository = userRepository,
+                        venueSettingsRepository = venueSettingsRepository,
                     )
+                    guestVisitRoutes(visitRepository = visitRepository)
                     guestStaffCallRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,
                         rateLimiter = guestRateLimiter,
@@ -883,6 +1084,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         staffCallRepository = staffCallRepository,
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
+                        staffChatNotifier = staffChatNotifier,
+                        userRepository = userRepository,
                     )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))
@@ -893,11 +1096,16 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository,
                 )
-                venueStaffRoutes(
+                    venueStaffRoutes(
+                        venueAccessRepository = venueAccessRepository,
+                        venueStaffRepository = venueStaffRepository,
+                        staffInviteRepository = staffInviteRepository,
+                        staffInviteConfig = staffInviteConfig,
+                        venueOwnerAccountRepository = venueOwnerAccountRepository,
+                    )
+                venueStaffCallRoutes(
                     venueAccessRepository = venueAccessRepository,
-                    venueStaffRepository = venueStaffRepository,
-                    staffInviteRepository = staffInviteRepository,
-                    staffInviteConfig = staffInviteConfig,
+                    staffCallRepository = staffCallRepository,
                 )
                 venueTableRoutes(
                     venueAccessRepository = venueAccessRepository,
@@ -912,11 +1120,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueOrderRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueOrdersRepository = venueOrdersRepository,
+                    outboxEnqueuer = telegramOutboxEnqueuer,
                 )
                 venueBookingRoutes(
                     venueAccessRepository = venueAccessRepository,
                     guestBookingRepository = guestBookingRepository,
                     outboxEnqueuer = telegramOutboxEnqueuer,
+                    venueSettingsRepository = venueSettingsRepository,
                 )
                 platformRoutes(
                     platformConfig = platformConfig,
@@ -927,6 +1137,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     billingService = billingService,
                     subscriptionSettingsRepository = subscriptionSettingsRepository,
                     platformVenueMemberRepository = platformVenueMemberRepository,
+                    venueOwnerAccountRepository = venueOwnerAccountRepository,
                     staffInviteRepository = staffInviteRepository,
                     staffInviteConfig = staffInviteConfig,
                 )
@@ -988,18 +1199,13 @@ private fun Route.miniAppRoutes(
         head {
             call.redirectToMiniAppRoot()
         }
-        handle {
-            call.respond(HttpStatusCode.MethodNotAllowed)
-        }
-    }
 
-    if (!devServerUrl.isNullOrBlank()) {
-        route("/miniapp/") {
-            get {
-                call.proxyToDevServer(call.request.uri, HttpMethod.Get, devServerUrl, httpClient)
+        if (!devServerUrl.isNullOrBlank()) {
+            get("/") {
+                call.proxyToDevServer(call.miniAppIndexRequestUri(), HttpMethod.Get, devServerUrl, httpClient)
             }
-            head {
-                call.proxyToDevServer(call.request.uri, HttpMethod.Head, devServerUrl, httpClient)
+            head("/") {
+                call.proxyToDevServer(call.miniAppIndexRequestUri(), HttpMethod.Head, devServerUrl, httpClient)
             }
             get("{...}") {
                 call.proxyToDevServer(call.request.uri, HttpMethod.Get, devServerUrl, httpClient)
@@ -1007,35 +1213,51 @@ private fun Route.miniAppRoutes(
             head("{...}") {
                 call.proxyToDevServer(call.request.uri, HttpMethod.Head, devServerUrl, httpClient)
             }
-            handle {
-                call.respond(HttpStatusCode.MethodNotAllowed)
+            return@route
+        }
+
+        val staticFolder = staticDir?.let { File(it) }?.takeIf { file -> file.exists() && file.isDirectory }
+        if (staticFolder != null) {
+            val indexFile = File(staticFolder, "index.html")
+            get("/") {
+                if (indexFile.exists() && indexFile.isFile) {
+                    call.respondFile(indexFile)
+                } else {
+                    call.respond(HttpStatusCode.NotFound)
+                }
             }
+            head("/") {
+                if (indexFile.exists() && indexFile.isFile) {
+                    call.respondBytes(
+                        bytes = ByteArray(0),
+                        contentType = ContentType.Text.Html,
+                        status = HttpStatusCode.OK,
+                    )
+                } else {
+                    call.respond(HttpStatusCode.NotFound)
+                }
+            }
+            staticFiles("", staticFolder) {
+                default("index.html")
+            }
+            return@route
         }
-        return
-    }
 
-    val staticFolder = staticDir?.let { File(it) }?.takeIf { it.exists() && it.isDirectory }
-    if (staticFolder != null) {
-        staticFiles("/miniapp", staticFolder) {
-            default("index.html")
-        }
-        return
-    }
-
-    route("/miniapp/") {
-        get {
+        get("/") {
             call.respondText(
                 text = "Mini app dev server is not configured. Set MINIAPP_DEV_SERVER_URL or MINIAPP_STATIC_DIR.",
                 contentType = ContentType.Text.Plain,
             )
         }
-        head {
-            call.respond(HttpStatusCode.MethodNotAllowed)
-        }
-        handle {
+        head("/") {
             call.respond(HttpStatusCode.MethodNotAllowed)
         }
     }
+}
+
+private fun ApplicationCall.miniAppIndexRequestUri(): String {
+    val query = request.queryString()
+    return if (query.isBlank()) "/miniapp/index.html" else "/miniapp/index.html?$query"
 }
 
 private suspend fun ApplicationCall.proxyToDevServer(
@@ -1185,5 +1407,47 @@ private suspend fun configureTelegramCommandMenu(apiClient: TelegramApiClient) {
 
 private fun ApplicationConfig.optionalString(path: String): String? =
     if (propertyOrNull(path) != null) property(path).getString() else null
+
+private data class CorsAllowedHost(
+    val host: String,
+    val schemes: List<String>,
+)
+
+private val defaultCorsAllowedHosts =
+    listOf(
+        CorsAllowedHost(host = "localhost:5173", schemes = listOf("http")),
+        CorsAllowedHost(host = "127.0.0.1:5173", schemes = listOf("http")),
+    )
+
+private fun ApplicationConfig.corsAllowedHosts(): List<CorsAllowedHost> {
+    val configured =
+        optionalString("cors.allowedHosts")
+            .orEmpty()
+            .split(',')
+            .mapNotNull(::parseCorsAllowedHost)
+
+    return (defaultCorsAllowedHosts + configured)
+        .groupBy { it.host }
+        .map { (host, specs) ->
+            CorsAllowedHost(
+                host = host,
+                schemes = specs.flatMap { it.schemes }.distinct(),
+            )
+        }
+}
+
+private fun parseCorsAllowedHost(value: String): CorsAllowedHost? {
+    val trimmed = value.trim().trimEnd('/')
+    if (trimmed.isBlank()) {
+        return null
+    }
+
+    val rawUri = if ("://" in trimmed) trimmed else "https://$trimmed"
+    val uri = runCatching { URI(rawUri) }.getOrNull() ?: return null
+    val scheme = uri.scheme?.lowercase(Locale.ROOT)?.takeIf { it == "http" || it == "https" } ?: "https"
+    val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
+    val hostWithPort = if (uri.port >= 0) "$host:${uri.port}" else host
+    return CorsAllowedHost(host = hostWithPort, schemes = listOf(scheme))
+}
 
 private fun redactJdbcUrl(jdbcUrl: String): String = jdbcUrl.replace(Regex("(?i)(password)=([^&;]+)"), "$1=***")

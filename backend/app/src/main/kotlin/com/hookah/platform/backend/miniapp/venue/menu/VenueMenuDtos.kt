@@ -13,6 +13,7 @@ data class VenueMenuCategoryDto(
     val id: Long,
     val name: String,
     val sortOrder: Int,
+    val categoryType: String,
     val items: List<VenueMenuItemDto>,
 )
 
@@ -25,6 +26,8 @@ data class VenueMenuItemDto(
     val currency: String,
     val isAvailable: Boolean,
     val sortOrder: Int,
+    val itemType: String? = null,
+    val effectiveItemType: String,
     val options: List<VenueMenuOptionDto>,
 )
 
@@ -41,11 +44,13 @@ data class VenueMenuOptionDto(
 @Serializable
 data class CreateCategoryRequest(
     val name: String,
+    val categoryType: String? = null,
 )
 
 @Serializable
 data class UpdateCategoryRequest(
     val name: String? = null,
+    val categoryType: String? = null,
 )
 
 @Serializable
@@ -55,6 +60,7 @@ data class CreateItemRequest(
     val priceMinor: Long,
     val currency: String = "RUB",
     val isAvailable: Boolean = true,
+    val itemType: String? = null,
 )
 
 @Serializable
@@ -64,6 +70,7 @@ data class UpdateItemRequest(
     val priceMinor: Long? = null,
     val currency: String? = null,
     val isAvailable: Boolean? = null,
+    val itemType: String? = null,
 )
 
 @Serializable

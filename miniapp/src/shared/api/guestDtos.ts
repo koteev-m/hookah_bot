@@ -8,6 +8,8 @@ export type CatalogVenueDto = {
   name: string
   city?: string | null
   address?: string | null
+  guestContact?: string | null
+  cardDescription?: string | null
 }
 
 export type VenueResponse = {
@@ -19,7 +21,31 @@ export type VenueDto = {
   name: string
   city?: string | null
   address?: string | null
+  guestContact?: string | null
+  cardDescription?: string | null
   status: string
+}
+
+export type VenueInfoSectionsResponse = {
+  venueId: number
+  sections: VenueInfoSectionDto[]
+}
+
+export type VenueInfoSectionDto = {
+  id: number
+  type: string
+  title: string
+  displayTitle: string
+  text?: string | null
+  mediaCount?: number | null
+  media?: VenueInfoSectionMediaDto[] | null
+}
+
+export type VenueInfoSectionMediaDto = {
+  id: number
+  mediaType: string
+  sortOrder: number
+  url?: string | null
 }
 
 export type MenuResponse = {
@@ -43,8 +69,12 @@ export type MenuItemDto = {
 
 export type TableResolveResponse = {
   venueId: number
+  venueName: string
   tableId: number
   tableSessionId: number
+  tableSessionStatus: string
+  tableSessionActive: boolean
+  tableSessionInactiveReason?: string | null
   tableNumber: string
   venueStatus: string
   subscriptionStatus: string
@@ -58,11 +88,29 @@ export type ActiveOrderResponse = {
 
 export type ActiveOrderDto = {
   orderId: number
+  displayNumber?: number | null
+  displayDate?: string | null
   venueId: number
   tableId: number
+  tableSessionId?: number | null
+  tabId?: number | null
   tableNumber: string
   status: string
+  grossTotalMinor: number
+  manualDiscountTotalMinor: number
+  promoDiscountTotalMinor: number
+  loyaltyDiscountTotalMinor: number
+  finalPayableTotalMinor: number
+  currency: string
+  discounts: ActiveOrderDiscountDto[]
   batches: OrderBatchDto[]
+}
+
+export type ActiveOrderDiscountDto = {
+  label: string
+  discountMinor: number
+  currency: string
+  ruleType?: string | null
 }
 
 export type OrderBatchDto = {
@@ -74,6 +122,14 @@ export type OrderBatchDto = {
 export type OrderBatchItemDto = {
   itemId: number
   qty: number
+  name?: string | null
+  priceMinor?: number | null
+  currency?: string | null
+  lineGrossMinor: number
+  manualDiscountMinor: number
+  promoDiscountMinor: number
+  linePayableMinor: number
+  isPromotionReward: boolean
 }
 
 export type AddBatchRequest = {
@@ -132,8 +188,49 @@ export type AddBatchResponse = {
   batchId: number
 }
 
+export type CartPreviewRequest = {
+  tableToken: string
+  tableSessionId: number
+  tabId: number
+  items: AddBatchItemDto[]
+}
+
+export type CartPreviewResponse = {
+  preview: CartPreviewDto
+}
+
+export type CartPreviewDto = {
+  grossTotalMinor: number
+  promoDiscountTotalMinor: number
+  loyaltyDiscountTotalMinor: number
+  finalPayableTotalMinor: number
+  currency: string
+  discounts: CartPreviewDiscountDto[]
+  items: CartPreviewItemDto[]
+}
+
+export type CartPreviewDiscountDto = {
+  label: string
+  discountMinor: number
+  currency: string
+  ruleType?: string | null
+}
+
+export type CartPreviewItemDto = {
+  itemId: number
+  name: string
+  qty: number
+  priceMinor: number
+  currency: string
+  lineGrossMinor: number
+  discountMinor: number
+  linePayableMinor: number
+  isPromotionReward: boolean
+}
+
 export type StaffCallRequest = {
   tableToken: string
+  tableSessionId: number
   reason: string
   comment?: string | null
 }
@@ -141,4 +238,126 @@ export type StaffCallRequest = {
 export type StaffCallResponse = {
   staffCallId: number
   createdAtEpochSeconds: number
+}
+
+export type GuestVisitListResponse = {
+  items: GuestVisitListItemDto[]
+}
+
+export type GuestVisitListItemDto = {
+  visitId: number
+  venueId: number
+  venueName: string
+  venueCity?: string | null
+  occurredAt: string
+  serviceDate?: string | null
+  source: string
+  totalMinor?: number | null
+  currency?: string | null
+  hasBooking: boolean
+  orderLabels: string[]
+}
+
+export type GuestVisitDetailResponse = {
+  visit: GuestVisitDetailDto
+}
+
+export type GuestVisitDetailDto = {
+  visitId: number
+  venueId: number
+  venueName: string
+  venueCity?: string | null
+  occurredAt: string
+  serviceDate?: string | null
+  source: string
+  totalMinor?: number | null
+  currency?: string | null
+  booking?: GuestVisitBookingDto | null
+  orders: GuestVisitOrderDto[]
+}
+
+export type GuestVisitBookingDto = {
+  bookingId: number
+  displayNumber?: number | null
+  partySize?: number | null
+  status: string
+}
+
+export type GuestBookingCreateRequest = {
+  venueId: number
+  scheduledAt: string
+  partySize?: number | null
+  comment?: string | null
+}
+
+export type GuestBookingCancelRequest = {
+  bookingId: number
+}
+
+export type GuestBookingConfirmRequest = {
+  bookingId: number
+}
+
+export type GuestBookingResponse = {
+  bookingId: number
+  venueId: number
+  status: string
+  scheduledAt: string
+  partySize?: number | null
+  comment?: string | null
+  lastGuestConfirmationAt?: string | null
+}
+
+export type GuestBookingListResponse = {
+  items: GuestBookingResponse[]
+}
+
+export type GuestVisitOrderDto = {
+  orderId: number
+  displayNumber?: number | null
+  displayDate?: string | null
+  totalMinor?: number | null
+  currency?: string | null
+  items: GuestVisitOrderItemDto[]
+  promotionDiscounts: GuestVisitPromotionDiscountDto[]
+}
+
+export type GuestVisitOrderItemDto = {
+  itemId: number
+  itemName: string
+  qty: number
+  priceMinor?: number | null
+  currency?: string | null
+  discountPercent?: number | null
+  totalMinor?: number | null
+}
+
+export type GuestVisitPromotionDiscountDto = {
+  label: string
+  discountMinor: number
+  currency: string
+}
+
+export type GuestFavoriteVenuesResponse = {
+  venues: GuestFavoriteVenueDto[]
+}
+
+export type GuestFavoriteVenueDto = {
+  venueId: number
+  name: string
+  city?: string | null
+  address?: string | null
+}
+
+export type GuestFavoriteItemsResponse = {
+  items: GuestFavoriteItemDto[]
+}
+
+export type GuestFavoriteItemDto = {
+  itemId: number
+  venueId: number
+  categoryId: number
+  name: string
+  priceMinor: number
+  currency: string
 }

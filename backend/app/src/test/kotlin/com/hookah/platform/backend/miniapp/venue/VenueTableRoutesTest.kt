@@ -186,6 +186,92 @@ class VenueTableRoutesTest {
             assertTrue(manifestContent!!.contains("https://t.me/hookah_test_bot?start=token-two"))
         }
 
+    @Test
+    fun `staff can read tables but cannot mutate tables or qr tokens`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("tables-staff-readonly")
+            val config =
+                buildConfig(
+                    jdbcUrl,
+                    webAppUrl = "https://example.com/miniapp/",
+                    botUsername = "hookah_test_bot",
+                )
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 4101L
+            val staffId = 4102L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            val tableId = seedTable(jdbcUrl, venueId, 7)
+            seedTableToken(jdbcUrl, tableId, "staff-readonly-token")
+            val staffToken = issueToken(config, staffId)
+
+            val listResponse =
+                client.get("/api/venue/tables?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val listPayload = json.decodeFromString(VenueTablesResponse.serializer(), listResponse.bodyAsText())
+            assertEquals(listOf(7), listPayload.tables.map { it.tableNumber })
+
+            val createResponse =
+                client.post("/api/venue/tables/batch-create?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"count":1,"startNumber":8}""")
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, createResponse.status)
+            assertApiErrorEnvelope(createResponse, ApiErrorCodes.FORBIDDEN)
+
+            val rotateSingleResponse =
+                client.post("/api/venue/tables/$tableId/rotate-token?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, rotateSingleResponse.status)
+            assertApiErrorEnvelope(rotateSingleResponse, ApiErrorCodes.FORBIDDEN)
+
+            val rotateSelectedResponse =
+                client.post("/api/venue/tables/rotate-tokens?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"tableIds":[$tableId]}""")
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, rotateSelectedResponse.status)
+            assertApiErrorEnvelope(rotateSelectedResponse, ApiErrorCodes.FORBIDDEN)
+
+            val rotateAllResponse =
+                client.post("/api/venue/tables/rotate-tokens?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{}""")
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, rotateAllResponse.status)
+            assertApiErrorEnvelope(rotateAllResponse, ApiErrorCodes.FORBIDDEN)
+
+            val exportResponse =
+                client.get("/api/venue/tables/qr-package?venueId=$venueId&format=zip") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, exportResponse.status)
+            assertApiErrorEnvelope(exportResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -213,15 +299,19 @@ class VenueTableRoutesTest {
         return MapApplicationConfig(*config.map { it.key to it.value }.toTypedArray())
     }
 
-    private fun issueToken(config: MapApplicationConfig): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long = TELEGRAM_USER_ID,
+    ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
-        return service.issueToken(TELEGRAM_USER_ID).token
+        return service.issueToken(userId).token
     }
 
     private fun seedVenueWithRole(
         jdbcUrl: String,
         userId: Long,
         role: String,
+        venueId: Long? = null,
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -234,8 +324,8 @@ class VenueTableRoutesTest {
                 statement.setLong(1, userId)
                 statement.executeUpdate()
             }
-            val venueId =
-                connection.prepareStatement(
+            val resolvedVenueId =
+                venueId ?: connection.prepareStatement(
                     """
                     INSERT INTO venues (name, city, address, status)
                     VALUES ('Venue', 'City', 'Address', ?)
@@ -254,12 +344,12 @@ class VenueTableRoutesTest {
                 VALUES (?, ?, ?)
                 """.trimIndent(),
             ).use { statement ->
-                statement.setLong(1, venueId)
+                statement.setLong(1, resolvedVenueId)
                 statement.setLong(2, userId)
                 statement.setString(3, role)
                 statement.executeUpdate()
             }
-            return venueId
+            return resolvedVenueId
         }
     }
 
@@ -325,6 +415,20 @@ class VenueTableRoutesTest {
             }
         }
     }
+
+    @Serializable
+    private data class VenueTableDto(
+        val tableId: Long,
+        val tableNumber: Int,
+        val tableLabel: String,
+        val isActive: Boolean,
+        val activeTokenIssuedAt: String? = null,
+    )
+
+    @Serializable
+    private data class VenueTablesResponse(
+        val tables: List<VenueTableDto>,
+    )
 
     @Serializable
     private data class VenueTableCreatedDto(

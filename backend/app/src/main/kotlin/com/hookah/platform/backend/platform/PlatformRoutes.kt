@@ -48,6 +48,7 @@ fun Route.platformRoutes(
     billingService: BillingService,
     subscriptionSettingsRepository: PlatformSubscriptionSettingsRepository,
     platformVenueMemberRepository: PlatformVenueMemberRepository,
+    venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository,
     staffInviteConfig: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig,
 ) {
@@ -74,6 +75,7 @@ fun Route.platformRoutes(
         auditLogRepository = auditLogRepository,
         subscriptionSettingsRepository = subscriptionSettingsRepository,
         platformVenueMemberRepository = platformVenueMemberRepository,
+        venueOwnerAccountRepository = venueOwnerAccountRepository,
         staffInviteRepository = staffInviteRepository,
         staffInviteConfig = staffInviteConfig,
     )

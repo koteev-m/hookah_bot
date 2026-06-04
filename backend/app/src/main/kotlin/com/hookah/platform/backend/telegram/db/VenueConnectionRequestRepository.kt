@@ -120,6 +120,57 @@ class VenueConnectionRequestRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findActiveUnlinkedByUser(telegramUserId: Long): VenueConnectionRequestRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val sql =
+                        """
+                        SELECT
+                            id,
+                            telegram_user_id,
+                            venue_name,
+                            city,
+                            contact,
+                            comment,
+                            status,
+                            created_at,
+                            linked_venue_id,
+                            trial_configured,
+                            trial_ends_on,
+                            current_price_rub,
+                            future_price_rub,
+                            future_price_effective_on,
+                            commercial_note
+                        FROM venue_connection_requests
+                        WHERE telegram_user_id = ?
+                          AND (
+                              status = ?
+                              OR (status = ? AND linked_venue_id IS NULL)
+                          )
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """.trimIndent()
+                    connection.prepareStatement(sql).use { statement ->
+                        statement.setLong(1, telegramUserId)
+                        statement.setString(2, STATUS_PENDING)
+                        statement.setString(3, STATUS_APPROVED)
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                mapRecord(rs)
+                            } else {
+                                null
+                            }
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun findPendingByIdForUser(
         requestId: Long,
         telegramUserId: Long,
@@ -253,6 +304,30 @@ class VenueConnectionRequestRepository(private val dataSource: DataSource?) {
                         statement.setString(1, status)
                         statement.setLong(2, requestId)
                         statement.setString(3, STATUS_PENDING)
+                        statement.executeUpdate() > 0
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun closeApprovedUnlinkedByOwner(requestId: Long): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val sql =
+                        """
+                        UPDATE venue_connection_requests
+                        SET status = ?
+                        WHERE id = ? AND status = ? AND linked_venue_id IS NULL
+                        """.trimIndent()
+                    connection.prepareStatement(sql).use { statement ->
+                        statement.setString(1, STATUS_CANCELLED)
+                        statement.setLong(2, requestId)
+                        statement.setString(3, STATUS_APPROVED)
                         statement.executeUpdate() > 0
                     }
                 }
@@ -472,6 +547,54 @@ class VenueConnectionRequestRepository(private val dataSource: DataSource?) {
     }
 
     suspend fun listNewRequests(limit: Int): List<VenueConnectionRequestRecord> = listPendingRequests(limit)
+
+    suspend fun listActionableRequests(limit: Int): List<VenueConnectionRequestRecord> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val sql =
+                        """
+                        SELECT
+                            id,
+                            telegram_user_id,
+                            venue_name,
+                            city,
+                            contact,
+                            comment,
+                            status,
+                            created_at,
+                            linked_venue_id,
+                            trial_configured,
+                            trial_ends_on,
+                            current_price_rub,
+                            future_price_rub,
+                            future_price_effective_on,
+                            commercial_note
+                        FROM venue_connection_requests
+                        WHERE status = ?
+                           OR (status = ? AND linked_venue_id IS NULL)
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT ?
+                        """.trimIndent()
+                    connection.prepareStatement(sql).use { statement ->
+                        statement.setString(1, STATUS_PENDING)
+                        statement.setString(2, STATUS_APPROVED)
+                        statement.setInt(3, limit.coerceAtLeast(1))
+                        statement.executeQuery().use { rs ->
+                            val items = mutableListOf<VenueConnectionRequestRecord>()
+                            while (rs.next()) {
+                                items.add(mapRecord(rs))
+                            }
+                            items
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
 
     private fun mapRecord(rs: ResultSet): VenueConnectionRequestRecord =
         VenueConnectionRequestRecord(

@@ -1,0 +1,2 @@
+ALTER TABLE IF EXISTS visit_feedback
+    ADD COLUMN IF NOT EXISTS comment_staff_notified_at TIMESTAMP WITH TIME ZONE NULL;

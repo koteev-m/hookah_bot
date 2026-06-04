@@ -1,0 +1,93 @@
+# Guest
+
+Дата актуализации: 2026-06-03.
+
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл фиксирует текущее поведение Guest в Telegram bot и Mini App после последних parity/fix-pack'ов.
+
+## Current status
+
+Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call и просмотр своего заказа/счёта.
+
+Ключевое разделение:
+- **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;
+- **после QR / active table context** guest получает заказное меню, корзину, дозаказы, staff call и active order.
+
+## Telegram bot
+
+До QR / без стола:
+- каталог заведений;
+- карточка заведения;
+- `ℹ️ Информация`;
+- внутри информации: `О заведении`, правила, пробковый сбор, FAQ, `📖 Фото-меню`, custom-разделы;
+- guest card больше не показывает отдельную кнопку заказного `🍽 Меню`;
+- legacy callback `bot_catalog_venue_menu:{venueId}` должен показывать безопасное объяснение, что заказное меню доступно после QR.
+
+После QR / table context:
+- structured order menu с категориями/позициями/ценами;
+- корзина;
+- отправка заказа или дозаказа;
+- staff call;
+- active order / счёт;
+- table session/tab context используется для scoped заказа.
+
+## Mini App
+
+Pre-QR Guest Mini App:
+- карточка заведения показывает safe guest-visible данные;
+- `ℹ️ Информация` отдаёт только visible + filled owner info sections;
+- `section_type=menu` отображается как `📖 Фото-меню`;
+- media из info sections открываются через backend proxy, без raw Telegram URL и без bot token во frontend;
+- structured order menu не запрашивается и не показывается без active table context;
+- add-to-cart/order actions недоступны без table context.
+
+QR/table Guest Mini App:
+- table token resolve и active table session;
+- structured order menu;
+- cart preview backend-owned;
+- submit order/add batch;
+- active order screen с refresh/polling;
+- staff call flow;
+- закрытый счёт больше не должен выглядеть активным.
+
+Account/bookings:
+- guest booking MVP присутствует: create/list active bookings/status refresh, cancel/accept changed time where supported;
+- account baseline включает history/favorites sections;
+- profile/promotions/loyalty остаются partial или safe fallback, если backend не отдаёт полноценные данные.
+
+## Allowed actions
+
+- Смотреть каталог и published guest-visible venues.
+- Открывать карточку заведения и заполненные visible info sections.
+- Смотреть `📖 Фото-меню` как информационный media/text section.
+- Создавать и отменять свои бронирования, если booking flow доступен.
+- После QR/table context смотреть заказное меню, собирать корзину, отправлять заказ/дозаказ.
+- Вызывать персонал из active table context.
+- Смотреть свой active/current order и backend-owned счёт.
+- Пользоваться account/favorites/history baseline, где он доступен.
+
+## Denied actions
+
+- Делать заказ до QR/table context.
+- Видеть structured order categories/items в pre-QR venue card.
+- Получать hidden info sections или hidden media.
+- Получать raw Telegram `file_id`, raw Telegram file URL или bot token.
+- Управлять меню, stop-list, столами, персоналом, счетами, скидками, venue settings или platform features.
+- Видеть чужие bookings/orders/tabs.
+
+## Known gaps / needs smoke
+
+- Полная guest profile/promotions/loyalty parity остаётся частичной.
+- Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
+- Media proxy требует ручной проверки для image/PDF и скрытых/удалённых sections.
+- QR/table order flow должен smoke-тестироваться отдельно от pre-QR catalog flow.
+- Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
+
+## Smoke-critical checks
+
+1. Открыть каталог без QR: карточка venue не показывает заказное `🍽 Меню`.
+2. Открыть `ℹ️ Информация`: видны только заполненные visible sections.
+3. Проверить `📖 Фото-меню`: изображения/PDF открываются через Mini App.
+4. Сканировать QR: structured order menu появляется только после table context.
+5. Добавить item в cart, отправить order/add batch.
+6. Вызвать персонал из active table.
+7. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.

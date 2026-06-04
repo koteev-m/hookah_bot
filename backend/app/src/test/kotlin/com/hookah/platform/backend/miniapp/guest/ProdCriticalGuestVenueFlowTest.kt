@@ -59,7 +59,7 @@ class ProdCriticalGuestVenueFlowTest {
             val token = issueToken(config)
 
             val resolveResponse =
-                client.get("/api/guest/table/resolve?tableToken=e2e-token") {
+                client.get("/api/guest/table/resolve?tableToken=e2e-token&resolveMode=create") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             assertEquals(HttpStatusCode.OK, resolveResponse.status)
@@ -93,6 +93,10 @@ class ProdCriticalGuestVenueFlowTest {
                 }
             assertEquals(HttpStatusCode.OK, addBatchResponse.status)
             val addBatchPayload = json.decodeFromString(AddBatchResponse.serializer(), addBatchResponse.bodyAsText())
+            assertEquals(
+                resolvePayload.tableSessionId,
+                fetchOrderTableSessionId(jdbcUrl, addBatchPayload.orderId),
+            )
 
             val statusResponse =
                 client.post("/api/venue/orders/${addBatchPayload.orderId}/status?venueId=$venueId") {
@@ -180,7 +184,7 @@ class ProdCriticalGuestVenueFlowTest {
             val token = issueToken(config)
 
             val resolveResponse =
-                client.get("/api/guest/table/resolve?tableToken=unavailable-item-token") {
+                client.get("/api/guest/table/resolve?tableToken=unavailable-item-token&resolveMode=create") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             assertEquals(HttpStatusCode.OK, resolveResponse.status)
@@ -414,6 +418,23 @@ class ProdCriticalGuestVenueFlowTest {
             }
         }
         return false
+    }
+
+    private fun fetchOrderTableSessionId(
+        jdbcUrl: String,
+        orderId: Long,
+    ): Long? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT table_session_id FROM orders WHERE id = ?").use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong("table_session_id")
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun countAnalyticsEvents(

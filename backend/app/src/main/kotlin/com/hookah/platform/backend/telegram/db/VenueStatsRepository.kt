@@ -78,11 +78,17 @@ class VenueStatsRepository(
                     CASE
                         WHEN obi.discount_percent BETWEEN 1 AND 100 THEN obi.discount_percent
                         ELSE 0
-                    END AS discount_percent
+                    END AS discount_percent,
+                    COALESCE(promo.discount_minor, 0) AS promo_discount_minor
                 FROM orders o
                 JOIN order_batches ob ON ob.order_id = o.id
                 JOIN order_batch_items obi ON obi.order_batch_id = ob.id
                 LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+                LEFT JOIN (
+                    SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                    FROM order_batch_item_promotion_adjustments
+                    GROUP BY order_batch_item_id
+                ) promo ON promo.order_batch_item_id = obi.id
                 WHERE o.venue_id = ?
                   AND o.status IN ('ACTIVE', 'CLOSED')
                   AND ob.created_at >= ?
@@ -90,11 +96,12 @@ class VenueStatsRepository(
                   AND ob.rejected_reason_code IS NULL
                   AND ob.rejected_reason_text IS NULL
                   AND obi.is_excluded = FALSE
+                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
             )
             SELECT
                 COUNT(DISTINCT order_id) AS orders_count,
-                COALESCE(SUM(price_minor * qty * (100 - discount_percent) / 100), 0) AS revenue_minor,
-                COALESCE(SUM(price_minor * qty * discount_percent / 100), 0) AS discount_minor,
+                COALESCE(SUM(GREATEST(price_minor * qty - price_minor * qty * discount_percent / 100 - promo_discount_minor, 0)), 0) AS revenue_minor,
+                COALESCE(SUM(price_minor * qty * discount_percent / 100 + promo_discount_minor), 0) AS discount_minor,
                 COALESCE(MAX(currency), 'RUB') AS currency
             FROM active_items
             """.trimIndent()
@@ -132,6 +139,7 @@ class VenueStatsRepository(
               AND ob.created_at >= ?
               AND (
                   obi.is_excluded = TRUE
+                  OR COALESCE(obi.item_status, 'ACTIVE') = 'CANCELED'
                   OR ob.status = 'REJECTED'
                   OR ob.rejected_reason_code IS NOT NULL
                   OR ob.rejected_reason_text IS NOT NULL
@@ -168,6 +176,7 @@ class VenueStatsRepository(
               AND ob.rejected_reason_code IS NULL
               AND ob.rejected_reason_text IS NULL
               AND obi.is_excluded = FALSE
+              AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
             GROUP BY obi.menu_item_id, mi.name
             ORDER BY SUM(obi.qty) DESC, MIN(obi.id) ASC
             LIMIT 3

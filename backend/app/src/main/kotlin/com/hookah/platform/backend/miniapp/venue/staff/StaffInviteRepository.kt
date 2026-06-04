@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
+import com.hookah.platform.backend.miniapp.venue.VenueRole
+import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
@@ -128,15 +130,37 @@ class StaffInviteRepository(
                     if (invite.usedAt != null || !invite.expiresAt.isAfter(nowTs)) {
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.InvalidOrExpired }
                     }
-                    val existingMember = loadMember(connection, invite.venueId, userId)
+                    val existingMember = loadMember(connection, invite.venueId, userId, forUpdate = true)
                     if (existingMember != null) {
+                        val resolvedExisting = VenueRoleMapping.fromDb(existingMember.role)
+                        val resolvedInvited = VenueRoleMapping.fromDb(invite.role)
+                        if (resolvedExisting == null || resolvedInvited == null) {
+                            return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
+                        }
+                        val normalizedExistingMember = existingMember.copy(role = resolvedExisting.name)
+                        val existingRank = venueRoleRank(resolvedExisting)
+                        val invitedRank = venueRoleRank(resolvedInvited)
+                        if (invitedRank > existingRank) {
+                            val updatedMember = updateMemberRole(connection, normalizedExistingMember, resolvedInvited.name)
+                            markInviteUsed(connection, codeHash, nowTs, userId)
+                            connection.commit()
+                            return@use StaffInviteAcceptResult.Success(
+                                member = updatedMember,
+                                alreadyMember = true,
+                                roleChanged = true,
+                            )
+                        }
                         markInviteUsed(connection, codeHash, nowTs, userId)
                         connection.commit()
-                        return@use StaffInviteAcceptResult.Success(existingMember, alreadyMember = true)
+                        return@use StaffInviteAcceptResult.Success(
+                            member = normalizedExistingMember,
+                            alreadyMember = true,
+                            keptHigherRole = existingRank > invitedRank,
+                        )
                     }
                     val member = createMember(connection, invite.venueId, invite.role, invite.createdByUserId)
                     if (member == null) {
-                        val existingAfterInsert = loadMember(connection, invite.venueId, userId)
+                        val existingAfterInsert = loadMember(connection, invite.venueId, userId, forUpdate = true)
                         if (existingAfterInsert != null) {
                             markInviteUsed(connection, codeHash, nowTs, userId)
                             connection.commit()
@@ -238,12 +262,15 @@ class StaffInviteRepository(
         connection: Connection,
         venueId: Long,
         userId: Long,
+        forUpdate: Boolean = false,
     ): VenueStaffMember? {
+        val lockClause = if (forUpdate) " FOR UPDATE" else ""
         return connection.prepareStatement(
             """
             SELECT role, created_at, invited_by_user_id
             FROM venue_members
             WHERE venue_id = ? AND user_id = ?
+            $lockClause
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
@@ -263,6 +290,33 @@ class StaffInviteRepository(
             }
         }
     }
+
+    private fun updateMemberRole(
+        connection: Connection,
+        member: VenueStaffMember,
+        role: String,
+    ): VenueStaffMember {
+        connection.prepareStatement(
+            """
+            UPDATE venue_members
+            SET role = ?
+            WHERE venue_id = ? AND user_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, role)
+            statement.setLong(2, member.venueId)
+            statement.setLong(3, member.userId)
+            statement.executeUpdate()
+        }
+        return member.copy(role = role)
+    }
+
+    private fun venueRoleRank(role: VenueRole): Int =
+        when (role) {
+            VenueRole.STAFF -> 1
+            VenueRole.MANAGER -> 2
+            VenueRole.OWNER -> 3
+        }
 
     private fun markInviteUsed(
         connection: Connection,
@@ -336,7 +390,12 @@ sealed interface StaffInvitePreviewResult {
 }
 
 sealed interface StaffInviteAcceptResult {
-    data class Success(val member: VenueStaffMember, val alreadyMember: Boolean) : StaffInviteAcceptResult
+    data class Success(
+        val member: VenueStaffMember,
+        val alreadyMember: Boolean,
+        val roleChanged: Boolean = false,
+        val keptHigherRole: Boolean = false,
+    ) : StaffInviteAcceptResult
 
     data object InvalidOrExpired : StaffInviteAcceptResult
 

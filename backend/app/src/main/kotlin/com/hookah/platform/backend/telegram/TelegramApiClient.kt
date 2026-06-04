@@ -13,6 +13,7 @@ import io.ktor.http.Headers
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -33,6 +34,11 @@ sealed class TelegramCallResult {
         val retryAfterSeconds: Int?,
     ) : TelegramCallResult()
 }
+
+data class TelegramDownloadedFile(
+    val bytes: ByteArray,
+    val contentType: ContentType?,
+)
 
 class TelegramApiClient(
     private val token: String,
@@ -63,8 +69,9 @@ class TelegramApiClient(
         chatId: Long,
         text: String,
         replyMarkup: ReplyMarkup? = null,
+        parseMode: String? = null,
     ): MessageId? {
-        val payload = buildSendMessagePayload(json, chatId, text, replyMarkup)
+        val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
         val payloadJson = json.encodeToJsonElement(payload)
         return runCatching {
             when (val result = callMethod("sendMessage", payloadJson)) {
@@ -136,6 +143,41 @@ class TelegramApiClient(
         return TelegramCallResult.Success(response.result)
     }
 
+    suspend fun downloadFile(fileId: String): TelegramDownloadedFile? {
+        val trimmedFileId = fileId.trim()
+        if (trimmedFileId.isBlank()) {
+            return null
+        }
+        return runCatching {
+            val fileResponse: TelegramResponse<TelegramFileInfo> =
+                client.get("$baseUrl/getFile") {
+                    parameter("file_id", trimmedFileId)
+                }.safeBody()
+            if (fileResponse.ok.not()) {
+                logger.warn(
+                    "Telegram getFile failed: {}{}",
+                    sanitizeTelegramForLog(fileResponse.description),
+                    fileResponse.errorCode?.let { " (code=$it)" } ?: "",
+                )
+                return@runCatching null
+            }
+
+            val filePath = fileResponse.result?.filePath?.takeIf { it.isNotBlank() } ?: return@runCatching null
+            val response = client.get("https://api.telegram.org/file/bot$token/$filePath")
+            if (!response.status.isSuccess()) {
+                logger.warn("Telegram file download failed: status={}", response.status.value)
+                return@runCatching null
+            }
+            TelegramDownloadedFile(
+                bytes = response.body(),
+                contentType = response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) },
+            )
+        }.onFailure { throwable ->
+            logger.warn("Telegram file download failed: {}", sanitizeTelegramForLog(throwable.message))
+            logger.debugTelegramException(throwable) { "Telegram file download exception" }
+        }.getOrNull()
+    }
+
     fun close() {
         client.close()
     }
@@ -164,6 +206,29 @@ class TelegramApiClient(
         }.onFailure { throwable ->
             logger.warn("Telegram getChatMember failed: {}", sanitizeTelegramForLog(throwable.message))
             logger.debugTelegramException(throwable) { "Telegram getChatMember exception" }
+        }.getOrNull()
+    }
+
+    suspend fun getChat(chatId: Long): Chat? {
+        return runCatching {
+            val response: TelegramResponse<Chat> =
+                client.get("$baseUrl/getChat") {
+                    parameter("chat_id", chatId)
+                }.safeBody()
+            if (response.ok.not()) {
+                val safeDescription = sanitizeTelegramForLog(response.description)
+                logger.warn(
+                    "Telegram getChat failed: {}{}",
+                    safeDescription,
+                    response.errorCode?.let { " (code=$it)" } ?: "",
+                )
+                null
+            } else {
+                response.result
+            }
+        }.onFailure { throwable ->
+            logger.warn("Telegram getChat failed: {}", sanitizeTelegramForLog(throwable.message))
+            logger.debugTelegramException(throwable) { "Telegram getChat exception" }
         }.getOrNull()
     }
 
@@ -234,4 +299,12 @@ private data class TelegramResponse<T>(
 @Serializable
 private data class TelegramResponseParameters(
     @SerialName("retry_after") val retryAfterSeconds: Int? = null,
+)
+
+@Serializable
+private data class TelegramFileInfo(
+    @SerialName("file_id") val fileId: String,
+    @SerialName("file_unique_id") val fileUniqueId: String? = null,
+    @SerialName("file_size") val fileSize: Int? = null,
+    @SerialName("file_path") val filePath: String? = null,
 )

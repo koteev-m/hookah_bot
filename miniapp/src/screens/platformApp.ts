@@ -10,6 +10,7 @@ import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { append, el } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
+import { renderPlatformCockpitSectionScreen } from './platformCockpitSections'
 import { renderPlatformCreateVenueScreen } from './platformCreateVenue'
 import { renderPlatformVenueDetailScreen } from './platformVenueDetail'
 import { renderPlatformVenuesListScreen } from './platformVenuesList'
@@ -19,7 +20,7 @@ export type PlatformAppOptions = {
   backendUrl: string
 }
 
-type RouteName = 'venues' | 'venue' | 'create'
+type RouteName = 'venues' | 'venue' | 'create' | 'onboarding' | 'placements' | 'support' | 'analytics'
 
 type Route = {
   name: RouteName
@@ -57,7 +58,7 @@ function resolveRoute(): Route {
   const [pathPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
-  if (!route || !['venues', 'venue', 'create'].includes(route)) {
+  if (!route || !['venues', 'venue', 'create', 'onboarding', 'placements', 'support', 'analytics'].includes(route)) {
     return { name: 'venues', venueId: null }
   }
   if (route === 'venue') {
@@ -231,6 +232,15 @@ export function mountPlatformApp(options: PlatformAppOptions) {
           root: refs.content,
           backendUrl,
           isDebug,
+          onNavigate: navigate
+        })
+      case 'onboarding':
+      case 'placements':
+      case 'support':
+      case 'analytics':
+        return renderPlatformCockpitSectionScreen({
+          root: refs.content,
+          section: route.name,
           onNavigate: navigate
         })
       case 'venue':

@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-06-03.
+Дата обновления: 2026-06-04.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -22,7 +22,7 @@
 
 > Market launch требует production-ready Telegram bot + Mini App core. AI входит в продукт как assistant layer. Telegram Guest Mode, Telegram Business / Secretary Bots, Managed branded bots и Bot-to-Bot agents не являются обязательными для первого запуска.
 
-Текущий фокус перед пилотом: завершить launch smoke на реальных Telegram WebApp runtime сценариях, стабилизировать production config/monitoring/support/billing baseline и не расширять scope в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
+Текущий фокус перед пилотом: завершить final pilot readiness review после успешного staging smoke, стабилизировать production config/monitoring/support/billing baseline и не расширять scope в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
 
 Актуальный post-fix snapshot:
 
@@ -40,6 +40,9 @@
 Recently verified:
 
 - STAFF booking RBAC split is implemented in backend/Mini App/Telegram callbacks and tests. Local manual smoke through `dev.hookahtootah.club` passed on 2026-06-04; staging deploy/smoke passed on 2026-06-04.
+- Full pilot staging smoke on 2026-06-04 completed as `PASS WITH P1 FIXES`; Pilot Smoke Fix Pack #1 was deployed and affected staging re-smoke passed.
+- Pilot Smoke Fix Pack #1.1 was deployed and affected staging re-smoke passed on 2026-06-04: health/db/miniapp, Telegram Mini App `initData`, Guest pre-QR info/media loading, venue selector Russian status labels and explicit archive restore copy all passed.
+- The previous P1 `Guest pre-QR endless "Загрузка информации..."` issue is resolved in staging.
 
 ## 2. Sources Merged
 
@@ -111,11 +114,11 @@ Done:
 - support-safe baseline;
 - active order scoping through `tableSessionId` and `tabId` in Mini App client/backend path.
 
-Remaining P1:
+Remaining P1/P2:
 
 - richer profile/promotions/loyalty polish in Mini App;
 - richer active order display with totals/promo/loyalty parity where needed;
-- runtime smoke for booking create/confirm/change/cancel across guest and venue surfaces.
+- booking create/confirm/change/cancel smoke passed for current staging MVP; keep it in regression smoke after future booking changes.
 
 ### Venue / Manager / Staff
 
@@ -204,7 +207,7 @@ Launch focus:
 
 ### Mini App Readiness
 
-Status: `P0 CLOSED / PILOT SMOKE REQUIRED`.
+Status: `P0 CLOSED / PILOT SMOKE PASSED WITH P2 FOLLOW-UP`.
 
 Closed readiness blocks:
 
@@ -226,17 +229,18 @@ Closed readiness blocks:
 - launch smoke/e2e coverage baseline;
 - support/tickets launch-safe baseline;
 - frontend active order API scoped by `tableSessionId`/`tabId`.
+- Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
+- Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; Guest pre-QR info/media no longer remains on endless loading.
 
 Remaining before pilot:
 
-- execute real Telegram runtime smoke using `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`;
-- confirm `initData` behavior through Telegram WebApp buttons;
-- confirm staging and local-dev WebApp config paths;
-- verify bot-created orders are visible in Venue Mini App and Mini App-created orders are visible in Telegram staff flow.
+- run final pilot readiness review against the completed smoke results and current dirty/untracked release snapshot;
+- repeat real Telegram runtime smoke using `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` after any additional release batch;
+- verify production/staging operational runbook ownership before inviting pilot users.
 
 ### DevOps / QA
 
-Status: `STAGING READY / SMOKE REQUIRED`.
+Status: `STAGING READY / SMOKE PASSED FOR CURRENT RELEASE`.
 
 Done:
 
@@ -248,7 +252,7 @@ Done:
 
 Remaining P1:
 
-- final staging smoke after each release batch;
+- final staging smoke after each additional release batch;
 - document broad-test heap behavior and keep targeted test commands;
 - harden deploy health-check wait/retry if curl sees early reset after container restart.
 
@@ -542,9 +546,9 @@ Before market launch, close:
 
 ### Launch-Critical Follow-Up
 
-1. Pilot venue smoke execution
-   - Why: final confidence must happen in real Telegram WebApp runtime.
-   - Acceptance: checklist completed for 1-3 venues, no P0 remains.
+1. Final pilot readiness review
+   - Why: current staging smoke and affected re-smokes passed, but the release snapshot is large and should be reviewed before inviting pilot users.
+   - Acceptance: completed release readiness checklist, no open P0/P1 from current smoke, known P2s accepted or deferred.
    - Source: `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`.
 
 2. Production config / infra readiness
@@ -739,7 +743,7 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 ## 12. Next Development Block
 
-Recommended next block: pilot venue smoke execution and launch-readiness bugfix batch.
+Recommended next block: final pilot readiness review and release-candidate decision.
 
 Prompt:
 
@@ -749,10 +753,10 @@ Prompt:
 Контекст:
 Canonical roadmap: docs/UPDATED_PRODUCT_AI_ROADMAP.md.
 Mini App smoke checklist: docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md.
-P0 Mini App readiness blocks are closed in code, but real Telegram runtime smoke is still required before pilot launch.
+P0 Mini App readiness blocks are closed in code, and the current staging Telegram runtime smoke passed on 2026-06-04 after Pilot Smoke Fix Pack #1 and #1.1.
 
 Goal:
-Провести pilot venue smoke for 1-3 venues and фиксировать только реальные launch blockers.
+Провести final pilot readiness review for the current staging release and decide whether it can become the pilot release candidate.
 
 Scope:
 1. Guest: QR/table -> Mini App -> menu -> cart -> checkout -> active order -> staff call.
@@ -764,5 +768,5 @@ Scope:
 
 Do not add new product scope.
 Classify findings as P0/P1/P2.
-If P0 found, produce the smallest implementation prompt for the fix.
+If a new P0/P1 is found, produce the smallest implementation prompt for the fix.
 ```

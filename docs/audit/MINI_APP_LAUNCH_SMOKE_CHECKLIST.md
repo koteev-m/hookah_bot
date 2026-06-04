@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-06-03.
+Дата: 2026-06-04.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` сейчас есть только `dev`, `build`, `preview`; frontend/browser e2e harness в проекте не найден. Поэтому стратегия на этот шаг гибридная:
 
@@ -17,7 +17,34 @@
 - STAFF can close bill/order but cannot edit discounts, exclusions, stop-list, menu, tables, staff, settings or staff chat link.
 - STAFF booking actions are operational only: view bookings and mark `Гость пришёл` / `Не пришёл`; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
+- Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
+- Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
 - Platform owner lifecycle and commercial terms flows are in smoke scope.
+
+## Current Staging Smoke Status
+
+Status: `PASSED FOR CURRENT RELEASE` on 2026-06-04.
+
+Confirmed:
+
+- staging `/health`, `/db/health` and `/miniapp/` passed;
+- Telegram Mini App opens with non-empty `initData`;
+- Guest pre-QR venue card opens, text info renders and `Загрузка информации...` disappears;
+- info-section image media renders through backend proxy or shows a safe empty/error state;
+- PDF media shows `Открыть PDF` when PDF exists;
+- empty/hidden info sections do not create endless loading;
+- structured order menu remains hidden before QR/table context;
+- table QR flow, category-first menu, cart comment draft, order flow and staff/manager/owner processing passed in affected smoke;
+- booking action copy is honest as `Перенести бронь`, and booking notifications include venue name, human-readable time and cancellation reason/fallback;
+- STAFF booking RBAC split remains passed: STAFF only sees arrival actions, MANAGER/OWNER keep management actions;
+- venue selector shows venue names and Russian status labels;
+- platform archived venue action copy is explicit that restore immediately publishes with current backend behavior.
+
+Remaining:
+
+- no open P0/P1 from the current pilot smoke and affected re-smokes is recorded in this checklist;
+- repeat this smoke after any additional release batch;
+- P2 follow-ups remain: frontend/browser e2e harness, cross-channel bill snapshot automation, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
 
@@ -40,7 +67,7 @@
 - `TelegramBotRouterTableTokenTest`
   - WebApp fallback sends supported `cmd=start_quick_order`.
 
-Manual runtime coverage still required:
+Manual runtime coverage for each release batch:
 
 - Telegram opens Mini App with non-empty `Telegram.WebApp.initData`;
 - pre-QR catalog does not expose structured order categories/items;
@@ -61,11 +88,11 @@ Manual runtime coverage still required:
   - promotion breakdown is grouped by readable labels;
   - loyalty accrual/redemption side effects remain consistent when orders close.
 
-Manual runtime coverage still required:
+Manual runtime coverage for each release batch:
 
 - Venue Owner/Manager/Staff entry is sent as inline `web_app`, not plain URL;
 - queue uses `Заказ №<displayNumber>`;
-- order detail renders `Управленческий счёт`;
+- order detail renders the user-facing bill block without technical copy;
 - UI displays backend totals directly and does not invent frontend-calculated money.
 - STAFF close bill/order works while bill edit controls stay hidden;
 - venue support screen is informational and points operators to the manual platform support path.
@@ -86,7 +113,7 @@ Manual runtime coverage still required:
   - pricing/date validation;
   - effective price uses override, schedule, then base price.
 
-Manual runtime coverage still required:
+Manual runtime coverage for each release batch:
 
 - `#/venues` opens platform cockpit;
 - `PLATFORM_OWNER_TELEGRAM_ID` grants access without requiring a separate non-empty legacy owner id;
@@ -194,7 +221,7 @@ Steps:
 7. Confirm header uses `Заказ №<displayNumber>`.
 8. Confirm statuses/buttons are in Russian.
 9. Confirm `🔄 Обновить` refreshes order detail.
-10. Confirm `Управленческий счёт` is visible.
+10. Confirm the `Счёт` / full bill block is visible without technical backend wording.
 11. Confirm rows are shown when applicable:
    - сумма до скидок / gross;
    - ручные скидки;
@@ -303,7 +330,7 @@ Expected:
 
 1. Create an order through Telegram bot and verify it appears in Venue Mini App queue.
 2. Create an order through Guest Mini App and verify Telegram staff flow receives it.
-3. Compare Telegram full bill and Venue Mini App `Управленческий счёт`:
+3. Compare Telegram full bill and Venue Mini App `Счёт`:
    - final total;
    - promo lines;
    - loyalty lines;

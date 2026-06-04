@@ -65,6 +65,7 @@ class TableSessionsMigrationV28PostgresTest {
                     assertEquals(oldTableId, resultSet.getLong("table_id"))
                     assertEquals("ENDED", resultSet.getString("status"))
                     assertNotNull(resultSet.getTimestamp("ended_at"))
+                    assertEquals(remappedSessionId, loadOrderTableSessionId(connection, remappedSessionId))
                 }
             }
 
@@ -88,6 +89,20 @@ class TableSessionsMigrationV28PostgresTest {
             "SELECT table_session_id FROM guest_batch_idempotency WHERE id = ?",
         ).use { statement ->
             statement.setLong(1, idempotencyId)
+            statement.executeQuery().use { resultSet ->
+                resultSet.next()
+                resultSet.getLong("table_session_id")
+            }
+        }
+
+    private fun loadOrderTableSessionId(
+        connection: Connection,
+        tableSessionId: Long,
+    ): Long =
+        connection.prepareStatement(
+            "SELECT table_session_id FROM orders WHERE table_session_id = ?",
+        ).use { statement ->
+            statement.setLong(1, tableSessionId)
             statement.executeQuery().use { resultSet ->
                 resultSet.next()
                 resultSet.getLong("table_session_id")

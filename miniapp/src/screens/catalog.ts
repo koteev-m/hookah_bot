@@ -13,6 +13,7 @@ type CatalogScreenOptions = {
   backendUrl: string
   isDebug: boolean
   onOpenVenue: (venueId: number) => void
+  onBookVenue?: (venueId: number) => void
 }
 
 type CatalogRefs = {
@@ -86,6 +87,7 @@ function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
 function renderCatalogList(
   venues: CatalogVenueDto[],
   onOpenVenue: (venueId: number) => void,
+  onBookVenue: ((venueId: number) => void) | undefined,
   refs: CatalogRefs,
   emptyMessage: string
 ) {
@@ -116,18 +118,29 @@ function renderCatalogList(
       info.appendChild(address)
     }
 
+    const actions = document.createElement('div')
+    actions.className = 'order-actions'
     const button = document.createElement('button')
-    button.textContent = 'Открыть меню'
+    button.className = 'button-small'
+    button.textContent = 'Открыть карточку'
     button.addEventListener('click', () => onOpenVenue(venue.id))
+    actions.appendChild(button)
+    if (onBookVenue) {
+      const bookingButton = document.createElement('button')
+      bookingButton.className = 'button-small button-secondary'
+      bookingButton.textContent = 'Забронировать'
+      bookingButton.addEventListener('click', () => onBookVenue(venue.id))
+      actions.appendChild(bookingButton)
+    }
 
     item.appendChild(info)
-    item.appendChild(button)
+    item.appendChild(actions)
     refs.list.appendChild(item)
   })
 }
 
 export function renderCatalogScreen(options: CatalogScreenOptions) {
-  const { root, backendUrl, isDebug, onOpenVenue } = options
+  const { root, backendUrl, isDebug, onOpenVenue, onBookVenue } = options
   if (!root) return () => undefined
 
   const refs = buildCatalogDom(root)
@@ -181,7 +194,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     const emptyMessage = venues.length
       ? 'Ничего не найдено по заданному фильтру.'
       : 'Пока нет доступных заведений.'
-    renderCatalogList(filtered, onOpenVenue, refs, emptyMessage)
+    renderCatalogList(filtered, onOpenVenue, onBookVenue, refs, emptyMessage)
   }
 
   async function loadCatalog() {

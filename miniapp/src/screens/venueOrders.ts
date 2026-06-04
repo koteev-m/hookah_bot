@@ -9,7 +9,14 @@ import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPrese
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 
 const POLL_INTERVAL_MS = 12000
-const ALL_STATUSES = ['new', 'accepted', 'cooking', 'delivering', 'delivered'] as const
+const STATUS_LABELS: Record<OrderQueueItemDto['status'], string> = {
+  new: 'новый',
+  accepted: 'принят',
+  cooking: 'готовится',
+  delivering: 'доставляется',
+  delivered: 'доставлен',
+  closed: 'закрыт'
+}
 
 type OrdersScreenOptions = {
   root: HTMLDivElement | null
@@ -102,14 +109,42 @@ function sortByCreatedAt(items: OrderQueueItemDto[]) {
   return [...items].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 }
 
+function dedupeByOrderId(items: OrderQueueItemDto[]) {
+  const seen = new Set<number>()
+  return items.filter((item) => {
+    if (seen.has(item.orderId)) {
+      return false
+    }
+    seen.add(item.orderId)
+    return true
+  })
+}
+
+function orderNumberLabel(item: OrderQueueItemDto) {
+  return item.displayNumber ? `Заказ №${item.displayNumber}` : `Заказ №${item.orderId}`
+}
+
+function orderStatusLabel(status: OrderQueueItemDto['status']) {
+  return STATUS_LABELS[status] ?? status
+}
+
 function renderOrderRow(item: OrderQueueItemDto, onOpenOrder: (orderId: number) => void) {
   const row = el('div', { className: 'venue-order-row' })
   const meta = el('div', { className: 'venue-order-meta' })
-  const title = el('strong', { text: `Order #${item.orderId} · Batch ${item.batchId}` })
-  const table = el('p', { className: 'venue-order-sub', text: `${item.tableLabel || item.tableNumber}` })
-  const details = el('p', { className: 'venue-order-sub', text: `Позиций: ${item.itemsCount} · ${item.status}` })
+  const title = el('strong', { text: orderNumberLabel(item) })
+  const table = el('p', { className: 'venue-order-sub', text: `Стол: ${item.tableLabel || item.tableNumber}` })
+  const activeBatchesCount = Math.max(1, item.activeBatchesCount ?? 1)
+  const compositionLabel =
+    activeBatchesCount > 1
+      ? `Заявок: ${activeBatchesCount} · Позиций в последней заявке: ${item.itemsCount}`
+      : `Состав: ${item.itemsCount} поз.`
+  const details = el('p', {
+    className: 'venue-order-sub',
+    text: `Статус: ${orderStatusLabel(item.status)} · ${compositionLabel}`
+  })
+  const created = el('p', { className: 'venue-order-sub', text: `Создан: ${new Date(item.createdAt).toLocaleString()}` })
   const comment = el('p', { className: 'venue-order-sub', text: item.comment ? `Комментарий: ${item.comment}` : 'Комментарий: —' })
-  append(meta, title, table, details, comment)
+  append(meta, title, table, details, created, comment)
 
   const actions = el('div', { className: 'venue-order-actions' })
   const openButton = el('button', { className: 'button-small', text: 'Открыть' }) as HTMLButtonElement
@@ -193,46 +228,22 @@ export function renderVenueOrdersScreen(options: OrdersScreenOptions) {
     const selectedStatus = refs.filter.value
     let results: OrderQueueItemDto[] = []
 
-    if (selectedStatus === 'all') {
-      const promises = ALL_STATUSES.map((status) =>
-        venueGetOrdersQueue(backendUrl, { venueId, status, limit: 50 }, deps, controller.signal)
-      )
-      const responses = await Promise.all(promises)
-      if (disposed || loadSeq !== seq) return
-      inFlight = false
-      loadAbort = null
-      const aborted = responses.find((response) => !response.ok && response.error.code === REQUEST_ABORTED_CODE)
-      if (aborted) return
-      const failed = responses.find((response) => !response.ok)
-      if (failed && !failed.ok) {
-        showError(failed.error)
-        setStatus('')
-        return
-      }
-      responses.forEach((response) => {
-        if (response.ok) {
-          results = results.concat(response.data.items)
-        }
-      })
-      results = sortByCreatedAt(results)
-    } else {
-      const response = await venueGetOrdersQueue(
-        backendUrl,
-        { venueId, status: selectedStatus, limit: 50 },
-        deps,
-        controller.signal
-      )
-      if (disposed || loadSeq !== seq) return
-      inFlight = false
-      loadAbort = null
-      if (!response.ok && response.error.code === REQUEST_ABORTED_CODE) return
-      if (!response.ok) {
-        showError(response.error)
-        setStatus('')
-        return
-      }
-      results = sortByCreatedAt(response.data.items)
+    const response = await venueGetOrdersQueue(
+      backendUrl,
+      { venueId, status: selectedStatus, limit: 50 },
+      deps,
+      controller.signal
+    )
+    if (disposed || loadSeq !== seq) return
+    inFlight = false
+    loadAbort = null
+    if (!response.ok && response.error.code === REQUEST_ABORTED_CODE) return
+    if (!response.ok) {
+      showError(response.error)
+      setStatus('')
+      return
     }
+    results = dedupeByOrderId(sortByCreatedAt(response.data.items))
 
     renderOrders(results)
     setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)

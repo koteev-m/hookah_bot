@@ -267,6 +267,28 @@ function resolveInfoMediaUrl(backendUrl: string, mediaUrl: string) {
   }
 }
 
+function normalizeInfoMedia(section: VenueInfoSectionDto) {
+  return Array.isArray(section.media)
+    ? section.media.filter((media) => typeof media.url === 'string' && media.url.trim().length > 0)
+    : []
+}
+
+function resolveInfoMediaCount(section: VenueInfoSectionDto, mediaItems: ReturnType<typeof normalizeInfoMedia>) {
+  return typeof section.mediaCount === 'number' && Number.isFinite(section.mediaCount)
+    ? section.mediaCount
+    : mediaItems.length
+}
+
+function isImageInfoMedia(mediaType: string) {
+  const normalized = mediaType.toLowerCase()
+  return normalized === 'image' || normalized === 'photo'
+}
+
+function isPdfInfoMedia(mediaType: string) {
+  const normalized = mediaType.toLowerCase()
+  return normalized === 'pdf' || normalized === 'application/pdf'
+}
+
 function renderInfoSection(section: VenueInfoSectionDto, backendUrl: string) {
   const sectionCard = el('section', { className: 'card venue-info-section' })
   const title = el('h4', { text: section.displayTitle || section.title })
@@ -276,17 +298,19 @@ function renderInfoSection(section: VenueInfoSectionDto, backendUrl: string) {
   if (text) {
     sectionCard.appendChild(el('p', { text }))
   }
-  if (section.media.length > 0) {
+  const mediaItems = normalizeInfoMedia(section)
+  const mediaCount = resolveInfoMediaCount(section, mediaItems)
+  if (mediaItems.length > 0) {
     const mediaList = el('div', { className: 'venue-info-media-list' })
-    section.media.forEach((media) => {
-      const mediaUrl = resolveInfoMediaUrl(backendUrl, media.url)
-      const mediaType = media.mediaType.toLowerCase()
-      if (mediaType === 'image') {
+    mediaItems.forEach((media, index) => {
+      const mediaUrl = resolveInfoMediaUrl(backendUrl, media.url ?? '')
+      const mediaType = media.mediaType ?? ''
+      if (isImageInfoMedia(mediaType)) {
         const frame = el('div', { className: 'venue-info-media-image' })
         const loading = el('p', { className: 'status', text: 'Загрузка изображения…' })
         const image = el('img')
-        image.src = mediaUrl
-        image.alt = `${section.displayTitle || section.title} ${media.sortOrder + 1}`
+        const displayIndex = typeof media.sortOrder === 'number' ? media.sortOrder + 1 : index + 1
+        image.alt = `${section.displayTitle || section.title} ${displayIndex}`
         image.loading = 'lazy'
         let settled = false
         const failImage = () => {
@@ -312,11 +336,12 @@ function renderInfoSection(section: VenueInfoSectionDto, backendUrl: string) {
         })
         frame.appendChild(loading)
         frame.appendChild(image)
+        image.src = mediaUrl
         mediaList.appendChild(frame)
         return
       }
 
-      if (mediaType === 'pdf') {
+      if (isPdfInfoMedia(mediaType)) {
         const link = el('a', { className: 'button-small button-secondary', text: 'Открыть PDF' })
         link.href = mediaUrl
         link.target = '_blank'
@@ -325,11 +350,15 @@ function renderInfoSection(section: VenueInfoSectionDto, backendUrl: string) {
         return
       }
 
-      mediaList.appendChild(el('p', { className: 'status', text: 'Файл можно открыть в Telegram-боте.' }))
+      const link = el('a', { className: 'button-small button-secondary', text: 'Открыть файл' })
+      link.href = mediaUrl
+      link.target = '_blank'
+      link.rel = 'noopener noreferrer'
+      mediaList.appendChild(link)
     })
     sectionCard.appendChild(mediaList)
-  } else if (section.mediaCount > 0) {
-    sectionCard.appendChild(el('p', { className: 'status', text: 'Файлы можно открыть в Telegram-боте.' }))
+  } else if (mediaCount > 0) {
+    sectionCard.appendChild(el('p', { className: 'status', text: 'Медиа пока не удалось показать.' }))
   }
 
   return sectionCard
@@ -777,33 +806,43 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       return
     }
 
-    renderVenueInfo(venueResult.data.venue)
-    updateBookingButtonVisibility()
-    renderedOrderMenuMode = orderMenuMode
-    if (orderMenuMode) {
-      const menuData = detailsResult.data as MenuResponse
-      const categories = menuData.categories ?? []
-      if (!categories.some((category) => category.id === selectedCategoryId)) {
-        selectedCategoryId = null
-      }
-      renderMenu(categories)
-      bindItemActions()
-
-      const itemsToCache: MenuItemDto[] = categories.flatMap((category) => category.items)
-      updateItemCache(
-        itemsToCache.map((item) => ({
-          itemId: item.id,
-          name: item.name,
-          priceMinor: item.priceMinor,
-          currency: item.currency
-        }))
-      )
-    } else {
-      const infoData = detailsResult.data as VenueInfoSectionsResponse
-      renderPreQrInfo(venueResult.data.venue, infoData.sections ?? [])
-    }
-
     setStatus('')
+    try {
+      renderVenueInfo(venueResult.data.venue)
+      updateBookingButtonVisibility()
+      renderedOrderMenuMode = orderMenuMode
+      if (orderMenuMode) {
+        const menuData = detailsResult.data as MenuResponse
+        const categories = menuData.categories ?? []
+        if (!categories.some((category) => category.id === selectedCategoryId)) {
+          selectedCategoryId = null
+        }
+        renderMenu(categories)
+        bindItemActions()
+
+        const itemsToCache: MenuItemDto[] = categories.flatMap((category) => category.items)
+        updateItemCache(
+          itemsToCache.map((item) => ({
+            itemId: item.id,
+            name: item.name,
+            priceMinor: item.priceMinor,
+            currency: item.currency
+          }))
+        )
+      } else {
+        const infoData = detailsResult.data as VenueInfoSectionsResponse
+        renderPreQrInfo(venueResult.data.venue, Array.isArray(infoData.sections) ? infoData.sections : [])
+      }
+    } catch {
+      refs.menuBody.appendChild(
+        el('p', {
+          className: 'status',
+          text: orderMenuMode
+            ? 'Не удалось показать меню. Нажмите «Обновить».'
+            : 'Не удалось показать часть информации. Нажмите «Обновить».'
+        })
+      )
+    }
   }
 
   const cartSubscription = subscribeCart((snapshot) => {

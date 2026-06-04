@@ -1,0 +1,109 @@
+# Staff
+
+Дата актуализации: 2026-06-03.
+
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
+
+## Current status
+
+STAFF может работать с заказами, вызовами и закрытием счёта, но не получает финансовые bill-edit права и не управляет меню/столами/персоналом/настройками.
+
+Current backend permissions:
+- `ORDER_QUEUE_VIEW`;
+- `ORDER_STATUS_UPDATE`;
+- `MENU_VIEW`;
+- `TABLE_VIEW`.
+
+STAFF не получает:
+- `MENU_MANAGE`;
+- `MENU_AVAILABILITY_MANAGE`;
+- `TABLE_MANAGE`;
+- `TABLE_TOKEN_ROTATE`;
+- `TABLE_TOKEN_ROTATE_ALL`;
+- `TABLE_QR_EXPORT`;
+- `STAFF_CHAT_LINK`;
+- `VENUE_SETTINGS`.
+
+## Telegram bot
+
+Staff bot flow:
+- order queue;
+- allowed status updates;
+- staff calls;
+- read-only operational context;
+- Venue Mini App entry trigger that sends inline `web_app` button.
+
+Group/supergroup safety:
+- linked staff group is notification/operations-only;
+- ordinary group text must not show private role menu/reply keyboard;
+- management commands stay in private bot chat or approved inline callbacks.
+
+## Mini App
+
+STAFF opens Venue Mini App through inline `web_app` entry (`📱 Открыть рабочую панель` flow), so Telegram initData is present.
+
+STAFF Mini App behavior:
+- dashboard shows operational counters, not staff chat diagnostics;
+- order queue/detail;
+- full bill read-only;
+- accept/deliver allowed statuses;
+- close bill/order;
+- staff calls view/accept/close;
+- bookings view and arrival/no-show marking;
+- menu read-only;
+- tables read-only;
+- forbidden management controls hidden and backend-protected.
+
+## Allowed actions
+
+- View venue order queue.
+- View order detail and full bill read-only.
+- Update allowed order statuses.
+- Close bill/order.
+- View active staff calls.
+- Accept/close staff calls.
+- View active bookings.
+- Mark booking guest as arrived (`SEATED`).
+- Mark booking guest as no-show (`NO_SHOW`).
+- View menu read-only.
+- View tables read-only.
+- Use Venue Mini App working panel.
+
+## Denied actions
+
+- Manual item discount.
+- Exclude/restore bill items.
+- Confirm new booking.
+- Cancel booking.
+- Change/propose booking time.
+- Message guest about booking.
+- Manage booking settings.
+- Stop-list/menu availability mutations.
+- Create/update/delete/reorder menu categories/items.
+- Option/flavor availability mutations.
+- Create/update/delete tables.
+- Rotate/export QR tokens.
+- Read full staff list or manage staff.
+- Create invites/update roles/remove members.
+- Manage staff chat link/status diagnostics.
+- Manage venue settings.
+- Manage billing/subscription/platform features.
+
+## Known gaps / needs smoke
+
+- Telegram and Mini App staff entries must both use inline `web_app` as runtime Mini App opener.
+- Staff multi-venue selector needs smoke if a staff user belongs to more than one venue.
+- Direct API denial tests remain critical: UI hiding is not a security boundary.
+
+## Smoke-critical checks
+
+1. STAFF opens Venue Mini App through inline `web_app`; auth succeeds.
+2. STAFF sees order queue/detail and full bill read-only.
+3. STAFF accepts/delivers and closes bill/order.
+4. STAFF does not see `Скидка`, `Исключить`, `Вернуть`.
+5. Direct STAFF bill-edit/menu/table/staff/settings mutations return 403.
+6. STAFF sees menu/tables read-only.
+7. STAFF dashboard has call counters and no staff chat status row.
+8. STAFF can accept/close staff calls.
+9. STAFF sees bookings and can mark arrived/no-show only.
+10. Direct STAFF confirm/cancel/change/message/settings booking attempts are denied.

@@ -6,6 +6,8 @@ import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
+import com.hookah.platform.backend.miniapp.guest.api.CartPreviewRequest
+import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -13,6 +15,7 @@ import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
+import com.hookah.platform.backend.telegram.db.OrdersRepository
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -25,6 +28,7 @@ import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
@@ -58,10 +62,14 @@ class GuestOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 4)
             seedTableToken(jdbcUrl, tableId, "active-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
 
             val token = issueToken(config)
             val response =
-                client.get("/api/guest/order/active?tableToken=active-token") {
+                client.get(
+                    "/api/guest/order/active?tableToken=active-token&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
 
@@ -130,16 +138,174 @@ class GuestOrderRoutesTest {
             assertEquals(firstPayload.batchId, secondPayload.batchId)
 
             val activeResponse =
-                client.get("/api/guest/order/active?tableToken=batch-token") {
+                client.get(
+                    "/api/guest/order/active?tableToken=batch-token&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                ) {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             assertEquals(HttpStatusCode.OK, activeResponse.status)
             val activePayload = json.decodeFromString(ActiveOrderResponse.serializer(), activeResponse.bodyAsText())
             val order = activePayload.order
             assertNotNull(order)
+            assertEquals(tableSessionId, order.tableSessionId)
+            assertEquals(personalTabId, order.tabId)
             assertEquals(1, order.batches.size)
-            assertEquals(itemId, order.batches.first().items.first().itemId)
+            val activeItem = order.batches.first().items.first()
+            assertEquals(itemId, activeItem.itemId)
+            assertEquals("Tea", activeItem.name)
+            assertEquals(200L, activeItem.lineGrossMinor)
+            assertEquals(200L, order.grossTotalMinor)
+            assertEquals(200L, order.finalPayableTotalMinor)
             assertEquals(1, countAnalyticsEvents(jdbcUrl, "batch_created", venueId))
+        }
+
+    @Test
+    fun `add-batch in different table sessions creates different active orders for same table`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-session-scope")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 15)
+            seedTableToken(jdbcUrl, tableId, "session-scope-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val firstSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val secondSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val firstTabId = seedPersonalTab(jdbcUrl, venueId, firstSessionId, TELEGRAM_USER_ID)
+            val secondTabId = seedPersonalTab(jdbcUrl, venueId, secondSessionId, TELEGRAM_USER_ID)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Session scoped item")
+
+            val token = issueToken(config)
+            val firstResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "session-scope-token",
+                                tableSessionId = firstSessionId,
+                                tabId = firstTabId,
+                                idempotencyKey = "session-scope-1",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                                comment = "first session",
+                            ),
+                        ),
+                    )
+                }
+            val secondResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "session-scope-token",
+                                tableSessionId = secondSessionId,
+                                tabId = secondTabId,
+                                idempotencyKey = "session-scope-2",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                                comment = "second session",
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(HttpStatusCode.OK, secondResponse.status)
+            val firstPayload = json.decodeFromString(AddBatchResponse.serializer(), firstResponse.bodyAsText())
+            val secondPayload = json.decodeFromString(AddBatchResponse.serializer(), secondResponse.bodyAsText())
+            assertTrue(firstPayload.orderId != secondPayload.orderId)
+            assertEquals(firstSessionId, fetchOrderTableSessionId(jdbcUrl, firstPayload.orderId))
+            assertEquals(secondSessionId, fetchOrderTableSessionId(jdbcUrl, secondPayload.orderId))
+
+            val firstActiveResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=session-scope-token&tableSessionId=$firstSessionId&tabId=$firstTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            val secondActiveResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=session-scope-token&tableSessionId=$secondSessionId&tabId=$secondTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, firstActiveResponse.status)
+            assertEquals(HttpStatusCode.OK, secondActiveResponse.status)
+            val firstActiveOrder =
+                json.decodeFromString(ActiveOrderResponse.serializer(), firstActiveResponse.bodyAsText()).order
+            val secondActiveOrder =
+                json.decodeFromString(ActiveOrderResponse.serializer(), secondActiveResponse.bodyAsText()).order
+            assertEquals(firstPayload.orderId, firstActiveOrder?.orderId)
+            assertEquals(firstSessionId, firstActiveOrder?.tableSessionId)
+            assertEquals(firstTabId, firstActiveOrder?.tabId)
+            assertEquals(secondPayload.orderId, secondActiveOrder?.orderId)
+            assertEquals(secondSessionId, secondActiveOrder?.tableSessionId)
+            assertEquals(secondTabId, secondActiveOrder?.tabId)
+        }
+
+    @Test
+    fun `active explicit tab from another table session is forbidden`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-active-cross-session-tab")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 18)
+            seedTableToken(jdbcUrl, tableId, "active-cross-session-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val firstSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val secondSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val firstTabId = seedPersonalTab(jdbcUrl, venueId, firstSessionId, TELEGRAM_USER_ID)
+            val secondTabId = seedPersonalTab(jdbcUrl, venueId, secondSessionId, TELEGRAM_USER_ID)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Cross session item")
+            val token = issueToken(config)
+
+            val addResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "active-cross-session-token",
+                                tableSessionId = firstSessionId,
+                                tabId = firstTabId,
+                                idempotencyKey = "active-cross-session-owner",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, addResponse.status)
+
+            val response =
+                client.get(
+                    "/api/guest/order/active?tableToken=active-cross-session-token&tableSessionId=$firstSessionId&tabId=$secondTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
         }
 
     @Test
@@ -197,6 +363,135 @@ class GuestOrderRoutesTest {
         }
 
     @Test
+    fun `user active summaries do not include other personal tab items`() =
+        testApplication {
+            val guestA = 10101L
+            val guestB = 20202L
+            val jdbcUrl = buildJdbcUrl("guest-order-summary-personal-tab-scope")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 13)
+            seedTableToken(jdbcUrl, tableId, "summary-personal-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val guestAItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Guest A item")
+            val guestBItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Guest B item")
+            val guestATabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, guestA)
+            val guestBTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, guestB)
+
+            val guestAToken = issueToken(config, guestA)
+            val guestBToken = issueToken(config, guestB)
+            val guestAResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "summary-personal-token",
+                                tableSessionId = tableSessionId,
+                                tabId = guestATabId,
+                                idempotencyKey = "summary-personal-a",
+                                items = listOf(AddBatchItemDto(itemId = guestAItemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            val guestBResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestBToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "summary-personal-token",
+                                tableSessionId = tableSessionId,
+                                tabId = guestBTabId,
+                                idempotencyKey = "summary-personal-b",
+                                items = listOf(AddBatchItemDto(itemId = guestBItemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, guestAResponse.status)
+            assertEquals(HttpStatusCode.OK, guestBResponse.status)
+
+            val summaries =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = guestA, limit = 5)
+
+            assertEquals(1, summaries.size)
+            assertEquals(listOf("Guest A item"), summaries.single().items.map { it.itemName })
+            assertTrue(summaries.single().items.none { it.itemId == guestBItemId })
+        }
+
+    @Test
+    fun `user active summaries include shared tab items only for members`() =
+        testApplication {
+            val guestA = 30303L
+            val guestB = 40404L
+            val jdbcUrl = buildJdbcUrl("guest-order-summary-shared-tab-scope")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 14)
+            seedTableToken(jdbcUrl, tableId, "summary-shared-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val sharedItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Shared tab item")
+            val sharedTabId = seedSharedTab(jdbcUrl, venueId, tableSessionId, guestB)
+
+            val guestBToken = issueToken(config, guestB)
+            val addSharedResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestBToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "summary-shared-token",
+                                tableSessionId = tableSessionId,
+                                tabId = sharedTabId,
+                                idempotencyKey = "summary-shared-b",
+                                items = listOf(AddBatchItemDto(itemId = sharedItemId, qty = 2)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, addSharedResponse.status)
+
+            val repository = OrdersRepository(h2DataSource(jdbcUrl))
+            val beforeJoin = repository.listActiveOrderSummariesForUser(userId = guestA, limit = 5)
+            assertTrue(beforeJoin.none { summary -> summary.items.any { item -> item.itemId == sharedItemId } })
+
+            addTabMember(jdbcUrl, sharedTabId, guestA, role = "MEMBER")
+
+            val afterJoin = repository.listActiveOrderSummariesForUser(userId = guestA, limit = 5)
+            assertEquals(1, afterJoin.size)
+            assertEquals(listOf("Shared tab item"), afterJoin.single().items.map { it.itemName })
+            assertEquals("SHARED", afterJoin.single().tabType)
+        }
+
+    @Test
     fun `add-batch stores miniapp source`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-source")
@@ -237,6 +532,693 @@ class GuestOrderRoutesTest {
             val payload = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText())
             val source = fetchOrderBatchSource(jdbcUrl, payload.batchId)
             assertEquals("MINIAPP", source)
+        }
+
+    @Test
+    fun `add-batch persists promotion ledger and active summary uses promo discount`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-ledger")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 17)
+            seedTableToken(jdbcUrl, tableId, "promo-ledger-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, categoryId, "HOOKAH")
+            val hookahItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Promo hookah")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 20, status = "ACTIVE")
+
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "promo-ledger-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-promo-ledger",
+                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 2)),
+                    comment = null,
+                )
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val replay =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(HttpStatusCode.OK, replay.status)
+            val orderSummary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .single()
+            val summary =
+                orderSummary
+                    .items
+                    .single()
+            assertEquals(hookahItemId, summary.itemId)
+            assertEquals(40L, summary.promoDiscountMinor)
+            assertEquals(listOf("Счастливые часы" to 40L), orderSummary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `cart preview returns promo discount without creating order and matches submit result`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-cart-preview-promo")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 18)
+            seedTableToken(jdbcUrl, tableId, "cart-preview-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, categoryId, "HOOKAH")
+            val hookahItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Preview hookah")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 20, status = "ACTIVE")
+            val token = issueToken(config)
+            val items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 2))
+
+            val previewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "cart-preview-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, previewResponse.status)
+            val previewPayload = json.decodeFromString(CartPreviewResponse.serializer(), previewResponse.bodyAsText())
+            val preview = previewPayload.preview
+            assertEquals(200L, preview.grossTotalMinor)
+            assertEquals(40L, preview.promoDiscountTotalMinor)
+            assertEquals(0L, preview.loyaltyDiscountTotalMinor)
+            assertEquals(160L, preview.finalPayableTotalMinor)
+            assertEquals(listOf("Счастливые часы" to 40L), preview.discounts.map { it.label to it.discountMinor })
+            assertEquals(200L, preview.items.single { it.itemId == hookahItemId }.lineGrossMinor)
+            assertEquals(40L, preview.items.single { it.itemId == hookahItemId }.discountMinor)
+            assertEquals(160L, preview.items.single { it.itemId == hookahItemId }.linePayableMinor)
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+            assertEquals(0, countPromotionAdjustments(jdbcUrl))
+
+            val submitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "cart-preview-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "idem-cart-preview",
+                                items = items,
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, submitResponse.status)
+
+            val activeResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=cart-preview-token&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, activeResponse.status)
+            val activePayload = json.decodeFromString(ActiveOrderResponse.serializer(), activeResponse.bodyAsText())
+            val order = assertNotNull(activePayload.order)
+            assertEquals(preview.grossTotalMinor, order.grossTotalMinor)
+            assertEquals(preview.promoDiscountTotalMinor, order.promoDiscountTotalMinor)
+            assertEquals(preview.loyaltyDiscountTotalMinor, order.loyaltyDiscountTotalMinor)
+            assertEquals(preview.finalPayableTotalMinor, order.finalPayableTotalMinor)
+            assertEquals(preview.discounts.map { it.label to it.discountMinor }, order.discounts.map { it.label to it.discountMinor })
+        }
+
+    @Test
+    fun `add-batch inserts gift reward item with promotion ledger adjustment`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-gift-ledger")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 27)
+            seedTableToken(jdbcUrl, tableId, "gift-ledger-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val hookahItemId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян обычный")
+            val teaCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, teaCategoryId, "TEA")
+            val teaItemId = seedMenuItem(jdbcUrl, venueId, teaCategoryId, "Чай")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedGiftWithItemRule(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = TELEGRAM_USER_ID,
+                rewardMenuItemId = teaItemId,
+                status = "ACTIVE",
+            )
+
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "gift-ledger-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-gift-ledger",
+                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    comment = null,
+                )
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val replay =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(HttpStatusCode.OK, replay.status)
+            val batchId = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText()).batchId
+            val summary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .single()
+            assertEquals(listOf(hookahItemId, teaItemId), summary.items.map { it.itemId })
+            assertEquals(100L, summary.items.single { it.itemId == teaItemId }.promoDiscountMinor)
+            assertTrue(summary.items.single { it.itemId == teaItemId }.isPromotionReward)
+            assertEquals(listOf("Чай в подарок" to 100L), summary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(2, countBatchItems(jdbcUrl, batchId))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+            assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
+        }
+
+    @Test
+    fun `add-batch applies loyalty redemption to cheapest eligible hookah and is idempotent`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-loyalty-redemption")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 47)
+            seedTableToken(jdbcUrl, tableId, "loyalty-redemption-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val regularHookahId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян обычный", priceMinor = 2_000)
+            val lightHookahId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян лёгкий", priceMinor = 1_500)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val programId = seedActiveLoyaltyProgramWithReward(jdbcUrl, venueId, TELEGRAM_USER_ID, rewardsAvailable = 1)
+
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "loyalty-redemption-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-loyalty-redemption",
+                    items =
+                        listOf(
+                            AddBatchItemDto(itemId = regularHookahId, qty = 1),
+                            AddBatchItemDto(itemId = lightHookahId, qty = 1),
+                        ),
+                    comment = null,
+                )
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val replay =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(HttpStatusCode.OK, replay.status)
+            val summary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .single()
+            assertEquals(listOf("Лояльность: бесплатный кальян" to 1_500L), summary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(1_500L, summary.items.single { it.itemId == lightHookahId }.promoDiscountMinor)
+            assertEquals(0L, summary.items.single { it.itemId == regularHookahId }.promoDiscountMinor)
+            assertEquals(1, countRows(jdbcUrl, "loyalty_redemptions"))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+            assertEquals(0, fetchLoyaltyRewardsAvailable(jdbcUrl, programId, TELEGRAM_USER_ID))
+            assertEquals(1, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+        }
+
+    @Test
+    fun `add-batch does not redeem loyalty for non eligible reward target`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-loyalty-non-eligible")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 48)
+            seedTableToken(jdbcUrl, tableId, "loyalty-non-eligible-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val regularHookahId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян обычный", priceMinor = 2_000)
+            val premiumHookahId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Премиум кальян", priceMinor = 3_000)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val programId =
+                seedActiveLoyaltyProgramWithReward(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardsAvailable = 1,
+                    rewardMenuItemIds = listOf(premiumHookahId),
+                )
+
+            val token = issueToken(config)
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "loyalty-non-eligible-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "idem-loyalty-non-eligible",
+                                items = listOf(AddBatchItemDto(itemId = regularHookahId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(0, countRows(jdbcUrl, "loyalty_redemptions"))
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+            assertEquals(1, fetchLoyaltyRewardsAvailable(jdbcUrl, programId, TELEGRAM_USER_ID))
+        }
+
+    @Test
+    fun `add-batch loyalty free hookah wins over percent discount on same item`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-loyalty-wins-percent")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 49)
+            seedTableToken(jdbcUrl, tableId, "loyalty-wins-percent-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val hookahItemId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян обычный", priceMinor = 2_000)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedActiveLoyaltyProgramWithReward(jdbcUrl, venueId, TELEGRAM_USER_ID, rewardsAvailable = 1)
+            seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 20, status = "ACTIVE")
+
+            val token = issueToken(config)
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "loyalty-wins-percent-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "idem-loyalty-wins-percent",
+                                items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val summary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .single()
+            assertEquals(listOf("Лояльность: бесплатный кальян" to 2_000L), summary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(2_000L, summary.items.single().promoDiscountMinor)
+            assertEquals(0L, summary.items.single().priceMinor!! * summary.items.single().qty - summary.items.single().promoDiscountMinor)
+            assertEquals(1, countRows(jdbcUrl, "loyalty_redemptions"))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `add-batch loyalty applies to cheapest hookah and percent applies to other hookah`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-loyalty-cheapest-percent-other")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 50)
+            seedTableToken(jdbcUrl, tableId, "loyalty-cheapest-percent-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val regularHookahId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян обычный", priceMinor = 2_000)
+            val lightHookahId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян лёгкий", priceMinor = 1_000)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedActiveLoyaltyProgramWithReward(jdbcUrl, venueId, TELEGRAM_USER_ID, rewardsAvailable = 1)
+            seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 20, status = "ACTIVE")
+
+            val token = issueToken(config)
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "loyalty-cheapest-percent-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "idem-loyalty-cheapest-percent",
+                                items =
+                                    listOf(
+                                        AddBatchItemDto(itemId = regularHookahId, qty = 1),
+                                        AddBatchItemDto(itemId = lightHookahId, qty = 1),
+                                    ),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val summary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .single()
+            assertEquals(
+                setOf("Лояльность: бесплатный кальян" to 1_000L, "Счастливые часы" to 400L),
+                summary.promotionDiscounts.map { it.label to it.discountMinor }.toSet(),
+            )
+            assertEquals(1_000L, summary.items.single { it.itemId == lightHookahId }.promoDiscountMinor)
+            assertEquals(400L, summary.items.single { it.itemId == regularHookahId }.promoDiscountMinor)
+            assertEquals(2, countPromotionApplications(jdbcUrl))
+            assertEquals(2, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `add-batch persists only best non-stackable promotion but stacks explicit gift`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-stackability")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 37)
+            seedTableToken(jdbcUrl, tableId, "stackability-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val hookahItemId = seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян", priceMinor = 2_000)
+            val drinkCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, drinkCategoryId, "DRINK")
+            val juiceItemId = seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Сок", priceMinor = 500)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 10, status = "ACTIVE")
+            seedGiftWithItemRule(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = TELEGRAM_USER_ID,
+                rewardMenuItemId = juiceItemId,
+                status = "ACTIVE",
+            )
+
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "stackability-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-stackability-best",
+                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    comment = null,
+                )
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val firstSummary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .single()
+            assertEquals(listOf(hookahItemId, juiceItemId), firstSummary.items.map { it.itemId })
+            assertEquals(listOf("Сок в подарок" to 500L), firstSummary.promotionDiscounts.map { it.label to it.discountMinor })
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+
+            val giftOnlyStackableTableId = seedTable(jdbcUrl, venueId, 39)
+            seedTableToken(jdbcUrl, giftOnlyStackableTableId, "stackability-token-gift-only")
+            val giftOnlyStackableSessionId = seedTableSession(jdbcUrl, venueId, giftOnlyStackableTableId)
+            val giftOnlyStackableTabId = seedPersonalTab(jdbcUrl, venueId, giftOnlyStackableSessionId, TELEGRAM_USER_ID)
+            setGiftRulesStackableOnly(jdbcUrl)
+            val giftOnlyStackableRequest =
+                AddBatchRequest(
+                    tableToken = "stackability-token-gift-only",
+                    tableSessionId = giftOnlyStackableSessionId,
+                    tabId = giftOnlyStackableTabId,
+                    idempotencyKey = "idem-stackability-gift-only",
+                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    comment = null,
+                )
+            val giftOnlyStackableResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), giftOnlyStackableRequest))
+                }
+
+            assertEquals(HttpStatusCode.OK, giftOnlyStackableResponse.status)
+            val giftOnlyStackableSummary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .maxBy { it.orderId }
+            assertEquals(listOf("Сок в подарок" to 500L), giftOnlyStackableSummary.promotionDiscounts.map { it.label to it.discountMinor })
+
+            val stackableTableId = seedTable(jdbcUrl, venueId, 38)
+            seedTableToken(jdbcUrl, stackableTableId, "stackability-token-2")
+            val stackableSessionId = seedTableSession(jdbcUrl, venueId, stackableTableId)
+            val stackableTabId = seedPersonalTab(jdbcUrl, venueId, stackableSessionId, TELEGRAM_USER_ID)
+            setAllPromotionRulesStackable(jdbcUrl)
+            val stackableRequest =
+                AddBatchRequest(
+                    tableToken = "stackability-token-2",
+                    tableSessionId = stackableSessionId,
+                    tabId = stackableTabId,
+                    idempotencyKey = "idem-stackability-both",
+                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    comment = null,
+                )
+            val stackableResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), stackableRequest))
+                }
+
+            assertEquals(HttpStatusCode.OK, stackableResponse.status)
+            val secondSummary =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
+                    .maxBy { it.orderId }
+            assertEquals(
+                setOf("Счастливые часы" to 200L, "Сок в подарок" to 500L),
+                secondSummary.promotionDiscounts.map { it.label to it.discountMinor }.toSet(),
+            )
+        }
+
+    @Test
+    fun `add-batch does not persist promo ledger when rule is paused`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-paused")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 18)
+            seedTableToken(jdbcUrl, tableId, "promo-paused-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, categoryId, "HOOKAH")
+            val hookahItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Paused promo hookah")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 20, status = "PAUSED")
+
+            val token = issueToken(config)
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "promo-paused-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "idem-promo-paused",
+                                items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+            assertEquals(0, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `add-batch does not persist promo ledger when parent promotion is archived`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-parent-archived")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 19)
+            seedTableToken(jdbcUrl, tableId, "promo-parent-archived-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, categoryId, "HOOKAH")
+            val hookahItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Archived promo hookah")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedHappyHoursRule(
+                jdbcUrl,
+                venueId,
+                TELEGRAM_USER_ID,
+                discountPercent = 20,
+                status = "ACTIVE",
+                promotionStatus = "ARCHIVED",
+            )
+
+            val token = issueToken(config)
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "promo-parent-archived-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "idem-promo-parent-archived",
+                                items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+            assertEquals(0, countPromotionAdjustments(jdbcUrl))
         }
 
     @Test
@@ -365,6 +1347,108 @@ class GuestOrderRoutesTest {
 
             assertEquals(HttpStatusCode.Forbidden, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `active explicit personal tab does not expose another guest tab`() =
+        testApplication {
+            val guestA = 50505L
+            val guestB = 60606L
+            val jdbcUrl = buildJdbcUrl("guest-order-active-foreign-personal")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 16)
+            seedTableToken(jdbcUrl, tableId, "active-foreign-personal-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val guestBTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, guestB)
+
+            val response =
+                client.get(
+                    "/api/guest/order/active?tableToken=active-foreign-personal-token&tableSessionId=$tableSessionId&tabId=$guestBTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, guestA)}") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `active explicit shared tab requires membership and returns shared batches for member`() =
+        testApplication {
+            val guestA = 70707L
+            val guestB = 80808L
+            val jdbcUrl = buildJdbcUrl("guest-order-active-shared-member")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 17)
+            seedTableToken(jdbcUrl, tableId, "active-shared-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val sharedItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Shared active item")
+            val sharedTabId = seedSharedTab(jdbcUrl, venueId, tableSessionId, guestB)
+            val guestBToken = issueToken(config, guestB)
+
+            val addResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestBToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "active-shared-token",
+                                tableSessionId = tableSessionId,
+                                tabId = sharedTabId,
+                                idempotencyKey = "active-shared-owner",
+                                items = listOf(AddBatchItemDto(itemId = sharedItemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, addResponse.status)
+
+            val guestAToken = issueToken(config, guestA)
+            val beforeJoinResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=active-shared-token&tableSessionId=$tableSessionId&tabId=$sharedTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, beforeJoinResponse.status)
+            assertApiErrorEnvelope(beforeJoinResponse, ApiErrorCodes.FORBIDDEN)
+
+            addTabMember(jdbcUrl, sharedTabId, guestA, role = "MEMBER")
+
+            val afterJoinResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=active-shared-token&tableSessionId=$tableSessionId&tabId=$sharedTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, afterJoinResponse.status)
+            val payload = json.decodeFromString(ActiveOrderResponse.serializer(), afterJoinResponse.bodyAsText())
+            val order = payload.order
+            assertNotNull(order)
+            assertEquals(tableSessionId, order.tableSessionId)
+            assertEquals(sharedTabId, order.tabId)
+            assertEquals(1, order.batches.size)
+            assertEquals(sharedItemId, order.batches.single().items.single().itemId)
         }
 
     @Test
@@ -810,6 +1894,75 @@ class GuestOrderRoutesTest {
         error("Failed to insert personal tab")
     }
 
+    private fun seedSharedTab(
+        jdbcUrl: String,
+        venueId: Long,
+        tableSessionId: Long,
+        ownerUserId: Long,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            ensureUser(connection, ownerUserId)
+            connection.prepareStatement(
+                """
+                INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
+                VALUES (?, ?, 'SHARED', ?, 'ACTIVE')
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, ownerUserId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        val tabId = rs.getLong(1)
+                        addTabMember(connection, tabId, ownerUserId, role = "OWNER")
+                        return tabId
+                    }
+                }
+            }
+        }
+        error("Failed to insert shared tab")
+    }
+
+    private fun addTabMember(
+        jdbcUrl: String,
+        tabId: Long,
+        userId: Long,
+        role: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            addTabMember(connection, tabId, userId, role)
+        }
+    }
+
+    private fun addTabMember(
+        connection: java.sql.Connection,
+        tabId: Long,
+        userId: Long,
+        role: String,
+    ) {
+        ensureUser(connection, userId)
+        connection.prepareStatement(
+            """
+            INSERT INTO tab_member (tab_id, user_id, role)
+            VALUES (?, ?, ?)
+            """.trimIndent(),
+        ).use { membership ->
+            membership.setLong(1, tabId)
+            membership.setLong(2, userId)
+            membership.setString(3, role)
+            membership.executeUpdate()
+        }
+    }
+
+    private fun h2DataSource(jdbcUrl: String): JdbcDataSource =
+        JdbcDataSource().apply {
+            setURL(jdbcUrl)
+            user = "sa"
+            password = ""
+        }
+
     private fun ensureUser(
         connection: java.sql.Connection,
         userId: Long,
@@ -960,6 +2113,7 @@ class GuestOrderRoutesTest {
         venueId: Long,
         categoryId: Long,
         name: String,
+        priceMinor: Long = 100,
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -972,7 +2126,7 @@ class GuestOrderRoutesTest {
                 statement.setLong(1, venueId)
                 statement.setLong(2, categoryId)
                 statement.setString(3, name)
-                statement.setLong(4, 100)
+                statement.setLong(4, priceMinor)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) {
@@ -983,6 +2137,365 @@ class GuestOrderRoutesTest {
         }
         error("Failed to insert item")
     }
+
+    private fun setMenuCategoryType(
+        jdbcUrl: String,
+        categoryId: Long,
+        categoryType: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE menu_categories
+                SET category_type = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, categoryType)
+                statement.setLong(2, categoryId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedHappyHoursRule(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        discountPercent: Int,
+        status: String,
+        promotionStatus: String = "ACTIVE",
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            ensureUser(connection, userId)
+            val promotionId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_promotions (
+                        venue_id,
+                        title,
+                        description,
+                        terms,
+                        status,
+                        created_by_user_id,
+                        template_type
+                    )
+                    VALUES (?, 'Счастливые часы', 'Скидка на кальяны', NULL, ?, ?, 'HAPPY_HOURS_PERCENT')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setString(2, promotionStatus)
+                    statement.setLong(3, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert promotion")
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rules (
+                    promotion_id,
+                    venue_id,
+                    rule_type,
+                    target_type,
+                    target_value,
+                    discount_percent,
+                    starts_time,
+                    ends_time,
+                    days_of_week,
+                    status,
+                    priority,
+                    created_by_user_id
+                )
+                VALUES (?, ?, 'HAPPY_HOURS_PERCENT', 'CATEGORY_TYPE', 'HOOKAH', ?, NULL, NULL, NULL, ?, 100, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, promotionId)
+                statement.setLong(2, venueId)
+                statement.setInt(3, discountPercent)
+                statement.setString(4, status)
+                statement.setLong(5, userId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong(1)
+                    }
+                }
+            }
+        }
+        error("Failed to insert promotion rule")
+    }
+
+    private fun seedGiftWithItemRule(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        rewardMenuItemId: Long,
+        status: String,
+        promotionStatus: String = "ACTIVE",
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            ensureUser(connection, userId)
+            val promotionId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_promotions (
+                        venue_id,
+                        title,
+                        description,
+                        terms,
+                        status,
+                        created_by_user_id,
+                        template_type
+                    )
+                    VALUES (?, 'Чай к кальяну', 'Подарок к позиции', NULL, ?, ?, 'GIFT_WITH_ITEM')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setString(2, promotionStatus)
+                    statement.setLong(3, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert promotion")
+                    }
+                }
+            val ruleId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO promotion_rules (
+                        promotion_id,
+                        venue_id,
+                        rule_type,
+                        target_type,
+                        target_value,
+                        discount_percent,
+                        starts_time,
+                        ends_time,
+                        days_of_week,
+                        status,
+                        priority,
+                        created_by_user_id
+                    )
+                    VALUES (?, ?, 'GIFT_WITH_ITEM', 'CATEGORY_TYPE', 'HOOKAH', NULL, NULL, NULL, NULL, ?, 100, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, promotionId)
+                    statement.setLong(2, venueId)
+                    statement.setString(3, status)
+                    statement.setLong(4, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert promotion rule")
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
+                VALUES (?, 'CATEGORY_TYPE', 'HOOKAH', NULL)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rule_rewards (rule_id, reward_menu_item_id, reward_qty, max_rewards_per_batch)
+                VALUES (?, ?, 1, 1)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.setLong(2, rewardMenuItemId)
+                statement.executeUpdate()
+            }
+            return ruleId
+        }
+    }
+
+    private fun setGiftRulesStackableOnly(jdbcUrl: String) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE promotion_rules
+                SET stackable = CASE WHEN rule_type = 'GIFT_WITH_ITEM' THEN TRUE ELSE FALSE END
+                """.trimIndent(),
+            ).use { statement ->
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun setAllPromotionRulesStackable(jdbcUrl: String) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE promotion_rules
+                SET stackable = TRUE
+                """.trimIndent(),
+            ).use { statement ->
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedActiveLoyaltyProgramWithReward(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        rewardsAvailable: Int,
+        rewardMenuItemIds: List<Long> = emptyList(),
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            ensureUser(connection, userId)
+            val programId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO loyalty_programs (
+                        venue_id,
+                        program_type,
+                        status,
+                        nth_value,
+                        max_redemptions_per_visit,
+                        created_by_user_id
+                    )
+                    VALUES (?, 'NTH_HOOKAH_FREE', 'ACTIVE', 6, 1, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert loyalty program")
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO loyalty_program_earn_targets (program_id, target_type, semantic_type)
+                VALUES (?, 'CATEGORY_TYPE', 'HOOKAH')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, programId)
+                statement.executeUpdate()
+            }
+            if (rewardMenuItemIds.isEmpty()) {
+                connection.prepareStatement(
+                    """
+                    INSERT INTO loyalty_program_reward_targets (program_id, target_type, semantic_type)
+                    VALUES (?, 'CATEGORY_TYPE', 'HOOKAH')
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, programId)
+                    statement.executeUpdate()
+                }
+            } else {
+                connection.prepareStatement(
+                    """
+                    INSERT INTO loyalty_program_reward_targets (program_id, target_type, menu_item_id)
+                    VALUES (?, 'MENU_ITEM', ?)
+                    """.trimIndent(),
+                ).use { statement ->
+                    rewardMenuItemIds.distinct().forEach { itemId ->
+                        statement.setLong(1, programId)
+                        statement.setLong(2, itemId)
+                        statement.addBatch()
+                    }
+                    statement.executeBatch()
+                }
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO guest_loyalty_progress (
+                    program_id,
+                    venue_id,
+                    user_id,
+                    progress_count,
+                    rewards_available,
+                    rewards_reserved
+                )
+                VALUES (?, ?, ?, 0, ?, 0)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, programId)
+                statement.setLong(2, venueId)
+                statement.setLong(3, userId)
+                statement.setInt(4, rewardsAvailable)
+                statement.executeUpdate()
+            }
+            return programId
+        }
+    }
+
+    private fun fetchLoyaltyRewardsAvailable(
+        jdbcUrl: String,
+        programId: Long,
+        userId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT rewards_available
+                FROM guest_loyalty_progress
+                WHERE program_id = ? AND user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, programId)
+                statement.setLong(2, userId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) rs.getInt("rewards_available") else 0
+                }
+            }
+        }
+
+    private fun fetchLoyaltyLedgerCount(
+        jdbcUrl: String,
+        programId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM guest_loyalty_ledger WHERE program_id = ?").use { statement ->
+                statement.setLong(1, programId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun countPromotionApplications(jdbcUrl: String): Int =
+        countRows(jdbcUrl, "order_promotion_applications")
+
+    private fun countPromotionAdjustments(jdbcUrl: String): Int =
+        countRows(jdbcUrl, "order_batch_item_promotion_adjustments")
+
+    private fun countBatchItems(
+        jdbcUrl: String,
+        batchId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM order_batch_items WHERE order_batch_id = ?").use { statement ->
+                statement.setLong(1, batchId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun countRows(
+        jdbcUrl: String,
+        tableName: String,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM $tableName").use { statement ->
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
 
     private fun fetchOrderBatchSource(
         jdbcUrl: String,
@@ -1000,6 +2513,29 @@ class GuestOrderRoutesTest {
                 statement.executeQuery().use { rs ->
                     if (rs.next()) {
                         return rs.getString("source")
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun fetchOrderTableSessionId(
+        jdbcUrl: String,
+        orderId: Long,
+    ): Long? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT table_session_id
+                FROM orders
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong("table_session_id")
                     }
                 }
             }

@@ -16,34 +16,46 @@ import { normalizeTableToken } from '../shared/validation/tableToken'
 import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
+import { renderGuestAccountScreen } from './guestAccount'
+import { renderGuestBookingsScreen } from './guestBookings'
 import { renderGuestVenueScreen } from './guestVenue'
 import { renderOrderScreen } from './order'
+import { renderGuestSupportScreen } from './supportScreens'
 
 type GuestAppOptions = {
   root: HTMLDivElement | null
 }
 
-type RouteName = 'catalog' | 'venue' | 'cart' | 'order'
-type NavRouteName = Exclude<RouteName, 'venue'>
+type RouteName = 'catalog' | 'venue' | 'cart' | 'order' | 'bookings' | 'account' | 'support'
+type GuestActionId = 'catalog' | 'qr' | 'menu' | 'cart' | 'order' | 'staff' | 'account' | 'support' | 'refresh'
+type GuestTableMode = 'no-table' | 'active-table' | 'ended-table'
 
 type Route = {
   name: RouteName
   venueId: number | null
+  openStaffCall: boolean
 }
-
-type NavButtonRefs = Record<NavRouteName, HTMLButtonElement>
 
 type GuestRefs = {
   app: HTMLDivElement
   statusTitle: HTMLParagraphElement
   statusDetails: HTMLParagraphElement
-  scanQrButton: HTMLButtonElement
-  fallbackChatButton: HTMLButtonElement
-  navButtons: NavButtonRefs
+  primaryActions: HTMLDivElement
+  nav: HTMLElement
   content: HTMLDivElement
 }
 
 const scannedTokenQueryParamKeys = ['table_token', 'tableToken', 'tgWebAppStartParam', 'startapp', 'start_param'] as const
+const primaryActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
+  'no-table': ['qr'],
+  'ended-table': ['qr', 'catalog', 'refresh'],
+  'active-table': ['staff']
+}
+const navActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
+  'no-table': ['catalog', 'qr', 'account', 'support'],
+  'ended-table': ['catalog', 'qr', 'account', 'support'],
+  'active-table': ['menu', 'cart', 'order', 'account', 'support']
+}
 
 function ensureDefaultHash() {
   const hash = window.location.hash
@@ -56,21 +68,33 @@ function resolveRoute(): Route {
   const rawHash = window.location.hash.replace(/^#/, '')
   const cleaned = rawHash.startsWith('/') ? rawHash.slice(1) : rawHash
   if (!cleaned) {
-    return { name: 'catalog', venueId: null }
+    return { name: 'catalog', venueId: null, openStaffCall: false }
   }
   const [pathPart, queryPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
-  if (!route || !['catalog', 'venue', 'cart', 'order'].includes(route)) {
-    return { name: 'catalog', venueId: null }
+  if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'support'].includes(route)) {
+    return { name: 'catalog', venueId: null, openStaffCall: false }
   }
   if (route === 'venue') {
     const venueIdFromPath = parsePositiveInt(segments[1])
     const params = new URLSearchParams(queryPart ?? '')
     const venueIdFromQuery = parsePositiveInt(params.get('id'))
-    return { name: 'venue', venueId: venueIdFromPath ?? venueIdFromQuery ?? null }
+    return {
+      name: 'venue',
+      venueId: venueIdFromPath ?? venueIdFromQuery ?? null,
+      openStaffCall: params.get('staff') === '1'
+    }
   }
-  return { name: route, venueId: null }
+  if (route === 'bookings') {
+    const params = new URLSearchParams(queryPart ?? '')
+    return {
+      name: 'bookings',
+      venueId: parsePositiveInt(params.get('venueId')) ?? parsePositiveInt(params.get('venue_id')) ?? null,
+      openStaffCall: false
+    }
+  }
+  return { name: route, venueId: null, openStaffCall: false }
 }
 
 function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | null {
@@ -85,7 +109,7 @@ function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | 
   const [pathPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
-  if (!route || !['catalog', 'venue', 'cart', 'order'].includes(route)) {
+  if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'support'].includes(route)) {
     return null
   }
   return route
@@ -125,21 +149,10 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
   const statusCard = el('div', { className: 'table-status' })
   const statusTitle = el('p', { className: 'table-status-title', text: '' })
   const statusDetails = el('p', { className: 'table-status-details', text: '' })
-  const scanQrButton = el('button', {
-    className: 'button-secondary table-scan-button',
-    text: 'Сканировать QR'
-  }) as HTMLButtonElement
-  const fallbackChatButton = el('button', {
-    className: 'button-secondary table-fallback-button',
-    text: 'Не грузится? → Оформить в чате'
-  }) as HTMLButtonElement
-  append(statusCard, statusTitle, statusDetails, scanQrButton, fallbackChatButton)
+  const primaryActions = el('div', { className: 'table-actions' }) as HTMLDivElement
+  append(statusCard, statusTitle, statusDetails, primaryActions)
 
   const nav = el('nav', { className: 'app-nav' })
-  const catalogButton = el('button', { className: 'nav-button', text: 'Каталог' })
-  const cartButton = el('button', { className: 'nav-button', text: 'Корзина (0)' })
-  const orderButton = el('button', { className: 'nav-button', text: 'Заказ' })
-  append(nav, catalogButton, cartButton, orderButton)
   append(header, brand, statusCard, nav)
 
   const content = el('div', { className: 'container app-content' })
@@ -150,13 +163,8 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
     app,
     statusTitle,
     statusDetails,
-    scanQrButton,
-    fallbackChatButton,
-    navButtons: {
-      catalog: catalogButton,
-      cart: cartButton,
-      order: orderButton
-    },
+    primaryActions,
+    nav,
     content
   }
 }
@@ -177,7 +185,13 @@ function renderRouteContent(
   isDebug: boolean,
   onOpenVenue: (venueId: number) => void,
   onNavigateOrder: () => void,
-  onNavigateMenu: (venueId: number | null) => void
+  onNavigateMenu: (venueId: number | null) => void,
+  onNavigateCatalog: () => void,
+  onNavigateSupportBack: () => void,
+  onOpenVenueStaffCall: () => void,
+  onOpenSupportBot: () => { ok: true } | { ok: false; message: string },
+  tableSnapshot: ReturnType<typeof getTableContext>,
+  hasTableContext: boolean
 ): () => void {
   const screenRoot = document.createElement('div')
   screenRoot.className = 'screen-root'
@@ -185,35 +199,159 @@ function renderRouteContent(
 
   switch (route.name) {
     case 'venue':
-      return renderGuestVenueScreen({ root: screenRoot, backendUrl, isDebug, venueId: route.venueId })
+      return renderGuestVenueScreen({
+        root: screenRoot,
+        backendUrl,
+        isDebug,
+        venueId: route.venueId,
+        openStaffCall: route.openStaffCall,
+        onBookVenue: (venueId) => {
+          window.location.hash = `#/bookings?venueId=${venueId}`
+        }
+      })
     case 'cart':
       return renderCartScreen({ root: screenRoot, backendUrl, isDebug, onNavigateOrder })
     case 'order':
       return renderOrderScreen({ root: screenRoot, backendUrl, isDebug, onNavigateMenu })
+    case 'bookings':
+      return renderGuestBookingsScreen({
+        root: screenRoot,
+        backendUrl,
+        isDebug,
+        venueId: route.venueId,
+        onBack: onNavigateCatalog
+      })
+    case 'account':
+      return renderGuestAccountScreen({
+        root: screenRoot,
+        backendUrl,
+        isDebug,
+        currentVenueId: tableSnapshot.status === 'resolved' ? tableSnapshot.venueId : route.venueId,
+        hasTableContext,
+        onBack: onNavigateCatalog,
+        onOpenVenue,
+        onOpenBot: onOpenSupportBot
+      })
+    case 'support':
+      return renderGuestSupportScreen({
+        root: screenRoot,
+        hasTableContext,
+        onBack: onNavigateSupportBack,
+        onOpenVenueStaffCall,
+        onOpenBot: onOpenSupportBot
+      })
     case 'catalog':
     default:
-      return renderCatalogScreen({ root: screenRoot, backendUrl, isDebug, onOpenVenue })
+      return renderCatalogScreen({
+        root: screenRoot,
+        backendUrl,
+        isDebug,
+        onOpenVenue,
+        onBookVenue: (venueId) => {
+          window.location.hash = `#/bookings?venueId=${venueId}`
+        }
+      })
   }
-}
-
-function updateNav(navButtons: NavButtonRefs, active: RouteName) {
-  const entries: Array<[NavRouteName, HTMLButtonElement]> = Object.entries(navButtons) as Array<[
-    NavRouteName,
-    HTMLButtonElement
-  ]>
-  entries.forEach(([key, button]) => {
-    const isActive = key === active
-    button.dataset.active = String(isActive)
-  })
 }
 
 function canOpenActiveOrder(snapshot: ReturnType<typeof getTableContext>): boolean {
   return snapshot.status === 'resolved' && Boolean(snapshot.tableToken) && snapshot.orderAllowed
 }
 
-function updateOrderNavAccess(navButtons: NavButtonRefs, canOpenOrder: boolean) {
-  navButtons.cart.disabled = !canOpenOrder
-  navButtons.order.disabled = !canOpenOrder
+function resolveTableMode(snapshot: ReturnType<typeof getTableContext>): GuestTableMode {
+  const hasResolvedTable = snapshot.status === 'resolved' && Boolean(snapshot.tableToken) && Boolean(snapshot.venueId)
+  if (hasResolvedTable && !snapshot.tableSessionActive) {
+    return 'ended-table'
+  }
+  if (hasResolvedTable && snapshot.tableSessionActive && snapshot.orderAllowed) {
+    return 'active-table'
+  }
+  return 'no-table'
+}
+
+function dedupeActions(actions: GuestActionId[]): GuestActionId[] {
+  return actions.filter((action, index) => actions.indexOf(action) === index)
+}
+
+function formatActionLabel(action: GuestActionId, cartQty: number, mode: GuestTableMode, variant: 'primary' | 'nav'): string {
+  switch (action) {
+    case 'catalog':
+      if (variant === 'nav') {
+        return 'Каталог'
+      }
+      return mode === 'ended-table' ? '🏠 В каталог' : '🏠 Каталог кальянных'
+    case 'qr':
+      return variant === 'nav' ? 'QR' : '🪑 Сканировать QR'
+    case 'menu':
+      return variant === 'nav' ? 'Меню' : '🍽 Меню'
+    case 'cart':
+      return cartQty > 0 ? `${variant === 'nav' ? 'Корзина' : '🧺 Корзина'} (${cartQty})` : variant === 'nav' ? 'Корзина' : '🧺 Корзина'
+    case 'order':
+      return variant === 'nav' ? 'Мой заказ' : '📄 Мой заказ'
+    case 'staff':
+      return '🛎 Вызвать персонал'
+    case 'account':
+      return variant === 'nav' ? 'Профиль' : '👤 Профиль'
+    case 'support':
+      return variant === 'nav' ? 'Поддержка' : '🆘 Поддержка'
+    case 'refresh':
+      return '🔄 Обновить'
+    default:
+      return action
+  }
+}
+
+function isActionActive(action: GuestActionId, route: Route, mode: GuestTableMode): boolean {
+  switch (action) {
+    case 'catalog':
+      return mode !== 'active-table' && route.name === 'catalog'
+    case 'menu':
+      return mode === 'active-table' && (route.name === 'venue' || route.name === 'catalog')
+    case 'cart':
+      return route.name === 'cart'
+    case 'order':
+      return route.name === 'order'
+    case 'account':
+      return route.name === 'account'
+    case 'support':
+      return route.name === 'support'
+    default:
+      return false
+  }
+}
+
+function renderActionSet(
+  container: HTMLElement,
+  actions: GuestActionId[],
+  buttonClassName: string,
+  cartQty: number,
+  route: Route,
+  mode: GuestTableMode,
+  variant: 'primary' | 'nav',
+  onAction: (action: GuestActionId) => void
+) {
+  const buttons = dedupeActions(actions).map((action) => {
+    const button = el('button', {
+      className: buttonClassName,
+      text: formatActionLabel(action, cartQty, mode, variant)
+    }) as HTMLButtonElement
+    button.dataset.action = action
+    button.dataset.active = String(isActionActive(action, route, mode))
+    button.addEventListener('click', () => onAction(action))
+    return button
+  })
+  container.replaceChildren(...buttons)
+}
+
+function updateGuestShellActions(
+  refs: GuestRefs,
+  mode: GuestTableMode,
+  route: Route,
+  cartQty: number,
+  onAction: (action: GuestActionId) => void
+) {
+  renderActionSet(refs.primaryActions, primaryActionsByMode[mode], 'button-secondary', cartQty, route, mode, 'primary', onAction)
+  renderActionSet(refs.nav, navActionsByMode[mode], 'nav-button', cartQty, route, mode, 'nav', onAction)
 }
 
 export function mountGuestApp(options: GuestAppOptions) {
@@ -226,36 +364,46 @@ export function mountGuestApp(options: GuestAppOptions) {
 
   const refs = buildGuestShell(root)
   let tableSnapshot = getTableContext()
-  setCartTableToken(tableSnapshot.tableToken)
-  let rerenderForTableChange: (() => void) | null = null
-  const updateCartNav = (totalQty: number) => {
-    refs.navButtons.cart.textContent = `Корзина (${totalQty})`
+  let currentRoute: Route = resolveRoute()
+  let handleGuestAction: (action: GuestActionId) => void = () => undefined
+  const renderShellActions = () => {
+    updateGuestShellActions(
+      refs,
+      resolveTableMode(tableSnapshot),
+      currentRoute,
+      getCartSnapshot().totalQty,
+      (action) => handleGuestAction(action)
+    )
   }
+  setCartTableToken(resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.tableToken : null)
+  let rerenderForTableChange: (() => void) | null = null
 
   const tableSubscription = subscribeTable((snapshot) => {
     const previousCanOpenOrder = canOpenActiveOrder(tableSnapshot)
+    const previousMode = resolveTableMode(tableSnapshot)
     const nextCanOpenOrder = canOpenActiveOrder(snapshot)
     tableSnapshot = snapshot
-    setCartTableToken(snapshot.tableToken)
+    const nextMode = resolveTableMode(snapshot)
+    setCartTableToken(nextMode === 'active-table' ? snapshot.tableToken : null)
     const presentation = formatTableStatus(snapshot)
     refs.statusTitle.textContent = presentation.title
     refs.statusDetails.textContent = presentation.details ?? ''
     refs.app.dataset.tableSeverity = presentation.severity
-    updateOrderNavAccess(refs.navButtons, nextCanOpenOrder)
+    renderShellActions()
     const routeName = resolveRoute().name
     if (
       rerenderForTableChange &&
-      (routeName === 'cart' || routeName === 'order') &&
-      previousCanOpenOrder !== nextCanOpenOrder
+      (previousMode !== nextMode ||
+        ((routeName === 'cart' || routeName === 'order') && previousCanOpenOrder !== nextCanOpenOrder))
     ) {
       rerenderForTableChange()
     }
   })
 
-  const cartSubscription = subscribeCart((snapshot) => {
-    updateCartNav(snapshot.totalQty)
+  const cartSubscription = subscribeCart(() => {
+    renderShellActions()
   })
-  updateCartNav(getCartSnapshot().totalQty)
+  renderShellActions()
 
   const historyStack: string[] = []
   let replaceNextHistoryEntry = false
@@ -276,9 +424,7 @@ export function mountGuestApp(options: GuestAppOptions) {
   }
 
   const navigateCatalogButton = () => {
-    const routeName = resolveRoute().name
-    const hasActiveVenueContext = tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && Boolean(tableSnapshot.venueId)
-    if ((routeName === 'cart' || routeName === 'order') && hasActiveVenueContext && tableSnapshot.venueId) {
+    if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
       navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
       return
     }
@@ -331,73 +477,109 @@ export function mountGuestApp(options: GuestAppOptions) {
   }
 
   const disposables: Array<() => void> = []
-  disposables.push(
-    on(refs.scanQrButton, 'click', () => {
-      const telegramContext = getTelegramContext()
-      const webApp = telegramContext.webApp
-      const scanQr = getTelegramQrScanner(webApp)
-      if (!scanQr) {
-        webApp?.showAlert?.('Сканер QR недоступен в текущем Telegram.')
-        return
-      }
-      try {
-        scanQr({ text: 'Наведите камеру на QR стола' }, (scannedText) => {
-          const token = extractTableTokenFromScannedText(scannedText)
-          if (!token) {
-            webApp?.showAlert?.('QR не содержит token стола.')
-            return false
-          }
-          try {
-            webApp?.closeScanQrPopup?.()
-          } catch {
-            // ignore scanner close errors
-          }
-          const nextUrl = new URL(window.location.href)
-          nextUrl.searchParams.delete('tableToken')
-          nextUrl.searchParams.delete('tgWebAppStartParam')
-          nextUrl.searchParams.delete('startapp')
-          nextUrl.searchParams.delete('start_param')
-          nextUrl.searchParams.set('table_token', token)
-          window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
-          void refreshTableContext()
-            .then(() => {
-              const snapshot = getTableContext()
-              if (resolveRoute().name !== 'catalog') {
-                return
-              }
-              if (snapshot.status === 'resolved' && snapshot.venueId) {
-                navigate(`#/venue/${snapshot.venueId}`)
-              }
-            })
-            .catch(() => undefined)
-          return true
-        })
-      } catch {
-        webApp?.showAlert?.('Не удалось открыть QR-сканер.')
-      }
-    })
-  )
-  disposables.push(
-    on(refs.fallbackChatButton, 'click', () => {
-      const telegramContext = getTelegramContext()
-      const tableSnapshot = getTableContext()
-      const result = openBotChat(telegramContext, {
-        tableToken: tableSnapshot.tableToken,
-        tableSessionId: tableSnapshot.tableSessionId
+  const openQrScanner = () => {
+    const telegramContext = getTelegramContext()
+    const webApp = telegramContext.webApp
+    const scanQr = getTelegramQrScanner(webApp)
+    const fallbackMessage =
+      'Откройте камеру телефона и отсканируйте QR на столе или нажмите «Я за столом / У меня QR» в боте.'
+    if (!scanQr) {
+      refs.statusDetails.textContent = fallbackMessage
+      webApp?.showAlert?.(fallbackMessage)
+      return
+    }
+    try {
+      scanQr({ text: 'Наведите камеру на QR стола' }, (scannedText) => {
+        const token = extractTableTokenFromScannedText(scannedText)
+        if (!token) {
+          webApp?.showAlert?.('QR не содержит token стола.')
+          return false
+        }
+        try {
+          webApp?.closeScanQrPopup?.()
+        } catch {
+          // ignore scanner close errors
+        }
+        const nextUrl = new URL(window.location.href)
+        nextUrl.searchParams.delete('tableToken')
+        nextUrl.searchParams.delete('tableSessionId')
+        nextUrl.searchParams.delete('table_session_id')
+        nextUrl.searchParams.delete('tgWebAppStartParam')
+        nextUrl.searchParams.delete('startapp')
+        nextUrl.searchParams.delete('start_param')
+        nextUrl.searchParams.set('table_token', token)
+        window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+        void refreshTableContext({ forceResolveSession: true })
+          .then(() => {
+            const snapshot = getTableContext()
+            if (resolveRoute().name !== 'catalog') {
+              return
+            }
+            if (snapshot.status === 'resolved' && snapshot.venueId && snapshot.tableSessionActive) {
+              navigate(`#/venue/${snapshot.venueId}`)
+            }
+          })
+          .catch(() => undefined)
+        return true
       })
-      if (!result.ok) {
-        refs.statusDetails.textContent = telegramContext.botUsername
-          ? `Не удалось открыть чат автоматически. Откройте @${telegramContext.botUsername} вручную.`
-          : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
-      }
-    })
-  )
-  disposables.push(on(refs.navButtons.catalog, 'click', navigateCatalogButton))
-  disposables.push(on(refs.navButtons.cart, 'click', () => navigate('#/cart', { replace: true })))
-  disposables.push(on(refs.navButtons.order, 'click', () => navigate('#/order', { replace: true })))
-
+    } catch {
+      refs.statusDetails.textContent = fallbackMessage
+      webApp?.showAlert?.('Не удалось открыть QR-сканер.')
+    }
+  }
+  handleGuestAction = (action) => {
+    switch (action) {
+      case 'catalog':
+      case 'menu':
+        navigateCatalogButton()
+        return
+      case 'qr':
+        openQrScanner()
+        return
+      case 'cart':
+        navigate('#/cart', { replace: true })
+        return
+      case 'order':
+        navigate('#/order', { replace: true })
+        return
+      case 'staff':
+        if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+          navigate(`#/venue/${tableSnapshot.venueId}?staff=1`, { replace: true })
+          return
+        }
+        navigate('#/catalog', { replace: true })
+        return
+      case 'account':
+        navigate('#/account', { replace: true })
+        return
+      case 'support':
+        navigate('#/support', { replace: true })
+        return
+      case 'refresh':
+        void refreshTableContext()
+        return
+      default:
+        return
+    }
+  }
+  renderShellActions()
+  const refreshResolvedTableContext = () => {
+    if (tableSnapshot.status === 'resolved' && tableSnapshot.tableToken) {
+      void refreshTableContext()
+    }
+  }
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      refreshResolvedTableContext()
+    }
+  }
+  window.addEventListener('focus', refreshResolvedTableContext)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  disposables.push(() => {
+    window.removeEventListener('focus', refreshResolvedTableContext)
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  })
   let currentDispose: (() => void) | null = null
-  let currentRoute: Route = resolveRoute()
 
   const router = {
     getRouteName: () => currentRoute.name,
@@ -422,8 +604,20 @@ export function mountGuestApp(options: GuestAppOptions) {
   const render = () => {
     const route = resolveRoute()
     currentRoute = route
-    updateNav(refs.navButtons, route.name)
+    renderShellActions()
     currentDispose?.()
+    const endedTableSession =
+      tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && !tableSnapshot.tableSessionActive
+    if ((route.name === 'venue' || route.name === 'cart' || route.name === 'order') && endedTableSession) {
+      currentDispose = renderCatalogScreen({
+        root: refs.content,
+        backendUrl,
+        isDebug,
+        onOpenVenue: (venueId) => navigate(`#/venue/${venueId}`),
+        onBookVenue: (venueId) => navigate(`#/bookings?venueId=${venueId}`)
+      })
+      return
+    }
     if ((route.name === 'cart' || route.name === 'order') && !canOpenActiveOrder(tableSnapshot)) {
       currentDispose = renderPlaceholder(
         refs.content,
@@ -449,7 +643,40 @@ export function mountGuestApp(options: GuestAppOptions) {
           return
         }
         navigate('#/catalog')
-      }
+      },
+      () => navigate('#/catalog'),
+      () => {
+        if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+          navigate(`#/venue/${tableSnapshot.venueId}`)
+          return
+        }
+        navigate('#/catalog')
+      },
+      () => {
+        if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+          navigate(`#/venue/${tableSnapshot.venueId}?staff=1`)
+          return
+        }
+        navigate('#/catalog')
+      },
+      () => {
+        const telegramContext = getTelegramContext()
+        const result = openBotChat(telegramContext, {
+          tableToken: tableSnapshot.tableToken,
+          tableSessionId: tableSnapshot.tableSessionId
+        })
+        if (result.ok) {
+          return { ok: true }
+        }
+        return {
+          ok: false,
+          message: telegramContext.botUsername
+            ? `Не удалось открыть чат автоматически. Откройте @${telegramContext.botUsername} вручную.`
+            : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
+        }
+      },
+      tableSnapshot,
+      resolveTableMode(tableSnapshot) === 'active-table'
     )
   }
   rerenderForTableChange = render

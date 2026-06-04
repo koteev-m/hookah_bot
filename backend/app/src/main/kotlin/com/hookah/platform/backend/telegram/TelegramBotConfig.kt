@@ -12,6 +12,7 @@ data class TelegramBotConfig(
     val webhookPath: String,
     val webhookSecretToken: String?,
     val webAppPublicUrl: String?,
+    val miniAppEntryEnabled: Boolean = true,
     val botUsername: String? = null,
     val platformOwnerId: Long?,
     val longPollingTimeoutSeconds: Int,
@@ -46,6 +47,13 @@ data class TelegramBotConfig(
                 error("telegram.webhookSecretToken must be configured for env=$appEnv")
             }
             val webAppPublicUrl = section.propertyOrNull("webAppPublicUrl")?.getString()?.takeIf { it.isNotBlank() }
+            val miniAppEntryEnabled =
+                runCatching { config.config("miniapp") }
+                    .getOrNull()
+                    ?.propertyOrNull("entryEnabled")
+                    ?.getString()
+                    ?.toBooleanStrictOrNull()
+                    ?: true
             val botUsername =
                 section.propertyOrNull("botUsername")?.getString()?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
             val configuredPlatformOwnerId = section.propertyOrNull("platformOwnerId")?.getString()?.toLongOrNull()
@@ -108,6 +116,7 @@ data class TelegramBotConfig(
                 webhookPath = webhookPath,
                 webhookSecretToken = webhookSecretToken,
                 webAppPublicUrl = webAppPublicUrl,
+                miniAppEntryEnabled = miniAppEntryEnabled,
                 botUsername = botUsername,
                 platformOwnerId = platformOwnerId,
                 longPollingTimeoutSeconds = longPollingTimeoutSeconds,

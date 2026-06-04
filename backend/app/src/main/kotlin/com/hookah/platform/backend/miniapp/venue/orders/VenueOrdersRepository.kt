@@ -4,7 +4,10 @@ import com.hookah.platform.backend.analytics.AnalyticsEventRecord
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
+import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
+import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -61,6 +64,11 @@ data class OrderQueueItem(
     val activeBatchesCount: Int = 1,
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
+    val guestDisplayName: String? = null,
+    val promoDiscountMinor: Long = 0L,
+    val payableMinor: Long? = null,
+    val currency: String? = null,
+    val promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
 )
 
 data class OrderQueueResult(
@@ -79,6 +87,7 @@ data class OrderDetail(
     val batches: List<OrderBatchDetail>,
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
+    val promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
 )
 
 data class OrderBatchDetail(
@@ -91,7 +100,16 @@ data class OrderBatchDetail(
     val rejectedReasonCode: String?,
     val rejectedReasonText: String?,
     val authorUserId: Long? = null,
+    val guestDisplayName: String? = null,
     val items: List<OrderBatchItemDetail>,
+    val promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
+)
+
+data class OrderPromotionDiscount(
+    val label: String,
+    val discountMinor: Long,
+    val currency: String,
+    val ruleType: String? = null,
 )
 
 data class OrderBatchItemDetail(
@@ -104,7 +122,26 @@ data class OrderBatchItemDetail(
     val isExcluded: Boolean = false,
     val excludedReasonText: String? = null,
     val discountPercent: Int? = null,
+    val promoDiscountMinor: Long = 0L,
+    val itemStatus: OrderBatchItemStatus = OrderBatchItemStatus.ACTIVE,
+    val canceledReasonCode: String? = null,
+    val canceledReasonText: String? = null,
+    val canceledAt: Instant? = null,
+    val canceledByUserId: Long? = null,
 )
+
+enum class OrderBatchItemStatus(
+    val dbValue: String,
+) {
+    ACTIVE("ACTIVE"),
+    CANCELED("CANCELED"),
+    ;
+
+    companion object {
+        fun fromDb(raw: String?): OrderBatchItemStatus =
+            entries.firstOrNull { it.dbValue.equals(raw, ignoreCase = true) } ?: ACTIVE
+    }
+}
 
 data class OrderAuditEntry(
     val orderId: Long,
@@ -130,9 +167,29 @@ data class OrderStatusUpdateResult(
     val applied: Boolean,
 )
 
+data class BatchStatusUpdateResult(
+    val orderId: Long,
+    val batchId: Long,
+    val status: OrderWorkflowStatus,
+    val updatedAt: Instant,
+    val applied: Boolean,
+)
+
+data class CancelBatchItemResult(
+    val orderId: Long,
+    val batchId: Long,
+    val batchItemId: Long,
+    val itemName: String,
+    val guestUserId: Long?,
+    val applied: Boolean,
+)
+
 class VenueOrdersRepository(
     private val dataSource: DataSource?,
     private val analyticsEventRepository: AnalyticsEventRepository? = null,
+    private val visitRepository: VisitRepository? = null,
+    private val visitFeedbackRepository: VisitFeedbackRepository? = null,
+    private val loyaltyRepository: LoyaltyRepository? = null,
 ) {
     private val logger = LoggerFactory.getLogger(VenueOrdersRepository::class.java)
 
@@ -187,80 +244,233 @@ class VenueOrdersRepository(
         venueId: Long,
         limit: Int,
     ): List<OrderQueueItem> {
+        return listOperationalQueueByOrder(
+            venueId = venueId,
+            status = null,
+            limit = limit,
+            cursor = null,
+        ).items
+    }
+
+    suspend fun listOperationalQueueByOrder(
+        venueId: Long,
+        status: OrderBatchStatus?,
+        limit: Int,
+        cursor: OrderQueueCursor?,
+    ): OrderQueueResult {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT o.id AS order_id,
-                               o.display_number AS display_number,
-                               o.display_date AS display_date,
-                               vt.table_number AS table_number,
-                               ob.id AS batch_id,
-                               ob.created_at AS created_at,
-                               ob.guest_comment AS guest_comment,
-                               ob.status AS status,
-                               (
-                                   SELECT COUNT(*)
-                                   FROM order_batch_items obi
-                                   WHERE obi.order_batch_id = ob.id
-                               ) AS items_count,
-                               (
-                                   SELECT COUNT(*)
-                                   FROM order_batches ob_active
-                                   WHERE ob_active.order_id = o.id
-                                     AND ob_active.status IN ('NEW', 'ACCEPTED', 'PREPARING', 'DELIVERING')
-                               ) AS active_batches_count
-                        FROM orders o
-                        JOIN venue_tables vt ON vt.id = o.table_id
-                        JOIN order_batches ob
-                          ON ob.id = (
-                              SELECT ob2.id
-                              FROM order_batches ob2
-                              WHERE ob2.order_id = o.id
-                                AND ob2.status IN ('NEW', 'ACCEPTED', 'PREPARING', 'DELIVERING')
-                              ORDER BY ob2.created_at DESC, ob2.id DESC
-                              LIMIT 1
-                          )
-                        WHERE o.venue_id = ?
-                          AND o.status = 'ACTIVE'
-                        ORDER BY ob.created_at DESC, ob.id DESC
-                        LIMIT ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setInt(2, limit)
-                        statement.executeQuery().use { rs ->
-                            val result = mutableListOf<OrderQueueItem>()
-                            while (rs.next()) {
-                                val statusRaw = rs.getString("status")
-                                val mappedStatus =
-                                    OrderBatchStatus.fromDb(statusRaw)?.toWorkflow()
-                                        ?: OrderWorkflowStatus.NEW
-                                result.add(
-                                    OrderQueueItem(
-                                        orderId = rs.getLong("order_id"),
-                                        batchId = rs.getLong("batch_id"),
-                                        tableNumber = rs.getInt("table_number"),
-                                        createdAt = rs.getTimestamp("created_at").toInstant(),
-                                        comment = rs.getString("guest_comment"),
-                                        itemsCount = rs.getInt("items_count"),
-                                        status = mappedStatus,
-                                        activeBatchesCount = rs.getInt("active_batches_count"),
-                                        displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
-                                        displayDate = rs.getDate("display_date")?.toLocalDate(),
-                                    ),
-                                )
-                            }
-                            result
+                    val items = loadOperationalQueueByOrderItems(connection, venueId, status, limit, cursor)
+                    val hasMore = items.size > limit
+                    val trimmed = if (hasMore) items.dropLast(1) else items
+                    val discountsByOrder = loadPromotionDiscountsByOrder(connection, trimmed.map { it.orderId })
+                    val withDiscounts =
+                        trimmed.map { item ->
+                            item.copy(promotionDiscounts = discountsByOrder[item.orderId].orEmpty())
                         }
-                    }
+                    val nextCursor =
+                        if (hasMore) {
+                            val last = trimmed.last()
+                            OrderQueueCursor(last.createdAt, last.batchId)
+                        } else {
+                            null
+                        }
+                    OrderQueueResult(items = withDiscounts, nextCursor = nextCursor)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    private fun loadOperationalQueueByOrderItems(
+        connection: Connection,
+        venueId: Long,
+        status: OrderBatchStatus?,
+        limit: Int,
+        cursor: OrderQueueCursor?,
+    ): MutableList<OrderQueueItem> {
+        val items = mutableListOf<OrderQueueItem>()
+        val sql =
+            buildString {
+                append(
+                    """
+                    SELECT o.id AS order_id,
+                           o.display_number AS display_number,
+                           o.display_date AS display_date,
+                           vt.table_number AS table_number,
+                           ob.id AS batch_id,
+                           ob.created_at AS created_at,
+                           ob.guest_comment AS guest_comment,
+                           ob.status AS status,
+                           u.guest_display_name AS guest_display_name,
+                           (
+                               SELECT COUNT(*)
+                               FROM order_batch_items obi
+                               WHERE obi.order_batch_id = ob.id
+                                 AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                           ) AS items_count,
+                           (
+                               SELECT COUNT(*)
+                               FROM order_batches ob_active
+                               WHERE ob_active.order_id = o.id
+                                 AND ob_active.status IN ('NEW', 'ACCEPTED', 'PREPARING', 'DELIVERING', 'DELIVERED')
+                           ) AS active_batches_count,
+                           (
+                               SELECT COALESCE(SUM(promo.discount_minor), 0)
+                               FROM order_batches ob_total
+                               JOIN order_batch_items obi_total ON obi_total.order_batch_id = ob_total.id
+                               LEFT JOIN (
+                                   SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                                   FROM order_batch_item_promotion_adjustments
+                                   GROUP BY order_batch_item_id
+                               ) promo ON promo.order_batch_item_id = obi_total.id
+                               WHERE ob_total.order_id = o.id
+                                 AND ob_total.status <> 'REJECTED'
+                                 AND ob_total.status <> 'CLOSED'
+                                 AND ob_total.rejected_reason_code IS NULL
+                                 AND ob_total.rejected_reason_text IS NULL
+                                 AND obi_total.is_excluded = FALSE
+                                 AND COALESCE(obi_total.item_status, 'ACTIVE') = 'ACTIVE'
+                           ) AS promo_discount_minor,
+                           (
+                               SELECT GREATEST(
+                                   COALESCE(
+                                       SUM(
+                                           (COALESCE(mi_total.price_minor, 0) * obi_total.qty)
+                                           - ((COALESCE(mi_total.price_minor, 0) * obi_total.qty) * COALESCE(obi_total.discount_percent, 0) / 100)
+                                           - COALESCE(promo.discount_minor, 0)
+                                       ),
+                                       0
+                                   ),
+                                   0
+                               )
+                               FROM order_batches ob_total
+                               JOIN order_batch_items obi_total ON obi_total.order_batch_id = ob_total.id
+                               LEFT JOIN menu_items mi_total ON mi_total.id = obi_total.menu_item_id
+                               LEFT JOIN (
+                                   SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                                   FROM order_batch_item_promotion_adjustments
+                                   GROUP BY order_batch_item_id
+                               ) promo ON promo.order_batch_item_id = obi_total.id
+                               WHERE ob_total.order_id = o.id
+                                 AND ob_total.status <> 'REJECTED'
+                                 AND ob_total.status <> 'CLOSED'
+                                 AND ob_total.rejected_reason_code IS NULL
+                                 AND ob_total.rejected_reason_text IS NULL
+                                 AND obi_total.is_excluded = FALSE
+                                 AND COALESCE(obi_total.item_status, 'ACTIVE') = 'ACTIVE'
+                           ) AS payable_minor,
+                           (
+                               SELECT MIN(mi_total.currency)
+                               FROM order_batches ob_total
+                               JOIN order_batch_items obi_total ON obi_total.order_batch_id = ob_total.id
+                               LEFT JOIN menu_items mi_total ON mi_total.id = obi_total.menu_item_id
+                               WHERE ob_total.order_id = o.id
+                                 AND ob_total.status <> 'REJECTED'
+                                 AND ob_total.status <> 'CLOSED'
+                                 AND ob_total.rejected_reason_code IS NULL
+                                 AND ob_total.rejected_reason_text IS NULL
+                                 AND obi_total.is_excluded = FALSE
+                                 AND COALESCE(obi_total.item_status, 'ACTIVE') = 'ACTIVE'
+                           ) AS currency
+                    FROM orders o
+                    JOIN venue_tables vt ON vt.id = o.table_id
+                    JOIN order_batches ob
+                      ON ob.id = (
+                          SELECT ob2.id
+                          FROM order_batches ob2
+                          WHERE ob2.order_id = o.id
+                            AND ob2.status IN ('NEW', 'ACCEPTED', 'PREPARING', 'DELIVERING', 'DELIVERED')
+                    """.trimIndent(),
+                )
+                if (status != null) {
+                    append("\n")
+                    append("                            AND ob2.status = ?")
+                }
+                append("\n")
+                append(
+                    """
+                          ORDER BY ob2.created_at DESC, ob2.id DESC
+                          LIMIT 1
+                      )
+                    LEFT JOIN users u
+                      ON u.telegram_user_id = COALESCE(
+                          ob.author_user_id,
+                          (
+                              SELECT gbi.user_id
+                              FROM guest_batch_idempotency gbi
+                              WHERE gbi.batch_id = ob.id
+                              ORDER BY gbi.id DESC
+                              LIMIT 1
+                          )
+                      )
+                    WHERE o.venue_id = ?
+                      AND o.status = 'ACTIVE'
+                    """.trimIndent(),
+                )
+                if (cursor != null) {
+                    append("\n")
+                    append(
+                        """
+                        AND (
+                            ob.created_at < ?
+                            OR (ob.created_at = ? AND ob.id < ?)
+                        )
+                        """.trimIndent(),
+                    )
+                }
+                append("\n")
+                append(
+                    """
+                    ORDER BY ob.created_at DESC, ob.id DESC
+                    LIMIT ?
+                    """.trimIndent(),
+                )
+            }
+        connection.prepareStatement(sql).use { statement ->
+            var index = 1
+            if (status != null) {
+                statement.setString(index++, status.dbValue)
+            }
+            statement.setLong(index++, venueId)
+            if (cursor != null) {
+                val ts = Timestamp.from(cursor.createdAt)
+                statement.setTimestamp(index++, ts)
+                statement.setTimestamp(index++, ts)
+                statement.setLong(index++, cursor.batchId)
+            }
+            statement.setInt(index, limit + 1)
+            statement.executeQuery().use { rs ->
+                while (rs.next()) {
+                    val statusRaw = rs.getString("status")
+                    val mappedStatus =
+                        OrderBatchStatus.fromDb(statusRaw)?.toWorkflow()
+                            ?: OrderWorkflowStatus.NEW
+                    items.add(
+                        OrderQueueItem(
+                            orderId = rs.getLong("order_id"),
+                            batchId = rs.getLong("batch_id"),
+                            tableNumber = rs.getInt("table_number"),
+                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                            comment = rs.getString("guest_comment"),
+                            itemsCount = rs.getInt("items_count"),
+                            status = mappedStatus,
+                            activeBatchesCount = rs.getInt("active_batches_count"),
+                            displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
+                            displayDate = rs.getDate("display_date")?.toLocalDate(),
+                            guestDisplayName = rs.getString("guest_display_name"),
+                            promoDiscountMinor = rs.getLong("promo_discount_minor"),
+                            payableMinor = rs.getLong("payable_minor").let { value -> if (rs.wasNull()) null else value },
+                            currency = rs.getString("currency"),
+                        ),
+                    )
+                }
+            }
+        }
+        return items
     }
 
     private fun loadQueueItems(
@@ -279,6 +489,7 @@ class VenueOrdersRepository(
                     SELECT COUNT(*)
                     FROM order_batch_items obi
                     WHERE obi.order_batch_id = ob.id
+                      AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
                 )
                 """.trimIndent()
             } else {
@@ -296,10 +507,22 @@ class VenueOrdersRepository(
                            o.display_number AS display_number,
                            o.display_date AS display_date,
                            vt.table_number AS table_number,
+                           u.guest_display_name AS guest_display_name,
                            $itemsCountExpr AS items_count
                     FROM order_batches ob
                     JOIN orders o ON o.id = ob.order_id
                     JOIN venue_tables vt ON vt.id = o.table_id
+                    LEFT JOIN users u
+                      ON u.telegram_user_id = COALESCE(
+                          ob.author_user_id,
+                          (
+                              SELECT gbi.user_id
+                              FROM guest_batch_idempotency gbi
+                              WHERE gbi.batch_id = ob.id
+                              ORDER BY gbi.id DESC
+                              LIMIT 1
+                          )
+                      )
                     WHERE o.venue_id = ?
                       AND o.status = 'ACTIVE'
                       AND ob.status = ?
@@ -352,6 +575,7 @@ class VenueOrdersRepository(
                             status = mappedStatus,
                             displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
                             displayDate = rs.getDate("display_date")?.toLocalDate(),
+                            guestDisplayName = rs.getString("guest_display_name"),
                         ),
                     )
                 }
@@ -424,8 +648,20 @@ class VenueOrdersRepository(
                                            ORDER BY gbi.id DESC
                                            LIMIT 1
                                        )
-                                   ) AS guest_user_id
+                                   ) AS guest_user_id,
+                                   u.guest_display_name AS guest_display_name
                             FROM order_batches ob
+                            LEFT JOIN users u
+                              ON u.telegram_user_id = COALESCE(
+                                  ob.author_user_id,
+                                  (
+                                      SELECT gbi.user_id
+                                      FROM guest_batch_idempotency gbi
+                                      WHERE gbi.batch_id = ob.id
+                                      ORDER BY gbi.id DESC
+                                      LIMIT 1
+                                  )
+                              )
                             WHERE order_id = ?
                             ORDER BY ob.created_at, ob.id
                             """.trimIndent(),
@@ -448,6 +684,7 @@ class VenueOrdersRepository(
                                             rejectedReasonCode = rs.getString("rejected_reason_code"),
                                             rejectedReasonText = rs.getString("rejected_reason_text"),
                                             authorUserId = rs.getLong("guest_user_id").let { value -> if (rs.wasNull()) null else value },
+                                            guestDisplayName = rs.getString("guest_display_name"),
                                             items = emptyList(),
                                         ),
                                     )
@@ -456,10 +693,15 @@ class VenueOrdersRepository(
                             }
                         }
 
-                    val itemsByBatch = loadBatchItems(connection, batches.map { it.batchId })
+                    val batchIds = batches.map { it.batchId }
+                    val itemsByBatch = loadBatchItems(connection, batchIds)
+                    val promotionDiscountsByBatch = loadPromotionDiscountsByBatch(connection, batchIds)
                     val mappedBatches =
                         batches.map { batch ->
-                            batch.copy(items = itemsByBatch[batch.batchId].orEmpty())
+                            batch.copy(
+                                items = itemsByBatch[batch.batchId].orEmpty(),
+                                promotionDiscounts = promotionDiscountsByBatch[batch.batchId].orEmpty(),
+                            )
                         }
 
                     val workflowStatus = resolveOrderWorkflowStatus(orderHeader.status, mappedBatches)
@@ -475,6 +717,7 @@ class VenueOrdersRepository(
                         createdAt = orderHeader.createdAt,
                         updatedAt = orderHeader.updatedAt,
                         batches = mappedBatches,
+                        promotionDiscounts = mappedBatches.flatMap { it.promotionDiscounts }.mergePromotionDiscounts(),
                     )
                 }
             } catch (e: SQLException) {
@@ -582,6 +825,11 @@ class VenueOrdersRepository(
                         var changedBatchId: Long? = null
                         if (nextStatus == OrderWorkflowStatus.CLOSED) {
                             updateOrderStatusOnly(connection, orderId)
+                            val visits = visitRepository?.recordOrderClosedVisits(connection, orderId, now.toInstant())
+                            loyaltyRepository?.accrueForClosedOrder(connection, orderId)
+                            visits?.visitIds.orEmpty().forEach { visitId ->
+                                visitFeedbackRepository?.scheduleFeedbackRequestForVisit(connection, visitId, now.toInstant())
+                            }
                         } else {
                             val batchStatus =
                                 OrderBatchStatus.fromWorkflow(nextStatus)
@@ -658,6 +906,122 @@ class VenueOrdersRepository(
                         OrderStatusUpdateResult(
                             orderId = orderId,
                             status = nextStatus,
+                            updatedAt = now.toInstant(),
+                            applied = true,
+                        )
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun updateBatchStatus(
+        venueId: Long,
+        batchId: Long,
+        expectedCurrentStatus: OrderBatchStatus,
+        nextStatus: OrderBatchStatus,
+        actor: OrderActionActor,
+    ): BatchStatusUpdateResult? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val batchRow =
+                            selectBatchForUpdate(connection, venueId, batchId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use null
+                            }
+                        val currentWorkflow = batchRow.status.toWorkflow()
+                        if (
+                            !batchRow.orderStatus.equals("ACTIVE", ignoreCase = true) ||
+                            batchRow.status != expectedCurrentStatus
+                        ) {
+                            runCatching { connection.rollback() }
+                            return@use BatchStatusUpdateResult(
+                                orderId = batchRow.orderId,
+                                batchId = batchId,
+                                status = currentWorkflow,
+                                updatedAt = batchRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE order_batches
+                                SET status = ?, updated_at = ?
+                                WHERE id = ?
+                                  AND status = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, nextStatus.dbValue)
+                                statement.setObject(2, now)
+                                statement.setLong(3, batchId)
+                                statement.setString(4, expectedCurrentStatus.dbValue)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            runCatching { connection.rollback() }
+                            return@use BatchStatusUpdateResult(
+                                orderId = batchRow.orderId,
+                                batchId = batchId,
+                                status = currentWorkflow,
+                                updatedAt = batchRow.updatedAt,
+                                applied = false,
+                            )
+                        }
+                        updateOrderTimestamp(connection, batchRow.orderId, now)
+                        insertAudit(
+                            connection = connection,
+                            orderId = batchRow.orderId,
+                            actor = actor,
+                            action = "BATCH_STATUS_CHANGE",
+                            fromStatus = currentWorkflow,
+                            toStatus = nextStatus.toWorkflow(),
+                            reasonCode = null,
+                            reasonText = null,
+                        )
+                        analyticsEventRepository?.append(
+                            connection = connection,
+                            event =
+                                AnalyticsEventRecord(
+                                    eventType = "batch_status_changed",
+                                    payload =
+                                        analyticsCorrelationPayload(
+                                            venueId = venueId,
+                                            orderId = batchRow.orderId,
+                                            batchId = batchId,
+                                            extra =
+                                                mapOf(
+                                                    "fromStatus" to currentWorkflow.toApi(),
+                                                    "toStatus" to nextStatus.toWorkflow().toApi(),
+                                                ),
+                                        ),
+                                    venueId = venueId,
+                                    orderId = batchRow.orderId,
+                                    batchId = batchId,
+                                    idempotencyKey =
+                                        "batch_status_changed:$venueId:${batchRow.orderId}:$batchId:${nextStatus.toWorkflow().toApi()}",
+                                ),
+                        )
+                        connection.commit()
+                        BatchStatusUpdateResult(
+                            orderId = batchRow.orderId,
+                            batchId = batchId,
+                            status = nextStatus.toWorkflow(),
                             updatedAt = now.toInstant(),
                             applied = true,
                         )
@@ -1155,6 +1519,7 @@ class VenueOrdersRepository(
                                     excluded_at = ?
                                 WHERE obi.id = ?
                                   AND obi.is_excluded = FALSE
+                                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
                                   AND EXISTS (
                                       SELECT 1
                                       FROM order_batches ob
@@ -1207,6 +1572,213 @@ class VenueOrdersRepository(
         }
     }
 
+    suspend fun restoreBatchItemToBill(
+        venueId: Long,
+        orderId: Long,
+        batchItemId: Long,
+        actor: OrderActionActor,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow =
+                            selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use false
+                            }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
+                            return@use false
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE order_batch_items obi
+                                SET is_excluded = FALSE,
+                                    excluded_reason_text = NULL,
+                                    excluded_at = NULL
+                                WHERE obi.id = ?
+                                  AND obi.is_excluded = TRUE
+                                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                                  AND EXISTS (
+                                      SELECT 1
+                                      FROM order_batches ob
+                                      JOIN orders o ON o.id = ob.order_id
+                                      WHERE ob.id = obi.order_batch_id
+                                        AND ob.order_id = ?
+                                        AND o.venue_id = ?
+                                        AND o.status = 'ACTIVE'
+                                        AND ob.status <> 'REJECTED'
+                                  )
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, batchItemId)
+                                statement.setLong(2, orderId)
+                                statement.setLong(3, venueId)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            runCatching { connection.rollback() }
+                            return@use false
+                        }
+                        updateOrderTimestamp(connection, orderId, now)
+                        insertAudit(
+                            connection = connection,
+                            orderId = orderId,
+                            actor = actor,
+                            action = "RESTORE_ITEM_TO_BILL",
+                            fromStatus = current,
+                            toStatus = current,
+                            reasonCode = "VENUE_ITEM_RESTORED_TO_BILL",
+                            reasonText = null,
+                        )
+                        connection.commit()
+                        true
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun cancelBatchItemAsUnavailable(
+        venueId: Long,
+        orderId: Long,
+        batchItemId: Long,
+        actor: OrderActionActor,
+        reasonText: String = "Позиция закончилась",
+    ): CancelBatchItemResult? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val orderRow =
+                            selectOrderForUpdate(connection, orderId, venueId) ?: run {
+                                runCatching { connection.rollback() }
+                                return@use null
+                            }
+                        val current = resolveOrderWorkflowStatus(orderRow.status, orderRow.batches)
+                        if (current == OrderWorkflowStatus.CLOSED) {
+                            runCatching { connection.rollback() }
+                            return@use null
+                        }
+                        val item =
+                            loadCancelableBatchItem(connection, venueId, orderId, batchItemId)
+                                ?: run {
+                                    runCatching { connection.rollback() }
+                                    return@use null
+                                }
+                        if (item.itemStatus == OrderBatchItemStatus.CANCELED) {
+                            runCatching { connection.rollback() }
+                            return@use CancelBatchItemResult(
+                                orderId = orderId,
+                                batchId = item.batchId,
+                                batchItemId = batchItemId,
+                                itemName = item.itemName,
+                                guestUserId = item.guestUserId,
+                                applied = false,
+                            )
+                        }
+                        if (item.isExcluded) {
+                            runCatching { connection.rollback() }
+                            return@use null
+                        }
+                        if (item.batchStatus !in cancelableItemBatchStatuses) {
+                            runCatching { connection.rollback() }
+                            return@use null
+                        }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE order_batch_items
+                                SET item_status = 'CANCELED',
+                                    canceled_reason_code = 'ITEM_UNAVAILABLE',
+                                    canceled_reason_text = ?,
+                                    canceled_at = ?,
+                                    canceled_by_user_id = (
+                                        SELECT telegram_user_id
+                                        FROM users
+                                        WHERE telegram_user_id = ?
+                                    )
+                                WHERE id = ?
+                                  AND item_status = 'ACTIVE'
+                                  AND is_excluded = FALSE
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, reasonText)
+                                statement.setObject(2, now)
+                                statement.setLong(3, actor.userId)
+                                statement.setLong(4, batchItemId)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            runCatching { connection.rollback() }
+                            return@use CancelBatchItemResult(
+                                orderId = orderId,
+                                batchId = item.batchId,
+                                batchItemId = batchItemId,
+                                itemName = item.itemName,
+                                guestUserId = item.guestUserId,
+                                applied = false,
+                            )
+                        }
+                        updateOrderTimestamp(connection, orderId, now)
+                        try {
+                            insertAudit(
+                                connection = connection,
+                                orderId = orderId,
+                                actor = actor,
+                                action = "CANCEL_ITEM_UNAVAILABLE",
+                                fromStatus = current,
+                                toStatus = current,
+                                reasonCode = "ITEM_UNAVAILABLE",
+                                reasonText = reasonText,
+                            )
+                        } catch (_: SQLException) {
+                            // Audit must not roll back the guest-facing correction of an unavailable item.
+                        }
+                        connection.commit()
+                        CancelBatchItemResult(
+                            orderId = orderId,
+                            batchId = item.batchId,
+                            batchItemId = batchItemId,
+                            itemName = item.itemName,
+                            guestUserId = item.guestUserId,
+                            applied = true,
+                        )
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun setBatchItemDiscountPercent(
         venueId: Long,
         orderId: Long,
@@ -1238,6 +1810,7 @@ class VenueOrdersRepository(
                                 SET discount_percent = ?
                                 WHERE obi.id = ?
                                   AND obi.is_excluded = FALSE
+                                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
                                   AND EXISTS (
                                       SELECT 1
                                       FROM order_batches ob
@@ -1323,6 +1896,86 @@ class VenueOrdersRepository(
             .maxWithOrNull(compareBy<OrderBatchDetail> { it.createdAt }.thenBy { it.batchId })
             ?.batchId
 
+    private fun loadCancelableBatchItem(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        batchItemId: Long,
+    ): CancelableBatchItem? {
+        val locked =
+            connection.prepareStatement(
+                """
+                SELECT obi.id
+                FROM order_batch_items obi
+                WHERE obi.id = ?
+                  AND EXISTS (
+                      SELECT 1
+                      FROM order_batches ob
+                      JOIN orders o ON o.id = ob.order_id
+                      WHERE ob.id = obi.order_batch_id
+                        AND ob.order_id = ?
+                        AND o.venue_id = ?
+                        AND o.status = 'ACTIVE'
+                  )
+                FOR UPDATE
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchItemId)
+                statement.setLong(2, orderId)
+                statement.setLong(3, venueId)
+                statement.executeQuery().use { rs -> rs.next() }
+            }
+        if (!locked) {
+            return null
+        }
+        return connection.prepareStatement(
+            """
+            SELECT obi.id,
+                   obi.order_batch_id,
+                   COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
+                   obi.is_excluded,
+                   COALESCE(obi.item_status, 'ACTIVE') AS item_status,
+                   ob.status AS batch_status,
+                   COALESCE(
+                       ob.author_user_id,
+                       (
+                           SELECT gbi.user_id
+                           FROM guest_batch_idempotency gbi
+                           WHERE gbi.batch_id = ob.id
+                           ORDER BY gbi.id DESC
+                           LIMIT 1
+                       )
+                   ) AS guest_user_id
+            FROM order_batch_items obi
+            JOIN order_batches ob ON ob.id = obi.order_batch_id
+            JOIN orders o ON o.id = ob.order_id
+            LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            WHERE obi.id = ?
+              AND ob.order_id = ?
+              AND o.venue_id = ?
+              AND o.status = 'ACTIVE'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchItemId)
+            statement.setLong(2, orderId)
+            statement.setLong(3, venueId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) {
+                    null
+                } else {
+                    CancelableBatchItem(
+                        batchId = rs.getLong("order_batch_id"),
+                        itemName = rs.getString("item_name"),
+                        isExcluded = rs.getBoolean("is_excluded"),
+                        itemStatus = OrderBatchItemStatus.fromDb(rs.getString("item_status")),
+                        batchStatus = OrderBatchStatus.fromDb(rs.getString("batch_status")) ?: OrderBatchStatus.REJECTED,
+                        guestUserId = rs.getLong("guest_user_id").let { value -> if (rs.wasNull()) null else value },
+                    )
+                }
+            }
+        }
+    }
+
     private fun loadBatchItems(
         connection: Connection,
         batchIds: List<Long>,
@@ -1340,11 +1993,22 @@ class VenueOrdersRepository(
                    obi.is_excluded,
                    obi.excluded_reason_text,
                    obi.discount_percent,
+                   COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
+                   obi.item_status,
+                   obi.canceled_reason_code,
+                   obi.canceled_reason_text,
+                   obi.canceled_at,
+                   obi.canceled_by_user_id,
                    mi.name,
                    mi.price_minor,
                    mi.currency
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN (
+                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                FROM order_batch_item_promotion_adjustments
+                GROUP BY order_batch_item_id
+            ) promo ON promo.order_batch_item_id = obi.id
             WHERE obi.order_batch_id IN ($placeholders)
             ORDER BY obi.order_batch_id, obi.id
             """.trimIndent()
@@ -1368,6 +2032,12 @@ class VenueOrdersRepository(
                             isExcluded = rs.getBoolean("is_excluded"),
                             excludedReasonText = rs.getString("excluded_reason_text"),
                             discountPercent = rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value },
+                            promoDiscountMinor = rs.getLong("promo_discount_minor"),
+                            itemStatus = OrderBatchItemStatus.fromDb(rs.getString("item_status")),
+                            canceledReasonCode = rs.getString("canceled_reason_code"),
+                            canceledReasonText = rs.getString("canceled_reason_text"),
+                            canceledAt = rs.getTimestamp("canceled_at")?.toInstant(),
+                            canceledByUserId = rs.getLong("canceled_by_user_id").let { value -> if (rs.wasNull()) null else value },
                         ),
                     )
                 }
@@ -1375,6 +2045,159 @@ class VenueOrdersRepository(
             }
         }
     }
+
+    private fun loadPromotionDiscountsByBatch(
+        connection: Connection,
+        batchIds: List<Long>,
+    ): Map<Long, List<OrderPromotionDiscount>> {
+        if (batchIds.isEmpty()) {
+            return emptyMap()
+        }
+        val placeholders = batchIds.joinToString(",") { "?" }
+        val sql =
+            """
+            WITH application_discounts AS (
+                SELECT
+                    opa.batch_id,
+                    CASE
+                        WHEN opa.rule_type = 'GIFT_WITH_ITEM' THEN COALESCE(MAX(opri.label_snapshot), opa.title_snapshot)
+                        ELSE opa.title_snapshot
+                    END AS promo_label,
+                    opa.rule_type,
+                    opa.currency,
+                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
+                    MIN(opa.id) AS first_application_id
+                FROM order_promotion_applications opa
+                JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
+                JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
+                JOIN order_batches ob ON ob.id = obi.order_batch_id
+                LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
+                WHERE opa.batch_id IN ($placeholders)
+                  AND ob.status <> 'REJECTED'
+                  AND ob.status <> 'CLOSED'
+                  AND ob.rejected_reason_code IS NULL
+                  AND ob.rejected_reason_text IS NULL
+                  AND obi.is_excluded = FALSE
+                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                GROUP BY opa.id, opa.batch_id, opa.title_snapshot, opa.rule_type, opa.currency
+            )
+            SELECT batch_id,
+                   promo_label,
+                   rule_type,
+                   currency,
+                   COALESCE(SUM(discount_minor), 0) AS discount_minor,
+                   MIN(first_application_id) AS first_application_id
+            FROM application_discounts
+            GROUP BY batch_id, promo_label, rule_type, currency
+            ORDER BY batch_id, first_application_id
+            """.trimIndent()
+        return connection.prepareStatement(sql).use { statement ->
+            batchIds.forEachIndexed { index, batchId ->
+                statement.setLong(index + 1, batchId)
+            }
+            statement.executeQuery().use { rs ->
+                val result = linkedMapOf<Long, MutableList<OrderPromotionDiscount>>()
+                while (rs.next()) {
+                    val discountMinor = rs.getLong("discount_minor")
+                    if (discountMinor > 0L) {
+                        result.getOrPut(rs.getLong("batch_id")) { mutableListOf() } +=
+                            OrderPromotionDiscount(
+                                label = rs.getString("promo_label"),
+                                discountMinor = discountMinor,
+                                currency = rs.getString("currency"),
+                                ruleType = rs.getString("rule_type"),
+                            )
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    private fun loadPromotionDiscountsByOrder(
+        connection: Connection,
+        orderIds: List<Long>,
+    ): Map<Long, List<OrderPromotionDiscount>> {
+        if (orderIds.isEmpty()) {
+            return emptyMap()
+        }
+        val distinctOrderIds = orderIds.distinct()
+        val placeholders = distinctOrderIds.joinToString(",") { "?" }
+        val sql =
+            """
+            WITH application_discounts AS (
+                SELECT
+                    opa.order_id,
+                    CASE
+                        WHEN opa.rule_type = 'GIFT_WITH_ITEM' THEN COALESCE(MAX(opri.label_snapshot), opa.title_snapshot)
+                        ELSE opa.title_snapshot
+                    END AS promo_label,
+                    opa.rule_type,
+                    opa.currency,
+                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
+                    MIN(opa.id) AS first_application_id
+                FROM order_promotion_applications opa
+                JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
+                JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
+                JOIN order_batches ob ON ob.id = obi.order_batch_id
+                LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
+                WHERE opa.order_id IN ($placeholders)
+                  AND ob.status <> 'REJECTED'
+                  AND ob.status <> 'CLOSED'
+                  AND ob.rejected_reason_code IS NULL
+                  AND ob.rejected_reason_text IS NULL
+                  AND obi.is_excluded = FALSE
+                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                GROUP BY opa.id, opa.order_id, opa.title_snapshot, opa.rule_type, opa.currency
+            )
+            SELECT order_id,
+                   promo_label,
+                   rule_type,
+                   currency,
+                   COALESCE(SUM(discount_minor), 0) AS discount_minor,
+                   MIN(first_application_id) AS first_application_id
+            FROM application_discounts
+            GROUP BY order_id, promo_label, rule_type, currency
+            ORDER BY order_id, first_application_id
+            """.trimIndent()
+        return connection.prepareStatement(sql).use { statement ->
+            distinctOrderIds.forEachIndexed { index, orderId ->
+                statement.setLong(index + 1, orderId)
+            }
+            statement.executeQuery().use { rs ->
+                val result = linkedMapOf<Long, MutableList<OrderPromotionDiscount>>()
+                while (rs.next()) {
+                    val discountMinor = rs.getLong("discount_minor")
+                    if (discountMinor > 0L) {
+                        result.getOrPut(rs.getLong("order_id")) { mutableListOf() } +=
+                            OrderPromotionDiscount(
+                                label = rs.getString("promo_label"),
+                                discountMinor = discountMinor,
+                                currency = rs.getString("currency"),
+                                ruleType = rs.getString("rule_type"),
+                            )
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    private fun List<OrderPromotionDiscount>.mergePromotionDiscounts(): List<OrderPromotionDiscount> =
+        groupBy { discount ->
+            Triple(
+                discount.label.takeIf { it.isNotBlank() } ?: "Акция",
+                discount.ruleType,
+                discount.currency,
+            )
+        }.map { (key, discounts) ->
+            OrderPromotionDiscount(
+                label = key.first,
+                ruleType = key.second,
+                currency = key.third,
+                discountMinor = discounts.sumOf { it.discountMinor },
+            )
+        }.filter { it.discountMinor > 0L }
 
     private fun loadBatchesForWorkflow(
         connection: Connection,
@@ -1417,6 +2240,24 @@ class VenueOrdersRepository(
         val batches: List<OrderBatchDetail>,
     )
 
+    private data class CancelableBatchItem(
+        val batchId: Long,
+        val itemName: String,
+        val isExcluded: Boolean,
+        val itemStatus: OrderBatchItemStatus,
+        val batchStatus: OrderBatchStatus,
+        val guestUserId: Long?,
+    )
+
+    private companion object {
+        val cancelableItemBatchStatuses =
+            setOf(
+                OrderBatchStatus.NEW,
+                OrderBatchStatus.ACCEPTED,
+                OrderBatchStatus.PREPARING,
+            )
+    }
+
     private data class OrderHeader(
         val status: String,
         val displayNumber: Int?,
@@ -1426,6 +2267,47 @@ class VenueOrdersRepository(
         val tableId: Long,
         val tableNumber: Int,
     )
+
+    private data class BatchRow(
+        val orderId: Long,
+        val orderStatus: String,
+        val status: OrderBatchStatus,
+        val updatedAt: Instant,
+    )
+
+    private fun selectBatchForUpdate(
+        connection: Connection,
+        venueId: Long,
+        batchId: Long,
+    ): BatchRow? =
+        connection.prepareStatement(
+            """
+            SELECT ob.order_id,
+                   ob.status AS batch_status,
+                   ob.updated_at,
+                   o.status AS order_status
+            FROM order_batches ob
+            JOIN orders o ON o.id = ob.order_id
+            WHERE ob.id = ?
+              AND o.venue_id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) {
+                    return@use null
+                }
+                val status = OrderBatchStatus.fromDb(rs.getString("batch_status")) ?: return@use null
+                BatchRow(
+                    orderId = rs.getLong("order_id"),
+                    orderStatus = rs.getString("order_status"),
+                    status = status,
+                    updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                )
+            }
+        }
 
     private fun selectOrderForUpdate(
         connection: Connection,

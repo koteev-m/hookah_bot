@@ -133,12 +133,16 @@ function renderTableRow(
 
   const actions = el('div', { className: 'venue-table-actions' })
   const rotateButton = el('button', { className: 'button-small', text: 'Переиздать токен' }) as HTMLButtonElement
-  rotateButton.disabled = !canRotate
-  rotateButton.title = canRotate ? '' : 'Недостаточно прав'
   rotateButton.addEventListener('click', () => onRotate(table.tableId))
-  append(actions, rotateButton)
+  if (canRotate) {
+    append(actions, rotateButton)
+  }
 
-  append(row, info, actions)
+  if (actions.childElementCount > 0) {
+    append(row, info, actions)
+  } else {
+    append(row, info)
+  }
   return row
 }
 
@@ -157,6 +161,15 @@ export function renderVenueTablesScreen(options: VenueTablesOptions) {
   const canRotate = access.permissions.includes('TABLE_TOKEN_ROTATE')
   const canRotateAll = access.permissions.includes('TABLE_TOKEN_ROTATE_ALL')
   const canExport = access.permissions.includes('TABLE_QR_EXPORT')
+  if (!canManage) {
+    refs.countInput.closest('.venue-form-grid')?.remove()
+  }
+  if (!canRotateAll) {
+    refs.rotateAllButton.remove()
+  }
+  if (!canExport) {
+    refs.exportSelect.closest('.venue-form-row')?.remove()
+  }
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -318,11 +331,8 @@ export function renderVenueTablesScreen(options: VenueTablesOptions) {
   disposables.push(on(refs.exportButton, 'click', () => void downloadQr()))
 
   refs.createButton.disabled = !canManage
-  refs.createButton.title = canManage ? '' : 'Недостаточно прав'
   refs.rotateAllButton.disabled = !canRotateAll
-  refs.rotateAllButton.title = canRotateAll ? '' : 'Недостаточно прав'
   refs.exportButton.disabled = !canExport
-  refs.exportButton.title = canExport ? '' : 'Недостаточно прав'
 
   void loadTables()
 

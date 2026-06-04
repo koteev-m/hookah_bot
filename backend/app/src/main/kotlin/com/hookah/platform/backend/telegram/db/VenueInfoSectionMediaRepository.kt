@@ -185,6 +185,45 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findById(
+        sectionId: Long,
+        mediaId: Long,
+    ): VenueInfoSectionMediaAttachment? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT id, section_id, media_type, telegram_file_id, sort_order
+                        FROM venue_info_section_media
+                        WHERE section_id = ? AND id = ?
+                        LIMIT 1
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, sectionId)
+                        statement.setLong(2, mediaId)
+                        statement.executeQuery().use { rs ->
+                            if (!rs.next()) {
+                                null
+                            } else {
+                                VenueInfoSectionMediaAttachment(
+                                    id = rs.getLong("id"),
+                                    sectionId = rs.getLong("section_id"),
+                                    mediaType = rs.getString("media_type").orEmpty(),
+                                    telegramFileId = rs.getString("telegram_file_id").orEmpty(),
+                                    sortOrder = rs.getInt("sort_order"),
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun deleteAttachment(
         sectionId: Long,
         mediaId: Long,

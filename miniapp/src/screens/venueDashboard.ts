@@ -2,7 +2,7 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestGetVenue } from '../shared/api/guestApi'
-import { venueGetOrdersQueue, venueGetStaffChatStatus } from '../shared/api/venueApi'
+import { venueGetStaffCalls, venueGetStaffChatStatus } from '../shared/api/venueApi'
 import type { VenueAccessDto } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
@@ -24,7 +24,7 @@ type DashboardRefs = {
   subtitle: HTMLParagraphElement
   summaryNew: HTMLSpanElement
   summaryActive: HTMLSpanElement
-  summaryChat: HTMLSpanElement
+  summaryChat: HTMLSpanElement | null
   refreshButton: HTMLButtonElement
   status: HTMLParagraphElement
   error: HTMLDivElement
@@ -51,24 +51,28 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   })
 }
 
-function buildDashboardDom(root: HTMLDivElement): DashboardRefs {
+function buildDashboardDom(root: HTMLDivElement, options: { showStaffChatStatus: boolean }): DashboardRefs {
   const wrapper = el('div', { className: 'venue-dashboard' })
   const header = el('div', { className: 'card' })
-  const title = el('h2', { text: 'Dashboard' })
+  const title = el('h2', { text: 'Обзор' })
   const subtitle = el('p', { className: 'venue-dashboard-subtitle', text: '' })
   append(header, title, subtitle)
 
   const summary = el('div', { className: 'venue-summary' })
   const summaryNew = el('span', { text: '—' })
   const summaryActive = el('span', { text: '—' })
-  const summaryChat = el('span', { text: '—' })
   const summaryNewRow = el('div', { className: 'venue-summary-row' })
-  append(summaryNewRow, el('strong', { text: 'Новые batches:' }), summaryNew)
+  append(summaryNewRow, el('strong', { text: 'Новые вызовы:' }), summaryNew)
   const summaryActiveRow = el('div', { className: 'venue-summary-row' })
-  append(summaryActiveRow, el('strong', { text: 'Активные заказы:' }), summaryActive)
-  const summaryChatRow = el('div', { className: 'venue-summary-row' })
-  append(summaryChatRow, el('strong', { text: 'Чат персонала:' }), summaryChat)
-  append(summary, summaryNewRow, summaryActiveRow, summaryChatRow)
+  append(summaryActiveRow, el('strong', { text: 'В работе:' }), summaryActive)
+  append(summary, summaryNewRow, summaryActiveRow)
+  let summaryChat: HTMLSpanElement | null = null
+  if (options.showStaffChatStatus) {
+    summaryChat = el('span', { text: '—' })
+    const summaryChatRow = el('div', { className: 'venue-summary-row' })
+    append(summaryChatRow, el('strong', { text: 'Чат персонала:' }), summaryChat)
+    append(summary, summaryChatRow)
+  }
 
   const actions = el('div', { className: 'button-row' })
   const refreshButton = el('button', { className: 'button-secondary', text: 'Обновить' }) as HTMLButtonElement
@@ -107,11 +111,34 @@ function toStatusLabel(status: string) {
   return status === 'linked' ? 'привязан' : status === 'unlinked' ? 'не привязан' : status
 }
 
+function venueRoleLabel(role: VenueAccessDto['role']) {
+  switch (role) {
+    case 'OWNER':
+      return 'владелец'
+    case 'MANAGER':
+      return 'менеджер'
+    case 'STAFF':
+      return 'персонал'
+    default:
+      return role
+  }
+}
+
+function isNewStaffCallStatus(status: string) {
+  return status.toUpperCase() === 'NEW'
+}
+
+function isInWorkStaffCallStatus(status: string) {
+  const normalized = status.toUpperCase()
+  return normalized === 'ACK' || normalized === 'ACKNOWLEDGED' || normalized === 'ACCEPTED'
+}
+
 export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
   const { root, backendUrl, isDebug, venueId, access } = options
   if (!root) return () => undefined
 
-  const refs = buildDashboardDom(root)
+  const showStaffChatStatus = access.role !== 'STAFF'
+  const refs = buildDashboardDom(root, { showStaffChatStatus })
   const deps = buildApiDeps(isDebug)
 
   let disposed = false
@@ -120,7 +147,7 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
   let inFlight = false
   let loadSeq = 0
 
-  const canViewOrders = access.permissions.includes('ORDER_QUEUE_VIEW')
+  const canViewStaffChat = showStaffChatStatus && access.permissions.includes('STAFF_CHAT_LINK')
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -161,81 +188,28 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     loadAbort = controller
     const seq = ++loadSeq
     const baseVenuePromise = guestGetVenue(backendUrl, venueId, deps, controller.signal)
-    const chatPromise = venueGetStaffChatStatus(backendUrl, venueId, deps, controller.signal)
+    const staffCallsPromise = venueGetStaffCalls(backendUrl, { venueId, limit: 100 }, deps, controller.signal)
+    const chatPromise = canViewStaffChat
+      ? venueGetStaffChatStatus(backendUrl, venueId, deps, controller.signal)
+      : Promise.resolve(null)
 
-    if (!canViewOrders) {
-      const responses = await Promise.all([baseVenuePromise, chatPromise])
-
-      if (disposed || loadSeq !== seq) return
-      inFlight = false
-      loadAbort = null
-
-      const venueResult = responses[0] as Awaited<typeof baseVenuePromise>
-      const chatResult = responses[1] as Awaited<typeof chatPromise>
-
-      if (!venueResult.ok && venueResult.error.code === REQUEST_ABORTED_CODE) {
-        return
-      }
-      if (!chatResult.ok && chatResult.error.code === REQUEST_ABORTED_CODE) {
-        return
-      }
-
-      if (!venueResult.ok) {
-        showError(venueResult.error)
-        setStatus('')
-        return
-      }
-      if (!chatResult.ok) {
-        showError(chatResult.error)
-        setStatus('')
-        return
-      }
-
-      const venue = venueResult.data.venue
-      refs.title.textContent = venue.name
-      refs.subtitle.textContent = `Venue #${venue.id} · Роль ${access.role}`
-
-      refs.summaryNew.textContent = '—'
-      refs.summaryActive.textContent = '—'
-      refs.summaryChat.textContent = chatResult.data.isLinked ? toStatusLabel('linked') : toStatusLabel('unlinked')
-
-      setStatus(`Обновлено: ${new Date().toLocaleTimeString()} · Нет доступа к очереди заказов`)
-      return
-    }
-
-    const newQueuePromise = venueGetOrdersQueue(
-      backendUrl,
-      { venueId, status: 'new', limit: 50 },
-      deps,
-      controller.signal
-    )
-    const activeStatuses = ['accepted', 'cooking', 'delivering']
-    const activePromises = activeStatuses.map((status) =>
-      venueGetOrdersQueue(backendUrl, { venueId, status, limit: 50 }, deps, controller.signal)
-    )
-
-    const responses = await Promise.all([baseVenuePromise, newQueuePromise, ...activePromises, chatPromise])
+    const responses = await Promise.all([baseVenuePromise, staffCallsPromise, chatPromise])
 
     if (disposed || loadSeq !== seq) return
     inFlight = false
     loadAbort = null
 
     const venueResult = responses[0] as Awaited<typeof baseVenuePromise>
-    const newQueueResult = responses[1] as Awaited<typeof newQueuePromise>
-    const activeResults = responses.slice(2, 2 + activeStatuses.length) as Awaited<typeof newQueuePromise>[]
-    const chatResult = responses[2 + activeStatuses.length] as Awaited<typeof chatPromise>
+    const staffCallsResult = responses[1] as Awaited<typeof staffCallsPromise>
+    const chatResult = responses[2] as Awaited<typeof chatPromise>
 
     if (!venueResult.ok && venueResult.error.code === REQUEST_ABORTED_CODE) {
       return
     }
-    if (!newQueueResult.ok && newQueueResult.error.code === REQUEST_ABORTED_CODE) {
+    if (!staffCallsResult.ok && staffCallsResult.error.code === REQUEST_ABORTED_CODE) {
       return
     }
-    const abortedActive = activeResults.find((result) => !result.ok && result.error.code === REQUEST_ABORTED_CODE)
-    if (abortedActive) {
-      return
-    }
-    if (!chatResult.ok && chatResult.error.code === REQUEST_ABORTED_CODE) {
+    if (chatResult && !chatResult.ok && chatResult.error.code === REQUEST_ABORTED_CODE) {
       return
     }
 
@@ -244,38 +218,34 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
       setStatus('')
       return
     }
-    if (!newQueueResult.ok) {
-      showError(newQueueResult.error)
-      setStatus('')
-      return
-    }
-    const badActive = activeResults.find((result) => !result.ok)
-    if (badActive && !badActive.ok) {
-      showError(badActive.error)
-      setStatus('')
-      return
-    }
-    if (!chatResult.ok) {
-      showError(chatResult.error)
+    if (!staffCallsResult.ok) {
+      refs.summaryNew.textContent = 'ошибка'
+      refs.summaryActive.textContent = 'ошибка'
+      showError(staffCallsResult.error)
       setStatus('')
       return
     }
 
     const venue = venueResult.data.venue
     refs.title.textContent = venue.name
-    refs.subtitle.textContent = `Venue #${venue.id} · Роль ${access.role}`
+    refs.subtitle.textContent = `Роль: ${venueRoleLabel(access.role)}`
 
-    refs.summaryNew.textContent = String(newQueueResult.data.items.length)
-    const activeOrders = new Set<number>()
-    activeResults.forEach((result) => {
-      if (result.ok) {
-        result.data.items.forEach((item) => activeOrders.add(item.orderId))
-      }
-    })
-    refs.summaryActive.textContent = String(activeOrders.size)
-    refs.summaryChat.textContent = chatResult.data.isLinked ? toStatusLabel('linked') : toStatusLabel('unlinked')
+    const activeCalls = staffCallsResult.data.items
+    refs.summaryNew.textContent = String(activeCalls.filter((item) => isNewStaffCallStatus(item.status)).length)
+    refs.summaryActive.textContent = String(activeCalls.filter((item) => isInWorkStaffCallStatus(item.status)).length)
+    if (showStaffChatStatus && refs.summaryChat) {
+      refs.summaryChat.textContent =
+        chatResult === null
+          ? 'недоступен'
+          : chatResult.ok
+            ? chatResult.data.isLinked
+              ? toStatusLabel('linked')
+              : toStatusLabel('unlinked')
+            : 'ошибка'
+    }
 
-    setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
+    const chatWarning = showStaffChatStatus && chatResult && !chatResult.ok ? ' · статус чата недоступен' : ''
+    setStatus(`Обновлено: ${new Date().toLocaleTimeString()}${chatWarning}`)
   }
 
   const startPolling = () => {

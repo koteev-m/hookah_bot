@@ -9,6 +9,7 @@ import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -22,11 +23,13 @@ import java.time.format.DateTimeFormatter
 
 private const val DEFAULT_QUEUE_LIMIT = 20
 private const val MAX_QUEUE_LIMIT = 100
+private const val DEFAULT_CURRENCY = "RUB"
 private val instantFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
 
 fun Route.venueOrderRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueOrdersRepository: VenueOrdersRepository,
+    outboxEnqueuer: TelegramOutboxEnqueuer? = null,
 ) {
     route("/venue") {
         get("/orders/queue") {
@@ -43,14 +46,18 @@ fun Route.venueOrderRoutes(
                 throw InvalidInputException("limit must be between 1 and $MAX_QUEUE_LIMIT")
             }
             val statusRaw = call.request.queryParameters["status"] ?: "new"
-            val status =
-                OrderWorkflowStatus.fromApi(statusRaw)
-                    ?: throw InvalidInputException(
-                        "status must be one of: new, accepted, cooking, delivering, delivered, closed",
-                    )
             val batchStatus =
-                OrderBatchStatus.fromWorkflow(status)
-                    ?: throw InvalidInputException("queue status is not supported")
+                if (statusRaw.equals("all", ignoreCase = true)) {
+                    null
+                } else {
+                    val status =
+                        OrderWorkflowStatus.fromApi(statusRaw)
+                            ?: throw InvalidInputException(
+                                "status must be one of: all, new, accepted, cooking, delivering, delivered, closed",
+                            )
+                    OrderBatchStatus.fromWorkflow(status)
+                        ?: throw InvalidInputException("queue status is not supported")
+                }
             val cursor =
                 OrderQueueCursor.parse(call.request.queryParameters["cursor"])
                     ?: if (call.request.queryParameters.contains("cursor")) {
@@ -62,7 +69,7 @@ fun Route.venueOrderRoutes(
                     }
 
             val result =
-                venueOrdersRepository.listQueue(
+                venueOrdersRepository.listOperationalQueueByOrder(
                     venueId = venueId,
                     status = batchStatus,
                     limit = limit,
@@ -71,18 +78,7 @@ fun Route.venueOrderRoutes(
             call.respond(
                 OrdersQueueResponse(
                     items =
-                        result.items.map { item ->
-                            OrderQueueItemDto(
-                                orderId = item.orderId,
-                                batchId = item.batchId,
-                                tableNumber = item.tableNumber.toString(),
-                                tableLabel = item.tableNumber.toString(),
-                                createdAt = formatInstant(item.createdAt),
-                                comment = item.comment,
-                                itemsCount = item.itemsCount,
-                                status = item.status.toApi(),
-                            )
-                        },
+                        result.items.map { item -> item.toQueueDto() },
                     nextCursor = result.nextCursor?.encode(),
                 ),
             )
@@ -170,13 +166,18 @@ fun Route.venueOrderRoutes(
                         OrderWorkflowStatus.COOKING,
                         OrderWorkflowStatus.DELIVERING,
                         OrderWorkflowStatus.DELIVERED,
+                        OrderWorkflowStatus.CLOSED,
                     )
                 if (!allowedForStaff.contains(nextStatus)) {
                     throw ForbiddenException()
                 }
             }
+            val detailBeforeUpdate =
+                venueOrdersRepository.loadOrderDetail(venueId, orderId)
+                    ?: throw NotFoundException()
             val result =
-                venueOrdersRepository.updateOrderStatus(
+                applyVenueOrderStatusTransition(
+                    venueOrdersRepository = venueOrdersRepository,
                     venueId = venueId,
                     orderId = orderId,
                     nextStatus = nextStatus,
@@ -184,6 +185,11 @@ fun Route.venueOrderRoutes(
                 ) ?: throw NotFoundException()
             if (!result.applied) {
                 throw InvalidInputException("Invalid status transition")
+            }
+            if (nextStatus == OrderWorkflowStatus.CLOSED) {
+                notifyGuestsAboutOrderClosed(outboxEnqueuer, detailBeforeUpdate)
+            } else {
+                notifyGuestAboutOrderStatusChange(outboxEnqueuer, detailBeforeUpdate, nextStatus)
             }
             call.respond(
                 OrderStatusResponse(
@@ -229,12 +235,283 @@ fun Route.venueOrderRoutes(
                 ),
             )
         }
+
+        post("/orders/{orderId}/close") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            val permissions = VenuePermissions.forRole(role)
+            if (!permissions.contains(VenuePermission.ORDER_STATUS_UPDATE)) {
+                throw ForbiddenException()
+            }
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
+            val detailBeforeUpdate =
+                venueOrdersRepository.loadOrderDetail(venueId, orderId)
+                    ?: throw NotFoundException()
+            val result =
+                applyVenueOrderStatusTransition(
+                    venueOrdersRepository = venueOrdersRepository,
+                    venueId = venueId,
+                    orderId = orderId,
+                    nextStatus = OrderWorkflowStatus.CLOSED,
+                    actor = OrderActionActor(userId, role),
+                ) ?: throw NotFoundException()
+            if (!result.applied) {
+                throw InvalidInputException("Invalid status transition")
+            }
+            notifyGuestsAboutOrderClosed(outboxEnqueuer, detailBeforeUpdate)
+            call.respond(
+                OrderStatusResponse(
+                    orderId = result.orderId,
+                    status = result.status.toApi(),
+                    updatedAt = formatInstant(result.updatedAt),
+                ),
+            )
+        }
+
+        post("/orders/{orderId}/items/{batchItemId}/exclude") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            requireBillEditRole(role)
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
+            val batchItemId =
+                call.parameters["batchItemId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("batchItemId must be a number")
+            val request = call.receive<OrderBillItemExcludeRequest>()
+            val reasonText = request.reasonText.trim()
+            if (reasonText.isBlank()) {
+                throw InvalidInputException("reasonText must not be blank")
+            }
+            val applied =
+                venueOrdersRepository.excludeBatchItemFromBill(
+                    venueId = venueId,
+                    orderId = orderId,
+                    batchItemId = batchItemId,
+                    reasonText = reasonText.take(200),
+                    actor = OrderActionActor(userId, role),
+                )
+            call.respondBillMutationResult(venueOrdersRepository, venueId, orderId, applied)
+        }
+
+        post("/orders/{orderId}/items/{batchItemId}/restore") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            requireBillEditRole(role)
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
+            val batchItemId =
+                call.parameters["batchItemId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("batchItemId must be a number")
+            val applied =
+                venueOrdersRepository.restoreBatchItemToBill(
+                    venueId = venueId,
+                    orderId = orderId,
+                    batchItemId = batchItemId,
+                    actor = OrderActionActor(userId, role),
+                )
+            call.respondBillMutationResult(venueOrdersRepository, venueId, orderId, applied)
+        }
+
+        post("/orders/{orderId}/items/{batchItemId}/discount") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            requireBillEditRole(role)
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("orderId must be a number")
+            val batchItemId =
+                call.parameters["batchItemId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("batchItemId must be a number")
+            val request = call.receive<OrderBillItemDiscountRequest>()
+            if (request.discountPercent !in 0..100) {
+                throw InvalidInputException("discountPercent must be between 0 and 100")
+            }
+            val applied =
+                venueOrdersRepository.setBatchItemDiscountPercent(
+                    venueId = venueId,
+                    orderId = orderId,
+                    batchItemId = batchItemId,
+                    discountPercent = request.discountPercent,
+                    actor = OrderActionActor(userId, role),
+                )
+            call.respondBillMutationResult(venueOrdersRepository, venueId, orderId, applied)
+        }
     }
+}
+
+private fun OrderQueueItem.toQueueDto(): OrderQueueItemDto =
+    OrderQueueItemDto(
+        orderId = orderId,
+        batchId = batchId,
+        displayNumber = displayNumber,
+        activeBatchesCount = activeBatchesCount,
+        tableNumber = tableNumber.toString(),
+        tableLabel = tableNumber.toString(),
+        createdAt = formatInstant(createdAt),
+        comment = comment,
+        itemsCount = itemsCount,
+        status = status.toApi(),
+    )
+
+private fun requireBillEditRole(role: VenueRole) {
+    if (role == VenueRole.STAFF) {
+        throw ForbiddenException()
+    }
+}
+
+private suspend fun io.ktor.server.application.ApplicationCall.respondBillMutationResult(
+    venueOrdersRepository: VenueOrdersRepository,
+    venueId: Long,
+    orderId: Long,
+    applied: Boolean,
+) {
+    val detail =
+        venueOrdersRepository.loadOrderDetail(venueId, orderId)
+            ?: throw NotFoundException()
+    if (!applied) {
+        throw InvalidInputException("Bill item update was not applied")
+    }
+    respond(OrderBillItemAdjustmentResponse(order = detail.toDto()))
+}
+
+private suspend fun applyVenueOrderStatusTransition(
+    venueOrdersRepository: VenueOrdersRepository,
+    venueId: Long,
+    orderId: Long,
+    nextStatus: OrderWorkflowStatus,
+    actor: OrderActionActor,
+): OrderStatusUpdateResult? {
+    if (nextStatus != OrderWorkflowStatus.DELIVERED) {
+        return venueOrdersRepository.updateOrderStatus(
+            venueId = venueId,
+            orderId = orderId,
+            nextStatus = nextStatus,
+            actor = actor,
+        )
+    }
+    val detail = venueOrdersRepository.loadOrderDetail(venueId = venueId, orderId = orderId) ?: return null
+    val transitions =
+        when (detail.status) {
+            OrderWorkflowStatus.ACCEPTED ->
+                listOf(
+                    OrderWorkflowStatus.COOKING,
+                    OrderWorkflowStatus.DELIVERING,
+                    OrderWorkflowStatus.DELIVERED,
+                )
+            OrderWorkflowStatus.COOKING ->
+                listOf(
+                    OrderWorkflowStatus.DELIVERING,
+                    OrderWorkflowStatus.DELIVERED,
+                )
+            OrderWorkflowStatus.DELIVERING -> listOf(OrderWorkflowStatus.DELIVERED)
+            else -> listOf(OrderWorkflowStatus.DELIVERED)
+        }
+    var lastResult: OrderStatusUpdateResult? = null
+    for (transition in transitions) {
+        val stepResult =
+            venueOrdersRepository.updateOrderStatus(
+                venueId = venueId,
+                orderId = orderId,
+                nextStatus = transition,
+                actor = actor,
+            ) ?: return null
+        if (!stepResult.applied) {
+            return stepResult
+        }
+        lastResult = stepResult
+    }
+    return lastResult
+}
+
+private suspend fun notifyGuestAboutOrderStatusChange(
+    outboxEnqueuer: TelegramOutboxEnqueuer?,
+    detail: OrderDetail,
+    nextStatus: OrderWorkflowStatus,
+) {
+    val currentBatch = currentVenueOrderBatch(detail) ?: return
+    val guestUserId = currentBatch.authorUserId ?: return
+    val message =
+        guestOrderStatusNotificationMessage(
+            nextStatus = nextStatus,
+            isReorder = !isCurrentBatchFirstInOrder(detail, currentBatch),
+        ) ?: return
+    outboxEnqueuer?.enqueueSendMessage(guestUserId, message)
+}
+
+private suspend fun notifyGuestsAboutOrderClosed(
+    outboxEnqueuer: TelegramOutboxEnqueuer?,
+    detail: OrderDetail,
+) {
+    val guestUserIds =
+        detail.batches
+            .asSequence()
+            .mapNotNull { batch -> batch.authorUserId }
+            .distinct()
+            .toList()
+    guestUserIds.forEach { guestUserId ->
+        outboxEnqueuer?.enqueueSendMessage(
+            guestUserId,
+            "✅ Счёт закрыт. Спасибо, что были с нами!\nБудем рады видеть вас снова.",
+        )
+    }
+}
+
+private fun guestOrderStatusNotificationMessage(
+    nextStatus: OrderWorkflowStatus,
+    isReorder: Boolean,
+): String? =
+    when (nextStatus) {
+        OrderWorkflowStatus.ACCEPTED ->
+            if (isReorder) {
+                "✅ Ваш дозаказ принят."
+            } else {
+                "✅ Ваш заказ принят."
+            }
+        OrderWorkflowStatus.DELIVERED ->
+            if (isReorder) {
+                "✅ Ваш дозаказ доставлен."
+            } else {
+                "✅ Ваш заказ доставлен."
+            }
+        else -> null
+    }
+
+private fun currentVenueOrderBatch(detail: OrderDetail): OrderBatchDetail? =
+    detail.batches
+        .asSequence()
+        .filter { batch -> batch.status != OrderWorkflowStatus.CLOSED }
+        .maxWithOrNull(compareBy({ batch -> batch.createdAt }, { batch -> batch.batchId }))
+
+private fun firstVenueOrderBatch(detail: OrderDetail): OrderBatchDetail? =
+    detail.batches
+        .asSequence()
+        .filter { batch -> batch.status != OrderWorkflowStatus.CLOSED }
+        .minWithOrNull(compareBy({ batch -> batch.createdAt }, { batch -> batch.batchId }))
+
+private fun isCurrentBatchFirstInOrder(
+    detail: OrderDetail,
+    currentBatch: OrderBatchDetail?,
+): Boolean {
+    if (currentBatch == null) {
+        return true
+    }
+    val firstBatch = firstVenueOrderBatch(detail) ?: return true
+    return firstBatch.batchId == currentBatch.batchId
 }
 
 private fun OrderDetail.toDto(): OrderDetailDto {
     return OrderDetailDto(
         orderId = orderId,
+        displayNumber = displayNumber,
+        displayDate = displayDate?.toString(),
         venueId = venueId,
         tableId = tableId,
         tableNumber = tableNumber.toString(),
@@ -242,6 +519,7 @@ private fun OrderDetail.toDto(): OrderDetailDto {
         status = status.toApi(),
         createdAt = formatInstant(createdAt),
         updatedAt = formatInstant(updatedAt),
+        bill = buildBillDto(),
         batches =
             batches.map { batch ->
                 OrderBatchDto(
@@ -253,18 +531,135 @@ private fun OrderDetail.toDto(): OrderDetailDto {
                     updatedAt = formatInstant(batch.updatedAt),
                     rejectedReasonCode = batch.rejectedReasonCode,
                     rejectedReasonText = batch.rejectedReasonText,
+                    promotionDiscounts = batch.promotionDiscounts.map { it.toDto() },
                     items =
                         batch.items.map { item ->
-                            OrderBatchItemDto(
-                                itemId = item.itemId,
-                                name = item.name,
-                                qty = item.qty,
-                            )
+                            item.toDto(batch)
                         },
                 )
             },
     )
 }
+
+private fun OrderBatchItemDetail.toDto(batch: OrderBatchDetail): OrderBatchItemDto {
+    val lineGrossMinor = lineGrossMinor()
+    val activePayableItem = !isCancelledBatch(batch) && isActiveBillItem()
+    return OrderBatchItemDto(
+        batchItemId = batchItemId,
+        itemId = itemId,
+        name = name,
+        qty = qty,
+        priceMinor = priceMinor,
+        currency = currency,
+        lineGrossMinor = lineGrossMinor,
+        manualDiscountMinor = if (activePayableItem) manualDiscountMinor() else 0,
+        promoDiscountMinor = if (activePayableItem) promoDiscountMinor.coerceAtLeast(0L) else 0,
+        linePayableMinor = if (activePayableItem) payableMinor() else 0,
+        isExcluded = isExcluded,
+        excludedReasonText = excludedReasonText,
+        discountPercent = discountPercent?.takeIf { it in 1..100 },
+        itemStatus = itemStatus.dbValue.lowercase(),
+        canceledReasonCode = canceledReasonCode,
+        canceledReasonText = canceledReasonText,
+        canceledAt = canceledAt?.let { formatInstant(it) },
+        canceledByUserId = canceledByUserId,
+    )
+}
+
+private fun OrderDetail.buildBillDto(): OrderBillDto {
+    val billableItems =
+        batches
+            .filterNot { batch -> isCancelledBatch(batch) }
+            .flatMap { batch -> batch.items.filter { item -> item.isActiveBillItem() } }
+    val promoDiscounts = promotionDiscounts.filterNot { it.isLoyaltyDiscount() }
+    val loyaltyDiscounts = promotionDiscounts.filter { it.isLoyaltyDiscount() }
+    val excludedItems = buildExcludedItemDtos()
+    return OrderBillDto(
+        grossTotalMinor = billableItems.sumOf { it.lineGrossMinor() },
+        manualDiscountTotalMinor = billableItems.sumOf { it.manualDiscountMinor() },
+        promoDiscountTotalMinor = promoDiscounts.sumOf { it.discountMinor },
+        loyaltyDiscountTotalMinor = loyaltyDiscounts.sumOf { it.discountMinor },
+        excludedTotalMinor = excludedItems.filter { it.status == "excluded" }.sumOf { it.lineGrossMinor },
+        canceledTotalMinor = excludedItems.filter { it.status == "canceled" }.sumOf { it.lineGrossMinor },
+        rejectedTotalMinor = excludedItems.filter { it.status == "rejected_batch" }.sumOf { it.lineGrossMinor },
+        finalPayableTotalMinor = billableItems.sumOf { it.payableMinor() },
+        currency = resolveCurrency(),
+        promoDiscounts = promoDiscounts.map { it.toDto() },
+        loyaltyDiscounts = loyaltyDiscounts.map { it.toDto() },
+        excludedItems = excludedItems,
+    )
+}
+
+private fun OrderDetail.buildExcludedItemDtos(): List<OrderBillExcludedItemDto> =
+    batches.flatMapIndexed { index, batch ->
+        val batchLabel = batchLabel(index)
+        batch.items.mapNotNull { item ->
+            val status =
+                when {
+                    isCancelledBatch(batch) -> "rejected_batch"
+                    item.itemStatus == OrderBatchItemStatus.CANCELED -> "canceled"
+                    item.isExcluded -> "excluded"
+                    else -> null
+                } ?: return@mapNotNull null
+            OrderBillExcludedItemDto(
+                batchId = batch.batchId,
+                batchLabel = batchLabel,
+                batchItemId = item.batchItemId,
+                itemId = item.itemId,
+                name = item.name,
+                qty = item.qty,
+                lineGrossMinor = item.lineGrossMinor(),
+                currency = item.currency?.takeIf { it.isNotBlank() } ?: DEFAULT_CURRENCY,
+                status = status,
+                reason =
+                    when (status) {
+                        "rejected_batch" -> batch.rejectedReasonText ?: batch.rejectedReasonCode
+                        "canceled" -> item.canceledReasonText ?: item.canceledReasonCode
+                        else -> item.excludedReasonText
+                    },
+            )
+        }
+    }
+
+private fun OrderDetail.resolveCurrency(): String =
+    batches
+        .flatMap { it.items }
+        .firstOrNull { !it.currency.isNullOrBlank() }
+        ?.currency
+        ?: promotionDiscounts.firstOrNull { it.currency.isNotBlank() }?.currency
+        ?: DEFAULT_CURRENCY
+
+private fun OrderBatchItemDetail.lineGrossMinor(): Long =
+    priceMinor?.let { it * qty } ?: 0L
+
+private fun OrderBatchItemDetail.manualDiscountMinor(): Long =
+    discountPercent?.takeIf { it in 1..100 }?.let { lineGrossMinor() * it / 100 } ?: 0L
+
+private fun OrderBatchItemDetail.payableMinor(): Long =
+    (lineGrossMinor() - manualDiscountMinor() - promoDiscountMinor.coerceAtLeast(0L)).coerceAtLeast(0L)
+
+private fun OrderBatchItemDetail.isActiveBillItem(): Boolean =
+    !isExcluded && itemStatus == OrderBatchItemStatus.ACTIVE
+
+private fun isCancelledBatch(batch: OrderBatchDetail): Boolean =
+    batch.status == OrderWorkflowStatus.CLOSED ||
+        !batch.rejectedReasonCode.isNullOrBlank() ||
+        !batch.rejectedReasonText.isNullOrBlank()
+
+private fun OrderPromotionDiscount.isLoyaltyDiscount(): Boolean =
+    ruleType.equals("LOYALTY_NTH_HOOKAH", ignoreCase = true) ||
+        label.contains("Лояльность", ignoreCase = true)
+
+private fun OrderPromotionDiscount.toDto(): OrderBillDiscountDto =
+    OrderBillDiscountDto(
+        label = label,
+        discountMinor = discountMinor,
+        currency = currency,
+        ruleType = ruleType,
+    )
+
+private fun batchLabel(index: Int): String =
+    if (index == 0) "Основной заказ" else "Дозаказ $index"
 
 private fun formatInstant(value: java.time.Instant): String {
     return instantFormatter.format(value.atOffset(ZoneOffset.UTC))

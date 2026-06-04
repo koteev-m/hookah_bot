@@ -15,8 +15,9 @@ class TelegramOutboxEnqueuer(
         chatId: Long,
         text: String,
         replyMarkup: ReplyMarkup? = null,
+        parseMode: String? = null,
     ) {
-        val payload = buildSendMessagePayload(json, chatId, text, replyMarkup)
+        val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
         repository.enqueue(
             chatId = chatId,
             method = "sendMessage",
@@ -69,10 +70,16 @@ class TelegramOutboxEnqueuer(
     suspend fun enqueueAnswerCallbackQuery(
         chatId: Long,
         callbackQueryId: String,
+        text: String? = null,
+        showAlert: Boolean = false,
     ) {
         val payload: JsonObject =
             buildJsonObject {
                 put("callback_query_id", callbackQueryId)
+                text?.takeIf { it.isNotBlank() }?.let { put("text", it) }
+                if (showAlert) {
+                    put("show_alert", true)
+                }
             }
         repository.enqueue(
             chatId = chatId,

@@ -11,6 +11,8 @@ data class CatalogVenueDto(
     val name: String,
     val city: String? = null,
     val address: String? = null,
+    val guestContact: String? = null,
+    val cardDescription: String? = null,
 )
 
 @Serializable
@@ -22,5 +24,32 @@ data class VenueDto(
     val name: String,
     val city: String? = null,
     val address: String? = null,
+    val guestContact: String? = null,
+    val cardDescription: String? = null,
     val status: String,
+)
+
+@Serializable
+data class VenueInfoSectionsResponse(
+    val venueId: Long,
+    val sections: List<VenueInfoSectionDto>,
+)
+
+@Serializable
+data class VenueInfoSectionDto(
+    val id: Long,
+    val type: String,
+    val title: String,
+    val displayTitle: String,
+    val text: String? = null,
+    val mediaCount: Int,
+    val media: List<VenueInfoSectionMediaDto>,
+)
+
+@Serializable
+data class VenueInfoSectionMediaDto(
+    val id: Long,
+    val mediaType: String,
+    val sortOrder: Int,
+    val url: String,
 )

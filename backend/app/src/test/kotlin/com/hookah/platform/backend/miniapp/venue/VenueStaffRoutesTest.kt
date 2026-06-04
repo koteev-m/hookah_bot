@@ -32,6 +32,118 @@ class VenueStaffRoutesTest {
     private val appEnv = "test"
 
     @Test
+    fun `owner and manager can list staff members`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-list-allowed")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1101L
+            val managerId = 1102L
+            val staffId = 1103L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val ownerToken = issueToken(config, ownerId)
+            val managerToken = issueToken(config, managerId)
+
+            val ownerResponse =
+                client.get("/api/venue/$venueId/staff") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            val managerResponse =
+                client.get("/api/venue/$venueId/staff") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, ownerResponse.status)
+            assertEquals(HttpStatusCode.OK, managerResponse.status)
+            val ownerPayload = json.decodeFromString(StaffListResponse.serializer(), ownerResponse.bodyAsText())
+            val managerPayload = json.decodeFromString(StaffListResponse.serializer(), managerResponse.bodyAsText())
+            assertEquals(setOf(ownerId, managerId, staffId), ownerPayload.members.map { it.userId }.toSet())
+            assertEquals(setOf(ownerId, managerId, staffId), managerPayload.members.map { it.userId }.toSet())
+        }
+
+    @Test
+    fun `staff cannot list staff members directly`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-list-denied")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1201L
+            val staffId = 1202L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val staffToken = issueToken(config, staffId)
+
+            val response =
+                client.get("/api/venue/$venueId/staff") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `staff cannot create invite update roles or remove members`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-management-denied")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1301L
+            val staffId = 1302L
+            val targetStaffId = 1303L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, targetStaffId, "STAFF", venueId)
+            val staffToken = issueToken(config, staffId)
+
+            val inviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "STAFF")))
+                }
+            val updateResponse =
+                client.patch("/api/venue/$venueId/staff/$targetStaffId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffUpdateRoleRequest.serializer(),
+                            StaffUpdateRoleRequest(role = "MANAGER"),
+                        ),
+                    )
+                }
+            val removeResponse =
+                client.delete("/api/venue/$venueId/staff/$targetStaffId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, inviteResponse.status)
+            assertApiErrorEnvelope(inviteResponse, ApiErrorCodes.FORBIDDEN)
+            assertEquals(HttpStatusCode.Forbidden, updateResponse.status)
+            assertApiErrorEnvelope(updateResponse, ApiErrorCodes.FORBIDDEN)
+            assertEquals(HttpStatusCode.Forbidden, removeResponse.status)
+            assertApiErrorEnvelope(removeResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
     fun `owner can create invite and accept it`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("staff-invite")
@@ -107,6 +219,178 @@ class VenueStaffRoutesTest {
 
             assertEquals(HttpStatusCode.Forbidden, forbiddenResponse.status)
             assertApiErrorEnvelope(forbiddenResponse, ApiErrorCodes.FORBIDDEN)
+
+            val allowedResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "STAFF")))
+                }
+
+            assertEquals(HttpStatusCode.OK, allowedResponse.status)
+            val payload = json.decodeFromString(StaffInviteResponse.serializer(), allowedResponse.bodyAsText())
+            assertTrue(payload.inviteCode.isNotBlank())
+        }
+
+    @Test
+    fun `owner cannot create owner invite from venue staff flow`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-owner-invite-blocked")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 3201L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            val token = issueToken(config, ownerId)
+
+            val response =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "OWNER")))
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+        }
+
+    @Test
+    fun `staff accepting manager invite is upgraded`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-upgrade-manager")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 3301L
+            val staffId = 3302L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val ownerToken = issueToken(config, ownerId)
+
+            val inviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "MANAGER")))
+                }
+            assertEquals(HttpStatusCode.OK, inviteResponse.status)
+            val invitePayload = json.decodeFromString(StaffInviteResponse.serializer(), inviteResponse.bodyAsText())
+
+            val staffToken = issueToken(config, staffId)
+            val acceptResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = invitePayload.inviteCode),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, acceptResponse.status)
+            val acceptPayload =
+                json.decodeFromString(StaffInviteAcceptResponse.serializer(), acceptResponse.bodyAsText())
+            assertEquals(true, acceptPayload.alreadyMember)
+            assertEquals("MANAGER", acceptPayload.member.role)
+        }
+
+    @Test
+    fun `manager accepting staff invite is not downgraded`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("manager-no-downgrade-staff")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 3401L
+            val managerId = 3402L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
+            val ownerToken = issueToken(config, ownerId)
+
+            val inviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "STAFF")))
+                }
+            assertEquals(HttpStatusCode.OK, inviteResponse.status)
+            val invitePayload = json.decodeFromString(StaffInviteResponse.serializer(), inviteResponse.bodyAsText())
+
+            val managerToken = issueToken(config, managerId)
+            val acceptResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = invitePayload.inviteCode),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, acceptResponse.status)
+            val acceptPayload =
+                json.decodeFromString(StaffInviteAcceptResponse.serializer(), acceptResponse.bodyAsText())
+            assertEquals(true, acceptPayload.alreadyMember)
+            assertEquals("MANAGER", acceptPayload.member.role)
+        }
+
+    @Test
+    fun `admin role input is rejected for new staff assignments`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-admin-input")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 3101L
+            val staffId = 3102L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val token = issueToken(config, ownerId)
+
+            val inviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "ADMIN")))
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, inviteResponse.status)
+            assertApiErrorEnvelope(inviteResponse, ApiErrorCodes.INVALID_INPUT)
+
+            val updateResponse =
+                client.patch("/api/venue/$venueId/staff/$staffId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffUpdateRoleRequest.serializer(),
+                            StaffUpdateRoleRequest(role = "ADMIN"),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, updateResponse.status)
+            assertApiErrorEnvelope(updateResponse, ApiErrorCodes.INVALID_INPUT)
         }
 
     @Test
@@ -301,6 +585,11 @@ class VenueStaffRoutesTest {
             statement.executeUpdate()
         }
     }
+
+    @Serializable
+    private data class StaffListResponse(
+        val members: List<StaffMemberDto>,
+    )
 
     @Serializable
     private data class StaffInviteRequest(

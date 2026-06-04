@@ -319,7 +319,7 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
             """
             SELECT user_id, role, created_at, invited_by_user_id
             FROM venue_members
-            WHERE venue_id = ? AND (user_id = ? OR UPPER(role) IN ('OWNER','ADMIN'))
+            WHERE venue_id = ? AND (user_id = ? OR UPPER(role) = 'OWNER')
             ORDER BY user_id
             FOR UPDATE
             """.trimIndent(),
@@ -345,7 +345,7 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
     }
 
     private fun isOwnerLikeRole(role: String): Boolean {
-        return role.trim().uppercase(Locale.ROOT) in setOf("OWNER", "ADMIN")
+        return role.trim().uppercase(Locale.ROOT) == "OWNER"
     }
 
     private fun rollbackBestEffort(connection: Connection) {

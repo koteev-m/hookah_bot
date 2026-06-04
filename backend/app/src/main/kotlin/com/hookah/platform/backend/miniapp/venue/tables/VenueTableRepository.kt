@@ -368,6 +368,34 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun setTableActive(
+        venueId: Long,
+        tableId: Long,
+        isActive: Boolean,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        UPDATE venue_tables
+                        SET is_active = ?
+                        WHERE id = ? AND venue_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setBoolean(1, isActive)
+                        statement.setLong(2, tableId)
+                        statement.setLong(3, venueId)
+                        statement.executeUpdate() > 0
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun rotateToken(
         venueId: Long,
         tableId: Long,

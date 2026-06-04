@@ -445,7 +445,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       ...(status === 'HIDDEN' ? [{ action: 'publish', label: 'Опубликовать', confirm: false }] : []),
       ...(status === 'PAUSED' ? [{ action: 'publish', label: 'Вернуть в работу', confirm: true }] : []),
       ...(status === 'SUSPENDED' ? [{ action: 'publish', label: 'Разблокировать и опубликовать', confirm: true }] : []),
-      ...(status === 'ARCHIVED' ? [{ action: 'publish', label: 'Восстановить и опубликовать', confirm: true }] : []),
+      ...(status === 'ARCHIVED' ? [{ action: 'publish', label: 'Восстановить — сразу опубликует', confirm: true }] : []),
       ...(status === 'PUBLISHED' ? [{ action: 'hide', label: 'Скрыть', confirm: true }] : []),
       ...(status === 'PUBLISHED' ? [{ action: 'pause', label: 'Приостановить', confirm: true }] : []),
       ...(status !== 'SUSPENDED' && status !== 'ARCHIVED'

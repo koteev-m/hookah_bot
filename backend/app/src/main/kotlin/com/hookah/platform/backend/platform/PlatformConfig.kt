@@ -10,12 +10,41 @@ data class PlatformConfig(
     companion object {
         fun from(config: ApplicationConfig): PlatformConfig {
             val logger = LoggerFactory.getLogger(PlatformConfig::class.java)
-            val rawOwnerId = config.propertyOrNull("platform.ownerUserId")?.getString()?.trim()
-            val ownerUserId = rawOwnerId?.toLongOrNull()
-            if (!rawOwnerId.isNullOrBlank() && ownerUserId == null) {
-                logger.warn("platform.ownerUserId is invalid: {}", sanitizeTelegramForLog(rawOwnerId))
-            }
+            val telegramOwnerId =
+                parseOwnerId(
+                    raw = config.propertyOrNull("telegram.platformOwnerId")?.getString()?.trim(),
+                    key = "telegram.platformOwnerId",
+                    logger = logger,
+                )
+            val platformOwnerUserId =
+                parseOwnerId(
+                    raw = config.propertyOrNull("platform.ownerUserId")?.getString()?.trim(),
+                    key = "platform.ownerUserId",
+                    logger = logger,
+                )
+            val legacyOwnerTelegramId =
+                parseOwnerId(
+                    raw =
+                        config.propertyOrNull("platform.legacyOwnerTelegramId")?.getString()?.trim()
+                            ?: System.getenv("OWNER_TELEGRAM_ID")?.trim(),
+                    key = "OWNER_TELEGRAM_ID",
+                    logger = logger,
+                )
+            val ownerUserId = telegramOwnerId ?: platformOwnerUserId ?: legacyOwnerTelegramId
             return PlatformConfig(ownerUserId = ownerUserId)
+        }
+
+        private fun parseOwnerId(
+            raw: String?,
+            key: String,
+            logger: org.slf4j.Logger,
+        ): Long? {
+            if (raw.isNullOrBlank()) return null
+            val parsed = raw.toLongOrNull()
+            if (parsed == null) {
+                logger.warn("{} is invalid: {}", key, sanitizeTelegramForLog(raw))
+            }
+            return parsed
         }
     }
 }

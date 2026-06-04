@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.ResultSet
@@ -16,7 +17,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
                     val categories =
                         connection.prepareStatement(
                             """
-                            SELECT id, name, sort_order
+                            SELECT id, name, sort_order, category_type
                             FROM menu_categories
                             WHERE venue_id = ?
                             ORDER BY sort_order, id
@@ -35,7 +36,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
                     val itemsByCategory =
                         connection.prepareStatement(
                             """
-                            SELECT id, category_id, name, price_minor, currency, is_available, sort_order
+                            SELECT id, category_id, name, price_minor, currency, is_available, sort_order, item_type
                             FROM menu_items
                             WHERE venue_id = ?
                               AND is_available = true
@@ -154,6 +155,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
             id = rs.getLong("id"),
             name = rs.getString("name"),
             sortOrder = rs.getInt("sort_order"),
+            categoryType = MenuSemanticType.fromDb(rs.getString("category_type")),
             items = emptyList(),
         )
 
@@ -165,6 +167,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
             currency = rs.getString("currency"),
             isAvailable = rs.getBoolean("is_available"),
             sortOrder = rs.getInt("sort_order"),
+            itemType = MenuSemanticType.nullableFromDb(rs.getString("item_type")),
         )
 }
 
@@ -178,6 +181,7 @@ data class MenuCategoryModel(
     val name: String,
     val sortOrder: Int,
     val items: List<MenuItemModel>,
+    val categoryType: MenuSemanticType = MenuSemanticType.OTHER,
 )
 
 data class MenuItemModel(
@@ -187,4 +191,7 @@ data class MenuItemModel(
     val currency: String,
     val isAvailable: Boolean,
     val sortOrder: Int,
+    val itemType: MenuSemanticType? = null,
 )
+
+fun MenuItemModel.effectiveType(category: MenuCategoryModel): MenuSemanticType = itemType ?: category.categoryType

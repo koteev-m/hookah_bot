@@ -52,7 +52,8 @@ fun Route.venueMenuRoutes(
             val payload = call.receive<CreateCategoryRequest>()
             val name = payload.name.trim()
             validateName(name)
-            val created = venueMenuRepository.createCategory(venueId, name)
+            val categoryType = payload.categoryType?.let { parseMenuSemanticType(it) }
+            val created = venueMenuRepository.createCategory(venueId, name, categoryType ?: MenuSemanticType.OTHER)
             call.respond(created.toDto())
         }
 
@@ -64,12 +65,29 @@ fun Route.venueMenuRoutes(
                 call.parameters["id"]?.toLongOrNull()
                     ?: throw InvalidInputException("categoryId must be a number")
             val payload = call.receive<UpdateCategoryRequest>()
-            val name = payload.name?.trim() ?: throw InvalidInputException("name is required")
-            validateName(name)
+            val name = payload.name?.trim()
+            if (name == null && payload.categoryType == null) {
+                throw InvalidInputException("name or categoryType is required")
+            }
+            if (name != null) {
+                validateName(name)
+            }
+            val categoryType = payload.categoryType?.let { parseMenuSemanticType(it) }
             val updated =
-                venueMenuRepository.updateCategory(venueId, categoryId, name)
+                if (name != null) {
+                    venueMenuRepository.updateCategory(venueId, categoryId, name)
+                } else {
+                    venueMenuRepository.getMenu(venueId).firstOrNull { it.id == categoryId }
+                }
                     ?: throw NotFoundException()
-            call.respond(updated.toDto())
+            val typed =
+                if (categoryType != null) {
+                    venueMenuRepository.updateCategoryType(venueId, categoryId, categoryType)
+                        ?: throw NotFoundException()
+                } else {
+                    updated
+                }
+            call.respond(typed.toDto())
         }
 
         delete("/menu/categories/{id}") {
@@ -102,6 +120,7 @@ fun Route.venueMenuRoutes(
             validatePrice(payload.priceMinor)
             val currency = payload.currency.trim().uppercase(Locale.ROOT)
             validateCurrency(currency)
+            val itemType = payload.itemType?.let { parseNullableMenuSemanticType(it) }
             val created =
                 venueMenuRepository.createItem(
                     venueId = venueId,
@@ -110,8 +129,9 @@ fun Route.venueMenuRoutes(
                     priceMinor = payload.priceMinor,
                     currency = currency,
                     isAvailable = payload.isAvailable,
+                    itemType = itemType,
                 ) ?: throw InvalidInputException("categoryId is invalid")
-            call.respond(created.toDto())
+            call.respond(created.toDtoWithCategory(resolveCategoryForItem(venueMenuRepository, venueId, created)))
         }
 
         patch("/menu/items/{id}") {
@@ -137,6 +157,7 @@ fun Route.venueMenuRoutes(
             if (payload.categoryId != null && !venueMenuRepository.categoryExists(venueId, payload.categoryId)) {
                 throw InvalidInputException("categoryId is invalid")
             }
+            val itemType = payload.itemType?.let { parseNullableMenuSemanticType(it) }
             val updated =
                 venueMenuRepository.updateItem(
                     venueId = venueId,
@@ -147,7 +168,14 @@ fun Route.venueMenuRoutes(
                     currency = currency,
                     isAvailable = payload.isAvailable,
                 ) ?: throw NotFoundException()
-            call.respond(updated.toDto())
+            val typed =
+                if (payload.itemType != null) {
+                    venueMenuRepository.updateItemType(venueId, itemId, itemType)
+                        ?: throw NotFoundException()
+                } else {
+                    updated
+                }
+            call.respond(typed.toDtoWithCategory(resolveCategoryForItem(venueMenuRepository, venueId, typed)))
         }
 
         delete("/menu/items/{id}") {
@@ -167,7 +195,7 @@ fun Route.venueMenuRoutes(
         patch("/menu/items/{id}/availability") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            ensureMenuManage(venueAccessRepository, userId, venueId)
+            ensureMenuAvailabilityManage(venueAccessRepository, userId, venueId)
             val itemId =
                 call.parameters["id"]?.toLongOrNull()
                     ?: throw InvalidInputException("itemId must be a number")
@@ -253,7 +281,7 @@ fun Route.venueMenuRoutes(
         patch("/menu/options/{id}/availability") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            ensureMenuManage(venueAccessRepository, userId, venueId)
+            ensureMenuAvailabilityManage(venueAccessRepository, userId, venueId)
             val optionId =
                 call.parameters["id"]?.toLongOrNull()
                     ?: throw InvalidInputException("optionId must be a number")
@@ -292,6 +320,18 @@ private suspend fun ensureMenuManage(
     }
 }
 
+private suspend fun ensureMenuAvailabilityManage(
+    venueAccessRepository: VenueAccessRepository,
+    userId: Long,
+    venueId: Long,
+) {
+    val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+    val permissions = VenuePermissions.forRole(role)
+    if (!permissions.contains(VenuePermission.MENU_AVAILABILITY_MANAGE)) {
+        throw ForbiddenException()
+    }
+}
+
 private fun validateName(name: String) {
     if (name.isBlank()) {
         throw InvalidInputException("name must not be blank")
@@ -316,6 +356,19 @@ private fun validateCurrency(currency: String) {
     }
 }
 
+private fun parseMenuSemanticType(value: String): MenuSemanticType =
+    MenuSemanticType.entries.firstOrNull { it.dbValue == value.trim().uppercase(Locale.ROOT) }
+        ?: throw InvalidInputException("menu type must be one of: ${MenuSemanticType.entries.joinToString { entry -> entry.dbValue }}")
+
+private fun parseNullableMenuSemanticType(value: String): MenuSemanticType? {
+    val normalized = value.trim()
+    return if (normalized.equals("INHERIT", ignoreCase = true) || normalized.equals("NULL", ignoreCase = true)) {
+        null
+    } else {
+        parseMenuSemanticType(normalized)
+    }
+}
+
 private fun validateUniqueIds(
     ids: List<Long>,
     fieldName: String,
@@ -331,15 +384,32 @@ private fun validateUniqueIds(
     }
 }
 
+private suspend fun resolveCategoryForItem(
+    venueMenuRepository: VenueMenuRepository,
+    venueId: Long,
+    item: VenueMenuItem,
+): VenueMenuCategory? =
+    venueMenuRepository.getMenu(venueId).firstOrNull { category -> category.id == item.categoryId }
+
 private fun VenueMenuCategory.toDto(): VenueMenuCategoryDto =
     VenueMenuCategoryDto(
         id = id,
         name = name,
         sortOrder = sortOrder,
-        items = items.map { it.toDto() },
+        categoryType = categoryType.dbValue,
+        items = items.map { it.toDto(this) },
     )
 
+private fun VenueMenuItem.toDto(category: VenueMenuCategory): VenueMenuItemDto =
+    toDto(effectiveType(category))
+
+private fun VenueMenuItem.toDtoWithCategory(category: VenueMenuCategory?): VenueMenuItemDto =
+    if (category == null) toDto() else toDto(category)
+
 private fun VenueMenuItem.toDto(): VenueMenuItemDto =
+    toDto(itemType ?: MenuSemanticType.OTHER)
+
+private fun VenueMenuItem.toDto(effectiveType: MenuSemanticType): VenueMenuItemDto =
     VenueMenuItemDto(
         id = id,
         categoryId = categoryId,
@@ -348,6 +418,8 @@ private fun VenueMenuItem.toDto(): VenueMenuItemDto =
         currency = currency,
         isAvailable = isAvailable,
         sortOrder = sortOrder,
+        itemType = itemType?.dbValue,
+        effectiveItemType = effectiveType.dbValue,
         options = options.map { it.toDto() },
     )
 

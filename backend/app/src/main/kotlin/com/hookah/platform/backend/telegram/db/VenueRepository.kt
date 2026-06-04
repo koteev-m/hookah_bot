@@ -72,7 +72,7 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT v.id, v.name, v.city, v.address, v.status
+                        SELECT v.id, v.name, v.city, v.address, v.guest_contact, v.card_description, v.status
                         FROM venues v
                         LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
                         WHERE v.status = ?
@@ -149,7 +149,7 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT v.id, v.name, v.city, v.address, v.status
+                        SELECT v.id, v.name, v.city, v.address, v.guest_contact, v.card_description, v.status
                         FROM venues v
                         LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
                         WHERE v.id = ?
@@ -519,6 +519,8 @@ open class VenueRepository(private val dataSource: DataSource?) {
             name = rs.getString("name"),
             city = rs.getString("city"),
             address = rs.getString("address"),
+            guestContact = rs.getString("guest_contact"),
+            cardDescription = rs.getString("card_description"),
         )
     }
 
@@ -572,6 +574,8 @@ data class CatalogVenueShort(
     val name: String,
     val city: String?,
     val address: String?,
+    val guestContact: String? = null,
+    val cardDescription: String? = null,
 )
 
 data class StaffChatStatus(

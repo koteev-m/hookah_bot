@@ -1,12 +1,27 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.ai.AiAssistantAnswer
+import com.hookah.platform.backend.ai.AiAssistantService
+import com.hookah.platform.backend.ai.AiDraftTextCommand
+import com.hookah.platform.backend.ai.AiDraftTextType
+import com.hookah.platform.backend.ai.AiVenueSummaryCommand
+import com.hookah.platform.backend.ai.AiVenueSummaryType
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
+import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
+import com.hookah.platform.backend.miniapp.guest.db.BookingReminderScheduleResult
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
+import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabModel
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestVisitDetail
+import com.hookah.platform.backend.miniapp.guest.db.GuestVisitHistoryItem
+import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrder
+import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItem
+import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
@@ -14,17 +29,70 @@ import com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
+import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRecord
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageRecord
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageSender
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackStatus
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackThread
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
+import com.hookah.platform.backend.miniapp.guest.db.VisitSource
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOption
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
+import com.hookah.platform.backend.miniapp.venue.orders.BatchStatusUpdateResult
+import com.hookah.platform.backend.miniapp.venue.orders.CancelBatchItemResult
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchDetail
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemDetail
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemStatus
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchStatus
+import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
+import com.hookah.platform.backend.miniapp.venue.orders.OrderPromotionDiscount
+import com.hookah.platform.backend.miniapp.venue.orders.OrderQueueItem
+import com.hookah.platform.backend.miniapp.venue.orders.OrderStatusUpdateResult
+import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
+import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCodeResult
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
+import com.hookah.platform.backend.miniapp.venue.tables.VenueTableOwnerSummary
+import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.platform.VenueOwnerAccount
+import com.hookah.platform.backend.platform.VenueOwnerAccountVenue
+import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequestDecisionResult
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequest
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequestOwner
+import com.hookah.platform.backend.platform.VenueOwnerLimitRequestSummary
+import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
+import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
+import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
+import com.hookah.platform.backend.platform.PlatformEffectivePrice
+import com.hookah.platform.backend.platform.PlatformSubscriptionSettings
+import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
+import com.hookah.platform.backend.platform.PlatformSubscriptionSnapshot
+import com.hookah.platform.backend.platform.PlatformSubscriptionSummary
 import com.hookah.platform.backend.platform.PlatformVenueDetail
+import com.hookah.platform.backend.platform.PlatformVenueFilter
+import com.hookah.platform.backend.platform.PlatformVenueOwner
 import com.hookah.platform.backend.platform.PlatformVenueRepository
+import com.hookah.platform.backend.platform.PlatformVenueSummary
+import com.hookah.platform.backend.platform.VenueStatusAction
+import com.hookah.platform.backend.platform.VenueStatusChangeResult
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
+import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.OrderBatchDetails
@@ -32,15 +100,23 @@ import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
+import com.hookah.platform.backend.telegram.db.StaffCallStatus
+import com.hookah.platform.backend.telegram.db.StaffCallStatusUpdateResult
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StoredChatContext
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.UserActiveOrderItemSummary
 import com.hookah.platform.backend.telegram.db.UserActiveOrderSummary
+import com.hookah.platform.backend.telegram.db.GuestProfile
+import com.hookah.platform.backend.telegram.db.GuestPublicReviewCtaState
+import com.hookah.platform.backend.telegram.db.TelegramUserContact
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHours
+import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRecord
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSection
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaAttachment
@@ -48,21 +124,64 @@ import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import com.hookah.platform.backend.telegram.db.VenueSettings
+import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
-import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
+import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.PromotionPreview
+import com.hookah.platform.backend.telegram.db.PromotionVenueFeedItem
+import com.hookah.platform.backend.telegram.db.VenuePromotionMedia
+import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionMediaType
+import com.hookah.platform.backend.telegram.db.PromotionPlacement
+import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
+import com.hookah.platform.backend.telegram.db.PromotionPlacementStatus
+import com.hookah.platform.backend.telegram.db.PromotionPlacementSurface
+import com.hookah.platform.backend.telegram.db.PromotionVenuePlacement
+import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
+import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
+import com.hookah.platform.backend.telegram.db.LoyaltyCartItem
+import com.hookah.platform.backend.telegram.db.LoyaltyProgram
+import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramTarget
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramTargetType
+import com.hookah.platform.backend.telegram.db.LoyaltyProgramType
+import com.hookah.platform.backend.telegram.db.LoyaltyRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionRule
+import com.hookah.platform.backend.telegram.db.PromotionRuleTarget
+import com.hookah.platform.backend.telegram.db.PromotionRuleTargetMenuItem
+import com.hookah.platform.backend.telegram.db.PromotionRuleReward
+import com.hookah.platform.backend.telegram.db.PromotionRuleRewardOption
+import com.hookah.platform.backend.telegram.db.PromotionRewardMode
+import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
+import com.hookah.platform.backend.telegram.db.VenuePromotionTemplateType
+import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
+import com.hookah.platform.backend.telegram.db.PromotionRuleType
+import com.hookah.platform.backend.telegram.db.VenueStatsReport
+import com.hookah.platform.backend.telegram.db.VenueStatsRepository
 import io.mockk.coEvery
 import io.mockk.coVerifyOrder
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneId
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class TelegramBotRouterTableTokenTest {
     private val apiClient: TelegramApiClient = mockk(relaxed = true)
@@ -84,12 +203,34 @@ class TelegramBotRouterTableTokenTest {
     private val venueMenuSectionImagesRepository: VenueMenuSectionImagesRepository = mockk(relaxed = true)
     private val venueMenuRepository: VenueMenuRepository = mockk(relaxed = true)
     private val venueAccessRepository: VenueAccessRepository = mockk()
+    private val venueContextRepository: TelegramVenueContextRepository = mockk(relaxed = true)
     private val subscriptionRepository: SubscriptionRepository = mockk()
     private val guestMenuRepository: GuestMenuRepository = mockk()
     private val tableSessionRepository: TableSessionRepository = mockk()
     private val guestTabsRepository: GuestTabsRepository = mockk()
     private val platformVenueRepository: PlatformVenueRepository = mockk(relaxed = true)
-    private val router =
+    private val platformSubscriptionSettingsRepository: PlatformSubscriptionSettingsRepository = mockk(relaxed = true)
+    private val venueOwnerAccountRepository: VenueOwnerAccountRepository = mockk(relaxed = true)
+    private val venueOrdersRepository: VenueOrdersRepository = mockk(relaxed = true)
+    private val venueStatsRepository: VenueStatsRepository = mockk(relaxed = true)
+    private val venueSettingsRepository: VenueSettingsRepository = mockk(relaxed = true)
+    private val visitRepository: VisitRepository = mockk(relaxed = true)
+    private val guestFavoritesRepository: GuestFavoritesRepository = mockk(relaxed = true)
+    private val visitFeedbackRepository: VisitFeedbackRepository = mockk(relaxed = true)
+    private val venuePromotionRepository: VenuePromotionRepository = mockk(relaxed = true)
+    private val venuePromotionMediaRepository: VenuePromotionMediaRepository = mockk(relaxed = true)
+    private val venuePromotionRuleRepository: VenuePromotionRuleRepository = mockk(relaxed = true)
+    private val promotionPlacementRepository: PromotionPlacementRepository = mockk(relaxed = true)
+    private val promotionVenuePlacementRepository: PromotionVenuePlacementRepository = mockk(relaxed = true)
+    private val loyaltyRepository: LoyaltyRepository = mockk(relaxed = true)
+    private val aiAssistantService: AiAssistantService = mockk(relaxed = true)
+    private val staffChatNotifier: StaffChatNotifier = mockk(relaxed = true)
+    private val venueTableRepository: VenueTableRepository = mockk(relaxed = true)
+    private val venueStaffRepository: VenueStaffRepository = mockk(relaxed = true)
+    private val staffInviteRepositoryForRouter: StaffInviteRepository = mockk(relaxed = true)
+    private val router = routerWithWebAppPublicUrl(null)
+
+    private fun routerWithWebAppPublicUrl(webAppPublicUrl: String?): TelegramBotRouter =
         TelegramBotRouter(
             config =
                 TelegramBotConfig(
@@ -98,7 +239,7 @@ class TelegramBotRouterTableTokenTest {
                     mode = TelegramBotConfig.Mode.LONG_POLLING,
                     webhookPath = "/",
                     webhookSecretToken = null,
-                    webAppPublicUrl = null,
+                    webAppPublicUrl = webAppPublicUrl,
                     platformOwnerId = 999L,
                     longPollingTimeoutSeconds = 25,
                     staffChatLinkTtlSeconds = 900,
@@ -120,27 +261,51 @@ class TelegramBotRouterTableTokenTest {
             venueBookingHoursRepository = venueBookingHoursRepository,
             venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
             venueMenuRepository = venueMenuRepository,
+            venueTableRepository = venueTableRepository,
             venueAccessRepository = venueAccessRepository,
+            venueContextRepository = venueContextRepository,
             subscriptionRepository = subscriptionRepository,
             guestMenuRepository = guestMenuRepository,
             tableSessionRepository = tableSessionRepository,
             guestTabsRepository = guestTabsRepository,
             platformVenueRepository = platformVenueRepository,
+            platformSubscriptionSettingsRepository = platformSubscriptionSettingsRepository,
+            venueOwnerAccountRepository = venueOwnerAccountRepository,
             tableSessionTtl = Duration.ofHours(2),
             json = Json { ignoreUnknownKeys = true },
             venueConnectionRequestRepository = venueConnectionRequestRepository,
             scope = CoroutineScope(Dispatchers.Unconfined),
             venueInfoSectionsRepository = venueInfoSectionsRepository,
             venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
+            venueOrdersRepository = venueOrdersRepository,
+            venueStatsRepository = venueStatsRepository,
+            venueSettingsRepository = venueSettingsRepository,
+            visitRepository = visitRepository,
+            guestFavoritesRepository = guestFavoritesRepository,
+            visitFeedbackRepository = visitFeedbackRepository,
+            venuePromotionRepository = venuePromotionRepository,
+            venuePromotionMediaRepository = venuePromotionMediaRepository,
+            venuePromotionRuleRepository = venuePromotionRuleRepository,
+            promotionPlacementRepository = promotionPlacementRepository,
+            promotionVenuePlacementRepository = promotionVenuePlacementRepository,
+            loyaltyRepository = loyaltyRepository,
+            aiAssistantService = aiAssistantService,
+            staffChatNotifier = staffChatNotifier,
+            venueStaffRepository = venueStaffRepository,
+            staffInviteRepository = staffInviteRepositoryForRouter,
         )
 
     @BeforeEach
     fun setup() {
+        every { aiAssistantService.isEnabled } returns true
         coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
+        coEvery { tableTokenRepository.resolveInactiveTable(any()) } returns null
         coEvery { dialogStateRepository.get(any()) } returns DialogState(DialogStateType.NONE)
         coEvery { dialogStateRepository.set(any(), any()) } returns Unit
         coEvery { dialogStateRepository.clear(any()) } returns Unit
         coEvery { chatContextRepository.saveContext(any(), any(), any()) } returns Unit
+        coEvery { chatContextRepository.get(any()) } returns null
+        coEvery { chatContextRepository.clear(any()) } returns Unit
         coEvery { venueMenuSectionImagesRepository.ensureBotTestVenueMenuSectionImages() } returns Unit
         coEvery { venueMenuRepository.getMenu(any()) } returns emptyList()
         coEvery { venueMenuRepository.createCategory(any(), any()) } answers
@@ -156,9 +321,221 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
         coEvery { guestBookingRepository.listActiveByUser(any(), any()) } returns emptyList()
+        coEvery { guestBookingRepository.scheduleRemindersForBooking(any(), any(), any()) } returns
+            BookingReminderScheduleResult(pendingCount = 0, skippedCount = 0, canceledCount = 0)
         coEvery { ordersRepository.listActiveOrderSummariesForUser(any(), any()) } returns emptyList<UserActiveOrderSummary>()
+        coEvery { guestMenuRepository.getMenu(any()) } answers {
+            MenuModel(
+                venueId = invocation.args[0] as Long,
+                categories = emptyList(),
+            )
+        }
+        coEvery { visitRepository.listGuestVisitHistory(any(), any(), any()) } returns emptyList()
+        coEvery { visitRepository.getGuestVisitDetail(any(), any()) } returns null
+        coEvery { visitFeedbackRepository.submitRating(any(), any(), any(), any()) } returns null
+        coEvery { visitFeedbackRepository.skipFeedback(any(), any(), any()) } returns null
+        coEvery { visitFeedbackRepository.saveComment(any(), any(), any(), any()) } returns null
+        coEvery { visitFeedbackRepository.markStaffNotified(any(), any()) } returns true
+        coEvery { guestFavoritesRepository.listFavoriteVenues(any(), any()) } returns emptyList()
+        coEvery { guestFavoritesRepository.listFavoriteItemsForVenue(any(), any(), any()) } returns emptyList()
+        coEvery { guestFavoritesRepository.isVenueFavorite(any(), any()) } returns false
+        coEvery { guestFavoritesRepository.isItemFavorite(any(), any()) } returns false
+        coEvery { guestFavoritesRepository.addVenueFavorite(any(), any()) } returns true
+        coEvery { guestFavoritesRepository.removeVenueFavorite(any(), any()) } returns true
+        coEvery { guestFavoritesRepository.addItemFavorite(any(), any(), any()) } returns true
+        coEvery { guestFavoritesRepository.removeItemFavorite(any(), any()) } returns true
+        coEvery { venuePromotionRepository.listActivePromotionsForGuest(any(), any()) } returns emptyList()
+        coEvery { venuePromotionRepository.listPromotionVenuesForGuest(any(), any(), any(), any()) } returns emptyList()
+        coEvery { venuePromotionRepository.listPromotionVenuesForGuest(any(), any(), any(), any(), any()) } returns emptyList()
+        coEvery { venuePromotionRepository.listPromotionVenueFeedItemsByVenueIds(any(), any(), any()) } returns emptyList()
+        coEvery { venuePromotionRepository.listActivePromotionsForVenue(any(), any(), any()) } returns emptyList()
+        coEvery { venuePromotionRepository.getPromotionForGuest(any(), any()) } returns null
+        coEvery { venuePromotionRepository.listVenuePromotionsForManagement(any(), any()) } returns emptyList()
+        coEvery { venuePromotionRepository.listArchivedPromotionsForManagement(any()) } returns emptyList()
+        coEvery { venuePromotionRepository.getPromotionForManagement(any(), any()) } returns null
+        coEvery { promotionPlacementRepository.createRequest(any(), any(), any(), any(), any(), any()) } returns null
+        coEvery { promotionPlacementRepository.listPending(any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.getForPlatformManagement(any()) } returns null
+        coEvery { promotionPlacementRepository.approve(any(), any()) } returns null
+        coEvery { promotionPlacementRepository.approveForPeriod(any(), any(), any(), any()) } returns null
+        coEvery { promotionPlacementRepository.reject(any(), any(), any()) } returns null
+        coEvery { promotionPlacementRepository.pause(any()) } returns null
+        coEvery { promotionPlacementRepository.archive(any()) } returns null
+        coEvery { promotionPlacementRepository.listActiveForPlatformManagement(any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.listActiveForPlatformManagement(any(), any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.listForVenueManagement(any(), any(), any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.listForVenueManagement(any(), any(), any(), any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.listFinishedForPlatformManagement(any(), any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.listFinishedForVenueManagement(any(), any(), any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.listActiveForGlobalPromotions(any(), any()) } returns emptyList()
+        coEvery { promotionPlacementRepository.listActiveForVenuePromotions(any(), any(), any()) } returns emptyList()
+        coEvery { promotionVenuePlacementRepository.createRequest(any(), any()) } returns null
+        coEvery { promotionVenuePlacementRepository.listPendingForPlatform(any()) } returns emptyList()
+        coEvery { promotionVenuePlacementRepository.getForPlatformManagement(any()) } returns null
+        coEvery { promotionVenuePlacementRepository.approve(any(), any(), any(), any()) } returns null
+        coEvery { promotionVenuePlacementRepository.approve(any(), any(), any(), any(), any()) } returns null
+        coEvery { promotionVenuePlacementRepository.reject(any(), any(), any()) } returns null
+        coEvery { promotionVenuePlacementRepository.pause(any()) } returns null
+        coEvery { promotionVenuePlacementRepository.archive(any()) } returns null
+        coEvery { promotionVenuePlacementRepository.listActiveForPlatformManagement(any(), any()) } returns emptyList()
+        coEvery { promotionVenuePlacementRepository.listForVenueManagement(any(), any(), any(), any()) } returns emptyList()
+        coEvery { promotionVenuePlacementRepository.listFinishedForPlatformManagement(any(), any()) } returns emptyList()
+        coEvery { promotionVenuePlacementRepository.listFinishedForVenueManagement(any(), any(), any()) } returns emptyList()
+        coEvery { promotionVenuePlacementRepository.getForVenueManagement(any(), any()) } returns null
+        coEvery { promotionVenuePlacementRepository.listActiveForGlobalFeed(any(), any()) } returns emptyList()
+        coEvery { loyaltyRepository.listProgramsForVenue(any()) } returns emptyList()
+        coEvery { loyaltyRepository.getProgramForVenue(any(), any()) } returns null
+        coEvery { loyaltyRepository.getActiveProgram(any()) } returns null
+        coEvery { loyaltyRepository.getGuestProgress(any(), any()) } returns null
+        coEvery { loyaltyRepository.listGuestProgress(any()) } returns emptyList()
+        coEvery { loyaltyRepository.previewRedemptionForCart(any(), any(), any()) } returns null
+        coEvery { loyaltyRepository.createOrUpdateDraftProgram(any(), any(), any()) } answers {
+            testLoyaltyProgram(
+                id = 1L,
+                venueId = firstArg(),
+                nthValue = secondArg(),
+                status = LoyaltyProgramStatus.DRAFT,
+            )
+        }
+        coEvery { loyaltyRepository.listEarnTargets(any(), any()) } returns emptyList()
+        coEvery { loyaltyRepository.listRewardTargets(any(), any()) } returns emptyList()
+        coEvery { loyaltyRepository.listHookahMenuItemsForTargetSelection(any()) } returns emptyList()
+        coEvery { loyaltyRepository.replaceEarnTargetsWithAllHookahs(any(), any()) } returns null
+        coEvery { loyaltyRepository.replaceEarnTargetsWithMenuItems(any(), any(), any()) } returns null
+        coEvery { loyaltyRepository.replaceRewardTargetsWithAllHookahs(any(), any()) } returns null
+        coEvery { loyaltyRepository.replaceRewardTargetsWithMenuItems(any(), any(), any()) } returns null
+        coEvery { aiAssistantService.diagnosePromotion(any()) } returns AiAssistantAnswer("🤖 Диагностика акции\n\nТестовый ответ.")
+        coEvery { venuePromotionMediaRepository.getPrimaryImage(any()) } returns null
+        coEvery { venuePromotionMediaRepository.replacePrimaryImage(any(), any(), any(), any()) } returns null
+        coEvery { venuePromotionMediaRepository.deletePrimaryImage(any(), any()) } returns false
+        coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = any(), now = any(), limit = any()) } returns emptyList()
+        coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(any(), any(), any()) } returns emptyList()
+        coEvery { venuePromotionRuleRepository.getRuleForManagement(any(), any()) } returns null
+        coEvery { venuePromotionRuleRepository.archiveRule(any(), any(), any()) } returns null
+        coEvery {
+            venuePromotionRuleRepository.findDuplicateHappyHoursRule(
+                venueId = any(),
+                promotionId = any(),
+                targetValue = any(),
+                targetMenuItemIds = any(),
+                discountPercent = any(),
+                startsTime = any(),
+                endsTime = any(),
+                daysOfWeek = any(),
+                stackable = any(),
+                conflictGroup = any(),
+                maxApplicationsPerItem = any(),
+            )
+        } returns null
+        coEvery {
+            venuePromotionRuleRepository.findDuplicateGiftWithItemRule(
+                venueId = any(),
+                promotionId = any(),
+                targetValue = any(),
+                targetMenuItemIds = any(),
+                rewardMode = any(),
+                rewardMenuItemId = any(),
+                rewardOptionMenuItemIds = any(),
+                rewardQty = any(),
+                maxRewardsPerBatch = any(),
+                startsTime = any(),
+                endsTime = any(),
+                daysOfWeek = any(),
+                stackable = any(),
+                conflictGroup = any(),
+                maxApplicationsPerItem = any(),
+            )
+        } returns null
         coEvery { platformVenueRepository.getVenueDetail(any()) } returns null
-        coEvery { venueConnectionRequestRepository.findPendingByUser(any()) } returns null
+        coEvery { venueAccessRepository.findVenueMembership(any(), any()) } answers {
+            VenueAccessRepository.VenueMembership(
+                venueId = invocation.args[1] as Long,
+                role = "OWNER",
+            )
+        }
+        coEvery { venueAccessRepository.listVenueMemberships(any()) } returns emptyList()
+        coEvery { venueContextRepository.getSelectedVenue(any(), any()) } returns null
+        coEvery { venueContextRepository.setSelectedVenue(any(), any(), any()) } returns Unit
+        coEvery { venueContextRepository.clearSelectedVenue(any(), any()) } returns Unit
+        coEvery { venueSettingsRepository.find(any()) } returns null
+        coEvery { venueSettingsRepository.resolveZoneId(any(), any()) } returns ZoneId.systemDefault()
+        coEvery { venueSettingsRepository.getPublicReviewUrl(any()) } returns null
+        coEvery { venueSettingsRepository.hasPublicReviewCtaBeenShown(any(), any()) } returns false
+        coEvery { venueSettingsRepository.markPublicReviewCtaShown(any(), any(), any()) } answers {
+            GuestPublicReviewCtaState(
+                userId = invocation.args[0] as Long,
+                venueId = invocation.args[1] as Long,
+                firstShownAt = Instant.parse("2030-05-10T10:00:00Z"),
+                lastShownAt = Instant.parse("2030-05-10T10:00:00Z"),
+                clickedAt = null,
+                markedDoneAt = null,
+            )
+        }
+        coEvery { venueSettingsRepository.markPublicReviewCtaDone(any(), any(), any()) } answers {
+            GuestPublicReviewCtaState(
+                userId = invocation.args[0] as Long,
+                venueId = invocation.args[1] as Long,
+                firstShownAt = Instant.parse("2030-05-10T10:00:00Z"),
+                lastShownAt = Instant.parse("2030-05-10T10:00:00Z"),
+                clickedAt = null,
+                markedDoneAt = Instant.parse("2030-05-10T10:00:00Z"),
+            )
+        }
+        coEvery { venueSettingsRepository.markPublicReviewCtaClicked(any(), any(), any()) } answers {
+            GuestPublicReviewCtaState(
+                userId = invocation.args[0] as Long,
+                venueId = invocation.args[1] as Long,
+                firstShownAt = Instant.parse("2030-05-10T10:00:00Z"),
+                lastShownAt = Instant.parse("2030-05-10T10:00:00Z"),
+                clickedAt = Instant.parse("2030-05-10T10:00:00Z"),
+                markedDoneAt = null,
+            )
+        }
+        coEvery { venueSettingsRepository.updateTimezoneFromLocation(any(), any(), any()) } answers {
+            VenueSettings(
+                venueId = invocation.args[0] as Long,
+                notifyOrdersEnabled = true,
+                notifyStaffCallsEnabled = true,
+                notifyCancellationsEnabled = true,
+                timezone = "Europe/Moscow",
+            )
+        }
+        coEvery { aiAssistantService.draftText(any()) } returns
+            AiAssistantAnswer("Черновик. Проверьте текст перед публикацией.\n\nНазвание: Тестовый черновик")
+        coEvery { aiAssistantService.summarizeVenue(any()) } returns
+            AiAssistantAnswer("🤖 Сводка\n\nТестовая сводка.")
+        coEvery { venueSettingsRepository.updatePublicReviewUrl(any(), any()) } answers {
+            VenueSettings(
+                venueId = invocation.args[0] as Long,
+                notifyOrdersEnabled = true,
+                notifyStaffCallsEnabled = true,
+                notifyCancellationsEnabled = true,
+                timezone = "Europe/Moscow",
+                publicReviewUrl = (invocation.args[1] as String).trim(),
+            )
+        }
+        coEvery { venueSettingsRepository.clearPublicReviewUrl(any()) } answers {
+            VenueSettings(
+                venueId = invocation.args[0] as Long,
+                notifyOrdersEnabled = true,
+                notifyStaffCallsEnabled = true,
+                notifyCancellationsEnabled = true,
+                timezone = "Europe/Moscow",
+                publicReviewUrl = null,
+            )
+        }
+        coEvery { venueSettingsRepository.getOrCreate(any(), any()) } answers {
+            VenueSettings(
+                venueId = invocation.args[0] as Long,
+                notifyOrdersEnabled = true,
+                notifyStaffCallsEnabled = true,
+                notifyCancellationsEnabled = true,
+                timezone = "Europe/Moscow",
+            )
+        }
+        coEvery { venueAccessRepository.hasVenueRole(any()) } returns false
+        coEvery { venueAccessRepository.hasVenueOwner(any(), any()) } returns true
+        coEvery { venueConnectionRequestRepository.findActiveUnlinkedByUser(any()) } returns null
         coEvery { venueInfoSectionsRepository.ensureDefaultSections(any()) } returns true
         coEvery { venueInfoSectionsRepository.listSections(any()) } returns emptyList()
         coEvery { venueInfoSectionsRepository.findSectionById(any(), any()) } returns null
@@ -169,6 +546,25 @@ class TelegramBotRouterTableTokenTest {
         coEvery { apiClient.sendMessage(any(), any(), any()) } returns null
         coEvery {
             tableSessionRepository.resolveActiveSession(
+                venueId = any(),
+                tableId = any(),
+                ttl = any(),
+                now = any(),
+            )
+        } returns
+            TableSessionRecord(
+                id = 55L,
+                venueId = 10L,
+                tableId = 11L,
+                startedAt = Instant.parse("2026-03-30T10:00:00Z").minusSeconds(60),
+                lastActivityAt = Instant.parse("2026-03-30T10:00:00Z"),
+                expiresAt = Instant.parse("2026-03-30T10:00:00Z").plusSeconds(7200),
+                endedAt = null,
+                status = TableSessionStatus.ACTIVE,
+            )
+        coEvery {
+            tableSessionRepository.touchActiveSession(
+                tableSessionId = any(),
                 venueId = any(),
                 tableId = any(),
                 ttl = any(),
@@ -248,12 +644,374 @@ class TelegramBotRouterTableTokenTest {
                 expiresAt = any(),
             )
         } returns CreateInviteResult.CREATED
+        coEvery { ordersRepository.findActiveOrderId(any()) } returns null
+        coEvery { ordersRepository.findActiveOrderSummary(any()) } returns null
         coEvery { ordersRepository.findActiveOrderSummaryForTab(any(), any()) } returns null
         coEvery { ordersRepository.findActiveOrderDetailsForTab(any(), any()) } returns null
     }
 
     @Test
-    fun `start with valid table token removes old reply keyboard and shows channel choice`() =
+    fun `guest can open profile from main menu`() =
+        runBlocking {
+            coEvery { userRepository.findGuestProfile(200L) } returns
+                GuestProfile(
+                    telegramUserId = 200L,
+                    guestDisplayName = "Алексей",
+                    birthdayMonth = 9,
+                    birthdayDay = 5,
+                    birthdaySetAt = Instant.parse("2026-04-01T10:00:00Z"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101,
+                    message =
+                        Message(
+                            messageId = 201,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "👤 Мой профиль",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("👤 Мой профиль") && it.contains("Имя: Алексей") && it.contains("05.09") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `guest can open loyalty progress from profile`() =
+        runBlocking {
+            coEvery { loyaltyRepository.listGuestProgress(200L) } returns
+                listOf(
+                    GuestLoyaltyProgress(
+                        programId = 301L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        userId = 200L,
+                        nthValue = 6,
+                        progressCount = 1,
+                        rewardsAvailable = 0,
+                        rewardsReserved = 0,
+                        updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-loyalty",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_1, chat = Chat(id = 100, type = "private")),
+                            data = "guest_loyalty",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🎁 Лояльность") &&
+                            it.contains("Mix") &&
+                            it.contains("Вы накопили 1 из 5 оплаченных кальянов.") &&
+                            it.contains("До бесплатного кальяна осталось: 4.") &&
+                            !it.contains("следующий этап")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎁 Лояльность" && it.callbackData == "guest_loyalty" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `guest loyalty progress with available reward uses guest friendly text`() =
+        runBlocking {
+            coEvery { loyaltyRepository.listGuestProgress(200L) } returns
+                listOf(
+                    GuestLoyaltyProgress(
+                        programId = 301L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        userId = 200L,
+                        nthValue = 6,
+                        progressCount = 0,
+                        rewardsAvailable = 1,
+                        rewardsReserved = 0,
+                        updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
+                    ),
+                )
+            coEvery { loyaltyRepository.listRewardTargets(10L, 301L) } returns
+                listOf(
+                    LoyaltyProgramTarget(
+                        id = 1L,
+                        programId = 301L,
+                        targetType = LoyaltyProgramTargetType.CATEGORY_TYPE,
+                        semanticType = MenuSemanticType.HOOKAH,
+                        menuItemId = null,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-loyalty-reward",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_2, chat = Chat(id = 100, type = "private")),
+                            data = "guest_loyalty",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Mix") &&
+                            it.contains("У вас есть бесплатный кальян.") &&
+                            it.contains("Можно выбрать любой кальян из меню.") &&
+                            !it.contains("Покажите этот экран персоналу") &&
+                            !it.contains("следующий этап")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `guest loyalty reward text lists selected reward targets`() =
+        runBlocking {
+            coEvery { loyaltyRepository.listGuestProgress(200L) } returns
+                listOf(
+                    GuestLoyaltyProgress(
+                        programId = 301L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        userId = 200L,
+                        nthValue = 6,
+                        progressCount = 0,
+                        rewardsAvailable = 1,
+                        rewardsReserved = 0,
+                        updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
+                    ),
+                )
+            coEvery { loyaltyRepository.listRewardTargets(10L, 301L) } returns
+                listOf(
+                    LoyaltyProgramTarget(
+                        id = 1L,
+                        programId = 301L,
+                        targetType = LoyaltyProgramTargetType.MENU_ITEM,
+                        semanticType = null,
+                        menuItemId = 701L,
+                        menuItemName = "Кальян классический",
+                    ),
+                    LoyaltyProgramTarget(
+                        id = 2L,
+                        programId = 301L,
+                        targetType = LoyaltyProgramTargetType.MENU_ITEM,
+                        semanticType = null,
+                        menuItemId = 702L,
+                        menuItemName = "Кальян лёгкий",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-loyalty-selected-reward",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_3, chat = Chat(id = 100, type = "private")),
+                            data = "guest_loyalty",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Можно выбрать:") &&
+                            it.contains("• Кальян классический") &&
+                            it.contains("• Кальян лёгкий") &&
+                            !it.contains("Покажите этот экран персоналу")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `guest can open profile from table context keyboard`() =
+        runBlocking {
+            coEvery { userRepository.findGuestProfile(200L) } returns
+                GuestProfile(
+                    telegramUserId = 200L,
+                    guestDisplayName = "Алексей",
+                    birthdayMonth = null,
+                    birthdayDay = null,
+                    birthdaySetAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_3,
+                    message =
+                        Message(
+                            messageId = 201_3,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "👤 Профиль",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("👤 Мой профиль") && it.contains("Имя: Алексей") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `guest can save profile name`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns DialogState(DialogStateType.GUEST_PROFILE_WAIT_NAME)
+            coEvery { userRepository.saveGuestDisplayName(200L, "Мария") } returns
+                GuestProfile(
+                    telegramUserId = 200L,
+                    guestDisplayName = "Мария",
+                    birthdayMonth = null,
+                    birthdayDay = null,
+                    birthdaySetAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 102,
+                    message =
+                        Message(
+                            messageId = 202,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "  Мария  ",
+                        ),
+                ),
+            )
+
+            coVerify { userRepository.saveGuestDisplayName(200L, "Мария") }
+            coVerify { dialogStateRepository.clear(100) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "✅ Имя сохранено.", any()) }
+        }
+
+    @Test
+    fun `guest birthday validates real date and saves once`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns DialogState(DialogStateType.GUEST_PROFILE_WAIT_BIRTHDAY)
+            coEvery { userRepository.saveBirthdayOnce(200L, 9, 5) } returns
+                GuestProfile(
+                    telegramUserId = 200L,
+                    guestDisplayName = null,
+                    birthdayMonth = 9,
+                    birthdayDay = 5,
+                    birthdaySetAt = Instant.parse("2026-04-01T10:00:00Z"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 103,
+                    message =
+                        Message(
+                            messageId = 203,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "31.02",
+                        ),
+                ),
+            )
+            coVerify(exactly = 0) { userRepository.saveBirthdayOnce(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Введите реальную дату") },
+                    any(),
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 104,
+                    message =
+                        Message(
+                            messageId = 204,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "05.09",
+                        ),
+                ),
+            )
+
+            coVerify { userRepository.saveBirthdayOnce(200L, 9, 5) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("✅ День рождения сохранён: 05.09") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `guest cannot set birthday twice from profile`() =
+        runBlocking {
+            coEvery { userRepository.findGuestProfile(200L) } returns
+                GuestProfile(
+                    telegramUserId = 200L,
+                    guestDisplayName = null,
+                    birthdayMonth = 9,
+                    birthdayDay = 5,
+                    birthdaySetAt = Instant.parse("2026-04-01T10:00:00Z"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 105,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-profile-birthday",
+                            from = User(id = 200L),
+                            message = Message(messageId = 205, chat = Chat(id = 100, type = "private")),
+                            data = "guest_profile_birthday",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("День рождения уже сохранён") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+            coVerify(exactly = 0) { userRepository.saveBirthdayOnce(any(), any(), any()) }
+        }
+
+    @Test
+    fun `start with valid table token shows table context actions`() =
         runBlocking {
             val context =
                 TableContext(
@@ -281,19 +1039,723 @@ class TelegramBotRouterTableTokenTest {
 
             router.process(update)
 
-            coVerifyOrder {
-                outboxEnqueuer.enqueueSendMessage(
-                    100,
-                    "\u2060",
-                    match { it is ReplyKeyboardRemove },
-                )
+            coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     "Вы за столом №5 в Venue. Выберите удобный способ заказа.",
-                    match { it is InlineKeyboardMarkup },
+                    match {
+                        it is ReplyKeyboardMarkup &&
+                            it.keyboard == TelegramKeyboards.tableContextBotFlow(context).keyboard
+                    },
                 )
             }
-            coVerify(exactly = 2) { outboxEnqueuer.enqueueSendMessage(100, any(), any()) }
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, any(), any()) }
+        }
+
+    @Test
+    fun `web app fallback quick order command applies table token and opens quick order`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_1,
+                    message =
+                        Message(
+                            messageId = 19_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            webAppData = WebAppData("""{"cmd":"start_quick_order","table_token":"TOKEN"}"""),
+                        ),
+                ),
+            )
+
+            coVerify { chatContextRepository.saveContext(100, 200, context) }
+            coVerify { dialogStateRepository.set(100, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT)) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Опишите, что хотите заказать.", null) }
+        }
+
+    @Test
+    fun `start with disabled table token shows unavailable message without table context`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns null
+            coEvery { tableTokenRepository.resolveInactiveTable("TOKEN") } returns context
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_001,
+                    message =
+                        Message(
+                            messageId = 19,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "/start TOKEN",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Этот стол временно недоступен. Обратитесь к персоналу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+        }
+
+    @Test
+    fun `owner table card shows rotate and disable actions`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.hasVenueOwner(200L, 10L) } returns true
+            coEvery { venueTableRepository.listOwnerTables(10L) } returns
+                listOf(
+                    VenueTableOwnerSummary(
+                        tableId = 21L,
+                        tableNumber = 5,
+                        capacity = 4,
+                        isActive = true,
+                        token = "TOKEN",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_002,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-table-owner",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_tables_table:10:21",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Стол №5") && it.contains("Статус: Активен") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "🔁 Перевыпустить QR" } &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "🚫 Отключить стол" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager table card hides rotate but keeps disable action`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.hasVenueOwner(200L, 10L) } returns false
+            coEvery { venueTableRepository.listOwnerTables(10L) } returns
+                listOf(
+                    VenueTableOwnerSummary(
+                        tableId = 21L,
+                        tableNumber = 5,
+                        capacity = 4,
+                        isActive = true,
+                        token = "TOKEN",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_003,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-table-manager",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_tables_table:10:21",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Стол №5") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().none { button -> button.text == "🔁 Перевыпустить QR" } &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "🚫 Отключить стол" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager direct rotate table qr callback is denied`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.hasVenueOwner(200L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-table-rotate-manager",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_tables_qr_rotate:10:21",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа", any())
+            }
+            coVerify(exactly = 0) { venueTableRepository.rotateToken(any(), any()) }
+        }
+
+    @Test
+    fun `manager can disable active table from table card`() =
+        runBlocking {
+            val activeTable =
+                VenueTableOwnerSummary(
+                    tableId = 21L,
+                    tableNumber = 5,
+                    capacity = 4,
+                    isActive = true,
+                    token = "TOKEN",
+                )
+            val inactiveTable = activeTable.copy(isActive = false)
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.hasVenueOwner(200L, 10L) } returns false
+            coEvery { venueTableRepository.listOwnerTables(10L) } returnsMany
+                listOf(listOf(activeTable), listOf(inactiveTable))
+            coEvery { venueTableRepository.setTableActive(10L, 21L, false) } returns true
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_005,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-table-toggle-manager",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_tables_table_toggle:10:21",
+                        ),
+                ),
+            )
+
+            coVerify { venueTableRepository.setTableActive(10L, 21L, false) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "🚫 Стол отключён.", any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Статус: Неактивен") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "✅ Включить стол" } &&
+                            it.inlineKeyboard.flatten().none { button -> button.text == "🔁 Перевыпустить QR" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager can enable inactive table from table card`() =
+        runBlocking {
+            val inactiveTable =
+                VenueTableOwnerSummary(
+                    tableId = 21L,
+                    tableNumber = 5,
+                    capacity = 4,
+                    isActive = false,
+                    token = "TOKEN",
+                )
+            val activeTable = inactiveTable.copy(isActive = true)
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.hasVenueOwner(200L, 10L) } returns false
+            coEvery { venueTableRepository.listOwnerTables(10L) } returnsMany
+                listOf(listOf(inactiveTable), listOf(activeTable))
+            coEvery { venueTableRepository.setTableActive(10L, 21L, true) } returns true
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_006,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-table-enable-manager",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_tables_table_toggle:10:21",
+                        ),
+                ),
+            )
+
+            coVerify { venueTableRepository.setTableActive(10L, 21L, true) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Стол включён.", any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Статус: Активен") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "🚫 Отключить стол" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can change staff role to manager`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "MANAGER")
+            } returns
+                VenueStaffUpdateResult.Success(
+                    VenueStaffMember(
+                        venueId = 10L,
+                        userId = 300L,
+                        role = "MANAGER",
+                        createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                        invitedByUserId = 200L,
+                    ),
+                )
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 200L,
+                        role = "OWNER",
+                        username = "owner",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 300L,
+                        role = "MANAGER",
+                        username = "manager",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_007,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-role-manager",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_change_select:10:300:manager",
+                        ),
+                ),
+            )
+
+            coVerify { venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "MANAGER") }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Роль обновлена: Manager.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `owner role change prompt for manager shows only staff target`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 300L,
+                        role = "MANAGER",
+                        username = "manager",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_014,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-role-prompt-manager",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_change_prompt:10:300",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("сейчас Manager") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "owner_venue_staff_role_change_select:10:300:staff"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.callbackData == "owner_venue_staff_role_change_select:10:300:manager"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner role change prompt for staff shows only manager target`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 300L,
+                        role = "STAFF",
+                        username = "operator",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_015,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-role-prompt-staff",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_change_prompt:10:300",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("сейчас Staff / Оператор смены") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "owner_venue_staff_role_change_select:10:300:manager"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.callbackData == "owner_venue_staff_role_change_select:10:300:staff"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner staff root does not show role change for owner member`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 200L,
+                        role = "OWNER",
+                        username = "main_owner",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 201L,
+                        role = "OWNER",
+                        username = "second_owner",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 300L,
+                        role = "STAFF",
+                        username = "operator",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_016,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-root-owner-no-change",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("@second_owner") && it.contains("@operator") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.callbackData == "owner_venue_staff_role_change_prompt:10:201"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "owner_venue_staff_role_change_prompt:10:300"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can change manager role to staff`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "STAFF")
+            } returns
+                VenueStaffUpdateResult.Success(
+                    VenueStaffMember(
+                        venueId = 10L,
+                        userId = 300L,
+                        role = "STAFF",
+                        createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                        invitedByUserId = 200L,
+                    ),
+                )
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_008,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-role-staff",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_change_select:10:300:staff",
+                        ),
+                ),
+            )
+
+            coVerify { venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "STAFF") }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Роль обновлена: Staff / Оператор смены.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `manager opens staff section and can create staff invite only`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER"))
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 201L,
+                        role = "OWNER",
+                        username = "owner_secret",
+                        firstName = "Owner",
+                        lastName = "Hidden",
+                    ),
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 200L,
+                        role = "MANAGER",
+                        username = "manager",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = 301L,
+                        role = "STAFF",
+                        username = "operator",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+            coEvery {
+                staffInviteRepositoryForRouter.createInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "STAFF",
+                    ttlSeconds = any(),
+                )
+            } returns
+                StaffInviteCodeResult(
+                    code = "ABC123",
+                    expiresAt = Instant.parse("2026-04-01T10:15:00Z"),
+                    ttlSeconds = 900L,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_009,
+                    message =
+                        Message(
+                            messageId = 21,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "👥 Персонал",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_010,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-manager-staff-add",
+                            from = User(id = 200L),
+                            message = Message(messageId = 22, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_add:10",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_011,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-manager-staff-select",
+                            from = User(id = 200L),
+                            message = Message(messageId = 23, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_select:10:staff",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("👥 Персонал") &&
+                            it.contains("Владелец: назначен") &&
+                            it.contains("@operator") &&
+                            !it.contains("owner_secret") &&
+                            !it.contains("Owner Hidden")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().none { button -> button.text.startsWith("✏️ Изменить роль") } &&
+                            it.inlineKeyboard.flatten().none { button -> button.text.startsWith("🗑 Удалить доступ") } &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "➕ Добавить сотрудника" }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Выберите роль") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().none { button -> button.text == "Manager" } &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "Staff / Оператор смены" }
+                    },
+                )
+            }
+            coVerify {
+                staffInviteRepositoryForRouter.createInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "STAFF",
+                    ttlSeconds = any(),
+                )
+            }
+        }
+
+    @Test
+    fun `manager cannot create manager invite by direct callback`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_012,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-manager-manager-invite",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_select:10:manager",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Менеджер может приглашать только Staff / Оператор смены.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { staffInviteRepositoryForRouter.createInvite(any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `staff cannot access staff management by direct callback`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_013,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-staff-add",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_add:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", any())
+            }
+            coVerify(exactly = 0) { staffInviteRepositoryForRouter.createInvite(any(), any(), any(), any()) }
         }
 
     @Test
@@ -318,14 +1780,1702 @@ class TelegramBotRouterTableTokenTest {
                     "Панель владельца платформы. Выберите раздел.",
                     match {
                         it is ReplyKeyboardMarkup &&
-                            it.keyboard.flatten().any { button -> button.text == "📨 Заявки на подключение" }
+                            it.keyboard.flatten().any { button -> button.text == "📨 Заявки на подключение" } &&
+                            it.keyboard.flatten().any { button -> button.text == "📣 Продвижение" }
                     },
                 )
             }
         }
 
     @Test
-    fun `start without token opens venue owner entry for venue owner`() =
+    fun `platform owner opens promotion root`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1,
+                    message =
+                        Message(
+                            messageId = 18_001,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "📣 Продвижение",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "📣 Продвижение\n\nВыберите тип продвижения.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🖼 Баннеры / Афиши" && it.callbackData == "platform_places_root" } &&
+                            buttons.any { it.text == "🏆 Топ в Акциях" && it.callbackData == "platform_vtop_root" } &&
+                            buttons.any { it.text == "↩️ Назад" && it.callbackData == "platform_owner_main" } &&
+                            buttons.none { it.callbackData == "platform_places_pending" } &&
+                            buttons.none { it.callbackData == "platform_places_active" } &&
+                            buttons.none { it.callbackData == "platform_places_finished" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner opens banner placement subsection`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_01,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-places-root",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_places_root",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "🖼 Баннеры / Афиши\n\nВыберите список.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🕓 На проверке" && it.callbackData == "platform_places_pending" } &&
+                            buttons.any { it.text == "✅ Активные" && it.callbackData == "platform_places_active" } &&
+                            buttons.any { it.text == "🗄 Завершённые / Архив" && it.callbackData == "platform_places_finished" } &&
+                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "platform_promo_root" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner opens venue top placement subsection`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_02,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-root",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_root",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "🏆 Топ в Акциях\n\nВыберите список.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🕓 Заявки" && it.callbackData == "platform_vtop_pending" } &&
+                            buttons.any { it.text == "✅ Активные" && it.callbackData == "platform_vtop_active" } &&
+                            buttons.any { it.text == "🗄 Завершённые / Архив" && it.callbackData == "platform_vtop_finished" } &&
+                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "platform_promo_root" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `non platform user cannot open platform promotion root`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_03,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-promo-root-denied",
+                            from = User(id = 200L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_promo_root",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Недостаточно прав.", null)
+            }
+        }
+
+    @Test
+    fun `platform owner sees pending venue top requests`() =
+        runBlocking {
+            coEvery { promotionVenuePlacementRepository.listPendingForPlatform(20) } returns
+                listOf(testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix"))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-pending",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_pending",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🏆 Топ в Акциях") && it.contains("Заявки") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "Mix · Тверская, 1" &&
+                                it.callbackData == "platform_vtop_open:801"
+                        }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner pending venue top detail shows requester contact`() =
+        runBlocking {
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_0,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-open",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_open:801",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Заявитель: Максим · @owner · id 200") &&
+                            text.contains("Контакт: @owner") &&
+                            text.contains("Роль: владелец") &&
+                            text.contains("Активных акций: 2")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Одобрить" && it.callbackData == "platform_vtop_approve:801" } &&
+                            buttons.any { it.text == "❌ Отклонить" && it.callbackData == "platform_vtop_reject:801" } &&
+                            buttons.any { it.text == "↩️ Назад" && it.callbackData == "platform_vtop_root" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner top approval opens duration screen with manual period`() =
+        runBlocking {
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_01,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-approve",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_approve:801",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "На какой срок разместить заведение в блоке «Рекомендуем»?",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "7 дней" && it.callbackData == "platform_vtop_approve_days:801:7" } &&
+                            buttons.any { it.text == "📅 Задать период" && it.callbackData == "platform_vtop_approve_period:801" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner approves venue top placement for seven days`() =
+        runBlocking {
+            val venueZone = ZoneId.of("Europe/Moscow")
+            val startDate = LocalDate.now(venueZone).plusDays(1)
+            val endDate = startDate.plusDays(6)
+            val expectedStartsAt = startDate.atStartOfDay(venueZone).toInstant()
+            val expectedEndsAt = endDate.plusDays(1).atStartOfDay(venueZone).toInstant().minusMillis(1)
+            val activePlacement =
+                testPromotionVenuePlacement(
+                    id = 801L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    status = PromotionPlacementStatus.ACTIVE,
+                    startsAt = expectedStartsAt,
+                    endsAt = expectedEndsAt,
+                )
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+            coEvery { promotionVenuePlacementRepository.approve(801L, 999L, any(), any()) } returns activePlacement
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-approve-7d",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_approve_days:801:7",
+                        ),
+                ),
+            )
+
+            coVerify {
+                promotionVenuePlacementRepository.approve(
+                    801L,
+                    999L,
+                    expectedStartsAt,
+                    expectedEndsAt,
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-platform-vtop-approve-7d", "Размещение одобрено.", false)
+                outboxEnqueuer.enqueueSendMessage(
+                    200,
+                    match {
+                        it.contains("Заявка одобрена.") &&
+                            it.contains("«Рекомендуем»") &&
+                            it.contains("с ") &&
+                            it.contains(" по ")
+                    },
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🏆 Топ в Акциях") && it.contains("Статус: активно") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "↩️ Назад" && it.callbackData == "platform_vtop_root" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner quick one day venue top approval starts tomorrow and ends tomorrow`() =
+        runBlocking {
+            val venueZone = ZoneId.of("Europe/Moscow")
+            val startDate = LocalDate.now(venueZone).plusDays(1)
+            val expectedStartsAt = startDate.atStartOfDay(venueZone).toInstant()
+            val expectedEndsAt = startDate.plusDays(1).atStartOfDay(venueZone).toInstant().minusMillis(1)
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+            coEvery { promotionVenuePlacementRepository.approve(801L, 999L, any(), any()) } returns
+                testPromotionVenuePlacement(
+                    id = 801L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    status = PromotionPlacementStatus.ACTIVE,
+                    startsAt = expectedStartsAt,
+                    endsAt = expectedEndsAt,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_1_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-approve-1d",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_approve_days:801:1",
+                        ),
+                ),
+            )
+
+            coVerify {
+                promotionVenuePlacementRepository.approve(801L, 999L, expectedStartsAt, expectedEndsAt)
+            }
+        }
+
+    @Test
+    fun `platform owner quick thirty days venue top approval starts tomorrow and ends after thirty days inclusive`() =
+        runBlocking {
+            val venueZone = ZoneId.of("Europe/Moscow")
+            val startDate = LocalDate.now(venueZone).plusDays(1)
+            val endDate = startDate.plusDays(29)
+            val expectedStartsAt = startDate.atStartOfDay(venueZone).toInstant()
+            val expectedEndsAt = endDate.plusDays(1).atStartOfDay(venueZone).toInstant().minusMillis(1)
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+            coEvery { promotionVenuePlacementRepository.approve(801L, 999L, any(), any()) } returns
+                testPromotionVenuePlacement(
+                    id = 801L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    status = PromotionPlacementStatus.ACTIVE,
+                    startsAt = expectedStartsAt,
+                    endsAt = expectedEndsAt,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_1_30,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-approve-30d",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_approve_days:801:30",
+                        ),
+                ),
+            )
+
+            coVerify {
+                promotionVenuePlacementRepository.approve(801L, 999L, expectedStartsAt, expectedEndsAt)
+            }
+        }
+
+    @Test
+    fun `platform owner manual venue top approval asks start date`() =
+        runBlocking {
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-vtop-period",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_vtop_approve_period:801",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    100,
+                    match {
+                        it.state == DialogStateType.PLATFORM_PROMOTION_PLACEMENT_WAIT_END_DATE &&
+                            it.payload["venue_top_placement_id"] == "801" &&
+                            it.payload["period_step"] == "start"
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите дату начала в формате dd.MM.yyyy.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.singleOrNull()?.callbackData == "platform_vtop_approve:801"
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner manual venue top approval saves start date and asks end date`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.PLATFORM_PROMOTION_PLACEMENT_WAIT_END_DATE,
+                    payload =
+                        mapOf(
+                            "venue_top_placement_id" to "801",
+                            "period_step" to "start",
+                        ),
+                )
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_3,
+                    message =
+                        Message(
+                            messageId = 18_003,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "01.06.2030",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    100,
+                    match {
+                        it.state == DialogStateType.PLATFORM_PROMOTION_PLACEMENT_WAIT_END_DATE &&
+                            it.payload["venue_top_placement_id"] == "801" &&
+                            it.payload["period_step"] == "end" &&
+                            it.payload["start_date"] == "2030-06-01"
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите дату окончания в формате dd.MM.yyyy.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                promotionVenuePlacementRepository.approve(any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `platform owner manual venue top approval rejects invalid date`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.PLATFORM_PROMOTION_PLACEMENT_WAIT_END_DATE,
+                    payload =
+                        mapOf(
+                            "venue_top_placement_id" to "801",
+                            "period_step" to "start",
+                        ),
+                )
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_4,
+                    message =
+                        Message(
+                            messageId = 18_004,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "завтра",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите дату начала в формате dd.MM.yyyy, например 31.05.2026.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.singleOrNull()?.callbackData == "platform_vtop_approve:801"
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                promotionVenuePlacementRepository.approve(any(), any(), any(), any())
+                dialogStateRepository.clear(100)
+            }
+        }
+
+    @Test
+    fun `platform owner manual venue top approval rejects end date before start`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.PLATFORM_PROMOTION_PLACEMENT_WAIT_END_DATE,
+                    payload =
+                        mapOf(
+                            "venue_top_placement_id" to "801",
+                            "period_step" to "end",
+                            "start_date" to "2030-06-10",
+                        ),
+                )
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_5,
+                    message =
+                        Message(
+                            messageId = 18_005,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "09.06.2030",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Дата окончания должна быть позже даты начала.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                promotionVenuePlacementRepository.approve(any(), any(), any(), any())
+                dialogStateRepository.clear(100)
+            }
+        }
+
+    @Test
+    fun `platform owner manual venue top approval approves selected period`() =
+        runBlocking {
+            val venueZone = ZoneId.of("Europe/Moscow")
+            val expectedStartsAt = LocalDate.parse("2030-06-01").atStartOfDay(venueZone).toInstant()
+            val expectedEndsAt = LocalDate.parse("2030-06-08").plusDays(1).atStartOfDay(venueZone).toInstant().minusMillis(1)
+            val activePlacement =
+                testPromotionVenuePlacement(
+                    id = 801L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    status = PromotionPlacementStatus.ACTIVE,
+                    startsAt = expectedStartsAt,
+                    endsAt = expectedEndsAt,
+                )
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.PLATFORM_PROMOTION_PLACEMENT_WAIT_END_DATE,
+                    payload =
+                        mapOf(
+                            "venue_top_placement_id" to "801",
+                            "period_step" to "end",
+                            "start_date" to "2030-06-01",
+                        ),
+                )
+            coEvery { promotionVenuePlacementRepository.getForPlatformManagement(801L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { promotionVenuePlacementRepository.approve(801L, 999L, any(), any()) } returns activePlacement
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_0_6,
+                    message =
+                        Message(
+                            messageId = 18_006,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "08.06.2030",
+                        ),
+                ),
+            )
+
+            coVerify {
+                promotionVenuePlacementRepository.approve(
+                    801L,
+                    999L,
+                    expectedStartsAt,
+                    expectedEndsAt,
+                )
+                dialogStateRepository.clear(100)
+                outboxEnqueuer.enqueueSendMessage(100, "Размещение одобрено.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    200,
+                    match { it.contains("Заявка одобрена.") && it.contains("«Рекомендуем»") },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner sees pending promotion placements`() =
+        runBlocking {
+            coEvery { promotionPlacementRepository.listPending(20) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 703L,
+                        promotionId = 520L,
+                        venueId = 10L,
+                        promotionTitle = "Афиша выходных",
+                        surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_1_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-places-pending",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_001, chat = Chat(id = 100, type = "private")),
+                            data = "platform_places_pending",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🖼 Баннеры / Афиши · На проверке") && it.contains("Заявки на проверку") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "Вверху общих акций · Mix · Афиша выходных" &&
+                                it.callbackData == "platform_place_open:703"
+                        }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner approve opens duration screen`() =
+        runBlocking {
+            coEvery { promotionPlacementRepository.getForPlatformManagement(703L) } returns
+                testPromotionPlacement(
+                    id = 703L,
+                    promotionId = 520L,
+                    venueId = 10L,
+                    promotionTitle = "Афиша выходных",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-place-approve",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_002, chat = Chat(id = 100, type = "private")),
+                            data = "platform_place_approve:703",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "На какой срок разместить баннер?",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "1 день" && it.callbackData == "platform_place_approve_days:703:1" } &&
+                            buttons.any { it.text == "7 дней" && it.callbackData == "platform_place_approve_days:703:7" } &&
+                            buttons.any { it.text == "30 дней" && it.callbackData == "platform_place_approve_days:703:30" } &&
+                            buttons.any { it.text == "Ввести вручную" && it.callbackData == "platform_place_approve_manual:703" }
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                promotionPlacementRepository.approveForPeriod(any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `platform owner approves promotion placement for seven days`() =
+        runBlocking {
+            val activePlacement =
+                testPromotionPlacement(
+                    id = 703L,
+                    promotionId = 520L,
+                    venueId = 10L,
+                    promotionTitle = "Афиша выходных",
+                    status = PromotionPlacementStatus.ACTIVE,
+                    startsAt = Instant.parse("2026-05-18T03:00:00Z"),
+                    endsAt = Instant.parse("2026-05-25T03:00:00Z"),
+                )
+            coEvery { promotionPlacementRepository.approveForPeriod(703L, 999L, any(), any()) } returns activePlacement
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_2_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-place-approve-7d",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_002, chat = Chat(id = 100, type = "private")),
+                            data = "platform_place_approve_days:703:7",
+                        ),
+                ),
+            )
+
+            coVerify {
+                promotionPlacementRepository.approveForPeriod(
+                    703L,
+                    999L,
+                    any(),
+                    match { endsAt -> endsAt.isAfter(Instant.now().plusSeconds(6 * 24 * 60 * 60)) },
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-platform-place-approve-7d", "Размещение одобрено.", false)
+                outboxEnqueuer.enqueueSendMessage(100, "Размещение одобрено.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Статус: активно") && it.contains("Период:") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.none { it.text == "✅ Одобрить" } &&
+                            buttons.any { it.text == "↩️ Назад" && it.callbackData == "platform_places_root" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manual placement approval rejects invalid date`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.PLATFORM_PROMOTION_PLACEMENT_WAIT_END_DATE,
+                    payload = mapOf("placement_id" to "703"),
+                )
+            coEvery { promotionPlacementRepository.getForPlatformManagement(703L) } returns
+                testPromotionPlacement(id = 703L, promotionId = 520L, venueId = 10L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_2_2,
+                    message =
+                        Message(
+                            messageId = 18_004,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "не дата",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите дату в формате dd.MM.yyyy, например 31.05.2026.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.singleOrNull()?.callbackData == "platform_place_approve:703"
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                promotionPlacementRepository.approveForPeriod(any(), any(), any(), any())
+                dialogStateRepository.clear(100)
+            }
+        }
+
+    @Test
+    fun `platform owner can open active promotion placements`() =
+        runBlocking {
+            coEvery { promotionPlacementRepository.listActiveForPlatformManagement(20, any()) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 704L,
+                        promotionId = 521L,
+                        venueId = 10L,
+                        promotionTitle = "Афиша выходных",
+                        status = PromotionPlacementStatus.ACTIVE,
+                        startsAt = Instant.parse("2026-05-18T10:00:00Z"),
+                        endsAt = Instant.parse("2030-05-11T10:00:00Z"),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_2_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-places-active",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_005, chat = Chat(id = 100, type = "private")),
+                            data = "platform_places_active",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🖼 Баннеры / Афиши · Активные") && it.contains("Активные размещения:") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text.contains("Вверху общих акций") &&
+                                it.text.contains("Mix") &&
+                                it.callbackData == "platform_place_open:704"
+                        }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner can open finished promotion placements`() =
+        runBlocking {
+            coEvery { promotionPlacementRepository.listFinishedForPlatformManagement(20, any()) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 705L,
+                        promotionId = 522L,
+                        venueId = 10L,
+                        promotionTitle = "Прошлая афиша",
+                        status = PromotionPlacementStatus.ARCHIVED,
+                    ),
+                    testPromotionPlacement(
+                        id = 706L,
+                        promotionId = 523L,
+                        venueId = 11L,
+                        venueName = "Lounge",
+                        promotionTitle = "Отклонённая афиша",
+                        status = PromotionPlacementStatus.REJECTED,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_2_4,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-places-finished",
+                            from = User(id = 999L),
+                            message = Message(messageId = 18_006, chat = Chat(id = 100, type = "private")),
+                            data = "platform_places_finished",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🖼 Баннеры / Афиши · Завершённые / Архив") && it.contains("Завершённые / архив:") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "platform_place_open:705" && it.text.contains("Прошлая афиша") } &&
+                            buttons.any { it.callbackData == "platform_place_open:706" && it.text.contains("Отклонённая афиша") } &&
+                            buttons.any { it.text == "↩️ Назад" && it.callbackData == "platform_places_root" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `non platform user cannot approve promotion placement`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_000_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-place-denied",
+                            from = User(id = 200L),
+                            message = Message(messageId = 18_003, chat = Chat(id = 100, type = "private")),
+                            data = "platform_place_approve:703",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-platform-place-denied", "Нет доступа", true)
+            }
+            coVerify(exactly = 0) {
+                promotionPlacementRepository.approveForPeriod(any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `platform owner venues button opens venues list`() =
+        runBlocking {
+            coEvery {
+                platformVenueRepository.listVenues(any<PlatformVenueFilter>())
+            } returns
+                listOf(
+                    PlatformVenueSummary(
+                        id = 10L,
+                        name = "Mix",
+                        city = "Москва",
+                        status = VenueStatus.PUBLISHED,
+                        createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                        ownersCount = 1,
+                        subscriptionSummary =
+                            PlatformSubscriptionSummary(
+                                trialEndDate = null,
+                                paidStartDate = Instant.parse("2026-04-01T10:00:00Z"),
+                                isPaid = true,
+                            ),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010,
+                    message =
+                        Message(
+                            messageId = 18,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "🏢 Кальянные",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🏢 Кальянные") &&
+                            it.contains("Mix") &&
+                            it.contains("Москва") &&
+                            it.contains("Статус: Опубликовано") &&
+                            it.contains("Владельцев: 1")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "Mix" && button.callbackData == "platform_venue_open:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner venue card shows owners subscription and actions`() =
+        runBlocking {
+            val venue =
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                    guestContact = "+7 900 000-00-00",
+                    cardDescription = "Кальянная в центре",
+                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns venue
+            coEvery { platformVenueRepository.listOwners(10L) } returns
+                listOf(
+                    PlatformVenueOwner(
+                        userId = 200L,
+                        role = "OWNER",
+                        username = "owner",
+                        firstName = "Owner",
+                        lastName = "User",
+                    ),
+                )
+            coEvery { platformVenueRepository.getSubscriptionSummary(10L) } returns
+                PlatformSubscriptionSummary(
+                    trialEndDate = null,
+                    paidStartDate = Instant.parse("2026-04-01T10:00:00Z"),
+                    isPaid = true,
+                )
+            coEvery { venueOwnerAccountRepository.findByOwner(200L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_011,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-open",
+                            from = User(id = 999L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_open:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🏢 Mix") &&
+                            it.contains("Статус: Опубликовано") &&
+                            it.contains("Город: Москва") &&
+                            it.contains("Owner User @owner") &&
+                            it.contains("Подписка: paid")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "💳 Подписка" && button.callbackData == "platform_venue_subscription:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⚙️ Статус" && button.callbackData == "platform_venue_status:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue subscription screen shows price edit actions`() =
+        runBlocking {
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { platformSubscriptionSettingsRepository.getSubscriptionSnapshot(10L) } returns
+                PlatformSubscriptionSnapshot(
+                    settings =
+                        PlatformSubscriptionSettings(
+                            venueId = 10L,
+                            trialEndDate = LocalDate.of(2026, 5, 1),
+                            paidStartDate = LocalDate.of(2026, 5, 2),
+                            basePriceMinor = 150_000,
+                            priceOverrideMinor = null,
+                            currency = "RUB",
+                        ),
+                    schedule = emptyList(),
+                    effectivePriceToday = PlatformEffectivePrice(priceMinor = 150_000, currency = "RUB"),
+                )
+            coEvery { venueConnectionRequestRepository.findApprovedByLinkedVenue(10L) } returns
+                VenueConnectionRequestRecord(
+                    id = 77L,
+                    telegramUserId = 7001L,
+                    venueName = "Mix",
+                    city = "Москва",
+                    contact = "@owner",
+                    comment = null,
+                    status = VenueConnectionRequestRepository.STATUS_APPROVED,
+                    createdAt = Instant.parse("2026-04-01T09:00:00Z"),
+                    linkedVenueId = 10L,
+                    commercialNote = "Индивидуальные условия из заявки",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_012,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-subscription",
+                            from = User(id = 999L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_subscription:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("💳 Подписка") &&
+                            it.contains("Статус подписки: Active") &&
+                            it.contains("Текущая цена: 1500.00 ₽") &&
+                            it.contains("Будущая цена: —") &&
+                            it.contains("Коммерческие заметки: Индивидуальные условия из заявки")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "✏️ Изменить текущую цену" &&
+                                    button.callbackData == "platform_subscription_edit_price:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "📅 Задать будущую цену" &&
+                                    button.callbackData == "platform_subscription_future_price:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue status exposes safe lifecycle actions and suspend asks reason`() =
+        runBlocking {
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_013,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-status",
+                            from = User(id = 999L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Статус заведения") && it.contains("Опубликовано") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status_ask:10:suspend"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status_ask:10:archive"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status_ask:10:delete"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.callbackData == "platform_venue_status_ask:10:hide" ||
+                                    button.callbackData == "platform_venue_status_ask:10:pause"
+                            }
+                    },
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_014,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-status-ask",
+                            from = User(id = 999L),
+                            message = Message(messageId = 21, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status_ask:10:suspend",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    100,
+                    match {
+                        it.state == DialogStateType.PLATFORM_VENUE_STATUS_WAIT_SUSPEND_REASON &&
+                            it.payload["venue_id"] == "10" &&
+                            it.payload["actor_user_id"] == "999"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Укажите причину приостановки") && it.contains("Причина будет сохранена") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад" &&
+                                    button.callbackData == "platform_venue_status:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue draft status does not expose direct publish action`() =
+        runBlocking {
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_017,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-status-draft",
+                            from = User(id = 999L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Статус заведения") && it.contains("Черновик") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.callbackData == "platform_venue_status_ask:10:publish"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status_ask:10:archive"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status_ask:10:delete"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue suspended and archived statuses expose restore action`() =
+        runBlocking {
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.SUSPENDED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                ) andThen
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.ARCHIVED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_024,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-status-suspended",
+                            from = User(id = 999L),
+                            message = Message(messageId = 29, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status:10",
+                        ),
+                ),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_025,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-status-archived",
+                            from = User(id = 999L),
+                            message = Message(messageId = 30, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Приостановлено") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "▶️ Восстановить" &&
+                                    button.callbackData == "platform_venue_status_ask:10:publish"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status_ask:10:archive"
+                            }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Архив") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "▶️ Восстановить" &&
+                                    button.callbackData == "platform_venue_status_ask:10:publish"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status_ask:10:delete"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue status confirm uses update status path`() =
+        runBlocking {
+            val updatedVenue =
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.ARCHIVED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery { platformVenueRepository.updateStatus(10L, VenueStatusAction.ARCHIVE) } returns
+                VenueStatusChangeResult.Success(
+                    venue = updatedVenue,
+                    fromStatus = VenueStatus.PUBLISHED,
+                    toStatus = VenueStatus.ARCHIVED,
+                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns updatedVenue
+            coEvery { platformVenueRepository.listOwners(10L) } returns emptyList()
+            coEvery { platformVenueRepository.getSubscriptionSummary(10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_015,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-status-confirm",
+                            from = User(id = 999L),
+                            message = Message(messageId = 22, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status_yes:10:archive",
+                        ),
+                ),
+            )
+
+            coVerify { platformVenueRepository.updateStatus(10L, VenueStatusAction.ARCHIVE) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("✅ Статус обновлён") && it.contains("Опубликовано → Архив") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue suspend reason updates status with reason`() =
+        runBlocking {
+            val updatedVenue =
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.SUSPENDED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.PLATFORM_VENUE_STATUS_WAIT_SUSPEND_REASON,
+                    payload = mapOf("venue_id" to "10", "actor_user_id" to "999"),
+                )
+            coEvery { platformVenueRepository.updateStatus(10L, VenueStatusAction.SUSPEND) } returns
+                VenueStatusChangeResult.Success(
+                    venue = updatedVenue,
+                    fromStatus = VenueStatus.PUBLISHED,
+                    toStatus = VenueStatus.SUSPENDED,
+                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns updatedVenue
+            coEvery { platformVenueRepository.listOwners(10L) } returns emptyList()
+            coEvery { platformVenueRepository.getSubscriptionSummary(10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_018,
+                    message =
+                        Message(
+                            messageId = 23,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "Неуплата",
+                        ),
+                ),
+            )
+
+            coVerify { platformVenueRepository.updateStatus(10L, VenueStatusAction.SUSPEND) }
+            coVerify { dialogStateRepository.clear(100) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("✅ Статус обновлён") &&
+                            it.contains("Опубликовано → Приостановлено") &&
+                            it.contains("Причина: Неуплата")
+                    },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue suspend empty reason keeps input state`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.PLATFORM_VENUE_STATUS_WAIT_SUSPEND_REASON,
+                    payload = mapOf("venue_id" to "10", "actor_user_id" to "999"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_019,
+                    message =
+                        Message(
+                            messageId = 24,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "   ",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { platformVenueRepository.updateStatus(10L, VenueStatusAction.SUSPEND) }
+            coVerify(exactly = 0) { dialogStateRepository.clear(100) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Введите причину приостановки") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_venue_status:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform venue delete requires review and final confirmation`() =
+        runBlocking {
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_020,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-delete-ask",
+                            from = User(id = 999L),
+                            message = Message(messageId = 25, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status_ask:10:delete",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Удаление — опасное действие") && it.contains("hard delete не выполняется") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⚠️ Продолжить к удалению" &&
+                                    button.callbackData == "platform_venue_status_delete_review:10"
+                            }
+                    },
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_021,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-delete-review",
+                            from = User(id = 999L),
+                            message = Message(messageId = 26, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status_delete_review:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Подтвердите удаление") && it.contains("второй шаг подтверждения") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Да, выполнить" &&
+                                    button.callbackData == "platform_venue_status_yes:10:delete"
+                            }
+                    },
+                )
+            }
+            coVerify(exactly = 0) { platformVenueRepository.updateStatus(10L, VenueStatusAction.DELETE) }
+        }
+
+    @Test
+    fun `platform venue delete confirmation returns to list without deleted venue`() =
+        runBlocking {
+            val deletedVenue =
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.DELETED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = Instant.parse("2026-06-01T10:00:00Z"),
+                )
+            coEvery { platformVenueRepository.updateStatus(10L, VenueStatusAction.DELETE) } returns
+                VenueStatusChangeResult.Success(
+                    venue = deletedVenue,
+                    fromStatus = VenueStatus.PUBLISHED,
+                    toStatus = VenueStatus.DELETED,
+                )
+            coEvery { platformVenueRepository.listVenues(any<PlatformVenueFilter>()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_021_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-delete-confirm",
+                            from = User(id = 999L),
+                            message = Message(messageId = 26, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status_yes:10:delete",
+                        ),
+                ),
+            )
+
+            coVerify { platformVenueRepository.updateStatus(10L, VenueStatusAction.DELETE) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Заведение удалено и больше не отображается в списках.") },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🏢 Кальянные") && it.contains("Заведений пока нет.") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { platformVenueRepository.listOwners(10L) }
+        }
+
+    @Test
+    fun `legacy platform venue open callback for deleted venue shows safe message`() =
+        runBlocking {
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.DELETED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = Instant.parse("2026-06-01T10:00:00Z"),
+                )
+            coEvery { platformVenueRepository.listVenues(any<PlatformVenueFilter>()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_021_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-open-deleted",
+                            from = User(id = 999L),
+                            message = Message(messageId = 27, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_open:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it == "Заведение удалено." },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🏢 Кальянные") && it.contains("Заведений пока нет.") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { platformVenueRepository.listOwners(10L) }
+        }
+
+    @Test
+    fun `legacy platform venue hide callbacks do not mutate status`() =
+        runBlocking {
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_022,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-hide-legacy-ask",
+                            from = User(id = 999L),
+                            message = Message(messageId = 27, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status_ask:10:hide",
+                        ),
+                ),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_023,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-hide-legacy-yes",
+                            from = User(id = 999L),
+                            message = Message(messageId = 28, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_status_yes:10:hide",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { platformVenueRepository.updateStatus(10L, VenueStatusAction.HIDE) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("старое действие") || it.contains("Старые действия") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `non platform user cannot open platform venue callback`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_016,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-venue-denied",
+                            from = User(id = 123L),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "platform_venue_open:10",
+                        ),
+                ),
+            )
+
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Недостаточно прав.", any()) }
+            coVerify(exactly = 0) { platformVenueRepository.getVenueDetail(10L) }
+        }
+
+    @Test
+    fun `start without token opens global owner menu for venue owner`() =
         runBlocking {
             coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
                 listOf(
@@ -357,17 +3507,13 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match {
-                        it.contains("💬 Режим настройки в боте") &&
-                            it.contains("Тестовая кальянная (OWNER)")
-                    },
+                    "Панель владельца заведений. Выберите действие.",
                     match {
                         it is ReplyKeyboardMarkup &&
                             it.keyboard.map { row -> row.map { button -> button.text } } ==
                             listOf(
-                                listOf("🏢 Моё заведение", "🍽 Меню заведения"),
-                                listOf("🪑 Столы и QR", "👥 Персонал"),
-                                listOf("📦 Заказы", "⚙️ Настройки"),
+                                listOf("🏢 Мои заведения", "📊 Статистика заведений"),
+                                listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
                             )
                     },
                 )
@@ -408,13 +3554,712 @@ class TelegramBotRouterTableTokenTest {
                         it is ReplyKeyboardMarkup &&
                             it.keyboard.map { row -> row.map { button -> button.text } } ==
                             listOf(
-                                listOf("🍽 Каталог кальянных", "📱 Открыть Mini App"),
+                                listOf("🍽 Каталог кальянных"),
                                 listOf("🎁 Акции", "🪑 Я за столом / У меня QR"),
-                                listOf("📄 Мои заказы и брони", "🤝 Добавить свою кальянную"),
+                                listOf("📄 Мои заказы и брони", "👤 Мой профиль"),
+                                listOf("🤝 Добавить свою кальянную"),
                             )
                     },
                 )
             }
+        }
+
+    @Test
+    fun `menu with owner membership shows global owner menu instead of venue scoped buttons`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"),
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { venueRepository.findVenueById(11L) } returns VenueShort(11L, "Smoke Lab", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_01,
+                    message =
+                        Message(
+                            messageId = 20_001_01,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "/menu",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Панель владельца заведений. Выберите действие.",
+                    match { markup ->
+                        markup is ReplyKeyboardMarkup &&
+                            markup.keyboard.map { row -> row.map { it.text } } ==
+                            listOf(
+                                listOf("🏢 Мои заведения", "📊 Статистика заведений"),
+                                listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
+                            )
+                    },
+                )
+            }
+            coVerify(exactly = 0) { venueContextRepository.setSelectedVenue(100, 200L, any()) }
+        }
+
+    @Test
+    fun `selecting second venue opens menu for selected role`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"),
+                )
+            coEvery { venueRepository.findVenueById(11L) } returns VenueShort(11L, "Smoke Lab", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_02,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-venue-select",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_02, chat = Chat(id = 100, type = "private")),
+                            data = "venue_select:11",
+                        ),
+                ),
+            )
+
+            coVerify { venueContextRepository.setSelectedVenue(100, 200L, 11L) }
+            coVerify { outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-venue-select", "Заведение выбрано", false) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Режим менеджера") && it.contains("Smoke Lab") },
+                    match {
+                        it is ReplyKeyboardMarkup &&
+                            it.keyboard == TelegramKeyboards.venueManagerMenu(showAiAssistant = true).keyboard
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner level menu remains available even when selected venue is manager role`() =
+        runBlocking {
+            coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 11L
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"),
+                )
+            coEvery { venueRepository.findVenueById(11L) } returns VenueShort(11L, "Smoke Lab", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_03,
+                    message =
+                        Message(
+                            messageId = 20_001_03,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "/menu",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Панель владельца заведений. Выберите действие.",
+                    match { it is ReplyKeyboardMarkup && it.keyboard == TelegramKeyboards.venueOwnerMenu().keyboard },
+                )
+            }
+        }
+
+    @Test
+    fun `change venue button always shows selector`() =
+        runBlocking {
+            coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 10L
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "STAFF"),
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { venueRepository.findVenueById(11L) } returns VenueShort(11L, "Smoke Lab", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_04,
+                    message =
+                        Message(
+                            messageId = 20_001_04,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "🔄 Сменить заведение",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите заведение",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().map { it.text } ==
+                            listOf("Mix · OWNER", "Smoke Lab · STAFF")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `venue reply actions use selected venue`() =
+        runBlocking {
+            coEvery { venueContextRepository.getSelectedVenue(501L, 501L) } returns 11L
+            coEvery { venueAccessRepository.listVenueMemberships(501L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"),
+                )
+            coEvery { venueOrdersRepository.listOperationalQueueByOrder(11L, 20) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_06,
+                    message =
+                        Message(
+                            messageId = 20_001_06,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "🧾 Заказы",
+                        ),
+                ),
+            )
+
+            coVerify { venueOrdersRepository.listOperationalQueueByOrder(11L, 20) }
+            coVerify(exactly = 0) { venueOrdersRepository.listOperationalQueueByOrder(10L, 20) }
+        }
+
+    @Test
+    fun `owner text mini app entry sends inline web app button without venue id`() =
+        runBlocking {
+            val localRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+
+            localRouter.process(
+                TelegramUpdate(
+                    updateId = 10_001_061,
+                    message =
+                        Message(
+                            messageId = 20_001_061,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📱 Открыть панель заведения",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Откройте панель заведения через кнопку ниже.",
+                    match { it.hasSingleWebAppButton("https://mini.app/miniapp/?mode=venue") },
+                )
+            }
+        }
+
+    @Test
+    fun `manager text mini app entry sends inline web app button with venue id`() =
+        runBlocking {
+            val localRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
+            coEvery { venueContextRepository.getSelectedVenue(100L, 200L) } returns 11L
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"))
+
+            localRouter.process(
+                TelegramUpdate(
+                    updateId = 10_001_062,
+                    message =
+                        Message(
+                            messageId = 20_001_062,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📱 Открыть панель заведения",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Откройте панель заведения через кнопку ниже.",
+                    match { it.hasSingleWebAppButton("https://mini.app/miniapp/?mode=venue&venueId=11") },
+                )
+            }
+        }
+
+    @Test
+    fun `staff text mini app entry sends inline web app button with venue id`() =
+        runBlocking {
+            val localRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
+            coEvery { venueContextRepository.getSelectedVenue(100L, 200L) } returns 11L
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 11L, role = "STAFF"))
+
+            localRouter.process(
+                TelegramUpdate(
+                    updateId = 10_001_063,
+                    message =
+                        Message(
+                            messageId = 20_001_063,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📱 Открыть рабочую панель",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Откройте панель заведения через кнопку ниже.",
+                    match { it.hasSingleWebAppButton("https://mini.app/miniapp/?mode=venue&venueId=11") },
+                )
+            }
+        }
+
+    @Test
+    fun `legacy mini app text for venue role sends venue inline web app button`() =
+        runBlocking {
+            val localRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
+            coEvery { venueContextRepository.getSelectedVenue(100L, 200L) } returns 11L
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"))
+
+            localRouter.process(
+                TelegramUpdate(
+                    updateId = 10_001_064,
+                    message =
+                        Message(
+                            messageId = 20_001_064,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📱 Открыть Mini App",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Откройте панель заведения через кнопку ниже.",
+                    match { it.hasSingleWebAppButton("https://mini.app/miniapp/?mode=venue&venueId=11") },
+                )
+            }
+        }
+
+    @Test
+    fun `staff venue menu back keeps owner level navigation available`() =
+        runBlocking {
+            coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 11L
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"),
+                )
+            coEvery { venueRepository.findVenueById(11L) } returns VenueShort(11L, "Smoke Lab", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_07,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-menu-back",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_07, chat = Chat(id = 100, type = "private")),
+                            data = "staff_venue_menu_back",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Панель владельца заведений. Выберите действие.",
+                    match { it is ReplyKeyboardMarkup && it.keyboard == TelegramKeyboards.venueOwnerMenu().keyboard },
+                )
+            }
+        }
+
+    @Test
+    fun `stats callback uses callback venue id instead of selected venue`() =
+        runBlocking {
+            coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 10L
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"),
+                )
+            coEvery { venueStatsRepository.loadVenueStats(11L, any()) } returns
+                VenueStatsReport(
+                    ordersCount = 2,
+                    revenueMinor = 500_00,
+                    averageCheckMinor = 250_00,
+                    discountMinor = 0,
+                    cancelledItemsCount = 0,
+                    currency = "RUB",
+                    topItems = emptyList(),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_08,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-stats-venue",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_08, chat = Chat(id = 100, type = "private")),
+                            data = "stats_period:11:today",
+                        ),
+                ),
+            )
+
+            coVerify { venueStatsRepository.loadVenueStats(11L, any()) }
+            coVerify(exactly = 0) { venueStatsRepository.loadVenueStats(10L, any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📊 Статистика · Сегодня") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { it.callbackData == "stats_period:11:today" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `stats today period uses venue timezone boundary`() =
+        runBlocking {
+            val venueZone = ZoneId.of("Asia/Vladivostok")
+            val expectedStart = LocalDate.now(venueZone).atStartOfDay(venueZone).toInstant()
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 11L, role = "MANAGER"))
+            coEvery { venueSettingsRepository.resolveZoneId(11L, any()) } returns venueZone
+            coEvery { venueStatsRepository.loadVenueStats(11L, expectedStart) } returns
+                VenueStatsReport(
+                    ordersCount = 2,
+                    revenueMinor = 500_00,
+                    averageCheckMinor = 250_00,
+                    discountMinor = 0,
+                    cancelledItemsCount = 0,
+                    currency = "RUB",
+                    topItems = emptyList(),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_081,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-stats-zone",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_081, chat = Chat(id = 100, type = "private")),
+                            data = "stats_period:11:today",
+                        ),
+                ),
+            )
+
+            coVerify { venueSettingsRepository.resolveZoneId(11L, any()) }
+            coVerify { venueStatsRepository.loadVenueStats(11L, expectedStart) }
+        }
+
+    @Test
+    fun `owner can open venue timezone setting`() =
+        runBlocking {
+            coEvery { venueSettingsRepository.getOrCreate(10L, any()) } returns
+                VenueSettings(
+                    venueId = 10L,
+                    notifyOrdersEnabled = true,
+                    notifyStaffCallsEnabled = true,
+                    notifyCancellationsEnabled = true,
+                    timezone = "Asia/Novosibirsk",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_082,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-timezone",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_082, chat = Chat(id = 100, type = "private")),
+                            data = "venue_settings_timezone:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🕒 Часовой пояс") &&
+                            it.contains("Часовой пояс: Asia/Novosibirsk") &&
+                            it.contains("Определяется автоматически по городу/адресу")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().none { it.text == "✏️ Изменить часовой пояс" } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "↩️ Назад к настройке заведения" &&
+                                    it.callbackData == "owner_venue_hub_setup:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `legacy notifications screen explains automatic staff chat notifications`() =
+        runBlocking {
+            coEvery { venueSettingsRepository.getOrCreate(10L, any()) } returns
+                VenueSettings(
+                    venueId = 10L,
+                    notifyOrdersEnabled = true,
+                    notifyStaffCallsEnabled = false,
+                    notifyCancellationsEnabled = true,
+                    timezone = "Europe/Moscow",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_082_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-notifications",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_082_1, chat = Chat(id = 100, type = "private")),
+                            data = "venue_settings_notifications:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🔔 Уведомления") &&
+                            it.contains("уведомления включены автоматически") &&
+                            it.contains("Заказы, дозаказы, вызовы персонала, брони и отмены") &&
+                            it.contains("💬 Чат персонала") &&
+                            !it.contains("Часовой пояс") &&
+                            !it.contains("Статистика и отчёты")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "💬 Чат персонала" &&
+                                    it.callbackData == "venue_staff_chat_root:10"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "↩️ Назад к настройке заведения" &&
+                                    it.callbackData == "owner_venue_hub_setup:10"
+                            } &&
+                            markup.inlineKeyboard.flatten().none {
+                                it.text.contains("Часовой пояс") ||
+                                    it.text.contains("Переключить") ||
+                                    it.text.contains("Нумерация") ||
+                                    it.text.contains("Статистика")
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `legacy notification toggle callback does not mutate settings`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_082_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-toggle-orders",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_082_2, chat = Chat(id = 100, type = "private")),
+                            data = "venue_settings_toggle_orders:10",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueSettingsRepository.toggleNotification(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("уведомления включены автоматически") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `old timezone edit callback does not open manual input`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_083,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-timezone-edit",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_083, chat = Chat(id = 100, type = "private")),
+                            data = "venue_settings_timezone_edit:10",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { dialogStateRepository.set(any(), any()) }
+            coVerify(exactly = 0) { venueSettingsRepository.updateTimezone(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    chatId = 100,
+                    callbackQueryId = "cb-timezone-edit",
+                    text = "Часовой пояс определяется автоматически по городу заведения.",
+                    showAlert = false,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Часовой пояс определяется автоматически по городу заведения.") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `deprecated timezone dialog state is cleared without saving manual input`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.VENUE_SETTINGS_WAIT_TIMEZONE,
+                    mapOf("venue_id" to "10"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_084,
+                    message =
+                        Message(
+                            messageId = 20_001_084,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "Asia/Yekaterinburg",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueSettingsRepository.updateTimezone(any(), any(), any()) }
+            coVerify { dialogStateRepository.clear(100) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Часовой пояс определяется автоматически по городу заведения.",
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `owner venue stats menu shows all venues selector`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "OWNER"),
+                )
+            coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 11L
+            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns
+                VenueOwnerAccount(
+                    id = 901L,
+                    primaryOwnerUserId = 200L,
+                    allowedVenuesCount = 2,
+                    notes = null,
+                    commercialNote = null,
+                    createdAt = Instant.EPOCH,
+                    updatedAt = Instant.EPOCH,
+                    updatedByUserId = 200L,
+                )
+            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(901L) } returns
+                listOf(
+                    VenueOwnerAccountVenue(
+                        id = 10L,
+                        name = "Mix",
+                        city = "Москва",
+                        status = "DRAFT",
+                        createdAt = Instant.EPOCH,
+                    ),
+                    VenueOwnerAccountVenue(
+                        id = 11L,
+                        name = "Особняк",
+                        city = "Москва",
+                        status = "PUBLISHED",
+                        createdAt = Instant.EPOCH,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_09,
+                    message =
+                        Message(
+                            messageId = 20_001_09,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📊 Статистика заведений",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📊 Статистика заведений") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().let { buttons ->
+                                buttons.any { it.text == "📊 Все заведения" && it.callbackData == "owner_stats_all" } &&
+                                    buttons.any { it.text == "Mix · Черновик" && it.callbackData == "owner_stats_venue:10" } &&
+                                    buttons.any { it.text == "✅ Особняк · Опубликовано" && it.callbackData == "owner_stats_venue:11" }
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `direct venue selector callback without membership is denied`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_09,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-venue-no-access",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_09, chat = Chat(id = 100, type = "private")),
+                            data = "venue_select:11",
+                        ),
+                ),
+            )
+
+            coVerify { outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-venue-no-access", "Нет доступа", true) }
+            coVerify(exactly = 0) { venueContextRepository.setSelectedVenue(100, 200L, 11L) }
         }
 
     @Test
@@ -449,9 +4294,8 @@ class TelegramBotRouterTableTokenTest {
                         it is ReplyKeyboardMarkup &&
                             it.keyboard.map { row -> row.map { button -> button.text } } ==
                             listOf(
-                                listOf("🏢 Моё заведение", "🍽 Меню заведения"),
-                                listOf("🪑 Столы и QR", "👥 Персонал"),
-                                listOf("📦 Заказы", "⚙️ Настройки"),
+                                listOf("🏢 Мои заведения", "📊 Статистика заведений"),
+                                listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
                             )
                     },
                 )
@@ -460,7 +4304,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `menu command opens venue owner entry for venue owner`() =
+    fun `menu command opens global owner menu for venue owner`() =
         runBlocking {
             coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
                 listOf(
@@ -492,17 +4336,13 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match {
-                        it.contains("💬 Режим настройки в боте") &&
-                            it.contains("Тестовая кальянная (OWNER)")
-                    },
+                    "Панель владельца заведений. Выберите действие.",
                     match {
                         it is ReplyKeyboardMarkup &&
                             it.keyboard.map { row -> row.map { button -> button.text } } ==
                             listOf(
-                                listOf("🏢 Моё заведение", "🍽 Меню заведения"),
-                                listOf("🪑 Столы и QR", "👥 Персонал"),
-                                listOf("📦 Заказы", "⚙️ Настройки"),
+                                listOf("🏢 Мои заведения", "📊 Статистика заведений"),
+                                listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
                             )
                     },
                 )
@@ -510,13 +4350,532 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `venue owner button shows venue card with inline field actions`() =
+    fun `owner venues dashboard shows all venues and create action when quota is available`() =
         runBlocking {
+            val account =
+                VenueOwnerAccount(
+                    id = 300L,
+                    primaryOwnerUserId = 200L,
+                    allowedVenuesCount = 2,
+                    notes = null,
+                    commercialNote = null,
+                    createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedByUserId = null,
+                )
+            val summary = VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 1)
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
+            coEvery { venueOwnerAccountRepository.getQuotaSummary(300L) } returns summary
+            coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 10L
+            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(300L) } returns
+                listOf(
+                    VenueOwnerAccountVenue(
+                        id = 10L,
+                        name = "Mix",
+                        city = "Москва",
+                        status = "DRAFT",
+                        createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    ),
+                    VenueOwnerAccountVenue(
+                        id = 11L,
+                        name = "Smoke Lab",
+                        city = "Сочи",
+                        status = "PUBLISHED",
+                        createdAt = Instant.parse("2026-04-03T12:01:00Z"),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_11,
+                    message =
+                        Message(
+                            messageId = 20_001_11,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "🏢 Мои заведения",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🏢 Мои заведения") &&
+                            it.contains("Заведений создано: 1 из 2") &&
+                            it.contains("Доступно к созданию: 1") &&
+                            it.contains("✅ Mix · Черновик · Москва") &&
+                            it.contains("Smoke Lab · Опубликовано · Сочи")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Mix · Черновик" &&
+                                    button.callbackData == "owner_venue_select:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "➕ Создать новое заведение" &&
+                                    button.callbackData == "owner_quota_create_start"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "📩 Запросить увеличение лимита" &&
+                                    button.callbackData == "owner_quota_request_start"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner venues dashboard hides create and keeps request when quota is exhausted`() =
+        runBlocking {
+            val account =
+                VenueOwnerAccount(
+                    id = 301L,
+                    primaryOwnerUserId = 200L,
+                    allowedVenuesCount = 1,
+                    notes = null,
+                    commercialNote = null,
+                    createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedByUserId = null,
+                )
+            val summary = VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 0)
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
+            coEvery { venueOwnerAccountRepository.getQuotaSummary(301L) } returns summary
+            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(301L) } returns
+                listOf(
+                    VenueOwnerAccountVenue(
+                        id = 10L,
+                        name = "Mix",
+                        city = "Москва",
+                        status = "DRAFT",
+                        createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_12,
+                    message =
+                        Message(
+                            messageId = 20_001_12,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "🏢 Мои заведения",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Лимит заведений исчерпан") &&
+                            it.contains("Доступно к созданию: 0")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "📩 Запросить увеличение лимита" &&
+                                    button.callbackData == "owner_quota_request_start"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button -> button.callbackData == "owner_quota_create_start" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can create new draft venue and selected venue is switched`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(100) } answers { states[100] ?: DialogState(DialogStateType.NONE) }
+            coEvery { dialogStateRepository.set(100, any()) } answers {
+                states[100] = invocation.args[1] as DialogState
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(100) } answers {
+                states.remove(100)
+                Unit
+            }
+            val account =
+                VenueOwnerAccount(
+                    id = 302L,
+                    primaryOwnerUserId = 200L,
+                    allowedVenuesCount = 2,
+                    notes = null,
+                    commercialNote = null,
+                    createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedByUserId = null,
+                )
+            val beforeSummary = VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 1)
+            val afterSummary = VenueOwnerQuotaSummary(account, usedVenuesCount = 2, availableVenuesCount = 0)
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 77L, role = "OWNER"))
+            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
+            coEvery { venueOwnerAccountRepository.ensureCanCreateVenue(302L) } returns
+                VenueOwnerQuotaCheckResult.Allowed(beforeSummary)
+            coEvery {
+                venueOwnerAccountRepository.createOwnedDraftVenue(
+                    ownerUserId = 200L,
+                    name = "Новый Mix",
+                    city = "Москва",
+                    address = "Арбат, 1",
+                    defaultLimit = 1,
+                )
+            } returns VenueOwnerVenueCreationResult.Success(venueId = 77L, summary = afterSummary)
+            coEvery { platformVenueRepository.getVenueDetail(77L) } returns
+                PlatformVenueDetail(
+                    id = 77L,
+                    name = "Новый Mix",
+                    city = "Москва",
+                    address = "Арбат, 1",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-03T12:01:00Z"),
+                    deletedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_13,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-create-quota",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_13, chat = Chat(id = 100, type = "private")),
+                            data = "owner_quota_create_start",
+                        ),
+                ),
+            )
+            listOf(
+                10_001_14 to "Новый Mix",
+                10_001_15 to "Москва",
+                10_001_16 to "Арбат, 1",
+            ).forEach { (updateId, text) ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = updateId.toLong(),
+                        message =
+                            Message(
+                                messageId = updateId.toLong(),
+                                chat = Chat(id = 100, type = "private"),
+                                fromUser = User(id = 200L),
+                                text = text,
+                            ),
+                    ),
+                )
+            }
+
+            coVerify {
+                venueOwnerAccountRepository.createOwnedDraftVenue(
+                    ownerUserId = 200L,
+                    name = "Новый Mix",
+                    city = "Москва",
+                    address = "Арбат, 1",
+                    defaultLimit = 1,
+                )
+            }
+            coVerify { venueContextRepository.setSelectedVenue(100, 200L, 77L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Заведение создано как черновик") },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `owner limit request creates pending request and notifies platform owner`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(100) } answers { states[100] ?: DialogState(DialogStateType.NONE) }
+            coEvery { dialogStateRepository.set(100, any()) } answers {
+                states[100] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(100) } answers {
+                states.remove(100)
+                Unit
+            }
+            val account =
+                VenueOwnerAccount(
+                    id = 303L,
+                    primaryOwnerUserId = 200L,
+                    allowedVenuesCount = 1,
+                    notes = null,
+                    commercialNote = null,
+                    createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedByUserId = null,
+                )
+            val request =
+                VenueOwnerLimitRequest(
+                    id = 901L,
+                    ownerAccountId = 303L,
+                    requestedExtraCount = 2,
+                    comment = "Хотим открыть второй филиал",
+                    status = "PENDING",
+                    createdAt = Instant.parse("2026-04-03T12:02:00Z"),
+                    decidedAt = null,
+                    decidedByUserId = null,
+                )
+            val summary =
+                VenueOwnerLimitRequestSummary(
+                    request = request,
+                    quota = VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 0),
+                    owner =
+                        VenueOwnerLimitRequestOwner(
+                            userId = 200L,
+                            username = "owner",
+                            firstName = "Owner",
+                            lastName = "User",
+                        ),
+                )
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
+            coEvery { venueOwnerAccountRepository.createLimitRequest(303L, 2, "Хотим открыть второй филиал") } returns request
+            coEvery { venueOwnerAccountRepository.findLimitRequestSummary(901L) } returns summary
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_17,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-limit-request",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_001_17, chat = Chat(id = 100, type = "private")),
+                            data = "owner_quota_request_start",
+                        ),
+                ),
+            )
+            listOf(
+                10_001_18 to "2",
+                10_001_19 to "Хотим открыть второй филиал",
+            ).forEach { (updateId, text) ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = updateId.toLong(),
+                        message =
+                            Message(
+                                messageId = updateId.toLong(),
+                                chat = Chat(id = 100, type = "private"),
+                                fromUser = User(id = 200L),
+                                text = text,
+                            ),
+                    ),
+                )
+            }
+
+            coVerify { venueOwnerAccountRepository.createLimitRequest(303L, 2, "Хотим открыть второй филиал") }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    999L,
+                    match {
+                        it.contains("Запрос на увеличение лимита") &&
+                            it.contains("Просит дополнительно: 2") &&
+                            it.contains("Хотим открыть второй филиал")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "platform_owner_limit_req_approve:901"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner can approve limit request partially`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(999) } answers { states[999] ?: DialogState(DialogStateType.NONE) }
+            coEvery { dialogStateRepository.set(999, any()) } answers {
+                states[999] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(999) } answers {
+                states.remove(999)
+                Unit
+            }
+            val account =
+                VenueOwnerAccount(
+                    id = 303L,
+                    primaryOwnerUserId = 200L,
+                    allowedVenuesCount = 1,
+                    notes = null,
+                    commercialNote = null,
+                    createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedByUserId = null,
+                )
+            val pendingRequest =
+                VenueOwnerLimitRequest(
+                    id = 901L,
+                    ownerAccountId = 303L,
+                    requestedExtraCount = 3,
+                    comment = "Хотим открыть три филиала",
+                    status = "PENDING",
+                    createdAt = Instant.parse("2026-04-03T12:02:00Z"),
+                    decidedAt = null,
+                    decidedByUserId = null,
+                )
+            val approvedRequest =
+                pendingRequest.copy(
+                    approvedExtraCount = 2,
+                    status = "APPROVED",
+                    decidedAt = Instant.parse("2026-04-03T12:03:00Z"),
+                    decidedByUserId = 999L,
+                )
+            val owner =
+                VenueOwnerLimitRequestOwner(
+                    userId = 200L,
+                    username = "owner",
+                    firstName = "Owner",
+                    lastName = "User",
+                )
+            val pendingSummary =
+                VenueOwnerLimitRequestSummary(
+                    request = pendingRequest,
+                    quota = VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 0),
+                    owner = owner,
+                )
+            val approvedSummary =
+                VenueOwnerLimitRequestSummary(
+                    request = approvedRequest,
+                    quota =
+                        VenueOwnerQuotaSummary(
+                            account.copy(allowedVenuesCount = 3),
+                            usedVenuesCount = 1,
+                            availableVenuesCount = 2,
+                        ),
+                    owner = owner,
+                )
+            coEvery { venueOwnerAccountRepository.findLimitRequestSummary(901L) } returnsMany
+                listOf(pendingSummary, approvedSummary)
+            coEvery {
+                venueOwnerAccountRepository.approveLimitRequestPartial(
+                    requestId = 901L,
+                    approvedExtraCount = 2,
+                    decidedByUserId = 999L,
+                )
+            } returns VenueOwnerLimitRequestDecisionResult.Success(approvedRequest)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_20,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-platform-limit-partial",
+                            from = User(id = 999L),
+                            message = Message(messageId = 20_001_20, chat = Chat(id = 999L, type = "private")),
+                            data = "platform_owner_limit_req_partial:901",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_21,
+                    message =
+                        Message(
+                            messageId = 20_001_21,
+                            chat = Chat(id = 999L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "4",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_001_22,
+                    message =
+                        Message(
+                            messageId = 20_001_22,
+                            chat = Chat(id = 999L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "2",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    999L,
+                    match { it.contains("Введите число от 1 до 3") },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    999L,
+                    "Введите число от 1 до 3.",
+                    null,
+                )
+            }
+            coVerify {
+                venueOwnerAccountRepository.approveLimitRequestPartial(
+                    requestId = 901L,
+                    approvedExtraCount = 2,
+                    decidedByUserId = 999L,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    999L,
+                    match { it.contains("Одобрено +2 из запрошенных +3") },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match { it.contains("одобрен частично") && it.contains("+2 из запрошенных +3") },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `venue owner my venues dashboard opens selected venue hub`() =
+        runBlocking {
+            val account =
+                VenueOwnerAccount(
+                    id = 304L,
+                    primaryOwnerUserId = 200L,
+                    allowedVenuesCount = 1,
+                    notes = null,
+                    commercialNote = null,
+                    createdAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedAt = Instant.parse("2026-04-03T12:00:00Z"),
+                    updatedByUserId = null,
+                )
             coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
                 listOf(
                     VenueAccessRepository.VenueMembership(
                         venueId = 10L,
                         role = "OWNER",
+                    ),
+                )
+            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
+            coEvery { venueOwnerAccountRepository.getQuotaSummary(304L) } returns
+                VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 0)
+            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(304L) } returns
+                listOf(
+                    VenueOwnerAccountVenue(
+                        id = 10L,
+                        name = "Тестовая кальянная",
+                        city = null,
+                        status = "DRAFT",
+                        createdAt = Instant.parse("2026-04-03T12:00:00Z"),
                     ),
                 )
             coEvery { venueRepository.findVenueById(10L) } returns
@@ -534,7 +4893,7 @@ class TelegramBotRouterTableTokenTest {
                             messageId = 20_004,
                             chat = Chat(id = 100, type = "private"),
                             fromUser = User(id = 200L),
-                            text = "🏢 Моё заведение",
+                            text = "🏢 Мои заведения",
                         ),
                 ),
             )
@@ -543,22 +4902,163 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match {
-                        it.contains("🏢 Моё заведение") &&
-                            it.contains("Название: Тестовая кальянная") &&
-                            it.contains("Город: —") &&
-                            it.contains("Адрес: —") &&
-                            it.contains("Статус: —") &&
-                            it.contains("Описание: —")
+                        it.contains("🏢 Мои заведения") &&
+                            it.contains("Заведений создано: 1 из 1") &&
+                            it.contains("Тестовая кальянная · Черновик")
                     },
                     match {
                         it is InlineKeyboardMarkup &&
-                            it.inlineKeyboard.map { row -> row.map { button -> button.text } } ==
-                            listOf(
-                                listOf("✏️ Название", "📍 Адрес"),
-                                listOf("🕒 Часы работы", "📝 Описание"),
-                                listOf("👁 Предпросмотр"),
-                                listOf("✅ Готовность к публикации"),
-                            )
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "Тестовая кальянная · Черновик" &&
+                                    button.callbackData == "owner_venue_select:10"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button -> button.callbackData == "owner_quota_create_start" } &&
+                            it.inlineKeyboard.flatten().any { button -> button.callbackData == "owner_quota_request_start" }
+                    },
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_005,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-venue-select",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_005, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_select:10",
+                        ),
+                ),
+            )
+
+            coVerify { venueContextRepository.setSelectedVenue(100, 200L, 10L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🏢 Тестовая кальянная") &&
+                            it.contains("OWNER") &&
+                            it.contains("Выберите раздел:")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🟢 Работа смены" &&
+                                    button.callbackData == "owner_venue_hub_shift:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⚙️ Настройка заведения" &&
+                                    button.callbackData == "owner_venue_hub_setup:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "📣 Продвижение" &&
+                                    button.callbackData == "venue_marketing_root:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🤖 Помощник" &&
+                                    button.callbackData == "venue_ai:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ К моим заведениям" &&
+                                    button.callbackData == "owner_venues_dashboard"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner selected venue work shift and setup submenus route back to hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(
+                        venueId = 10L,
+                        role = "OWNER",
+                    ),
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns
+                VenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    staffChatId = 12345L,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_005_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-venue-shift",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_005_1, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_hub_shift:10",
+                        ),
+                ),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_005_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-venue-setup",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_005_2, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_hub_setup:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🟢 Работа смены") && it.contains("Тестовая кальянная") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "📦 Заказы" &&
+                                    button.callbackData == "staff_venue_orders_root:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🚫 Стоп-лист" &&
+                                    button.callbackData == "staff_venue_stoplist_root:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад к заведению" &&
+                                    button.callbackData == "owner_venue_hub:10"
+                            }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Настройка заведения") && it.contains("Тестовая кальянная") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🍽 Заказное меню" &&
+                                    button.callbackData == "owner_venue_order_menu_root:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "💬 Чат персонала" &&
+                                    button.callbackData == "venue_staff_chat_root:10"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.text == "🔔 Уведомления"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.text == "⚙️ Настройки"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Готовность к публикации" &&
+                                    button.callbackData == "owner_venue_publish_readiness:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад к заведению" &&
+                                    button.callbackData == "owner_venue_hub:10"
+                            }
                     },
                 )
             }
@@ -625,7 +5125,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "🍽 Заказное меню\nВыберите раздел.",
+                    "🍽 Заказное меню\n" +
+                        "Категории, позиции, цены и стоп-лист. Это меню гость видит по кнопке 🍽 Меню и использует для заказа по QR.\n\n" +
+                        "Выберите раздел.",
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.map { row -> row.map { button -> button.text } } ==
@@ -635,12 +5137,14 @@ class TelegramBotRouterTableTokenTest {
                                 listOf("Кухня"),
                                 listOf("➕ Добавить раздел"),
                                 listOf("🚫 Стоп-лист"),
+                                listOf("↩️ Назад к настройке"),
                             ) &&
                             it.inlineKeyboard[0][0].callbackData == "owner_venue_order_menu_section:10:501" &&
                             it.inlineKeyboard[1][0].callbackData == "owner_venue_order_menu_section:10:502" &&
                             it.inlineKeyboard[2][0].callbackData == "owner_venue_order_menu_section:10:503" &&
                             it.inlineKeyboard[3][0].callbackData == "owner_venue_order_menu_add:10" &&
-                            it.inlineKeyboard[4][0].callbackData == "owner_venue_order_menu_stoplist:10"
+                            it.inlineKeyboard[4][0].callbackData == "owner_venue_order_menu_stoplist:10" &&
+                            it.inlineKeyboard[5][0].callbackData == "owner_venue_hub_setup:10"
                     },
                 )
             }
@@ -833,7 +5337,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "✅ Позиция добавлена.",
+                    "✅ Позиция добавлена. Теперь можно настроить цену, наличие и вкусы/варианты.",
                     null,
                 )
             }
@@ -841,11 +5345,23 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match {
-                        it.contains("🍽 Раздел: Кальянное меню") &&
-                            it.contains("Позиции: 1") &&
-                            it.contains("• Авторский кальян — 850 ₽")
+                        it.contains("Авторский кальян") &&
+                            it.contains("Цена: 850 ₽")
                     },
-                    any(),
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().let { buttons ->
+                                buttons.any { it.text == "🍓 Вкусы / варианты" } &&
+                                    buttons.any { it.text == "💰 Цена" } &&
+                                    buttons.any { it.text == "✏️ Название" } &&
+                                    buttons.any { it.text == "🚫 Наличие / стоп-лист" } &&
+                                    buttons.any {
+                                        it.text == "⚙️ Дополнительно" &&
+                                            it.callbackData == "owner_venue_order_menu_item_more:10:501:7001"
+                                    } &&
+                                    buttons.none { it.text == "🏷 Тип позиции" }
+                            }
+                    },
                 )
             }
         }
@@ -897,15 +5413,1001 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it.contains("🍽 Раздел: Кальянное меню") &&
                             it.contains("Позиции: 1") &&
+                            it.contains("Тип раздела применяется ко всем позициям внутри.") &&
                             it.contains("• Авторский кальян — 850 ₽")
                     },
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard[0][0].text == "Авторский кальян — 850 ₽" &&
-                            it.inlineKeyboard[0][0].callbackData == "owner_venue_order_menu_item:10:501:7001"
+                            it.inlineKeyboard[0][0].callbackData == "owner_venue_order_menu_item:10:501:7001" &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "➕ Добавить позицию" } &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "✏️ Переименовать раздел" } &&
+                            it.inlineKeyboard.flatten().any { button -> button.text == "🗑 Удалить раздел" } &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.text.contains("Привести все позиции") ||
+                                    button.text.contains("Сбросить вкусы всех") ||
+                                    button.text == "⚙️ Дополнительно" ||
+                                    button.callbackData?.startsWith("owner_venue_section_flavors_norm_") == true
+                            }
                     },
                 )
             }
+        }
+
+    @Test
+    fun `owner can update order menu section type`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    VenueMenuCategory(
+                        id = 501L,
+                        venueId = 10L,
+                        name = "Кальянное меню",
+                        sortOrder = 10,
+                        items = emptyList(),
+                        categoryType = MenuSemanticType.OTHER,
+                    ),
+                )
+            coEvery { venueMenuRepository.updateCategoryType(10L, 501L, MenuSemanticType.HOOKAH) } returns
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Кальянное меню",
+                    sortOrder = 10,
+                    items = emptyList(),
+                    categoryType = MenuSemanticType.HOOKAH,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_281,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-section-type",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_281, chat = Chat(id = 100, type = "private")),
+                            data = "omt_c:10:501",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_282,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-section-type-set",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_282, chat = Chat(id = 100, type = "private")),
+                            data = "omt_cs:10:501:HOOKAH",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🏷 Тип раздела") && it.contains("Сейчас: Другое") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "Кальяны" && button.callbackData == "omt_cs:10:501:HOOKAH"
+                            }
+                    },
+                )
+            }
+            coVerify { venueMenuRepository.updateCategoryType(10L, 501L, MenuSemanticType.HOOKAH) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Тип раздела сохранён: Кальяны.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `manager can update order menu item type and staff direct callback is denied`() =
+        runBlocking {
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Авторский кальян",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 10,
+                    options = emptyList(),
+                    itemType = null,
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns true
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(202L, 10L) } returns false
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    VenueMenuCategory(
+                        id = 501L,
+                        venueId = 10L,
+                        name = "Кальянное меню",
+                        sortOrder = 10,
+                        items = listOf(item),
+                        categoryType = MenuSemanticType.HOOKAH,
+                    ),
+                )
+            coEvery { venueMenuRepository.updateItemType(10L, 7001L, MenuSemanticType.DRINK) } returns
+                item.copy(itemType = MenuSemanticType.DRINK)
+            coEvery { venueMenuRepository.updateItemType(10L, 7001L, null) } returns
+                item.copy(itemType = null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_283,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-manager-order-menu-item-type-set",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_283, chat = Chat(id = 100, type = "private")),
+                            data = "omt_is:10:501:7001:DRINK",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_284,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-manager-order-menu-item-type-inherit",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_284, chat = Chat(id = 100, type = "private")),
+                            data = "omt_is:10:501:7001:INHERIT",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_285,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-item-type-set",
+                            from = User(id = 202L),
+                            message = Message(messageId = 30_004_284, chat = Chat(id = 100, type = "private")),
+                            data = "omt_is:10:501:7001:TEA",
+                        ),
+                ),
+            )
+
+            coVerify { venueMenuRepository.updateItemType(10L, 7001L, MenuSemanticType.DRINK) }
+            coVerify { venueMenuRepository.updateItemType(10L, 7001L, null) }
+            coVerify(exactly = 0) { venueMenuRepository.updateItemType(10L, 7001L, MenuSemanticType.TEA) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Тип позиции сохранён: Напитки.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Тип позиции сохранён: Как у раздела (Кальяны).",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Нет доступа к заведению.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `owner order menu item advanced screen shows item type action`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    VenueMenuCategory(
+                        id = 501L,
+                        venueId = 10L,
+                        name = "Кальянное меню",
+                        sortOrder = 10,
+                        items =
+                            listOf(
+                                VenueMenuItem(
+                                    id = 7001L,
+                                    venueId = 10L,
+                                    categoryId = 501L,
+                                    name = "Авторский кальян",
+                                    priceMinor = 85_000L,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    sortOrder = 10,
+                                    options = emptyList(),
+                                    itemType = null,
+                                ),
+                            ),
+                        categoryType = MenuSemanticType.HOOKAH,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_286,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-item-advanced",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_286, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_more:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("⚙️ Дополнительно") &&
+                            it.contains("Авторский кальян") &&
+                            it.contains("Тип позиции: Как у раздела (Кальяны)")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🏷 Тип позиции" &&
+                                    button.callbackData == "omt_i:10:501:7001"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад к позиции" &&
+                                    button.callbackData == "owner_venue_order_menu_item:10:501:7001"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can add all base flavor profiles without duplicates`() =
+        runBlocking {
+            val baseFlavorProfiles =
+                listOf(
+                    "Ягодный",
+                    "Фруктовый",
+                    "Цитрусовый",
+                    "Десертный",
+                    "Освежающий / мятный",
+                    "Напиточный",
+                    "Пряный",
+                    "Цветочный",
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.createOption(10L, 7001L, any(), 0L, true) } answers {
+                val name = invocation.args[2] as String
+                VenueMenuOption(
+                    id = 9000L + baseFlavorProfiles.indexOf(name),
+                    venueId = 10L,
+                    itemId = 7001L,
+                    name = name,
+                    priceDeltaMinor = 0,
+                    isAvailable = true,
+                    sortOrder = baseFlavorProfiles.indexOf(name) + 1,
+                )
+            }
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(hookahMenuCategoryWithOptions(emptyList())),
+                    listOf(hookahMenuCategoryWithOptions(baseFlavorProfiles.mapIndexed { index, name -> hookahFlavorOption(index + 1L, name) })),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_32,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavors-standard",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_32, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_std:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 8) { venueMenuRepository.createOption(10L, 7001L, any(), 0L, true) }
+            coVerify { venueMenuRepository.createOption(10L, 7001L, "Ягодный", 0L, true) }
+            coVerify { venueMenuRepository.createOption(10L, 7001L, "Цветочный", 0L, true) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Добавлено профилей: 8. Уже были в списке: 0.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `owner can add individual base flavor profile`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.createOption(10L, 7001L, "Ягодный", 0L, true) } returns
+                hookahFlavorOption(9001L, "Ягодный")
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(hookahMenuCategoryWithOptions(emptyList())),
+                    listOf(hookahMenuCategoryWithOptions(listOf(hookahFlavorOption(9001L, "Ягодный")))),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_321,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavor-profile-one",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_321, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavor_p:10:501:7001:0",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) { venueMenuRepository.createOption(10L, 7001L, "Ягодный", 0L, true) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Профиль «Ягодный» добавлен.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `owner flavor screen quick add shows only missing canonical profiles`() =
+        runBlocking {
+            val options =
+                listOf(
+                    hookahFlavorOption(1L, "Яблоко"),
+                    hookahFlavorOption(2L, "Ягодные"),
+                    hookahFlavorOption(3L, "Ягодный"),
+                    hookahFlavorOption(4L, "Авторский микс"),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns listOf(hookahMenuCategoryWithOptions(options))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_323,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavor-screen",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_323, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_flavors:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Текущие варианты") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard
+                                .flatten()
+                                .filter { button -> button.callbackData?.startsWith("owner_venue_item_flavor_p:") == true }
+                                .map { button -> button.text } ==
+                            listOf(
+                                "Фруктовый",
+                                "Цитрусовый",
+                                "Десертный",
+                                "Освежающий / мятный",
+                                "Напиточный",
+                                "Пряный",
+                                "Цветочный",
+                            )
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner individual base flavor profile add skips duplicate`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(hookahMenuCategoryWithOptions(listOf(hookahFlavorOption(1L, "Ягодный")))),
+                    listOf(hookahMenuCategoryWithOptions(listOf(hookahFlavorOption(1L, "Ягодный")))),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_322,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavor-profile-duplicate",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_322, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavor_p:10:501:7001:0",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Профиль «Ягодный» уже есть в списке.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `owner base flavor profiles bulk add skips existing profiles`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.createOption(10L, 7001L, any(), 0L, true) } answers {
+                val name = invocation.args[2] as String
+                VenueMenuOption(
+                    id = 9100L,
+                    venueId = 10L,
+                    itemId = 7001L,
+                    name = name,
+                    priceDeltaMinor = 0,
+                    isAvailable = true,
+                    sortOrder = 10,
+                )
+            }
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(hookahMenuCategoryWithOptions(listOf(hookahFlavorOption(1L, "Освежающий / мятный")))),
+                    listOf(hookahMenuCategoryWithOptions(listOf(hookahFlavorOption(1L, "Освежающий / мятный")))),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_33,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavors-standard-existing",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_33, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_std:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 7) { venueMenuRepository.createOption(10L, 7001L, any(), 0L, true) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(10L, 7001L, "Освежающий / мятный", 0L, true) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Добавлено профилей: 7. Уже были в списке: 1.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `base flavor profiles bulk add is idempotent when all profiles already exist`() =
+        runBlocking {
+            val existing =
+                listOf(
+                    "Ягодный",
+                    "Фруктовый",
+                    "Цитрусовый",
+                    "Десертный",
+                    "Освежающий / мятный",
+                    "Напиточный",
+                    "Пряный",
+                    "Цветочный",
+                ).mapIndexed { index, name -> hookahFlavorOption(index + 1L, name) }
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(hookahMenuCategoryWithOptions(existing)),
+                    listOf(hookahMenuCategoryWithOptions(existing)),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_34,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavors-standard-repeat",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_34, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_std:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Добавлено профилей: 0. Уже были в списке: 8.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot invoke owner base flavor profiles bulk edit callback`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_35,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-flavors-standard",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_35, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_std:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Нет доступа к заведению.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `staff cannot invoke owner individual base flavor profile edit callback`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_36,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-flavor-profile",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_36, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavor_p:10:501:7001:0",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Нет доступа к заведению.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `owner flavor advanced screen contains reset action`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    hookahMenuCategoryWithOptions(
+                        listOf(
+                            hookahFlavorOption(1L, "Арбуз"),
+                            hookahFlavorOption(2L, "Ягодный"),
+                        ),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_364,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavors-more",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_364, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_more:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Дополнительно") && it.contains("Авторский кальян") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "♻️ Сбросить к базовым профилям" &&
+                                    button.callbackData == "owner_venue_item_flavors_norm_ask:10:501:7001"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner normalize flavor profiles ask shows confirmation without mutating data`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    hookahMenuCategoryWithOptions(
+                        listOf(
+                            hookahFlavorOption(1L, "Арбуз"),
+                            hookahFlavorOption(2L, "Ягодные"),
+                            hookahFlavorOption(3L, "Ягодный"),
+                            hookahFlavorOption(4L, "Авторский микс"),
+                        ),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_365,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavors-normalize-ask",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_365, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_norm_ask:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Сбросить варианты к базовым профилям?\nКастомные варианты будут сохранены, старые стандартные дубли будут убраны.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Да, сбросить к базовым профилям" &&
+                                    button.callbackData == "owner_venue_item_flavors_norm_confirm:10:501:7001"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner normalize flavor profiles removes obsolete values keeps custom and canonical and adds missing profiles`() =
+        runBlocking {
+            val before =
+                listOf(
+                    hookahFlavorOption(1L, "Яблоко"),
+                    hookahFlavorOption(2L, "Фруктовые"),
+                    hookahFlavorOption(3L, "Освежающий"),
+                    hookahFlavorOption(4L, "Мятный"),
+                    hookahFlavorOption(5L, "Освежающий / мятный"),
+                    hookahFlavorOption(6L, "Авторский микс"),
+                    hookahFlavorOption(7L, "Ягодный"),
+                    hookahFlavorOption(8L, "Арбуз"),
+                )
+            val createdProfiles = mutableListOf<String>()
+            val after =
+                listOf(
+                    hookahFlavorOption(5L, "Освежающий / мятный"),
+                    hookahFlavorOption(6L, "Авторский микс"),
+                    hookahFlavorOption(7L, "Ягодный"),
+                    hookahFlavorOption(101L, "Фруктовый"),
+                    hookahFlavorOption(102L, "Цитрусовый"),
+                    hookahFlavorOption(103L, "Десертный"),
+                    hookahFlavorOption(104L, "Напиточный"),
+                    hookahFlavorOption(105L, "Пряный"),
+                    hookahFlavorOption(106L, "Цветочный"),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.deleteOption(10L, any()) } returns true
+            coEvery { venueMenuRepository.createOption(10L, 7001L, any(), 0L, true) } answers {
+                val name = invocation.args[2] as String
+                createdProfiles += name
+                hookahFlavorOption(100L + createdProfiles.size, name)
+            }
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(hookahMenuCategoryWithOptions(before)),
+                    listOf(hookahMenuCategoryWithOptions(after)),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_366,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavors-normalize-confirm",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_366, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_norm_confirm:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 1L) }
+            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 2L) }
+            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 3L) }
+            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 4L) }
+            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 8L) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 5L) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 6L) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 7L) }
+            assertEquals(
+                listOf("Фруктовый", "Цитрусовый", "Десертный", "Напиточный", "Пряный", "Цветочный"),
+                createdProfiles,
+            )
+            coVerify(exactly = 0) { venueMenuRepository.createOption(10L, 7001L, "Ягодный", 0L, true) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(10L, 7001L, "Освежающий / мятный", 0L, true) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Готово. Удалено старых вариантов: 5. Добавлено базовых профилей: 6.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Текущие варианты") &&
+                            it.contains("Авторский микс") &&
+                            it.contains("Освежающий / мятный") &&
+                            it.contains("Ягодный") &&
+                            !it.contains("Яблоко") &&
+                            !it.contains("Фруктовые") &&
+                            !it.contains("Арбуз")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard
+                                .flatten()
+                                .none { button -> button.callbackData?.startsWith("owner_venue_item_flavor_p:") == true }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `legacy owner normalize section flavor profiles ask is unavailable and does not mutate data`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_3661,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-section-flavors-normalize-ask",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_3661, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_section_flavors_norm_ask:10:501",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Массовый сброс вариантов недоступен. Настройте вкусы в карточке позиции.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `legacy owner normalize section flavor profiles confirm is unavailable and does not mutate data`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_3662,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-section-flavors-normalize-confirm",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_3662, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_section_flavors_norm_confirm:10:501",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Массовый сброс вариантов недоступен. Настройте вкусы в карточке позиции.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot invoke owner normalize section flavor profiles callback`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_3663,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-section-flavors-normalize",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_3663, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_section_flavors_norm_confirm:10:501",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Нет доступа к заведению.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `staff cannot invoke owner normalize flavor profiles callback`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_367,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-flavors-normalize",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_367, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_norm_confirm:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Нет доступа к заведению.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `owner flavor delete ask shows confirmation without deleting`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    hookahMenuCategoryWithOptions(
+                        listOf(
+                            hookahFlavorOption(1L, "Арбуз"),
+                            hookahFlavorOption(2L, "Ягодный"),
+                        ),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_37,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavor-delete-ask",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_37, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_delete_ask:10:501:7001:1",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Удалить вариант «Арбуз»") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Да, удалить" &&
+                                    button.callbackData == "owner_venue_order_menu_item_option_delete_confirm:10:501:7001:1"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner flavor delete confirm deletes only selected option and returns to flavor list`() =
+        runBlocking {
+            val before =
+                listOf(
+                    hookahFlavorOption(1L, "Арбуз"),
+                    hookahFlavorOption(2L, "Ягодный"),
+                )
+            val after = listOf(hookahFlavorOption(2L, "Ягодный"))
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.deleteOption(10L, 1L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(hookahMenuCategoryWithOptions(before)),
+                    listOf(hookahMenuCategoryWithOptions(after)),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_38,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavor-delete-confirm",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_38, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_delete_confirm:10:501:7001:1",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 1L) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 2L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Вкус удалён.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Текущие варианты") && it.contains("Ягодный") && !it.contains("Арбуз") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot invoke owner flavor delete confirm callback`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_39,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-flavor-delete-confirm",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_39, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_delete_confirm:10:501:7001:1",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Нет доступа к заведению.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
         }
 
     @Test
@@ -1004,7 +6506,7 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.text == "✅ Убрать из стоп-листа" &&
+                                button.text == "✅ Наличие / стоп-лист" &&
                                     button.callbackData == "owner_venue_order_menu_item_unstop:10:501:7001"
                             }
                     },
@@ -1151,9 +6653,190 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `staff stoplist callbacks are denied`() =
+        runBlocking {
+            val option =
+                VenueMenuOption(
+                    id = 8001L,
+                    venueId = 10L,
+                    itemId = 7001L,
+                    name = "Мята",
+                    priceDeltaMinor = 0L,
+                    isAvailable = false,
+                    sortOrder = 10,
+                )
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Авторский кальян",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = false,
+                    sortOrder = 10,
+                    options = listOf(option),
+                )
+            val category =
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Кальянное меню",
+                    sortOrder = 10,
+                    items = listOf(item),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueMenuRepository.getMenu(10L) } returns listOf(category)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_33,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-stoplist-item-stop",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_33, chat = Chat(id = 100, type = "private")),
+                            data = "staff_venue_stoplist_item_stop:10:501:7001",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_34,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-stoplist-option-stop",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_34, chat = Chat(id = 100, type = "private")),
+                            data = "staff_venue_stoplist_option_stop:10:501:7001:8001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
+            coVerify(exactly = 0) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
+                outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
+            }
+        }
+
+    @Test
+    fun `staff direct owner stoplist mutation callbacks are denied`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_36,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-owner-item-stop",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_36, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_stop:10:501:7001",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_37,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-owner-option-stop",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_37, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_stop:10:501:7001:8001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
+            coVerify(exactly = 0) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
+            }
+        }
+
+    @Test
+    fun `staff direct owner table mutation callbacks are denied`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_38,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-owner-table-toggle",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_38, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_tables_table_toggle:10:21",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_39,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-owner-table-rotate",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_39, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_tables_qr_rotate:10:21",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueTableRepository.setTableActive(10L, 21L, any()) }
+            coVerify(exactly = 0) { venueTableRepository.rotateToken(10L, 21L) }
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(100, "Управление столами доступно менеджеру или владельцу.", null)
+            }
+        }
+
+    @Test
+    fun `staff cannot open manager full menu editor`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF"))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_35,
+                    message =
+                        Message(
+                            messageId = 30_004_35,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "🍽 Меню",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Меню» доступен менеджеру.",
+                    match { it is ReplyKeyboardMarkup && it.keyboard == TelegramKeyboards.venueStaffMenu().keyboard },
+                )
+            }
+        }
+
+    @Test
     fun `owner preview opens guest venue card for draft venue`() =
         runBlocking {
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(
+                        venueId = 10L,
+                        role = "OWNER",
+                    ),
+                )
             coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns null
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns
                 PlatformVenueDetail(
@@ -1164,6 +6847,8 @@ class TelegramBotRouterTableTokenTest {
                     status = VenueStatus.DRAFT,
                     createdAt = Instant.parse("2026-04-01T12:00:00Z"),
                     deletedAt = null,
+                    guestContact = "+7 999 000-00-00",
+                    cardDescription = "Авторские чаши и спокойная посадка.",
                 )
 
             router.process(
@@ -1183,9 +6868,11 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match {
-                        it.contains("Это предпросмотр. Заведение пока не опубликовано.") &&
+                            it.contains("Это предпросмотр. Заведение пока не опубликовано.") &&
                             it.contains("Тестовая кальянная") &&
                             it.contains("📍 Тверская, 1") &&
+                            it.contains("☎️ Контакт: +7 999 000-00-00") &&
+                            it.contains("Авторские чаши и спокойная посадка.") &&
                             it.contains("Что хотите сделать?")
                     },
                     match {
@@ -1194,9 +6881,48 @@ class TelegramBotRouterTableTokenTest {
                                 button.text == "🪑 Забронировать стол" &&
                                     button.callbackData == "bot_catalog_venue_book:10"
                             } &&
-                            it.inlineKeyboard.flatten().any { button ->
-                                button.text == "🍽 Меню" &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.text == "🍽 Меню" ||
                                     button.callbackData == "bot_catalog_venue_menu:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "ℹ️ Информация" &&
+                                    button.callbackData == "bot_catalog_venue_about:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад к заведению" &&
+                                    button.callbackData == "owner_venue_hub:10"
+                            }
+                    },
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-venue-preview-back",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_2, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_hub:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🏢 Тестовая кальянная") &&
+                            it.contains("OWNER") &&
+                            it.contains("Выберите раздел:")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🟢 Работа смены" &&
+                                    button.callbackData == "owner_venue_hub_shift:10"
                             }
                     },
                 )
@@ -1204,7 +6930,50 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `venue about opens sections picker with visible sections only`() =
+    fun `owner selected venue stats opens venue stats period screen`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(
+                    venueId = 10L,
+                    role = "OWNER",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_101,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-venue-stats-root",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_101, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_stats_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "📊 Статистика заведения\n\nВыберите период:",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "Сегодня" &&
+                                    button.callbackData == "stats_period:10:today"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⬅️ Назад" &&
+                                    button.callbackData == "venue_menu_back:10"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button -> button.text == "⭐ Оценки и отзывы" } &&
+                            it.inlineKeyboard.flatten().none { button -> button.text == "🔗 Ссылка на отзывы" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `venue info opens filled visible sections picker only`() =
         runBlocking {
             coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
                 CatalogVenueShort(
@@ -1227,13 +6996,42 @@ class TelegramBotRouterTableTokenTest {
                     VenueInfoSection(
                         id = 102L,
                         venueId = 10L,
+                        title = "FAQ",
+                        sectionType = "faq",
+                        sortOrder = 20,
+                        isVisible = true,
+                        textContent = null,
+                    ),
+                    VenueInfoSection(
+                        id = 103L,
+                        venueId = 10L,
                         title = "Скрытый раздел",
                         sectionType = "custom",
-                        sortOrder = 20,
+                        sortOrder = 30,
                         isVisible = false,
                         textContent = "Секрет",
                     ),
+                    VenueInfoSection(
+                        id = 104L,
+                        venueId = 10L,
+                        title = "Интерьер",
+                        sectionType = "custom",
+                        sortOrder = 40,
+                        isVisible = true,
+                        textContent = null,
+                    ),
+                    VenueInfoSection(
+                        id = 105L,
+                        venueId = 10L,
+                        title = "Меню",
+                        sectionType = "menu",
+                        sortOrder = 50,
+                        isVisible = true,
+                        textContent = "Фото страниц меню.",
+                    ),
                 )
+            coEvery { venueInfoSectionMediaRepository.countBySectionIds(listOf(101L, 102L, 104L, 105L)) } returns
+                mapOf(104L to 1)
 
             router.process(
                 TelegramUpdate(
@@ -1251,15 +7049,117 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "ℹ️ О заведении\nВыберите раздел.",
+                    "ℹ️ Информация о заведении\nВыберите раздел.",
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "О заведении" &&
                                     button.callbackData == "bot_catalog_venue_about_section:10:101"
                             } &&
-                            it.inlineKeyboard.flatten().none { button -> button.text == "Скрытый раздел" }
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "Интерьер" &&
+                                    button.callbackData == "bot_catalog_venue_about_section:10:104"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "📖 Фото-меню" &&
+                                    button.callbackData == "bot_catalog_venue_about_section:10:105"
+                            } &&
+                            it.inlineKeyboard.flatten().none { button -> button.text == "FAQ" } &&
+                            it.inlineKeyboard.flatten().none { button -> button.text == "Скрытый раздел" } &&
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.text == "Меню" &&
+                                    button.callbackData?.startsWith("bot_catalog_venue_about_section:") == true
+                            }
                     },
+                )
+            }
+        }
+
+    @Test
+    fun `venue info direct empty visible section callback is safe`() =
+        runBlocking {
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueInfoSectionsRepository.findSectionById(10L, 202L) } returns
+                VenueInfoSection(
+                    id = 202L,
+                    venueId = 10L,
+                    title = "FAQ",
+                    sectionType = "faq",
+                    sortOrder = 40,
+                    isVisible = true,
+                    textContent = null,
+                )
+            coEvery { venueInfoSectionMediaRepository.listBySectionId(202L) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_21,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-venue-empty-info-section",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_21, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_about_section:10:202",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "ℹ️ FAQ\n\nРаздел пока не заполнен.",
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `venue info direct hidden section callback is safe`() =
+        runBlocking {
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueInfoSectionsRepository.findSectionById(10L, 203L) } returns
+                VenueInfoSection(
+                    id = 203L,
+                    venueId = 10L,
+                    title = "Скрытый раздел",
+                    sectionType = "custom",
+                    sortOrder = 50,
+                    isVisible = false,
+                    textContent = "Секрет",
+                )
+            coEvery { venueInfoSectionsRepository.listSections(10L) } returns emptyList()
+            coEvery { venueInfoSectionMediaRepository.countBySectionIds(emptyList()) } returns emptyMap()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_22,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-venue-hidden-info-section",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_22, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_about_section:10:203",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел недоступен. Выберите другой раздел.",
+                    null,
                 )
             }
         }
@@ -1434,7 +7334,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(100, "✅ Название обновлено.", null)
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("🏢 Моё заведение") && it.contains("Название: Новая кальянная") },
+                    match { it.contains("🏢 Заведение") && it.contains("Название: Новая кальянная") },
                     match { it is InlineKeyboardMarkup },
                 )
             }
@@ -1525,10 +7425,219 @@ class TelegramBotRouterTableTokenTest {
 
             coVerifyOrder {
                 platformVenueRepository.updateVenueAddress(venueId = 10L, address = "Новый Арбат, 24")
+                venueSettingsRepository.updateTimezoneFromLocation(
+                    venueId = 10L,
+                    city = "Москва",
+                    address = "Новый Арбат, 24",
+                )
                 outboxEnqueuer.enqueueSendMessage(100, "✅ Адрес обновлён.", null)
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("🏢 Моё заведение") && it.contains("Адрес: Новый Арбат, 24") },
+                    match { it.contains("🏢 Заведение") && it.contains("Адрес: Новый Арбат, 24") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `owner venue city input updates venue and returns updated card`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_PROFILE_WAIT_CITY,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "owner_user_id" to "200",
+                        ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                platformVenueRepository.updateVenueCity(venueId = 10L, city = "Томск")
+            } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Томск",
+                    address = "Новый Арбат, 24",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-13T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Томск",
+                    address = "Новый Арбат, 24",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-13T10:00:00Z"),
+                    deletedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_008_1,
+                    message =
+                        Message(
+                            messageId = 20_008_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "Томск",
+                        ),
+                ),
+            )
+
+            coVerifyOrder {
+                platformVenueRepository.updateVenueCity(venueId = 10L, city = "Томск")
+                venueSettingsRepository.updateTimezoneFromLocation(
+                    venueId = 10L,
+                    city = "Томск",
+                    address = "Новый Арбат, 24",
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Город обновлён.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🏢 Заведение") && it.contains("Город: Томск") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `owner venue contact input updates venue and returns updated card`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_PROFILE_WAIT_CONTACT,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "owner_user_id" to "200",
+                        ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                platformVenueRepository.updateVenueGuestContact(venueId = 10L, guestContact = "+7 999 000-00-00")
+            } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Новый Арбат, 24",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-13T10:00:00Z"),
+                    deletedAt = null,
+                    guestContact = "+7 999 000-00-00",
+                )
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Новый Арбат, 24",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-13T10:00:00Z"),
+                    deletedAt = null,
+                    guestContact = "+7 999 000-00-00",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_008_2,
+                    message =
+                        Message(
+                            messageId = 20_008_2,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "+7 999 000-00-00",
+                        ),
+                ),
+            )
+
+            coVerifyOrder {
+                platformVenueRepository.updateVenueGuestContact(venueId = 10L, guestContact = "+7 999 000-00-00")
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Контакт для гостей обновлён.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Контакт: +7 999 000-00-00") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `owner venue card description input updates venue and stays separate from info sections`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_PROFILE_WAIT_CARD_DESCRIPTION,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "owner_user_id" to "200",
+                        ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                platformVenueRepository.updateVenueCardDescription(
+                    venueId = 10L,
+                    cardDescription = "Авторские чаши и спокойная посадка.",
+                )
+            } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Новый Арбат, 24",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-13T10:00:00Z"),
+                    deletedAt = null,
+                    cardDescription = "Авторские чаши и спокойная посадка.",
+                )
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Новый Арбат, 24",
+                    status = VenueStatus.DRAFT,
+                    createdAt = Instant.parse("2026-04-13T10:00:00Z"),
+                    deletedAt = null,
+                    cardDescription = "Авторские чаши и спокойная посадка.",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_008_3,
+                    message =
+                        Message(
+                            messageId = 20_008_3,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "Авторские чаши и спокойная посадка.",
+                        ),
+                ),
+            )
+
+            coVerifyOrder {
+                platformVenueRepository.updateVenueCardDescription(
+                    venueId = 10L,
+                    cardDescription = "Авторские чаши и спокойная посадка.",
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Краткое описание карточки обновлено.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Краткое описание карточки: Авторские чаши и спокойная посадка.") &&
+                            !it.contains("Раздел: О заведении")
+                    },
                     match { it is InlineKeyboardMarkup },
                 )
             }
@@ -1594,6 +7703,15 @@ class TelegramBotRouterTableTokenTest {
                         isVisible = true,
                         textContent = null,
                     ),
+                    VenueInfoSection(
+                        id = 103L,
+                        venueId = 10L,
+                        title = "Меню",
+                        sectionType = "menu",
+                        sortOrder = 50,
+                        isVisible = true,
+                        textContent = null,
+                    ),
                 )
 
             router.process(
@@ -1619,6 +7737,10 @@ class TelegramBotRouterTableTokenTest {
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text.contains("О заведении") &&
                                     button.callbackData == "owner_venue_description_section:10:101"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text.contains("📖 Фото-меню") &&
+                                    button.callbackData == "owner_venue_description_section:10:103"
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "➕ Добавить свой раздел" &&
@@ -1717,7 +7839,50 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `owner venue description media callback accepts photo and saves attachment`() =
+    fun `owner venue photo menu section uses informational menu copy`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueInfoSectionsRepository.findSectionById(10L, 105L) } returns
+                VenueInfoSection(
+                    id = 105L,
+                    venueId = 10L,
+                    title = "Меню",
+                    sectionType = "menu",
+                    sortOrder = 50,
+                    isVisible = true,
+                    textContent = "Фото страниц меню.",
+                )
+            coEvery { venueInfoSectionMediaRepository.listBySectionId(105L) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010_3_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-venue-photo-menu-section",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_010_3_1, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_description_section:10:105",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("📝 Раздел: 📖 Фото-меню") &&
+                            text.contains("Тип: 📖 Фото-меню") &&
+                            text.contains("Это информационный раздел карточки: картинки/PDF меню для просмотра.") &&
+                            text.contains("Он не управляет заказным меню.")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `owner venue description media upload keeps state for multiple files until done`() =
         runBlocking {
             val states = mutableMapOf<Long, DialogState>()
             coEvery { dialogStateRepository.get(any()) } answers {
@@ -1750,6 +7915,13 @@ class TelegramBotRouterTableTokenTest {
                     sectionId = 101L,
                     mediaType = "image",
                     telegramFileId = "photo-file-id",
+                )
+            } returns true
+            coEvery {
+                venueInfoSectionMediaRepository.addMediaAttachment(
+                    sectionId = 101L,
+                    mediaType = "image",
+                    telegramFileId = "second-photo-file-id",
                 )
             } returns true
             coEvery { venueInfoSectionMediaRepository.countBySectionId(101L) } returns 1
@@ -1786,24 +7958,81 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010_6,
+                    message =
+                        Message(
+                            messageId = 20_010_6,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            photo =
+                                listOf(
+                                    PhotoSize(
+                                        fileId = "second-photo-file-id",
+                                        width = 1080,
+                                        height = 1350,
+                                        fileSize = 150_000,
+                                    ),
+                                ),
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010_7,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-venue-description-media-done",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_010_7, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_description_media_done:10:101",
+                        ),
+                ),
+            )
 
             coVerifyOrder {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Отправьте изображение или PDF для раздела «О заведении».\nОтправьте «—», чтобы отменить.",
-                    null,
+                    "Отправьте изображение или PDF для раздела «О заведении».\nМожно отправить несколько файлов подряд, затем нажмите «Готово».",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Готово" && it.callbackData == "owner_venue_description_media_done:10:101" } &&
+                            buttons.any { it.text == "⬅️ Назад" && it.callbackData == "owner_venue_description_media_back:10:101" }
+                    },
                 )
                 venueInfoSectionMediaRepository.addMediaAttachment(
                     sectionId = 101L,
                     mediaType = "image",
                     telegramFileId = "photo-file-id",
                 )
-                outboxEnqueuer.enqueueSendMessage(100, "✅ Медиа добавлено.", null)
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("📝 Описание заведения") && it.contains("Выберите раздел для настройки.") },
+                    "✅ Медиа добавлено. Можно отправить ещё файл или нажать «Готово».",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Готово" && it.callbackData == "owner_venue_description_media_done:10:101" }
+                    },
+                )
+                venueInfoSectionMediaRepository.addMediaAttachment(
+                    sectionId = 101L,
+                    mediaType = "image",
+                    telegramFileId = "second-photo-file-id",
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Медиа добавлено. Можно отправить ещё файл или нажать «Готово».",
                     match { it is InlineKeyboardMarkup },
                 )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📝 Раздел: О заведении") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+            assertEquals(DialogStateType.NONE, states[100]?.state ?: DialogStateType.NONE)
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Используйте меню ниже.", any())
             }
         }
 
@@ -1984,6 +8213,72 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `owner venue hours close input allows equal times as twenty four hours`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_PROFILE_WAIT_HOURS_CLOSE,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "owner_user_id" to "200",
+                            "mode" to "weekday",
+                            "weekday" to "1",
+                            "opens_at" to "12:00",
+                        ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                venueBookingHoursRepository.upsertWeekdayHours(
+                    venueId = 10L,
+                    weekday = 1,
+                    opensAt = LocalTime.of(12, 0),
+                    closesAt = LocalTime.of(12, 0),
+                    isClosed = false,
+                )
+            } returns true
+            coEvery { venueBookingHoursRepository.listWeeklyHours(10L) } returns
+                listOf(
+                    VenueBookingHours(
+                        venueId = 10L,
+                        weekday = 1,
+                        opensAt = LocalTime.of(12, 0),
+                        closesAt = LocalTime.of(12, 0),
+                        isClosed = false,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010_24,
+                    message =
+                        Message(
+                            messageId = 20_010_24,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "12:00",
+                        ),
+                ),
+            )
+
+            coVerifyOrder {
+                venueBookingHoursRepository.upsertWeekdayHours(
+                    venueId = 10L,
+                    weekday = 1,
+                    opensAt = LocalTime.of(12, 0),
+                    closesAt = LocalTime.of(12, 0),
+                    isClosed = false,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Пн: часы обновлены.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🕒 Часы работы · Пн") && it.contains("Текущий статус: 24 часа") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
     fun `my command opens my orders and bookings section`() =
         runBlocking {
             router.process(
@@ -2003,7 +8298,3759 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     "У вас пока нет активных заказов и броней.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "📜 История посещений" && button.callbackData == "visit_history"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `visit history callback renders recent visits`() =
+        runBlocking {
+            coEvery {
+                visitRepository.listGuestVisitHistory(userId = 200, limit = 10, cursor = null)
+            } returns
+                listOf(
+                    GuestVisitHistoryItem(
+                        visitId = 44L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        venueCity = "Москва",
+                        occurredAt = Instant.parse("2026-05-12T18:00:00Z"),
+                        serviceDate = LocalDate.parse("2026-05-12"),
+                        source = VisitSource.ORDER_CLOSED,
+                        totalMinor = 240_000L,
+                        currency = "RUB",
+                        hasBooking = false,
+                        orderLabels = listOf("№4"),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_01,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-history",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_01, chat = Chat(id = 100, type = "private")),
+                            data = "visit_history",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📜 История посещений") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "12.05 · Mix · 2 400 ₽" && button.callbackData == "visit_open:44"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `table context history button renders recent visits`() =
+        runBlocking {
+            coEvery {
+                visitRepository.listGuestVisitHistory(userId = 200, limit = 10, cursor = null)
+            } returns
+                listOf(
+                    GuestVisitHistoryItem(
+                        visitId = 44L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        venueCity = "Москва",
+                        occurredAt = Instant.parse("2026-05-12T18:00:00Z"),
+                        serviceDate = LocalDate.parse("2026-05-12"),
+                        source = VisitSource.ORDER_CLOSED,
+                        totalMinor = 240_000L,
+                        currency = "RUB",
+                        hasBooking = false,
+                        orderLabels = listOf("№4"),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_10,
+                    message =
+                        Message(
+                            messageId = 20_002_10,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "📜 История",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📜 История посещений") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "12.05 · Mix · 2 400 ₽" && button.callbackData == "visit_open:44"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `empty table context history has back to table actions`() =
+        runBlocking {
+            coEvery { visitRepository.listGuestVisitHistory(userId = 200, limit = 10, cursor = null) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_11,
+                    message =
+                        Message(
+                            messageId = 20_002_11,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "📜 История",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "📜 История посещений\n\nУ вас пока нет прошлых посещений.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().single().callbackData == "table_actions_back"
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `favorite items entry without table context is blocked`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_12,
+                    message =
+                        Message(
+                            messageId = 20_002_12,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "⭐ Любимое",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Любимые позиции доступны за столом. Отсканируйте QR-код.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `favorite items entry shows current venue favorite items`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { guestFavoritesRepository.listFavoriteItemsForVenue(200L, 10L, any()) } returns
+                listOf(
+                    FavoriteMenuItem(
+                        itemId = 1000L,
+                        venueId = 10L,
+                        categoryId = 500L,
+                        name = "Кальян классический",
+                        priceMinor = 25000L,
+                        currency = "RUB",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_13,
+                    message =
+                        Message(
+                            messageId = 20_002_13,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "⭐ Любимое",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "⭐ Любимое\nВыберите позицию.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "Кальян классический — 250.00 ₽" &&
+                                    button.callbackData == "bot_menu_item:500:1000"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `visit detail callback renders booking orders and total`() =
+        runBlocking {
+            coEvery {
+                visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L)
+            } returns
+                GuestVisitDetail(
+                    visitId = 44L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    venueCity = "Москва",
+                    occurredAt = Instant.parse("2026-05-12T18:00:00Z"),
+                    serviceDate = LocalDate.parse("2026-05-12"),
+                    source = VisitSource.MERGED,
+                    booking =
+                        com.hookah.platform.backend.miniapp.guest.db.GuestVisitBooking(
+                            bookingId = 77L,
+                            displayNumber = 7,
+                            partySize = 2,
+                            status = "SEATED",
+                        ),
+                    orders =
+                        listOf(
+                            GuestVisitOrder(
+                                orderId = 88L,
+                                displayNumber = 8,
+                                displayDate = LocalDate.parse("2026-05-12"),
+                                items =
+                                    listOf(
+                                        GuestVisitOrderItem(
+                                            itemId = 101L,
+                                            itemName = "Кальян обычный",
+                                            qty = 1,
+                                            priceMinor = 110_000L,
+                                            currency = "RUB",
+                                            discountPercent = null,
+                                            totalMinor = 110_000L,
+                                        ),
+                                    ),
+                                totalMinor = 110_000L,
+                                currency = "RUB",
+                            ),
+                            GuestVisitOrder(
+                                orderId = 89L,
+                                displayNumber = 9,
+                                displayDate = LocalDate.parse("2026-05-12"),
+                                items =
+                                    listOf(
+                                        GuestVisitOrderItem(
+                                            itemId = 102L,
+                                            itemName = "Вода",
+                                            qty = 1,
+                                            priceMinor = 40_000L,
+                                            currency = "RUB",
+                                            discountPercent = null,
+                                            totalMinor = 40_000L,
+                                        ),
+                                    ),
+                                totalMinor = 40_000L,
+                                currency = "RUB",
+                            ),
+                        ),
+                    totalMinor = 150_000L,
+                    currency = "RUB",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_02,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-detail",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_02, chat = Chat(id = 100, type = "private")),
+                            data = "visit_open:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("📜 Ваш визит в Mix") &&
+                            text.contains("Москва · 12 мая 2026") &&
+                            text.contains("Вы были по брони №7 на 2 гостей.") &&
+                            text.contains("Основной заказ:") &&
+                            text.contains("• Кальян обычный ×1 — 1 100 ₽") &&
+                            text.contains("Дозаказ:") &&
+                            text.contains("• Вода ×1 — 400 ₽") &&
+                            text.contains("Итого за визит: 1 500 ₽") &&
+                            !text.contains("Тип:") &&
+                            !text.contains("Статус: Гость пришёл") &&
+                            !text.contains("Итого по заказу") &&
+                            !text.contains(".00 ₽") &&
+                            !text.contains("table_session_id") &&
+                            !text.contains("order_id")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ К истории посещений" && button.callbackData == "visit_history_back"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `visit detail shows promotion breakdown by names`() =
+        runBlocking {
+            coEvery {
+                visitRepository.getGuestVisitDetail(userId = 200, visitId = 45L)
+            } returns
+                GuestVisitDetail(
+                    visitId = 45L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    venueCity = "Москва",
+                    occurredAt = Instant.parse("2026-05-12T18:00:00Z"),
+                    serviceDate = LocalDate.parse("2026-05-12"),
+                    source = VisitSource.ORDER_CLOSED,
+                    booking = null,
+                    orders =
+                        listOf(
+                            GuestVisitOrder(
+                                orderId = 88L,
+                                displayNumber = 8,
+                                displayDate = LocalDate.parse("2026-05-12"),
+                                items =
+                                    listOf(
+                                        GuestVisitOrderItem(
+                                            itemId = 101L,
+                                            itemName = "Кальян",
+                                            qty = 1,
+                                            priceMinor = 200_000L,
+                                            currency = "RUB",
+                                            discountPercent = null,
+                                            promoDiscountMinor = 20_000L,
+                                            totalMinor = 180_000L,
+                                        ),
+                                        GuestVisitOrderItem(
+                                            itemId = 102L,
+                                            itemName = "Сок",
+                                            qty = 1,
+                                            priceMinor = 50_000L,
+                                            currency = "RUB",
+                                            discountPercent = null,
+                                            promoDiscountMinor = 50_000L,
+                                            isPromotionReward = true,
+                                            totalMinor = 0L,
+                                        ),
+                                    ),
+                                totalMinor = 180_000L,
+                                currency = "RUB",
+                                promotionDiscounts =
+                                    listOf(
+                                        GuestVisitPromotionDiscount(
+                                            label = "Счастливые часы",
+                                            discountMinor = 20_000L,
+                                            currency = "RUB",
+                                            ruleType = "HAPPY_HOURS_PERCENT",
+                                        ),
+                                        GuestVisitPromotionDiscount(
+                                            label = "Сок в подарок",
+                                            discountMinor = 50_000L,
+                                            currency = "RUB",
+                                            ruleType = "GIFT_WITH_ITEM",
+                                        ),
+                                    ),
+                            ),
+                        ),
+                    totalMinor = 180_000L,
+                    currency = "RUB",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_03,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-detail-promo-breakdown",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_03, chat = Chat(id = 100, type = "private")),
+                            data = "visit_open:45",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("🎁 Акции:\n• Счастливые часы: −200 ₽\n• Сок в подарок: −500 ₽") &&
+                            text.contains("Итого за визит: 1 800 ₽")
+                    },
                     any(),
+                )
+            }
+        }
+
+    @Test
+    fun `visit detail shows repeat order when active table context is same venue`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
+                repeatableVisitDetail(includeUnavailable = true)
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 101L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_04,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-detail-repeat",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_04, chat = Chat(id = 100, type = "private")),
+                            data = "visit_open:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📜 Ваш визит в Mix") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🔁 Повторить заказ" && button.callbackData == "visit_repeat_ask:44"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `repeat order without table context is blocked`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
+                repeatableVisitDetail(includeUnavailable = true)
+            coEvery { chatContextRepository.get(100) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_05,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-repeat-no-context",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_05, chat = Chat(id = 100, type = "private")),
+                            data = "visit_repeat_ask:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Повторить заказ можно только когда вы находитесь за столом. Отсканируйте QR-код на столе.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `repeat order from another venue is blocked`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
+                repeatableVisitDetail(includeUnavailable = true)
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 99L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_06,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-repeat-other-venue",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_06, chat = Chat(id = 100, type = "private")),
+                            data = "visit_repeat_ask:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Этот заказ был в другом заведении. Повторить его можно только за столом этого заведения.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `repeat ask shows available items and unavailable exclusions`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
+                repeatableVisitDetail(includeUnavailable = true)
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 101L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_07,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-repeat-ask",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_07, chat = Chat(id = 100, type = "private")),
+                            data = "visit_repeat_ask:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Повторить заказ?") &&
+                            text.contains("• Кальян обычный ×1 — 1 100 ₽") &&
+                            text.contains("Цены актуальные на сейчас.") &&
+                            text.contains("Не сможем повторить:") &&
+                            text.contains("• Вода ×1 — сейчас недоступно")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Добавить в корзину" &&
+                                    button.callbackData == "visit_repeat_confirm:44"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `repeat confirm adds items to cart and opens cart`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
+                repeatableVisitDetail(includeUnavailable = true)
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 101L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_08,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-repeat-confirm",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_08, chat = Chat(id = 100, type = "private")),
+                            data = "visit_repeat_confirm:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("✅ Добавили в корзину.") &&
+                            it.contains("Проверьте состав и оформите заказ.") &&
+                            it.contains("Не сможем повторить:") &&
+                            it.contains("• Вода ×1 — сейчас недоступно")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🧺 Корзина") && it.contains("Итого: 1100.00 ₽") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `another user cannot repeat visit`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 201, visitId = 44L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_09,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-repeat-denied",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_002_09, chat = Chat(id = 100, type = "private")),
+                            data = "visit_repeat_confirm:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Визит не найден.", null)
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `visit detail callback denies another users visit`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 99L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_03,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-visit-denied",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_03, chat = Chat(id = 100, type = "private")),
+                            data = "visit_open:99",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Визит не найден.", null)
+            }
+        }
+
+    @Test
+    fun `high feedback rating saves rating without staff notification`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any()) } returns
+                VisitFeedbackRecord(
+                    id = 91L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 5,
+                    comment = null,
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_14,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-rating",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_14, chat = Chat(id = 100, type = "private")),
+                            data = "fb_r:44:5",
+                        ),
+                ),
+            )
+
+            coVerify {
+                visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_14,
+                    "Спасибо за оценку!",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-feedback-rating", "Спасибо за оценку", false)
+            }
+        }
+
+    @Test
+    fun `rating five with configured public review link shows one time CTA`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any()) } returns
+                VisitFeedbackRecord(
+                    id = 91L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 5,
+                    comment = null,
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+            coEvery { venueSettingsRepository.getPublicReviewUrl(10L) } returns "https://yandex.ru/maps/org/mix/reviews"
+            coEvery { venueSettingsRepository.hasPublicReviewCtaBeenShown(200L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_141,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-rating-review",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_141, chat = Chat(id = 100, type = "private")),
+                            data = "fb_r:44:5",
+                        ),
+                ),
+            )
+
+            coVerify { venueSettingsRepository.markPublicReviewCtaShown(200L, 10L, any()) }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_141,
+                    match {
+                        it.contains("Спасибо за оценку!") &&
+                            it.contains("Если хотите, оставьте публичный отзыв")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "⭐ Оставить отзыв" &&
+                                    button.url == "https://yandex.ru/maps/org/mix/reviews"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Уже оставил отзыв" &&
+                                    button.callbackData == "pubrev_done:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `rating five does not show public review CTA twice for same venue`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any()) } returns
+                VisitFeedbackRecord(
+                    id = 91L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 5,
+                    comment = null,
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+            coEvery { venueSettingsRepository.getPublicReviewUrl(10L) } returns "https://yandex.ru/maps/org/mix/reviews"
+            coEvery { venueSettingsRepository.hasPublicReviewCtaBeenShown(200L, 10L) } returns true
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_142,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-rating-review-again",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_142, chat = Chat(id = 100, type = "private")),
+                            data = "fb_r:44:5",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueSettingsRepository.markPublicReviewCtaShown(200L, 10L, any()) }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_142,
+                    "Спасибо за оценку!",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `rating four never shows public review CTA`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 4, now = any()) } returns
+                VisitFeedbackRecord(
+                    id = 91L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 4,
+                    comment = null,
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+            coEvery { venueSettingsRepository.getPublicReviewUrl(10L) } returns "https://yandex.ru/maps/org/mix/reviews"
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_143,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-rating-four-review",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_143, chat = Chat(id = 100, type = "private")),
+                            data = "fb_r:44:4",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueSettingsRepository.hasPublicReviewCtaBeenShown(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_143,
+                    "Спасибо за оценку!",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `public review done callback marks CTA as done`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_144,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-public-review-done",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_144, chat = Chat(id = 100, type = "private")),
+                            data = "pubrev_done:10",
+                        ),
+                ),
+            )
+
+            coVerify { venueSettingsRepository.markPublicReviewCtaDone(200L, 10L, any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-public-review-done",
+                    "Спасибо! Больше не будем предлагать публичный отзыв по этому заведению.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `low feedback rating asks for comment without immediate staff alert`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 2, now = any()) } returns
+                VisitFeedbackRecord(
+                    id = 92L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 2,
+                    comment = null,
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_15,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-low-rating",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_15, chat = Chat(id = 100, type = "private")),
+                            data = "fb_r:44:2",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_15,
+                    match {
+                        it.contains("Спасибо за оценку") &&
+                            it.contains("Что пошло не так")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "💬 Оставить комментарий" && button.callbackData == "fb_c:44"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "Без комментария" && button.callbackData == "fb_skip:44"
+                            }
+                    },
+                )
+            }
+            coVerify(exactly = 0) { visitFeedbackRepository.markStaffNotified(any(), any()) }
+        }
+
+    @Test
+    fun `feedback comment callback opens dialog for own visit`() =
+        runBlocking {
+            coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
+                repeatableVisitDetail(includeUnavailable = false)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_16,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-comment",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_16, chat = Chat(id = 100, type = "private")),
+                            data = "fb_c:44",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    100L,
+                    match { state ->
+                        state.state == DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT &&
+                            state.payload["visit_id"] == "44" &&
+                            state.payload["guest_user_id"] == "200"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Напишите комментарий о визите") && it.contains("/cancel") },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-feedback-comment", "Введите комментарий", false)
+            }
+        }
+
+    @Test
+    fun `feedback comment dialog saves comment`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT,
+                    mapOf("visit_id" to "44", "guest_user_id" to "200"),
+                )
+            coEvery {
+                visitFeedbackRepository.saveComment(
+                    visitId = 44L,
+                    userId = 200L,
+                    comment = "Все понравилось",
+                    now = any(),
+                )
+            } returns
+                VisitFeedbackRecord(
+                    id = 93L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 5,
+                    comment = "Все понравилось",
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_17,
+                    message =
+                        Message(
+                            messageId = 20_002_17,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Все понравилось",
+                        ),
+                ),
+            )
+
+            coVerify {
+                visitFeedbackRepository.saveComment(
+                    visitId = 44L,
+                    userId = 200L,
+                    comment = "Все понравилось",
+                    now = any(),
+                )
+            }
+            coVerify { dialogStateRepository.clear(100L) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Спасибо за комментарий.", any()) }
+        }
+
+    @Test
+    fun `low feedback comment stays in management without staff chat alert`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT,
+                    mapOf("visit_id" to "44", "guest_user_id" to "200"),
+                )
+            coEvery {
+                visitFeedbackRepository.saveComment(
+                    visitId = 44L,
+                    userId = 200L,
+                    comment = "Долго ждали заказ",
+                    now = any(),
+                )
+            } returns
+                VisitFeedbackRecord(
+                    id = 95L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 2,
+                    comment = "Долго ждали заказ",
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_20,
+                    message =
+                        Message(
+                            messageId = 20_002_20,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Долго ждали заказ",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { visitFeedbackRepository.markStaffNotified(any(), any()) }
+            coVerify(exactly = 0) { visitFeedbackRepository.markCommentStaffNotified(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Спасибо за отзыв. Мы передали его менеджеру заведения.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `low feedback comment does not use legacy staff notification flags`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT,
+                    mapOf("visit_id" to "44", "guest_user_id" to "200"),
+                )
+            coEvery {
+                visitFeedbackRepository.saveComment(
+                    visitId = 44L,
+                    userId = 200L,
+                    comment = "Долго ждали заказ",
+                    now = any(),
+                )
+            } returns
+                VisitFeedbackRecord(
+                    id = 96L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 2,
+                    comment = "Долго ждали заказ",
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = Instant.parse("2030-05-10T10:00:00Z"),
+                    commentStaffNotifiedAt = Instant.parse("2030-05-10T10:01:00Z"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_21,
+                    message =
+                        Message(
+                            messageId = 20_002_21,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Долго ждали заказ",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { visitFeedbackRepository.markStaffNotified(any(), any()) }
+            coVerify(exactly = 0) { visitFeedbackRepository.markCommentStaffNotified(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Спасибо за отзыв. Мы передали его менеджеру заведения.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `comment before rating asks guest to rate without staff alert`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT,
+                    mapOf("visit_id" to "44", "guest_user_id" to "200"),
+                )
+            coEvery {
+                visitFeedbackRepository.saveComment(
+                    visitId = 44L,
+                    userId = 200L,
+                    comment = "Хорошая атмосфера",
+                    now = any(),
+                )
+            } returns
+                VisitFeedbackRecord(
+                    id = 97L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = null,
+                    comment = "Хорошая атмосфера",
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_22,
+                    message =
+                        Message(
+                            messageId = 20_002_22,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Хорошая атмосфера",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Спасибо за комментарий. Поставьте, пожалуйста, оценку от 1 до 5.",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().map { it.callbackData } ==
+                            listOf("fb_r:44:1", "fb_r:44:2", "fb_r:44:3", "fb_r:44:4", "fb_r:44:5")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `feedback skip callback saves skipped response`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.skipFeedback(visitId = 44L, userId = 200L, now = any()) } returns
+                VisitFeedbackRecord(
+                    id = 94L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = null,
+                    comment = null,
+                    status = VisitFeedbackStatus.SKIPPED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_18,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-skip",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_18, chat = Chat(id = 100, type = "private")),
+                            data = "fb_skip:44",
+                        ),
+                ),
+            )
+
+            coVerify { visitFeedbackRepository.skipFeedback(visitId = 44L, userId = 200L, now = any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-feedback-skip", "Спасибо за визит", false)
+            }
+        }
+
+    @Test
+    fun `low feedback without comment stays in management without staff chat alert`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.skipFeedback(visitId = 44L, userId = 200L, now = any()) } returns
+                VisitFeedbackRecord(
+                    id = 98L,
+                    visitId = 44L,
+                    venueId = 10L,
+                    userId = 200L,
+                    rating = 2,
+                    comment = null,
+                    status = VisitFeedbackStatus.SUBMITTED,
+                    staffNotifiedAt = null,
+                    commentStaffNotifiedAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_23,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-no-comment",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_002_23, chat = Chat(id = 100, type = "private")),
+                            data = "fb_skip:44",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { visitFeedbackRepository.markStaffNotified(any(), any()) }
+            coVerify(exactly = 0) { visitFeedbackRepository.markCommentStaffNotified(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_23,
+                    "Спасибо за отзыв. Мы передали его менеджеру заведения.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-feedback-no-comment", "Спасибо за отзыв", false)
+            }
+        }
+
+    @Test
+    fun `another user cannot rate someone elses visit`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.submitRating(visitId = 44L, userId = 201L, rating = 5, now = any()) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_19,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-denied",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_002_19, chat = Chat(id = 100, type = "private")),
+                            data = "fb_r:44:5",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(100, "cb-feedback-denied", "Визит не найден", true)
+            }
+        }
+
+    @Test
+    fun `owner can open venue feedback root filters`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_186,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-list-owner",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_186, chat = Chat(id = 501L, type = "private")),
+                            data = "venue_feedback_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { it.contains("⭐ Оценки и отзывы") && it.contains("Mix") && it.contains("Выберите фильтр или настройку") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { it.text == "🔴 Требуют ответа" && it.callbackData == "vf_l:a:needs:0" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "⚠️ Низкие оценки" && it.callbackData == "vf_l:a:low:0" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "✅ Все отзывы" && it.callbackData == "vf_l:a:all:0" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "⭐ Ссылка на отзывы" && it.callbackData == "vfr_url:10" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "↩️ Назад" && it.callbackData == "owner_venue_stats_root:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager can open paginated venue feedback list`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery {
+                visitFeedbackRepository.listVenueFeedback(10L, VisitFeedbackVenueFilter.NEEDS_REPLY, 6, 0)
+            } returns
+                (0 until 6).map { index ->
+                    venueFeedbackSummary(feedbackId = 92L + index, requiresAnswer = index % 2 == 0)
+                }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_187,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-list-manager",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_187, chat = Chat(id = 501L, type = "private")),
+                            data = "vf_l:a:needs:0",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match {
+                        it.contains("⭐ Оценки и отзывы") &&
+                            it.contains("🔴 Требуют ответа") &&
+                            it.contains("Страница 1")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().count { button -> button.callbackData?.startsWith("vf_o:a:") == true } == 5 &&
+                            markup.inlineKeyboard.flatten().any { button -> button.text == "▶️ Далее" && button.callbackData == "vf_l:a:needs:1" } &&
+                            markup.inlineKeyboard.flatten().any { button -> button.text == "↩️ К фильтрам" && button.callbackData == "venue_feedback_root:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot open venue feedback management`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_188,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-list-staff",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_188, chat = Chat(id = 501L, type = "private")),
+                            data = "venue_feedback_root:10",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { visitFeedbackRepository.listVenueFeedback(any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    "Отзывы гостей доступны менеджеру или владельцу.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `owner can open public review link settings`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueSettingsRepository.getPublicReviewUrl(10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_196,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-public-review-settings",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_196, chat = Chat(id = 501L, type = "private")),
+                            data = "vfr_url:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match {
+                        it.contains("⭐ Ссылка на отзывы") &&
+                            it.contains("Mix") &&
+                            it.contains("Ссылка на публичный отзыв не настроена")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "✏️ Добавить ссылку" && button.callbackData == "vfr_url_edit:10"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ К отзывам" && button.callbackData == "venue_feedback_root:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager can save public review link from dialog`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(501L) } returns
+                DialogState(
+                    DialogStateType.VENUE_FEEDBACK_WAIT_PUBLIC_REVIEW_URL,
+                    mapOf("venue_id" to "10", "actor_user_id" to "501"),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_197,
+                    message =
+                        Message(
+                            messageId = 20_002_197,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = " https://yandex.ru/maps/org/mix/reviews ",
+                        ),
+                ),
+            )
+
+            coVerify { venueSettingsRepository.updatePublicReviewUrl(10L, "https://yandex.ru/maps/org/mix/reviews") }
+            coVerify { dialogStateRepository.clear(501L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match {
+                        it.contains("Ссылка на отзывы сохранена") &&
+                            it.contains("Текущая ссылка:") &&
+                            it.contains("https://yandex.ru/maps/org/mix/reviews")
+                    },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `invalid public review link keeps dialog open with clear error`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(501L) } returns
+                DialogState(
+                    DialogStateType.VENUE_FEEDBACK_WAIT_PUBLIC_REVIEW_URL,
+                    mapOf("venue_id" to "10", "actor_user_id" to "501"),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueSettingsRepository.updatePublicReviewUrl(10L, "http://example.com") } throws
+                IllegalArgumentException("invalid")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_198,
+                    message =
+                        Message(
+                            messageId = 20_002_198,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "http://example.com",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { dialogStateRepository.clear(501L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    "Отправьте ссылку, которая начинается с https://",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `manager can clear public review link`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_199,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-public-review-clear",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_199, chat = Chat(id = 501L, type = "private")),
+                            data = "vfr_url_clear:10",
+                        ),
+                ),
+            )
+
+            coVerify { venueSettingsRepository.clearPublicReviewUrl(10L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match {
+                        it.contains("Ссылка на отзывы удалена") &&
+                            it.contains("Ссылка на публичный отзыв не настроена")
+                    },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot manage public review link`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_200,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-public-review-staff",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_200, chat = Chat(id = 501L, type = "private")),
+                            data = "vfr_url:10",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueSettingsRepository.getPublicReviewUrl(any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    "Ссылка на отзывы доступна менеджеру или владельцу.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `venue feedback detail shows rating comment messages and reply action`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { visitFeedbackRepository.getVenueFeedbackDetail(10L, 92L) } returns venueFeedbackDetail()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_189,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-detail",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_189, chat = Chat(id = 501L, type = "private")),
+                            data = "vf_o:a:2k:needs:0",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match {
+                        it.contains("⭐ Отзыв гостя") &&
+                            it.contains("Гость: Максим") &&
+                            it.contains("Оценка: 2/5") &&
+                            it.contains("Статус: требует ответа") &&
+                            it.contains("Комментарий: Долго ждали заказ") &&
+                            it.contains("Переписка:") &&
+                            it.contains("Менеджер: Извините, уже разбираемся.") &&
+                            it.contains("Гость: Спасибо за ответ.")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "💬 Ответить гостю" && button.callbackData == "fb_reply:92"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ К отзывам" && button.callbackData == "vf_l:a:needs:0"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager feedback reply callback opens private dialog`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.findFeedbackThread(92L) } returns lowFeedbackThread()
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_191,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-reply",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_191, chat = Chat(id = -777, type = "supergroup")),
+                            data = "fb_reply:92",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    501L,
+                    match { state ->
+                        state.state == DialogStateType.STAFF_FEEDBACK_WAIT_REPLY &&
+                            state.payload["feedback_id"] == "92" &&
+                            state.payload["venue_id"] == "10" &&
+                            state.payload["actor_user_id"] == "501"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match {
+                        it.contains("Ответ гостю по отзыву") &&
+                            it.contains("Оценка: 2/5") &&
+                            it.contains("Комментарий: Долго ждали заказ")
+                    },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-feedback-reply",
+                    "Напишите ответ гостю в личном чате с ботом.",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `feedback reply callback rejects user without venue role`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.findFeedbackThread(92L) } returns lowFeedbackThread()
+            coEvery { venueAccessRepository.findVenueMembership(999L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_192,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-reply-denied",
+                            from = User(id = 999L),
+                            message = Message(messageId = 20_002_192, chat = Chat(id = -777, type = "supergroup")),
+                            data = "fb_reply:92",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { dialogStateRepository.set(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-feedback-reply-denied",
+                    "Ответить гостю может менеджер или владелец.",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot start feedback reply from staff chat`() =
+        runBlocking {
+            coEvery { visitFeedbackRepository.findFeedbackThread(92L) } returns lowFeedbackThread()
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_1921,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-feedback-reply-staff-denied",
+                            from = User(id = 501L),
+                            message = Message(messageId = 20_002_1921, chat = Chat(id = -777, type = "supergroup")),
+                            data = "fb_reply:92",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { dialogStateRepository.set(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-feedback-reply-staff-denied",
+                    "Ответить гостю может менеджер или владелец.",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `manager feedback private reply sends message to guest`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(501L) } returns
+                DialogState(
+                    DialogStateType.STAFF_FEEDBACK_WAIT_REPLY,
+                    mapOf("feedback_id" to "92", "venue_id" to "10", "actor_user_id" to "501"),
+                )
+            coEvery { visitFeedbackRepository.findFeedbackThread(92L) } returns lowFeedbackThread()
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                visitFeedbackRepository.saveFeedbackMessage(
+                    feedbackId = 92L,
+                    senderType = VisitFeedbackMessageSender.STAFF,
+                    senderUserId = 501L,
+                    messageText = "Извините, уже разбираемся.",
+                    now = any(),
+                )
+            } returns feedbackMessage(VisitFeedbackMessageSender.STAFF, 501L, "Извините, уже разбираемся.")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_193,
+                    message =
+                        Message(
+                            messageId = 20_002_193,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "Извините, уже разбираемся.",
+                        ),
+                ),
+            )
+
+            coVerify {
+                visitFeedbackRepository.saveFeedbackMessage(
+                    feedbackId = 92L,
+                    senderType = VisitFeedbackMessageSender.STAFF,
+                    senderUserId = 501L,
+                    messageText = "Извините, уже разбираемся.",
+                    now = any(),
+                )
+            }
+            coVerify {
+                dialogStateRepository.set(
+                    200L,
+                    match { state ->
+                        state.state == DialogStateType.GUEST_FEEDBACK_WAIT_REPLY &&
+                            state.payload["feedback_id"] == "92" &&
+                            state.payload["guest_user_id"] == "200"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match {
+                        it.contains("Сообщение от Mix по вашему отзыву") &&
+                            it.contains("Извините, уже разбираемся.") &&
+                            it.contains("Вы можете ответить на это сообщение здесь")
+                    },
+                    any(),
+                )
+            }
+            coVerify { dialogStateRepository.clear(501L) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(501L, "✅ Ответ отправлен гостю.", any()) }
+        }
+
+    @Test
+    fun `guest feedback reply is saved without staff chat notification`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(200L) } returns
+                DialogState(
+                    DialogStateType.GUEST_FEEDBACK_WAIT_REPLY,
+                    mapOf("feedback_id" to "92", "guest_user_id" to "200"),
+                )
+            coEvery { visitFeedbackRepository.findFeedbackThread(92L) } returns lowFeedbackThread()
+            coEvery {
+                visitFeedbackRepository.saveFeedbackMessage(
+                    feedbackId = 92L,
+                    senderType = VisitFeedbackMessageSender.GUEST,
+                    senderUserId = 200L,
+                    messageText = "Спасибо за ответ.",
+                    now = any(),
+                )
+            } returns feedbackMessage(VisitFeedbackMessageSender.GUEST, 200L, "Спасибо за ответ.")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(id = 10L, name = "Mix", staffChatId = -777L)
+            coEvery { userRepository.findGuestProfile(200L) } returns
+                GuestProfile(
+                    telegramUserId = 200L,
+                    guestDisplayName = "Максим",
+                    birthdayMonth = null,
+                    birthdayDay = null,
+                    birthdaySetAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_194,
+                    message =
+                        Message(
+                            messageId = 20_002_194,
+                            chat = Chat(id = 200L, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "Спасибо за ответ.",
+                        ),
+                ),
+            )
+
+            coVerify {
+                visitFeedbackRepository.saveFeedbackMessage(
+                    feedbackId = 92L,
+                    senderType = VisitFeedbackMessageSender.GUEST,
+                    senderUserId = 200L,
+                    messageText = "Спасибо за ответ.",
+                    now = any(),
+                )
+            }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(-777L, any(), any()) }
+            coVerify { dialogStateRepository.clear(200L) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(200L, "✅ Ответ отправлен заведению.", any()) }
+        }
+
+    @Test
+    fun `guest cannot answer another users feedback thread`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(200L) } returns
+                DialogState(
+                    DialogStateType.GUEST_FEEDBACK_WAIT_REPLY,
+                    mapOf("feedback_id" to "92", "guest_user_id" to "200"),
+                )
+            coEvery { visitFeedbackRepository.findFeedbackThread(92L) } returns lowFeedbackThread(guestUserId = 201L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_195,
+                    message =
+                        Message(
+                            messageId = 20_002_195,
+                            chat = Chat(id = 200L, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "Это не мой отзыв.",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { visitFeedbackRepository.saveFeedbackMessage(any(), any(), any(), any(), any()) }
+            coVerify { dialogStateRepository.clear(200L) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(200L, "Отзыв не найден или недоступен.", any()) }
+        }
+
+    @Test
+    fun `booking time picker renders half hour slots four per row`() =
+        runBlocking {
+            val bookingDate = LocalDate.now(ZoneId.systemDefault()).plusDays(1)
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(17, 0),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-date",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_1, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_date:10:$bookingDate",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Выберите время бронирования.") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.first().map { it.text } ==
+                            listOf("14:00", "14:30", "15:00", "15:30") &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "bot_catalog_venue_book_time:10:$bookingDate:14:30"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `booking time picker keeps after midnight slots under selected service date`() =
+        runBlocking {
+            val bookingDate = LocalDate.now(ZoneId.systemDefault()).plusDays(1)
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(4, 0),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-date-overnight",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_2, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_date:10:$bookingDate",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Смена: ${bookingDate.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))}") &&
+                            it.contains("Ночные слоты после полуночи относятся к выбранной смене.")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "02:00" &&
+                                    button.callbackData == "bot_catalog_venue_book_time:10:$bookingDate:02:00"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `booking confirm maps overnight slot to next actual date and keeps service date`() =
+        runBlocking {
+            val bookingDate = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(1)
+            val venueZone = ZoneId.of("Europe/Moscow")
+            val expectedScheduledAt =
+                LocalDateTime
+                    .of(bookingDate.plusDays(1), LocalTime.of(2, 0))
+                    .atZone(venueZone)
+                    .toInstant()
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(4, 0),
+                )
+            coEvery {
+                guestBookingRepository.create(
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = expectedScheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = venueZone,
+                    serviceDate = bookingDate,
+                )
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = expectedScheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 1,
+                    displayDate = bookingDate,
+                    arrivalDeadlineAt = expectedScheduledAt.plus(Duration.ofMinutes(30)),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_21,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-skip-comment-overnight",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_21, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_comment_skip:10:$bookingDate:02_00:2",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_22,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-confirm-overnight",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_22, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_confirm",
+                        ),
+                ),
+            )
+
+            coVerify {
+                guestBookingRepository.create(
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = expectedScheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = venueZone,
+                    serviceDate = bookingDate,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Ждём вас") &&
+                            it.contains("ночью, в 02:00.") &&
+                            !it.contains("Дата смены") &&
+                            !it.contains("Дата и время визита") &&
+                            !it.contains("в ночь с")
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `booking confirm ordinary slot uses human guest visit text`() =
+        runBlocking {
+            val bookingDate = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(1)
+            val venueZone = ZoneId.of("Europe/Moscow")
+            val expectedScheduledAt =
+                LocalDateTime
+                    .of(bookingDate, LocalTime.of(20, 0))
+                    .atZone(venueZone)
+                    .toInstant()
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(23, 0),
+                )
+            coEvery {
+                guestBookingRepository.create(
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = expectedScheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = venueZone,
+                    serviceDate = bookingDate,
+                )
+            } returns
+                BookingRecord(
+                    id = 78L,
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = expectedScheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 2,
+                    displayDate = bookingDate,
+                    arrivalDeadlineAt = expectedScheduledAt.plus(Duration.ofMinutes(30)),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_23,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-skip-comment-ordinary",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_23, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_comment_skip:10:$bookingDate:20_00:2",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_24,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-confirm-ordinary",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_24, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_confirm",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Ждём вас") &&
+                            it.contains(", в 20:00.") &&
+                            !it.contains("ночью") &&
+                            !it.contains("Дата смены") &&
+                            !it.contains("Дата и время визита")
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `booking comment step can navigate back to guest count`() =
+        runBlocking {
+            val bookingDate = LocalDate.now(ZoneId.systemDefault()).plusDays(1)
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(17, 0),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_11,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-guests",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_11, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_guests:10:$bookingDate:14_30:3",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_12,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-comment-prompt",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_12, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_comment_prompt:10:$bookingDate:14_30:3",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Если есть пожелания") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад" &&
+                                    button.callbackData == "bot_catalog_venue_book_time:10:$bookingDate:14:30"
+                            }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Напишите пожелания одним сообщением.",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().callbackData ==
+                            "bot_catalog_venue_book_time:10:$bookingDate:14:30"
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `venue bookings screen renders pending booking actions`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER"))
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.listActiveByVenue(venueId = 10L, limit = 20) } returns
+                listOf(
+                    BookingRecord(
+                        id = 77L,
+                        venueId = 10L,
+                        userId = 555L,
+                        scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                        partySize = 3,
+                        comment = "У окна",
+                        status = BookingStatus.PENDING,
+                        displayNumber = 7,
+                        displayDate = LocalDate.parse("2026-04-03"),
+                        arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
+                        guestDisplayName = "Максим",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_2,
+                    message =
+                        Message(
+                            messageId = 20_002_2,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📄 Брони",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "📄 Брони", any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Бронь №7") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("Смена: пятница") &&
+                            text.contains("Визит: пятница") &&
+                            text.contains("Держим до:") &&
+                            text.contains("Комментарий: У окна") &&
+                            !text.contains("#77")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Подтвердить" &&
+                                    button.callbackData == "staff_booking_confirm:10:77"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Гость пришёл" &&
+                                    button.callbackData == "staff_booking_seated_ask:10:77"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "🚫 Не пришёл" &&
+                                    button.callbackData == "staff_booking_noshow_ask:10:77"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "✉️ Написать гостю" &&
+                                    button.callbackData == "staff_booking_message:10:77"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "❌ Отменить бронь" &&
+                                    button.callbackData == "staff_booking_cancel_ask:10:77"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff bookings screen renders only arrival actions`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF"))
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { guestBookingRepository.listActiveByVenue(venueId = 10L, limit = 20) } returns
+                listOf(
+                    BookingRecord(
+                        id = 77L,
+                        venueId = 10L,
+                        userId = 555L,
+                        scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                        partySize = 3,
+                        comment = "У окна",
+                        status = BookingStatus.PENDING,
+                        displayNumber = 7,
+                        displayDate = LocalDate.parse("2026-04-03"),
+                        arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
+                        guestDisplayName = "Максим",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_201,
+                    message =
+                        Message(
+                            messageId = 20_002_201,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📄 Брони",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Бронь №7") && it.contains("Гость: Максим") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.map { it.text } == listOf("✅ Гость пришёл", "🚫 Не пришёл") &&
+                            buttons.none { button ->
+                                button.callbackData?.startsWith("staff_booking_confirm:") == true ||
+                                    button.callbackData?.startsWith("staff_booking_cancel_ask:") == true ||
+                                    button.callbackData?.startsWith("staff_booking_message:") == true
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager can open booking hold settings`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.getHoldMinutes(10L) } returns 30
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_21,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-hold-open",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_21, chat = Chat(id = 100, type = "private")),
+                            data = "venue_booking_hold_settings:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("⏱ Сколько держим бронь") &&
+                            text.contains("Сейчас бронь держится: 30 минут") &&
+                            text.contains("После подтверждения гость увидит")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().map { it.text } ==
+                            listOf("60 минут", "✏️ Ввести своё число", "↩️ Назад")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager can update booking hold minutes`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.updateHoldMinutes(10L, 60) } returns 60
+            coEvery { guestBookingRepository.getHoldMinutes(10L) } returns 60
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_22,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-hold-set",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_22, chat = Chat(id = 100, type = "private")),
+                            data = "venue_booking_hold_set:10:60",
+                        ),
+                ),
+            )
+
+            coVerify { guestBookingRepository.updateHoldMinutes(10L, 60) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-booking-hold-set",
+                    "Настройка сохранена",
+                    false,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Сейчас бронь держится: 60 минут") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `manager can start custom booking hold minutes dialog and save valid value`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(100) } answers { states[100] ?: DialogState(DialogStateType.NONE) }
+            coEvery { dialogStateRepository.set(100, any()) } answers {
+                states[100] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(100) } answers {
+                states.remove(100)
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.getHoldMinutes(10L) } returns 30 andThen 45
+            coEvery { guestBookingRepository.updateHoldMinutes(10L, 45) } returns 45
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_24,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-hold-custom",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_24, chat = Chat(id = 100, type = "private")),
+                            data = "venue_booking_hold_custom:10",
+                        ),
+                ),
+            )
+
+            assertEquals(DialogStateType.VENUE_BOOKING_HOLD_WAIT_CUSTOM_MINUTES, states[100]?.state)
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Введите, сколько минут держать бронь") && it.contains("от 10 до 240") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.map { it.text } == listOf("⬅️ Назад", "✖️ Отмена") &&
+                            buttons.none { it.text.contains("минут") || it.text.contains("Ввести") }
+                    },
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_25,
+                    message =
+                        Message(
+                            messageId = 20_002_25,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "45",
+                        ),
+                ),
+            )
+
+            coVerify { guestBookingRepository.updateHoldMinutes(10L, 45) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Настройка сохранена: 45 минут.",
+                    null,
+                )
+            }
+            assertEquals(null, states[100])
+        }
+
+    @Test
+    fun `invalid custom booking hold minutes keep dialog open`() =
+        runBlocking {
+            val state =
+                DialogState(
+                    DialogStateType.VENUE_BOOKING_HOLD_WAIT_CUSTOM_MINUTES,
+                    mapOf("venue_id" to "10", "actor_user_id" to "200"),
+                )
+            coEvery { dialogStateRepository.get(100) } returns state
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_26,
+                    message =
+                        Message(
+                            messageId = 20_002_26,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "241",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { guestBookingRepository.updateHoldMinutes(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите число от 10 до 240 минут.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.map { it.text } == listOf("⬅️ Назад", "✖️ Отмена")
+                    },
+                )
+            }
+            coVerify(exactly = 0) { dialogStateRepository.clear(100) }
+        }
+
+    @Test
+    fun `staff cannot update booking hold minutes`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_23,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-hold-set-denied",
+                            from = User(id = 201L),
+                            message = Message(messageId = 20_002_23, chat = Chat(id = 100, type = "private")),
+                            data = "venue_booking_hold_set:10:30",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { guestBookingRepository.updateHoldMinutes(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-booking-hold-set-denied",
+                    "Нет доступа",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking confirm callback confirms booking and notifies guest`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                guestBookingRepository.updateByVenue(
+                    bookingId = 77L,
+                    venueId = 10L,
+                    nextStatus = BookingStatus.CONFIRMED,
+                )
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-confirm",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_3, chat = Chat(id = 100, type = "private")),
+                            data = "staff_booking_confirm:10:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    555L,
+                    match { text ->
+                        text.contains("✅ Бронь №7 подтверждена заведением.") &&
+                            text.contains("Ждём вас") &&
+                            text.contains("Мы держим бронь до") &&
+                            text.contains("Если задерживаетесь")
+                    },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_3,
+                    match {
+                        it.contains("Бронь №7") &&
+                            it.contains("Гость: Максим") &&
+                            it.contains("Держим до:") &&
+                            it.contains("Статус: Подтверждена")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().none { button -> button.text == "✅ Подтвердить" } &&
+                            markup.inlineKeyboard.flatten().any { button -> button.text == "✉️ Написать гостю" }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-booking-confirm",
+                    "Бронь подтверждена",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat booking confirm callback is denied for staff`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_31,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-confirm-staff-chat",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_31, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_confirm:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                guestBookingRepository.updateByVenue(
+                    bookingId = 77L,
+                    venueId = 10L,
+                    nextStatus = BookingStatus.CONFIRMED,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(555L, any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-confirm-staff-chat",
+                    "Нет доступа",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat booking confirm callback rejects user without venue role`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_32,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-confirm-denied",
+                            from = User(id = 201L),
+                            message = Message(messageId = 20_002_32, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_confirm:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                guestBookingRepository.updateByVenue(any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-confirm-denied",
+                    "Нет доступа",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking seated callback asks confirmation without mutating`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_33,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-seated-ask",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_33, chat = Chat(id = 100, type = "private")),
+                            data = "staff_booking_seated_ask:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { guestBookingRepository.markSeated(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_33,
+                    match {
+                        it.contains("Бронь №7") &&
+                            it.contains("Гость: Максим") &&
+                            it.contains("Держим до:") &&
+                            it.contains("Отметить, что гость пришёл?")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "✅ Да, отметить" &&
+                                    it.callbackData == "staff_booking_seated_yes:10:77"
+                            } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "↩️ Назад" }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-booking-seated-ask",
+                    "Подтвердите действие",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking seated confirm marks booking and updates message without guest notification`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                guestBookingRepository.markSeated(venueId = 10L, bookingId = 77L, actorUserId = 200L)
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.SEATED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    seatedAt = Instant.parse("2026-04-03T18:05:00Z"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_34,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-seated-yes",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_34, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_seated_yes:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(555L, any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777,
+                    20_002_34,
+                    match {
+                        it.contains("Бронь №7: гость пришёл") &&
+                            it.contains("Гость: Максим") &&
+                            it.contains("Статус: Гость пришёл")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-seated-yes",
+                    "Гость отмечен",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking no show confirm marks booking and updates message`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                guestBookingRepository.markNoShow(venueId = 10L, bookingId = 77L, actorUserId = 200L)
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.NO_SHOW,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    noShowAt = Instant.parse("2026-04-03T18:45:00Z"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_35,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-noshow-yes",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_35, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_noshow_yes:10:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777,
+                    20_002_35,
+                    match {
+                        it.contains("Бронь №7: гость не пришёл") &&
+                            it.contains("Статус: Гость не пришёл")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-noshow-yes",
+                    "Неявка отмечена",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking visit callback rejects user without venue role`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_36,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-seated-denied",
+                            from = User(id = 201L),
+                            message = Message(messageId = 20_002_36, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_seated_yes:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                guestBookingRepository.markSeated(any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-seated-denied",
+                    "Нет доступа",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking message callback opens personal dialog`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_39,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-message",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_39, chat = Chat(id = 100, type = "private")),
+                            data = "staff_booking_message:10:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    100L,
+                    match { state ->
+                        state.state == DialogStateType.VENUE_BOOKING_WAIT_GUEST_MESSAGE &&
+                            state.payload["venue_id"] == "10" &&
+                            state.payload["booking_id"] == "77"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    match { it.contains("Напишите сообщение гостю по Бронь №7") },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-booking-message",
+                    "Введите сообщение",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `staff booking message callback is denied for staff`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_391,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-message-staff",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_391, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_message:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                dialogStateRepository.set(any(), any())
+            }
+            coVerify(exactly = 0) {
+                guestBookingRepository.findByVenue(any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-message-staff",
+                    "Нет доступа",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking message dialog sends text to guest without contacts`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.VENUE_BOOKING_WAIT_GUEST_MESSAGE,
+                    mapOf("venue_id" to "10", "booking_id" to "77", "actor_user_id" to "200"),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueRepository.findVenueById(10L) } returns
+                VenueShort(id = 10L, name = "Mix", staffChatId = null)
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_4,
+                    message =
+                        Message(
+                            messageId = 20_002_4,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L, username = "manager"),
+                            text = "Подтвердите, пожалуйста, время на 18:00.",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    555L,
+                    match { text ->
+                        text.contains("Сообщение по вашей брони №7 в «Mix»") &&
+                            text.contains("Подтвердите, пожалуйста, время на 18:00.") &&
+                            !text.contains("@manager")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "↩️ Ответить" && it.callbackData == "guest_booking_reply:10:77"
+                            }
+                    },
+                )
+            }
+            coVerify { dialogStateRepository.clear(100) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "✅ Сообщение гостю отправлено.", any()) }
+        }
+
+    @Test
+    fun `guest booking reply callback opens reply dialog`() =
+        runBlocking {
+            coEvery {
+                guestBookingRepository.findActiveByGuest(
+                    bookingId = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                )
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_40,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-booking-reply",
+                            from = User(id = 555L),
+                            message = Message(messageId = 20_002_40, chat = Chat(id = 555, type = "private")),
+                            data = "guest_booking_reply:10:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    555L,
+                    match { state ->
+                        state.state == DialogStateType.GUEST_BOOKING_WAIT_REPLY &&
+                            state.payload["venue_id"] == "10" &&
+                            state.payload["booking_id"] == "77"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    555L,
+                    match { it.contains("Напишите ответ по Бронь №7") && it.contains("/cancel") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `booking reminder confirm callback marks guest confirmation and notifies staff chat`() =
+        runBlocking {
+            val booking =
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+            coEvery { guestBookingRepository.markGuestConfirmed(bookingId = 77L, userId = 555L, now = any()) } returns booking
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(id = 10L, name = "Mix", staffChatId = 900L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_42,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-br-ok",
+                            from = User(id = 555L),
+                            message = Message(messageId = 20_002_42, chat = Chat(id = 555, type = "private")),
+                            data = "br_ok:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    900L,
+                    match { it.contains("✅ Гость подтвердил, что придёт по Бронь №7.") },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(555L, "cb-br-ok", "Спасибо, ждём вас", false)
+            }
+        }
+
+    @Test
+    fun `booking reminder cancel callback uses guest cancel flow`() =
+        runBlocking {
+            val booking =
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+            coEvery { guestBookingRepository.findActiveByGuest(bookingId = 77L, userId = 555L) } returns booking
+            coEvery { guestBookingRepository.cancelByGuest(bookingId = 77L, venueId = 10L, userId = 555L) } returns
+                booking.copy(status = BookingStatus.CANCELED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_43,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-br-cancel-yes",
+                            from = User(id = 555L),
+                            message = Message(messageId = 20_002_43, chat = Chat(id = 555, type = "private")),
+                            data = "br_cancel_yes:77",
+                        ),
+                ),
+            )
+
+            coVerify { guestBookingRepository.cancelByGuest(bookingId = 77L, venueId = 10L, userId = 555L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    555L,
+                    "✅ Бронь №7 отменена.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `booking reminder message callback enters guest reply state`() =
+        runBlocking {
+            coEvery { guestBookingRepository.findActiveByGuest(bookingId = 77L, userId = 555L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_44,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-br-msg",
+                            from = User(id = 555L),
+                            message = Message(messageId = 20_002_44, chat = Chat(id = 555, type = "private")),
+                            data = "br_msg:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    555L,
+                    match { state ->
+                        state.state == DialogStateType.GUEST_BOOKING_WAIT_REPLY &&
+                            state.payload["venue_id"] == "10" &&
+                            state.payload["booking_id"] == "77"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    555L,
+                    match { it.contains("Напишите сообщение заведению по Бронь №7") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `guest booking reply sends text to staff chat`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(555L) } returns
+                DialogState(
+                    DialogStateType.GUEST_BOOKING_WAIT_REPLY,
+                    mapOf("venue_id" to "10", "booking_id" to "77", "guest_user_id" to "555"),
+                )
+            coEvery {
+                guestBookingRepository.findActiveByGuest(
+                    bookingId = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                )
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns
+                VenueShort(id = 10L, name = "Mix", staffChatId = -777L)
+            coEvery { userRepository.findGuestProfile(555L) } returns
+                GuestProfile(
+                    telegramUserId = 555L,
+                    guestDisplayName = "Максим",
+                    birthdayMonth = null,
+                    birthdayDay = null,
+                    birthdaySetAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_401,
+                    message =
+                        Message(
+                            messageId = 20_002_401,
+                            chat = Chat(id = 555, type = "private"),
+                            fromUser = User(id = 555L, username = "guest"),
+                            text = "Будем на 10 минут позже.",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    -777L,
+                    match { text ->
+                        text.contains("💬 Ответ гостя по Бронь №7") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("Смена: пятница") &&
+                            text.contains("Визит: пятница") &&
+                            text.contains("Будем на 10 минут позже.") &&
+                            !text.contains("@guest")
+                    },
+                    match { it is ReplyKeyboardRemove },
+                )
+            }
+            coVerify { dialogStateRepository.clear(555L) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(555L, "✅ Ответ отправлен заведению.", any()) }
+        }
+
+    @Test
+    fun `staff chat booking message callback opens personal dialog`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_41,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-message-staff-chat",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_41, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_message:10:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    200L,
+                    match { state ->
+                        state.state == DialogStateType.VENUE_BOOKING_WAIT_GUEST_MESSAGE &&
+                            state.payload["venue_id"] == "10" &&
+                            state.payload["booking_id"] == "77"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match { it.contains("Напишите сообщение гостю по Бронь №7") },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-message-staff-chat",
+                    "Откройте личный чат с ботом",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking cancel ask shows reason choices without canceling`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_42,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-cancel-ask",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_42, chat = Chat(id = 100, type = "private")),
+                            data = "staff_booking_cancel_ask:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                    guestBookingRepository.updateByVenue(bookingId = 77L, venueId = 10L, nextStatus = BookingStatus.CANCELED)
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_42,
+                    match { it.contains("Выберите причину отмены") && it.contains("Бронь №7") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { it.text == "Нет мест" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "Заведение закрыто" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "Ошибка в бронировании" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "Другое" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "↩️ Назад" }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-booking-cancel-ask",
+                    "Выберите причину",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `staff booking cancel callback is denied for staff`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_421,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-cancel-staff",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_421, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_cancel_ask:10:77",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                guestBookingRepository.findByVenue(any(), any())
+            }
+            coVerify(exactly = 0) {
+                guestBookingRepository.updateByVenue(any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-cancel-staff",
+                    "Нет доступа",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking cancel back restores booking actions`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_43,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-cancel-back",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_43, chat = Chat(id = 100, type = "private")),
+                            data = "staff_booking_cancel_back:10:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_43,
+                    match { it.contains("Бронь №7") && !it.contains("Отменить бронь?") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { it.text == "✅ Подтвердить" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "✉️ Написать гостю" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "❌ Отменить бронь" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking cancel reason confirm contains guest name`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_432,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-cancel-no-seats",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_432, chat = Chat(id = 100, type = "private")),
+                            data = "sbc_r:10:77:no_seats",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    20_002_432,
+                    match { text ->
+                        text.contains("Отменить Бронь №7?") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("Причина: Нет мест")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100,
+                    "cb-booking-cancel-no-seats",
+                    "Подтвердите отмену",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking cancel other reason asks for custom text in personal chat`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_431,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-cancel-other",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_431, chat = Chat(id = -777, type = "supergroup")),
+                            data = "sbc_r:10:77:other",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    200L,
+                    match { state ->
+                        state.state == DialogStateType.VENUE_BOOKING_CANCEL_WAIT_REASON &&
+                            state.payload["venue_id"] == "10" &&
+                            state.payload["booking_id"] == "77" &&
+                            state.payload["source_chat_id"] == "-777" &&
+                            state.payload["source_message_id"] == "20002431"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match { it.contains("Напишите причину отмены для Бронь №7") && it.contains("/cancel") },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-cancel-other",
+                    "Откройте личный чат с ботом",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking cancel confirm cancels booking and notifies guest for manager`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                guestBookingRepository.updateByVenue(
+                    bookingId = 77L,
+                    venueId = 10L,
+                    nextStatus = BookingStatus.CANCELED,
+                    cancelReasonText = "Нет мест",
+                    canceledByRole = "MANAGER",
+                    canceledByUserId = 200L,
+                )
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CANCELED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    cancelReasonText = "Нет мест",
+                    canceledByRole = "MANAGER",
+                    canceledByUserId = 200L,
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_44,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-cancel-yes",
+                            from = User(id = 200L, username = "waiter"),
+                            message = Message(messageId = 20_002_44, chat = Chat(id = -777, type = "supergroup")),
+                            data = "sbc_y:10:77:no_seats",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    555L,
+                    "❌ Бронь №7 отменена заведением.\nПричина: Нет мест",
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777,
+                    20_002_44,
+                    match {
+                        it.contains("Бронь №7") &&
+                            it.contains("Гость: Максим") &&
+                            it.contains("Статус: Отменена") &&
+                            it.contains("Отменил: @waiter") &&
+                            it.contains("Причина: Нет мест")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-cancel-yes",
+                    "Бронь отменена",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking cancel callback rejects user without venue role`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_45,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-cancel-denied",
+                            from = User(id = 201L),
+                            message = Message(messageId = 20_002_45, chat = Chat(id = -777, type = "supergroup")),
+                            data = "sbc_y:10:77:no_seats",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                guestBookingRepository.updateByVenue(bookingId = 77L, venueId = 10L, nextStatus = BookingStatus.CANCELED)
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-cancel-denied",
+                    "Нет доступа",
+                    true,
                 )
             }
         }
@@ -2022,6 +12069,9 @@ class TelegramBotRouterTableTokenTest {
                         scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
                         partySize = 3,
                         status = BookingStatus.PENDING,
+                        displayNumber = 7,
+                        displayDate = LocalDate.parse("2026-04-03"),
+                        guestDisplayName = "Максим",
                     ),
                 )
             coEvery {
@@ -2052,8 +12102,9 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match { text ->
-                        text.contains("Бронь #77") &&
+                        text.contains("Бронь №7") &&
                             text.contains("Кальянная: Тестовая кальянная") &&
+                            text.contains("Имя для персонала: Максим") &&
                             text.contains("Гостей: 3")
                     },
                     match {
@@ -2143,6 +12194,8 @@ class TelegramBotRouterTableTokenTest {
                         scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
                         partySize = 2,
                         status = BookingStatus.CONFIRMED,
+                        displayNumber = 8,
+                        displayDate = LocalDate.parse("2026-04-03"),
                     ),
                 )
             coEvery {
@@ -2181,7 +12234,7 @@ class TelegramBotRouterTableTokenTest {
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { text -> text.contains("Бронь #88") },
+                    match { text -> text.contains("Бронь №8") },
                     any(),
                 )
             }
@@ -2205,6 +12258,8 @@ class TelegramBotRouterTableTokenTest {
                     partySize = 3,
                     comment = "У окна",
                     status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
                 )
             coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
                 CatalogVenueShort(
@@ -2237,7 +12292,7 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     match { text ->
                         text.contains("Тестовая кальянная") &&
-                            text.contains("Выберите новую дату брони #77.")
+                            text.contains("Выберите новую дату для бронь №7.")
                     },
                     match { it is InlineKeyboardMarkup },
                 )
@@ -2262,6 +12317,8 @@ class TelegramBotRouterTableTokenTest {
                     partySize = 3,
                     comment = null,
                     status = BookingStatus.CANCELED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
                 )
 
             router.process(
@@ -2292,7 +12349,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "✅ Бронь #77 отменена.",
+                    "✅ Бронь №7 отменена.",
                     any(),
                 )
             }
@@ -2329,8 +12386,25 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `start menu promotions button opens placeholder entry`() =
+    fun `start menu promotions button opens grouped venue feed`() =
         runBlocking {
+            coEvery { chatContextRepository.get(100) } returns null
+            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), any()) } returns
+                listOf(
+                    testPromotionVenueFeedItem(
+                        venueId = 10L,
+                        venueName = "Mix",
+                        city = "Москва",
+                        address = "Тверская, 1",
+                        promotionsCount = 2,
+                        previewPromotions =
+                            listOf(
+                                testPromotionPreview(id = 501L, title = "Сет на компанию"),
+                                testPromotionPreview(id = 502L, title = "Счастливые часы"),
+                            ),
+                    ),
+                )
+
             router.process(
                 TelegramUpdate(
                     updateId = 10_004,
@@ -2347,9 +12421,5460 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Раздел «Акции» — следующий шаг.",
+                    match { text ->
+                        text.contains("🎁 Акции сегодня") &&
+                            text.contains("Здесь собраны заведения с активными акциями.") &&
+                            text.contains("Все кальянные — в каталоге.") &&
+                            text.contains("Актуальные акции") &&
+                            text.contains("1. Mix · Москва, Тверская, 1") &&
+                            text.contains("• Сет на компанию") &&
+                            text.contains("• Счастливые часы") &&
+                            !text.contains("Выберите акцию:")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "1 · Mix" && it.callbackData == "gp_v:10" } &&
+                            buttons.none { it.callbackData?.startsWith("gp_o:") == true }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `start menu promotions button opens global feed even with table context`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
+            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), any()) } returns
+                listOf(
+                    testPromotionVenueFeedItem(
+                        venueId = 11L,
+                        venueName = "Lounge X",
+                        city = "Москва",
+                        address = "Арбат, 10",
+                        promotionsCount = 1,
+                        previewPromotions = listOf(testPromotionPreview(id = 511L, title = "Афиша недели")),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_0_0,
+                    message =
+                        Message(
+                            messageId = 20_004_0_0,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🎁 Акции",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("🎁 Акции сегодня") &&
+                            text.contains("Все кальянные — в каталоге.") &&
+                            text.contains("1. Lounge X · Москва, Арбат, 10") &&
+                            !text.contains("Выберите акцию:")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "1 · Lounge X" && it.callbackData == "gp_v:11" }
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                venuePromotionRepository.listActivePromotionsForVenue(10L, 20, any())
+            }
+        }
+
+    @Test
+    fun `global promotions feed paginates venue groups`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns null
+            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), any()) } returns
+                (1L..6L).map { index ->
+                    testPromotionVenueFeedItem(
+                        venueId = 100L + index,
+                        venueName = "Venue $index",
+                        promotionsCount = 1,
+                        previewPromotions = listOf(testPromotionPreview(id = 500L + index, title = "Акция $index")),
+                    )
+                }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_0_1,
+                    message =
+                        Message(
+                            messageId = 20_004_0_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🎁 Акции",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("1. Venue 1") &&
+                            text.contains("5. Venue 5") &&
+                            !text.contains("6. Venue 6")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.count { it.callbackData?.startsWith("gp_v:") == true } == 5 &&
+                            buttons.any { it.text == "▶️ Далее" && it.callbackData == "gp_page:1" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `global promotions page callback opens requested venue feed page`() =
+        runBlocking {
+            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 5, any(), any(), any()) } returns
+                listOf(
+                    testPromotionVenueFeedItem(
+                        venueId = 206L,
+                        venueName = "Lounge 6",
+                        promotionsCount = 4,
+                        previewPromotions =
+                            listOf(
+                                testPromotionPreview(id = 606L, title = "Счастливые часы"),
+                                testPromotionPreview(id = 607L, title = "Афиша"),
+                                testPromotionPreview(id = 608L, title = "Сет"),
+                            ),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_0_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gp-page",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_0_2, chat = Chat(id = 100, type = "private")),
+                            data = "gp_page:1",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("6. Lounge 6") &&
+                            text.contains("• +1 акция")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "◀️ Назад" && it.callbackData == "gp_page:0" } &&
+                            buttons.none { it.text == "▶️ Далее" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `global promotions list shows promoted banner above normal promotions without duplicate`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns null
+            coEvery { promotionPlacementRepository.listActiveForGlobalPromotions(any(), 1) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 701L,
+                        promotionId = 501L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        promotionTitle = "Сет на компанию",
+                        surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+                        status = PromotionPlacementStatus.ACTIVE,
+                    ),
+                )
+            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), setOf(501L), any()) } returns
+                listOf(
+                    testPromotionVenueFeedItem(
+                        venueId = 10L,
+                        venueName = "Mix",
+                        promotionsCount = 1,
+                        previewPromotions = listOf(testPromotionPreview(id = 502L, title = "Счастливые часы")),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_3,
+                    message =
+                        Message(
+                            messageId = 20_004_3,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🎁 Акции",
+                        ),
+                ),
+            )
+
+            coVerifyOrder {
+                outboxEnqueuer.enqueueSendPhoto(
+                    100,
+                    "banner-photo-file-id",
+                    match { caption ->
+                        caption == "Mix\nТверская, 1" &&
+                            !caption.contains("Афиша") &&
+                            !caption.contains("Продвигаемое") &&
+                            !caption.contains("Сет на компанию") &&
+                            !caption.contains("Описание акции")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.singleOrNull()?.let { it.text == "Подробнее" && it.callbackData == "gp_o:501:g" } == true
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("🎁 Акции сегодня") &&
+                            text.contains("Все кальянные — в каталоге.") &&
+                            text.contains("• Счастливые часы") &&
+                            !text.contains("• Сет на компанию")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.none { it.callbackData == "gp_o:501:g" } &&
+                            buttons.any { it.text == "1 · Mix" && it.callbackData == "gp_v:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `global promotions feed shows venue top placements under recommended and excludes them from normal feed`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns null
+            coEvery { promotionVenuePlacementRepository.listActiveForGlobalFeed(any(), 5) } returns
+                listOf(
+                    testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix"),
+                )
+            coEvery { venuePromotionRepository.listPromotionVenueFeedItemsByVenueIds(listOf(10L), any(), any()) } returns
+                listOf(
+                    testPromotionVenueFeedItem(
+                        venueId = 10L,
+                        venueName = "Mix",
+                        promotionsCount = 2,
+                        previewPromotions =
+                            listOf(
+                                testPromotionPreview(id = 501L, title = "Счастливые часы"),
+                                testPromotionPreview(id = 502L, title = "Афиша"),
+                            ),
+                    ),
+                )
+            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), setOf(10L)) } returns
+                listOf(
+                    testPromotionVenueFeedItem(
+                        venueId = 11L,
+                        venueName = "Lounge X",
+                        promotionsCount = 1,
+                        previewPromotions = listOf(testPromotionPreview(id = 511L, title = "Сет")),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_3_1,
+                    message =
+                        Message(
+                            messageId = 20_004_3_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🎁 Акции",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Рекомендуем") &&
+                            text.contains("1. Mix") &&
+                            text.contains("Актуальные акции") &&
+                            text.contains("1. Lounge X") &&
+                            text.indexOf("Рекомендуем") < text.indexOf("Актуальные акции")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Рекомендуем · Mix" && it.callbackData == "gp_v:10" } &&
+                            buttons.any { it.text == "1 · Lounge X" && it.callbackData == "gp_v:11" }
+                    },
+                )
+            }
+            coVerify {
+                venuePromotionRepository.listPromotionVenuesForGuest(
+                    6,
+                    0,
+                    any(),
+                    any(),
+                    setOf(10L),
+                )
+            }
+        }
+
+    @Test
+    fun `start menu promotions button shows empty state`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns null
+            coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), any()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    message =
+                        Message(
+                            messageId = 20_004,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🎁 Акции",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text == "🎁 Акции сегодня\n\nСейчас нет активных акций." &&
+                            !text.contains("в этом заведении", ignoreCase = true)
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `venue promotions empty state uses venue-specific wording`() =
+        runBlocking {
+            coEvery { venuePromotionRepository.listActivePromotionsForVenue(10L, 20, any()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-venue-promotions-empty",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_1, chat = Chat(id = 100, type = "private")),
+                            data = "gp_v:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "🎁 Акции\n\nВ этом заведении сейчас нет активных акций.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `table context venue promotions empty state uses venue-specific wording with back button`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
+            coEvery { venuePromotionRepository.listActivePromotionsForVenue(10L, 20, any()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_2,
+                    message =
+                        Message(
+                            messageId = 20_004_2,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🎁 Акции заведения",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "🎁 Акции\n\nВ этом заведении сейчас нет активных акций.",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().callbackData == "table_actions_back"
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `venue promotions reply button without table context shows clear message`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_2_1,
+                    message =
+                        Message(
+                            messageId = 20_004_2_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🎁 Акции заведения",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Акции заведения доступны после выбора заведения или входа по QR.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `venue promotions list shows promoted banner above normal promotions without duplicate`() =
+        runBlocking {
+            coEvery { promotionPlacementRepository.listActiveForVenuePromotions(10L, any(), 1) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 702L,
+                        promotionId = 501L,
+                        venueId = 10L,
+                        promotionTitle = "Афиша выходных",
+                        surface = PromotionPlacementSurface.VENUE_PROMOTIONS_TOP,
+                        status = PromotionPlacementStatus.ACTIVE,
+                    ),
+                )
+            coEvery { venuePromotionRepository.listActivePromotionsForVenue(10L, 20, any()) } returns
+                listOf(
+                    testPromotion(id = 501L, venueId = 10L, venueName = "Mix", title = "Афиша выходных"),
+                    testPromotion(id = 502L, venueId = 10L, venueName = "Mix", title = "Счастливые часы"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_4,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-venue-promotions-promoted",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_4, chat = Chat(id = 100, type = "private")),
+                            data = "gp_v:10",
+                        ),
+                ),
+            )
+
+            coVerifyOrder {
+                outboxEnqueuer.enqueueSendPhoto(
+                    100,
+                    "banner-photo-file-id",
+                    match { caption ->
+                        caption == "Mix\nТверская, 1" &&
+                            !caption.contains("Афиша") &&
+                            !caption.contains("Продвигаемое") &&
+                            !caption.contains("Афиша выходных") &&
+                            !caption.contains("Описание акции")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.singleOrNull()?.let { it.text == "Подробнее" && it.callbackData == "gp_o:501:v" } == true
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Mix") &&
+                            text.contains("Выберите акцию:") &&
+                            !text.contains("Все кальянные — в каталоге.")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.none { it.callbackData == "gp_o:501:v" } &&
+                            buttons.any { it.text == "Счастливые часы" && it.callbackData == "gp_o:502:v" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `venue card shows promotions entry when venue has active promotions`() =
+        runBlocking {
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Mix",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venuePromotionRepository.listActivePromotionsForVenue(10L, 10, any()) } returns
+                listOf(testPromotion(id = 502L, venueId = 10L, venueName = "Mix", title = "Чай к кальяну"))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-card",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 20_004,
+                                    chat = Chat(id = 100, type = "private"),
+                                    fromUser = User(id = 200),
+                                ),
+                            data = "bot_catalog_venue:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text -> text.contains("🎁 Акции: 1") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "🎁 Акции заведения" && it.callbackData == "gp_v:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can open venue marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-owner",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10, chat = Chat(id = 100, type = "private")),
+                            data = "venue_marketing_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("📣 Продвижение") &&
+                            it.contains("Mix") &&
+                            it.contains("инструменты для привлечения гостей")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎁 Акции" && it.callbackData == "vm_promos:10" } &&
+                            buttons.any { it.text == "🎁 Лояльность" && it.callbackData == "vm_loyalty:10" } &&
+                            buttons.any { it.text == "🖼 Баннеры / Афиши" && it.callbackData == "vm_banners:10" } &&
+                            buttons.any { it.text == "📌 Размещения" && it.callbackData == "vm_placements:10" } &&
+                            buttons.any { it.text == "🏆 Поднять в Акциях" && it.callbackData == "vm_top_req:10" } &&
+                            buttons.any { it.text == "⭐ Оценки и отзывы" && it.callbackData == "vm_feedback:10" } &&
+                            buttons.any { it.text == "🔗 Ссылка на отзывы" && it.callbackData == "vm_review_url:10" } &&
+                            buttons.any { it.text == "🤖 Помощник по продвижению" && it.callbackData == "vm_ai:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can open general ai assistant root from venue hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_0,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-venue-ai-root",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_0, chat = Chat(id = 100, type = "private")),
+                            data = "venue_ai:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🤖 Помощник") &&
+                            it.contains("Mix") &&
+                            it.contains("настройки заведения") &&
+                            it.contains("не меняет настройки без подтверждения")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "🔍 Почему акция не применяется?" &&
+                                it.callbackData == "venue_ai_diag:10"
+                        } &&
+                            buttons.any {
+                                it.text == "📣 Сводка по продвижению" &&
+                                    it.callbackData == "venue_ai_sum:promotion:10"
+                            } &&
+                            buttons.any {
+                                it.text == "⭐ Сводка по отзывам" &&
+                                    it.callbackData == "venue_ai_sum:feedback:10"
+                            } &&
+                            buttons.any {
+                                it.text == "🎁 Сводка по лояльности" &&
+                                    it.callbackData == "venue_ai_sum:loyalty:10"
+                            } &&
+                            buttons.any {
+                                it.text == "🧾 Сводка по заказам" &&
+                                    it.callbackData == "venue_ai_sum:orders:10"
+                            } &&
+                            buttons.any {
+                                it.text == "✍️ Помочь с текстом акции" &&
+                                    it.callbackData == "venue_ai_draft:promotion:10"
+                            } &&
+                            buttons.any {
+                                it.text == "💬 Черновик ответа на отзыв" &&
+                                    it.callbackData == "venue_ai_draft:review:10"
+                            } &&
+                            buttons.any {
+                                it.text == "🖼 Текст для баннера" &&
+                                    it.callbackData == "venue_ai_draft:banner:10"
+                            } &&
+                            buttons.any {
+                                it.text == "↩️ К заведению" &&
+                                    it.callbackData == "owner_venue_hub:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can open marketing ai assistant root from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-ai-root",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_1, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🤖 Помощник") &&
+                            it.contains("Mix") &&
+                            it.contains("настройки заведения") &&
+                            it.contains("не меняет настройки без подтверждения")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "🔍 Почему акция не применяется?" &&
+                                it.callbackData == "vm_ai_diag:10"
+                        } &&
+                            buttons.any {
+                                it.text == "📣 Сводка по продвижению" &&
+                                    it.callbackData == "vm_ai_sum:promotion:10"
+                            } &&
+                            buttons.any {
+                                it.text == "⭐ Сводка по отзывам" &&
+                                    it.callbackData == "vm_ai_sum:feedback:10"
+                            } &&
+                            buttons.any {
+                                it.text == "🎁 Сводка по лояльности" &&
+                                    it.callbackData == "vm_ai_sum:loyalty:10"
+                            } &&
+                            buttons.any {
+                                it.text == "🧾 Сводка по заказам" &&
+                                    it.callbackData == "vm_ai_sum:orders:10"
+                            } &&
+                            buttons.any {
+                                it.text == "✍️ Помочь с текстом акции" &&
+                                    it.callbackData == "vm_ai_draft:promotion:10"
+                            } &&
+                            buttons.any {
+                                it.text == "💬 Черновик ответа на отзыв" &&
+                                    it.callbackData == "vm_ai_draft:review:10"
+                            } &&
+                            buttons.any {
+                                it.text == "🖼 Текст для баннера" &&
+                                    it.callbackData == "vm_ai_draft:banner:10"
+                            } &&
+                            buttons.any {
+                                it.text == "↩️ К продвижению" &&
+                                    it.callbackData == "venue_marketing_root:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager can open ai assistant from reply menu`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER"))
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1_1,
+                    message =
+                        Message(
+                            messageId = 20_004_10_1_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🤖 Помощник",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🤖 Помощник") &&
+                            it.contains("Mix") &&
+                            it.contains("не меняет настройки без подтверждения")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "venue_ai_diag:10" } &&
+                            buttons.any { it.callbackData == "venue_ai_sum:promotion:10" } &&
+                            buttons.any { it.callbackData == "venue_ai_sum:feedback:10" } &&
+                            buttons.any { it.callbackData == "venue_ai_sum:loyalty:10" } &&
+                            buttons.any { it.callbackData == "venue_ai_sum:orders:10" } &&
+                            buttons.any { it.callbackData == "owner_venue_hub:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can run ai promotion summary`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_7_0,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-ai-summary-promotion",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_7_0, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai_sum:promotion:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                aiAssistantService.summarizeVenue(
+                    match<AiVenueSummaryCommand> {
+                        it.principal.userId == 200L &&
+                            it.principal.role.name == "OWNER" &&
+                            it.venueId == 10L &&
+                            it.type == AiVenueSummaryType.PROMOTION
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🤖 Сводка") && it.contains("Тестовая сводка") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "📣 Сводка по продвижению" &&
+                                it.callbackData == "vm_ai_sum:promotion:10"
+                        } &&
+                            buttons.any {
+                                it.text == "↩️ К продвижению" &&
+                                    it.callbackData == "venue_marketing_root:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot run ai summary directly`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_7_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-ai-summary-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_7_1, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai_sum:orders:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Помощник доступен менеджеру или владельцу.",
                     any(),
                 )
+            }
+            coVerify(exactly = 0) { aiAssistantService.summarizeVenue(any()) }
+        }
+
+    @Test
+    fun `cross venue ai summary is denied`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_7_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-ai-summary-cross-venue",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_7_2, chat = Chat(id = 100, type = "private")),
+                            data = "venue_ai_sum:feedback:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Нет доступа к заведению.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { aiAssistantService.summarizeVenue(any()) }
+        }
+
+    @Test
+    fun `promotion text draft flow asks for brief and returns draft`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-ai-promotion-draft",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_1_2, chat = Chat(id = 100, type = "private")),
+                            data = "venue_ai_draft:promotion:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                dialogStateRepository.set(
+                    100,
+                    match {
+                        it.state == DialogStateType.AI_WAIT_PROMOTION_TEXT_BRIEF &&
+                            it.payload["venueId"] == "10" &&
+                            it.payload["origin"] == "GENERAL"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("✍️ Помочь с текстом акции") &&
+                            it.contains("Коротко опишите акцию") &&
+                            it.contains("ничего не сохранит")
+                    },
+                    any(),
+                )
+            }
+
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.AI_WAIT_PROMOTION_TEXT_BRIEF,
+                    mapOf("venueId" to "10", "origin" to "GENERAL"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1_3,
+                    message =
+                        Message(
+                            messageId = 20_004_10_1_3,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "кальян + чай по будням до 18:00",
+                        ),
+                ),
+            )
+
+            coVerify {
+                aiAssistantService.draftText(
+                    match<AiDraftTextCommand> {
+                        it.principal.userId == 200L &&
+                            it.principal.role.name == "OWNER" &&
+                            it.venueId == 10L &&
+                            it.type == AiDraftTextType.PROMOTION_TEXT &&
+                            it.brief.contains("кальян + чай")
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("✍️ Помочь с текстом акции") &&
+                            it.contains("Черновик. Проверьте текст перед публикацией") &&
+                            it.contains("Название: Тестовый черновик")
+                    },
+                    any(),
+                )
+            }
+            coVerify { dialogStateRepository.clear(100) }
+        }
+
+    @Test
+    fun `review reply draft flow asks for pasted review and does not send guest message`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { aiAssistantService.draftText(any()) } returns
+                AiAssistantAnswer("Черновик. Проверьте текст перед отправкой.\n\nСпасибо за отзыв.")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1_4,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-ai-review-draft",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_1_4, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai_draft:review:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("💬 Черновик ответа на отзыв") &&
+                            it.contains("Вставьте текст отзыва") &&
+                            it.contains("не отправит сообщение гостю")
+                    },
+                    any(),
+                )
+            }
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.AI_WAIT_REVIEW_REPLY_BRIEF,
+                    mapOf("venueId" to "10", "origin" to "MARKETING"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1_5,
+                    message =
+                        Message(
+                            messageId = 20_004_10_1_5,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Долго ждали заказ",
+                        ),
+                ),
+            )
+
+            coVerify {
+                aiAssistantService.draftText(
+                    match<AiDraftTextCommand> {
+                        it.type == AiDraftTextType.FEEDBACK_REPLY &&
+                            it.venueId == 10L &&
+                            it.principal.role.name == "MANAGER"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("💬 Черновик ответа на отзыв") &&
+                            it.contains("Черновик. Проверьте текст перед отправкой") &&
+                            it.contains("Спасибо за отзыв")
+                    },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { visitFeedbackRepository.saveFeedbackMessage(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `banner text draft flow returns draft`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { aiAssistantService.draftText(any()) } returns
+                AiAssistantAnswer("Черновик. Проверьте текст перед публикацией.\n\nЗаголовок: Афиша недели")
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.AI_WAIT_BANNER_TEXT_BRIEF,
+                    mapOf("venueId" to "10", "origin" to "GENERAL"),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1_6,
+                    message =
+                        Message(
+                            messageId = 20_004_10_1_6,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "вечер джаза в пятницу",
+                        ),
+                ),
+            )
+
+            coVerify {
+                aiAssistantService.draftText(
+                    match<AiDraftTextCommand> {
+                        it.type == AiDraftTextType.BANNER_TEXT &&
+                            it.brief.contains("вечер джаза")
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🖼 Текст для баннера") &&
+                            it.contains("Черновик. Проверьте текст перед публикацией") &&
+                            it.contains("Афиша недели")
+                    },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `owner can choose promotion for ai diagnostics`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venuePromotionRepository.listVenuePromotionsForManagement(10L) } returns
+                listOf(
+                    testPromotion(
+                        id = 501L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        title = "Счастливые часы",
+                        templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-ai-diagnostics",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_2, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai_diag:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🔍 Почему акция не применяется?") &&
+                            it.contains("Выберите акцию для диагностики")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text.contains("Счастливые часы") &&
+                                it.callbackData == "vm_ai_diag_p:10:501"
+                        } &&
+                            buttons.any { it.text == "↩️ К помощнику" && it.callbackData == "vm_ai:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can run ai promotion diagnostics`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-ai-run",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_3, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai_diag_p:10:501",
+                        ),
+                ),
+            )
+
+            coVerify {
+                aiAssistantService.diagnosePromotion(
+                    match {
+                        it.principal.userId == 200L &&
+                            it.principal.role.name == "OWNER" &&
+                            it.venueId == 10L &&
+                            it.promotionId == 501L
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🤖 Диагностика акции") && it.contains("Тестовый ответ") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "🔍 Почему акция не применяется?" &&
+                                it.callbackData == "vm_ai_diag:10"
+                        }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot open ai assistant from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_4,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-ai-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_4, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Помощник доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { aiAssistantService.diagnosePromotion(any()) }
+        }
+
+    @Test
+    fun `staff cannot run ai promotion diagnostics directly`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_5,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-ai-run-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_5, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai_diag_p:10:501",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Помощник доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { aiAssistantService.diagnosePromotion(any()) }
+        }
+
+    @Test
+    fun `staff cannot open ai draft tools directly`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_6,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-ai-draft-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_6, chat = Chat(id = 100, type = "private")),
+                            data = "vm_ai_draft:banner:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Помощник доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { aiAssistantService.draftText(any()) }
+        }
+
+    @Test
+    fun `owner can open loyalty root from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { loyaltyRepository.listProgramsForVenue(10L) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-loyalty",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_1, chat = Chat(id = 100, type = "private")),
+                            data = "vm_loyalty:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🎁 Лояльность") &&
+                            it.contains("Гость копит оплаченные кальяны") &&
+                            it.contains("гость оплачивает 5 кальянов, а 6-й получает бесплатно") &&
+                            it.contains("Программа пока не настроена")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎁 Каждый N-й кальян" && it.callbackData == "vm_loyalty_program:10" } &&
+                            buttons.any { it.text == "➕ Настроить программу" && it.callbackData == "vm_loyalty_setup:10" } &&
+                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can create draft loyalty program with nth value`() =
+        runBlocking {
+            val created = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { loyaltyRepository.listProgramsForVenue(10L) } returns emptyList()
+            coEvery { loyaltyRepository.createOrUpdateDraftProgram(10L, 5, 200L) } returns created
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-loyalty-n5",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_2, chat = Chat(id = 100, type = "private")),
+                            data = "vm_loyalty_n:10:5",
+                        ),
+                ),
+            )
+
+            coVerify { loyaltyRepository.createOrUpdateDraftProgram(10L, 5, 200L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Программа лояльности сохранена как черновик.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🎁 Каждый N-й кальян") &&
+                            it.contains("каждый 5-й кальян") &&
+                            it.contains("Оплаченных до бонуса: 4") &&
+                            it.contains("Статус: Черновик") &&
+                            it.contains("Начисление происходит после закрытия счёта")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎯 Что засчитывается" && it.callbackData == "vm_loyalty_earn:10:301" } &&
+                            buttons.any { it.text == "🎁 Что можно получить бесплатно" && it.callbackData == "vm_loyalty_reward:10:301" } &&
+                            buttons.any { it.text == "▶️ Включить" && it.callbackData == "vm_loyalty_status:10:301:ACTIVE" } &&
+                            buttons.any { it.text == "🗄 Архивировать" && it.callbackData == "vm_loyalty_status:10:301:ARCHIVED" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can enter custom loyalty nth value`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            val created = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 7, status = LoyaltyProgramStatus.DRAFT)
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { loyaltyRepository.createOrUpdateDraftProgram(10L, 7, 200L) } returns created
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-loyalty-custom",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_3, chat = Chat(id = 100, type = "private")),
+                            data = "vm_loyalty_custom:10",
+                        ),
+                ),
+            )
+
+            assertEquals(DialogStateType.VENUE_LOYALTY_WAIT_CUSTOM_N, states[100]?.state)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_4,
+                    message =
+                        Message(
+                            messageId = 20_004_09_4,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "7",
+                        ),
+                ),
+            )
+
+            coVerify { loyaltyRepository.createOrUpdateDraftProgram(10L, 7, 200L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите число от 2 до 50.",
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.singleOrNull()
+                            ?.callbackData == "vm_loyalty_setup:10"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Программа лояльности сохранена как черновик.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `active loyalty program custom nth update remains enabled in owner text`() =
+        runBlocking {
+            val states =
+                mutableMapOf(
+                    100L to
+                        DialogState(
+                            DialogStateType.VENUE_LOYALTY_WAIT_CUSTOM_N,
+                            mapOf("venueId" to "10"),
+                        ),
+                )
+            val updated = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 8, status = LoyaltyProgramStatus.ACTIVE)
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { loyaltyRepository.createOrUpdateDraftProgram(10L, 8, 200L) } returns updated
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_4_1,
+                    message =
+                        Message(
+                            messageId = 20_004_09_4_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "8",
+                        ),
+                ),
+            )
+
+            coVerify { loyaltyRepository.createOrUpdateDraftProgram(10L, 8, 200L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Программа лояльности сохранена. Программа остаётся включённой.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `invalid custom loyalty nth value stays in wait state`() =
+        runBlocking {
+            val states =
+                mutableMapOf(
+                    100L to
+                        DialogState(
+                            DialogStateType.VENUE_LOYALTY_WAIT_CUSTOM_N,
+                            mapOf("venueId" to "10"),
+                        ),
+                )
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_5,
+                    message =
+                        Message(
+                            messageId = 20_004_09_5,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "51",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { loyaltyRepository.createOrUpdateDraftProgram(10L, any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите число от 2 до 50.",
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.singleOrNull()
+                            ?.callbackData == "vm_loyalty_setup:10"
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `active loyalty program target update remains enabled in owner text`() =
+        runBlocking {
+            val program = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.ACTIVE)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { loyaltyRepository.getProgramForVenue(10L, 301L) } returns program
+            coEvery { loyaltyRepository.replaceEarnTargetsWithAllHookahs(10L, 301L) } returns program
+            coEvery { loyaltyRepository.replaceRewardTargetsWithAllHookahs(10L, 301L) } returns program
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_5_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-active-earn-all",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_5_1, chat = Chat(id = 100, type = "private")),
+                            data = "vle_all:10:301",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_5_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-active-reward-all",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_5_2, chat = Chat(id = 100, type = "private")),
+                            data = "vlr_all:10:301",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "В прогресс будут засчитываться все кальяны. Программа остаётся включённой.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Бесплатным может быть любой кальян. Программа остаётся включённой.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `owner can configure loyalty earn targets`() =
+        runBlocking {
+            val program = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { loyaltyRepository.getProgramForVenue(10L, 301L) } returns program
+            coEvery { loyaltyRepository.replaceEarnTargetsWithAllHookahs(10L, 301L) } returns program
+            coEvery { loyaltyRepository.listHookahMenuItemsForTargetSelection(10L) } returns
+                listOf(
+                    PromotionRuleTargetMenuItem(701L, "Кальян обычный", MenuSemanticType.HOOKAH),
+                    PromotionRuleTargetMenuItem(702L, "Премиум кальян", MenuSemanticType.HOOKAH),
+                )
+            coEvery { loyaltyRepository.replaceEarnTargetsWithMenuItems(10L, 301L, listOf(701L)) } returns program
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_6,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-earn-all",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_6, chat = Chat(id = 100, type = "private")),
+                            data = "vle_all:10:301",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_7,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-earn-items",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_7, chat = Chat(id = 100, type = "private")),
+                            data = "vle_items:10:301:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_8,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-earn-toggle",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_8, chat = Chat(id = 100, type = "private")),
+                            data = "vle_t:10:301:701:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_9,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-earn-done",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_9, chat = Chat(id = 100, type = "private")),
+                            data = "vle_done:10:301",
+                        ),
+                ),
+            )
+
+            coVerify { loyaltyRepository.replaceEarnTargetsWithAllHookahs(10L, 301L) }
+            coVerify { loyaltyRepository.replaceEarnTargetsWithMenuItems(10L, 301L, listOf(701L)) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "В прогресс будут засчитываться все кальяны. Программа сохранена как черновик.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "В прогресс будут засчитываться выбранные позиции. Программа сохранена как черновик.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `owner can configure loyalty reward targets`() =
+        runBlocking {
+            val program = testLoyaltyProgram(id = 301L, venueId = 10L, nthValue = 5, status = LoyaltyProgramStatus.DRAFT)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { loyaltyRepository.getProgramForVenue(10L, 301L) } returns program
+            coEvery { loyaltyRepository.replaceRewardTargetsWithAllHookahs(10L, 301L) } returns program
+            coEvery { loyaltyRepository.listHookahMenuItemsForTargetSelection(10L) } returns
+                listOf(
+                    PromotionRuleTargetMenuItem(701L, "Кальян обычный", MenuSemanticType.HOOKAH),
+                    PromotionRuleTargetMenuItem(702L, "Премиум кальян", MenuSemanticType.HOOKAH),
+                )
+            coEvery { loyaltyRepository.replaceRewardTargetsWithMenuItems(10L, 301L, listOf(702L)) } returns program
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_10,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-reward-all",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_10, chat = Chat(id = 100, type = "private")),
+                            data = "vlr_all:10:301",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_11,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-reward-items",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_11, chat = Chat(id = 100, type = "private")),
+                            data = "vlr_items:10:301:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_12,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-reward-toggle",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_12, chat = Chat(id = 100, type = "private")),
+                            data = "vlr_t:10:301:702:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_13,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-reward-done",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_13, chat = Chat(id = 100, type = "private")),
+                            data = "vlr_done:10:301",
+                        ),
+                ),
+            )
+
+            coVerify { loyaltyRepository.replaceRewardTargetsWithAllHookahs(10L, 301L) }
+            coVerify { loyaltyRepository.replaceRewardTargetsWithMenuItems(10L, 301L, listOf(702L)) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Бесплатным может быть любой кальян. Программа сохранена как черновик.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Бесплатными смогут быть выбранные позиции. Программа сохранена как черновик.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot configure loyalty targets`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_09_14,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-earn-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_09_14, chat = Chat(id = 100, type = "private")),
+                            data = "vm_loyalty_earn:10:301",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Продвижение» доступен менеджеру или владельцу.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) { loyaltyRepository.getProgramForVenue(any(), any()) }
+        }
+
+    @Test
+    fun `owner venue top placement request screen explains recommended block and manual approval`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_0,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-top-request-screen",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_0, chat = Chat(id = 100, type = "private")),
+                            data = "vm_top_req:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("📌 Поднять в Акциях") &&
+                            it.contains("Рекомендуем") &&
+                            it.contains("не гарантирует") &&
+                            it.contains("согласуются с владельцем платформы вручную")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "📨 Отправить заявку" && it.callbackData == "vm_top_send:10" } &&
+                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can create venue top placement request from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { promotionVenuePlacementRepository.createRequest(10L, 200L) } returns
+                testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix")
+            coEvery { userRepository.findTelegramUserContact(999L) } returns
+                TelegramUserContact(telegramUserId = 999L, username = "platform_owner", firstName = "Платформа", lastName = null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_10_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-top-request",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_10_1, chat = Chat(id = 100, type = "private")),
+                            data = "vm_top_send:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                promotionVenuePlacementRepository.createRequest(10L, 200L)
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Заявка отправлена.") &&
+                            it.contains("свяжется с вами") &&
+                            it.contains("Контакт: @platform_owner")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🕓 На проверке" && it.callbackData == "vm_places_pending:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `marketing promotions entry returns back to marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { venuePromotionRepository.listVenuePromotionsForManagement(10L, any()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_12,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-promos",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_12, chat = Chat(id = 100, type = "private")),
+                            data = "vm_promos:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📣 Акции") && it.contains("Mix") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `marketing feedback entry returns back to marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_13,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-feedback",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_13, chat = Chat(id = 100, type = "private")),
+                            data = "vm_feedback:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⭐ Оценки и отзывы") && it.contains("Mix") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" } &&
+                            buttons.any { it.text == "⭐ Ссылка на отзывы" && it.callbackData == "vm_review_url:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `marketing public review url returns back to marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { venueSettingsRepository.getPublicReviewUrl(10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_14,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-review-url",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_14, chat = Chat(id = 100, type = "private")),
+                            data = "vm_review_url:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⭐ Ссылка на отзывы") && it.contains("Mix") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" } &&
+                            buttons.any { it.text == "✏️ Добавить ссылку" && it.callbackData == "vm_review_url_edit:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `marketing placeholders return back to marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_15,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-banners",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_15, chat = Chat(id = 100, type = "private")),
+                            data = "vm_banners:10",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_16,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-placements",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_16, chat = Chat(id = 100, type = "private")),
+                            data = "vm_placements:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🖼 Баннеры / Афиши") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📌 Размещения") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🕓 На проверке" && it.callbackData == "vm_places_pending:10" } &&
+                            buttons.any { it.text == "✅ Активные" && it.callbackData == "vm_places_active:10" } &&
+                            buttons.any { it.text == "🗄 Завершённые / Архив" && it.callbackData == "vm_places_finished:10" } &&
+                            buttons.any { it.text == "↩️ К продвижению" && it.callbackData == "venue_marketing_root:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can list pending venue placements from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { promotionPlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.PENDING, 20, any()) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 701L,
+                        promotionId = 501L,
+                        venueId = 10L,
+                        promotionTitle = "Афиша выходных",
+                        surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+                        status = PromotionPlacementStatus.PENDING,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_17,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-placements-pending",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_17, chat = Chat(id = 100, type = "private")),
+                            data = "vm_places_pending:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📌 Размещения") && it.contains("Mix") && it.contains("На проверке") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "vm_place_open:10:701:pending" } &&
+                            buttons.any { it.text == "↩️ К размещениям" && it.callbackData == "vm_placements:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner placement list includes venue top placements`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { promotionVenuePlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.PENDING, 20, any()) } returns
+                listOf(testPromotionVenuePlacement(id = 801L, venueId = 10L, venueName = "Mix"))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_17_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-top-pending",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_17_1, chat = Chat(id = 100, type = "private")),
+                            data = "vm_places_pending:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📌 Размещения") && it.contains("На проверке") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text?.contains("Топ в Акциях") == true &&
+                                it.callbackData == "vm_top_place_open:10:801:pending"
+                        }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `manager can list active venue placements from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { promotionPlacementRepository.listForVenueManagement(10L, PromotionPlacementStatus.ACTIVE, 20, any()) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 702L,
+                        promotionId = 502L,
+                        venueId = 10L,
+                        promotionTitle = "Афиша недели",
+                        surface = PromotionPlacementSurface.VENUE_PROMOTIONS_TOP,
+                        status = PromotionPlacementStatus.ACTIVE,
+                        startsAt = Instant.parse("2026-05-14T10:00:00Z"),
+                        endsAt = Instant.parse("2026-05-21T10:00:00Z"),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_18,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-placements-active",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_18, chat = Chat(id = 100, type = "private")),
+                            data = "vm_places_active:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📌 Размещения") && it.contains("Mix") && it.contains("Активные") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "vm_place_open:10:702:active" } &&
+                            buttons.any { it.text == "↩️ К размещениям" && it.callbackData == "vm_placements:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can list finished venue placements from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { promotionPlacementRepository.listFinishedForVenueManagement(10L, 20, any()) } returns
+                listOf(
+                    testPromotionPlacement(
+                        id = 703L,
+                        promotionId = 503L,
+                        venueId = 10L,
+                        promotionTitle = "Прошлая афиша",
+                        surface = PromotionPlacementSurface.VENUE_PROMOTIONS_TOP,
+                        status = PromotionPlacementStatus.ARCHIVED,
+                    ),
+                    testPromotionPlacement(
+                        id = 704L,
+                        promotionId = 504L,
+                        venueId = 10L,
+                        promotionTitle = "Отклонённая афиша",
+                        surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+                        status = PromotionPlacementStatus.REJECTED,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_18_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-placements-finished",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_18, chat = Chat(id = 100, type = "private")),
+                            data = "vm_places_finished:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📌 Размещения") && it.contains("Mix") && it.contains("Завершённые / архив") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "vm_place_open:10:703:finished" && it.text.contains("Прошлая афиша") } &&
+                            buttons.any { it.callbackData == "vm_place_open:10:704:finished" && it.text.contains("Отклонённая афиша") } &&
+                            buttons.any { it.text == "↩️ К размещениям" && it.callbackData == "vm_placements:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can open venue placement detail without platform actions`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { promotionPlacementRepository.getForVenueManagement(10L, 702L) } returns
+                testPromotionPlacement(
+                    id = 702L,
+                    promotionId = 502L,
+                    venueId = 10L,
+                    promotionTitle = "Афиша недели",
+                    surface = PromotionPlacementSurface.VENUE_PROMOTIONS_TOP,
+                    status = PromotionPlacementStatus.ACTIVE,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_19,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-placement-detail",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_19, chat = Chat(id = 100, type = "private")),
+                            data = "vm_place_open:10:702:active",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("📌 Размещение") &&
+                            it.contains("Акция: Афиша недели") &&
+                            it.contains("Статус: активно")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "↩️ К размещениям" && it.callbackData == "vm_places_active:10" } &&
+                            buttons.none { it.text.contains("Одобрить") || it.text.contains("Отклонить") }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot open venue marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_11,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_11, chat = Chat(id = 100, type = "private")),
+                            data = "venue_marketing_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Продвижение» доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot open venue loyalty from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_11_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-loyalty-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_11_1, chat = Chat(id = 100, type = "private")),
+                            data = "vm_loyalty:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Продвижение» доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { loyaltyRepository.listProgramsForVenue(any()) }
+        }
+
+    @Test
+    fun `staff cannot open venue placements from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_20,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-placements-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_20, chat = Chat(id = 100, type = "private")),
+                            data = "vm_placements:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Продвижение» доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot open venue placement archive from marketing hub`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_21,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-marketing-placements-finished-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004_21, chat = Chat(id = 100, type = "private")),
+                            data = "vm_places_finished:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Продвижение» доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                promotionPlacementRepository.listFinishedForVenueManagement(any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `staff cannot open venue promotions management`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-staff",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 20_004,
+                                    chat = Chat(id = 100, type = "private"),
+                                    fromUser = User(id = 200),
+                                ),
+                            data = "vp_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Акции» доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `owner can open venue promotions management`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { venuePromotionRepository.listVenuePromotionsForManagement(10L, any()) } returns
+                listOf(testPromotion(id = 503L, venueId = 10L, venueName = "Mix", title = "Сет", status = VenuePromotionStatus.DRAFT))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-owner",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 20_004,
+                                    chat = Chat(id = 100, type = "private"),
+                                    fromUser = User(id = 200),
+                                ),
+                            data = "vp_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text -> text.contains("📣 Акции") && text.contains("Mix") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { it.text == "черновик · Сет" && it.callbackData == "vp_o:10:503" } &&
+                            markup.inlineKeyboard.flatten().any { it.text == "➕ Создать акцию" && it.callbackData == "vp_new:10" } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "↩️ К продвижению" &&
+                                    it.callbackData == "venue_marketing_root:10"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can open venue promotions archive`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { venuePromotionRepository.listArchivedPromotionsForManagement(10L) } returns
+                listOf(
+                    testPromotion(
+                        id = 530L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        title = "Прошлая афиша",
+                        status = VenuePromotionStatus.ARCHIVED,
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_01,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-archive",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004, chat = Chat(id = 100, type = "private")),
+                            data = "vp_archive_root:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🗄 Архив акций") && it.contains("Mix") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text.contains("Прошлая афиша") && it.callbackData == "vp_archive_open:10:530" } &&
+                            buttons.any { it.text == "↩️ К акциям" && it.callbackData == "vp_root:10" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `archived promotion detail is read only`() =
+        runBlocking {
+            val archived =
+                testPromotion(
+                    id = 531L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Архивная акция",
+                    status = VenuePromotionStatus.ARCHIVED,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 531L) } returns archived
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_02,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-archive-open",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004, chat = Chat(id = 100, type = "private")),
+                            data = "vp_archive_open:10:531",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Архивная акция") &&
+                            it.contains("Статус: в архиве")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.singleOrNull()?.let { it.text == "↩️ К архиву" && it.callbackData == "vp_archive_root:10" } == true &&
+                            buttons.none {
+                                it.text.contains("Включить") ||
+                                    it.text.contains("Приостановить") ||
+                                    it.text.contains("Правила") ||
+                                    it.text.contains("Название") ||
+                                    it.text.contains("Описание")
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `direct archived promotion callback opens read only detail`() =
+        runBlocking {
+            val archived =
+                testPromotion(
+                    id = 532L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Архивный баннер",
+                    status = VenuePromotionStatus.ARCHIVED,
+                    templateType = VenuePromotionTemplateType.BANNER,
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 532L) } returns archived
+            coEvery { venuePromotionMediaRepository.getPrimaryImage(532L) } returns testPromotionMedia(1L, 532L, "photo-file")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_03,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-archived-direct",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004, chat = Chat(id = 100, type = "private")),
+                            data = "vp_o:10:532",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Архивный баннер") && it.contains("Статус: в архиве") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.singleOrNull()?.callbackData == "vp_archive_root:10"
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner promotion create starts with template selection`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-template",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004, chat = Chat(id = 100, type = "private")),
+                            data = "vp_new:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Выберите тип акции") && it.contains("Комбо, промокоды и лояльность появятся позже.") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "📝 Простая акция" && it.callbackData == "vp_tpl:10:TEXT_ONLY"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "🕒 Счастливые часы" && it.callbackData == "vp_tpl:10:HAPPY_HOURS_PERCENT"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "🎁 Подарок к позиции" && it.callbackData == "vp_tpl:10:GIFT_WITH_ITEM"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "🖼 Баннер / афиша" && it.callbackData == "vp_tpl:10:BANNER"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can create venue promotion draft`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            val created = testPromotion(id = 504L, venueId = 10L, venueName = "Mix", title = "Сет", status = VenuePromotionStatus.DRAFT)
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Сет",
+                    description = "Кальян и чай",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                    createdByUserId = 200L,
+                )
+            } returns created
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 504L) } returns created
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-new",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004, chat = Chat(id = 100, type = "private")),
+                            data = "vp_new:10",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_0041,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-template-text",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004, chat = Chat(id = 100, type = "private")),
+                            data = "vp_tpl:10:TEXT_ONLY",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_005,
+                    message = Message(messageId = 20_005, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "Сет"),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_006,
+                    message =
+                        Message(
+                            messageId = 20_006,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Кальян и чай",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_007,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-terms-skip",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_007, chat = Chat(id = 100, type = "private")),
+                            data = "vp_terms_skip:10",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Напишите описание акции.",
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any { it.text == "↩️ К акциям" && it.callbackData == "vp_root:10" } == true
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Напишите условия акции или нажмите «Пропустить».",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Пропустить" && it.callbackData == "vp_terms_skip:10" } &&
+                            buttons.any { it.text == "↩️ К акциям" && it.callbackData == "vp_root:10" }
+                    },
+                )
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Сет",
+                    description = "Кальян и чай",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                    createdByUserId = 200L,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Акция создана как черновик.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📣 Акция") && it.contains("Сет") && it.contains("Статус: черновик") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can create banner promotion with photo`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            val created =
+                testPromotion(
+                    id = 520L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Афиша выходных",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.BANNER,
+                )
+            val media = testPromotionMedia(id = 900L, promotionId = 520L, fileId = "large-photo-file-id")
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Афиша выходных",
+                    description = "Живая музыка и новые вкусы",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.BANNER,
+                    createdByUserId = 200L,
+                )
+            } returns created
+            coEvery { venuePromotionMediaRepository.replacePrimaryImage(10L, 520L, "large-photo-file-id", null) } returns media
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 520L) } returns created
+            coEvery { venuePromotionMediaRepository.getPrimaryImage(520L) } returns media
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_040,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-template-banner",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_040, chat = Chat(id = 100, type = "private")),
+                            data = "vp_tpl:10:BANNER",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_041,
+                    message =
+                        Message(
+                            messageId = 20_041,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Афиша выходных",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_042,
+                    message =
+                        Message(
+                            messageId = 20_042,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Живая музыка и новые вкусы",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_043,
+                    message =
+                        Message(
+                            messageId = 20_043,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            photo =
+                                listOf(
+                                    PhotoSize(fileId = "small-photo-file-id", width = 320, height = 180, fileSize = 10_000),
+                                    PhotoSize(fileId = "large-photo-file-id", width = 1280, height = 720, fileSize = 150_000),
+                                ),
+                        ),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Отправьте изображение для баннера.",
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten()?.singleOrNull()?.callbackData == "vp_root:10"
+                    },
+                )
+                venuePromotionMediaRepository.replacePrimaryImage(10L, 520L, "large-photo-file-id", null)
+                outboxEnqueuer.enqueueSendMessage(100, "Баннер создан как черновик.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Тип: баннер / афиша") &&
+                            it.contains("Изображение: добавлено") &&
+                            !it.contains("Изображение не добавлено")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🖼 Заменить изображение" && it.callbackData == "vp_img:10:520" } &&
+                            buttons.any { it.text == "🗑 Удалить изображение" && it.callbackData == "vp_img_del:10:520" } &&
+                            buttons.none { it.text == "✏️ Условия" } &&
+                            buttons.none { it.text == "⚙️ Правила акции" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `banner promotion detail lets owner request placement`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 520L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Афиша выходных",
+                    status = VenuePromotionStatus.ACTIVE,
+                    templateType = VenuePromotionTemplateType.BANNER,
+                )
+            val placement =
+                testPromotionPlacement(
+                    id = 703L,
+                    promotionId = 520L,
+                    venueId = 10L,
+                    promotionTitle = "Афиша выходных",
+                    status = PromotionPlacementStatus.PENDING,
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 520L) } returns promotion
+            coEvery { venuePromotionMediaRepository.getPrimaryImage(520L) } returns
+                testPromotionMedia(id = 902L, promotionId = 520L, fileId = "banner-photo-file-id")
+            coEvery {
+                promotionPlacementRepository.createRequest(
+                    promotionId = 520L,
+                    venueId = 10L,
+                    surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+                    requestedByUserId = 200L,
+                )
+            } returns placement
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_043_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-placement-detail",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_043_1, chat = Chat(id = 100, type = "private")),
+                            data = "vp_o:10:520",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_043_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-placement-open",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_043_2, chat = Chat(id = 100, type = "private")),
+                            data = "vp_place:10:520",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_043_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-placement-request",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_043_3, chat = Chat(id = 100, type = "private")),
+                            data = "vp_place_new:10:520:G",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📣 Акция") && it.contains("Афиша выходных") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "📌 Разместить как баннер" && it.callbackData == "vp_place:10:520" } &&
+                            buttons.none { it.text == "⚙️ Правила акции" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📌 Разместить как баннер") && it.contains("Выберите место показа") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎁 Вверху общих акций" && it.callbackData == "vp_place_new:10:520:G" } &&
+                            buttons.any { it.text == "🎁 Вверху акций заведения" && it.callbackData == "vp_place_new:10:520:V" }
+                    },
+                )
+                promotionPlacementRepository.createRequest(
+                    promotionId = 520L,
+                    venueId = 10L,
+                    surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+                    requestedByUserId = 200L,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Заявка на размещение отправлена на проверку.", null)
+            }
+        }
+
+    @Test
+    fun `staff cannot request banner placement`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_043_4,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-placement-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_043_4, chat = Chat(id = 100, type = "private")),
+                            data = "vp_place:10:520",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Акции» доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                promotionPlacementRepository.createRequest(any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `banner image upload flow rejects text and pdf`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.VENUE_PROMOTION_WAIT_MEDIA,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "promotion_id" to "520",
+                        ),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_044,
+                    message =
+                        Message(
+                            messageId = 20_044,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "текст вместо фото",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_045,
+                    message =
+                        Message(
+                            messageId = 20_045,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            document =
+                                Document(
+                                    fileId = "pdf-file-id",
+                                    fileName = "afisha.pdf",
+                                    mimeType = "application/pdf",
+                                    fileSize = 100_000,
+                                ),
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Отправьте изображение для баннера.",
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Отправьте изображение, не PDF.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                venuePromotionMediaRepository.replacePrimaryImage(any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `staff cannot replace banner image`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_046,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-banner-staff",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_046, chat = Chat(id = 100, type = "private")),
+                            data = "vp_img:10:520",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Акции» доступен менеджеру или владельцу.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                dialogStateRepository.set(any(), any())
+            }
+        }
+
+    @Test
+    fun `guest banner detail sends photo when image exists`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 521L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Афиша выходных",
+                    status = VenuePromotionStatus.ACTIVE,
+                    templateType = VenuePromotionTemplateType.BANNER,
+                )
+            val media = testPromotionMedia(id = 901L, promotionId = 521L, fileId = "banner-photo-file-id")
+            coEvery { venuePromotionRepository.getPromotionForGuest(521L, any()) } returns promotion
+            coEvery { venuePromotionMediaRepository.getPrimaryImage(521L) } returns media
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_047,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-banner-detail",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_047, chat = Chat(id = 100, type = "private")),
+                            data = "gp_o:521:g",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendPhoto(
+                    100,
+                    "banner-photo-file-id",
+                    match { caption ->
+                        caption.contains("🎁 Афиша выходных") &&
+                            caption.contains("Mix") &&
+                            caption.contains("Описание акции") &&
+                            caption.contains("Условия:")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { it.text == "↩️ К акциям" && it.callbackData == "gp_all" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `guest banner detail falls back to text when image is missing`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 522L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Афиша выходных",
+                    status = VenuePromotionStatus.ACTIVE,
+                    templateType = VenuePromotionTemplateType.BANNER,
+                )
+            coEvery { venuePromotionRepository.getPromotionForGuest(522L, any()) } returns promotion
+            coEvery { venuePromotionMediaRepository.getPrimaryImage(522L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_048,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-banner-detail-no-image",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_048, chat = Chat(id = 100, type = "private")),
+                            data = "gp_o:522:g",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("🎁 Афиша выходных") && it.contains("Описание акции") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendPhoto(any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `manager can activate venue promotion`() =
+        runBlocking {
+            val promotion = testPromotion(id = 505L, venueId = 10L, venueName = "Mix", title = "Сет")
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venuePromotionRepository.setPromotionStatus(10L, 505L, VenuePromotionStatus.ACTIVE) } returns promotion
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 505L) } returns promotion
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-on",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_004, chat = Chat(id = 100, type = "private")),
+                            data = "vp_on:10:505",
+                        ),
+                ),
+            )
+
+            coVerify {
+                venuePromotionRepository.setPromotionStatus(10L, 505L, VenuePromotionStatus.ACTIVE)
+                outboxEnqueuer.enqueueSendMessage(100, "Акция включена.", null)
+            }
+        }
+
+    @Test
+    fun `owner edits promotion terms and returns to detail with inline actions`() =
+        runBlocking {
+            val basePromotion =
+                testPromotion(
+                    id = 513L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Сет",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                )
+            val updatedPromotion = basePromotion.copy(terms = "До 18:00")
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 513L) } returns basePromotion andThen updatedPromotion
+            coEvery {
+                venuePromotionRepository.updatePromotion(
+                    venueId = 10L,
+                    promotionId = 513L,
+                    terms = "До 18:00",
+                    clearTerms = false,
+                )
+            } returns updatedPromotion
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_030,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-edit-terms",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_030, chat = Chat(id = 100, type = "private")),
+                            data = "vp_er:10:513",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_031,
+                    message = Message(messageId = 20_031, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "До 18:00"),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Текущие условия") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Пропустить" && it.callbackData == "vp_terms_skip:10" } &&
+                            buttons.any { it.text == "↩️ К акции" && it.callbackData == "vp_o:10:513" }
+                    },
+                )
+                venuePromotionRepository.updatePromotion(
+                    venueId = 10L,
+                    promotionId = 513L,
+                    terms = "До 18:00",
+                    clearTerms = false,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Условия акции обновлены.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("📣 Акция") && it.contains("До 18:00") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "▶️ Включить" && it.callbackData == "vp_on:10:513" } &&
+                            buttons.any { it.text == "↩️ К акциям" && it.callbackData == "vp_root:10" }
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Используйте меню ниже.", any())
+            }
+        }
+
+    @Test
+    fun `text only promotion detail hides rules action`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 508L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Сет",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 508L) } returns promotion
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_009,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-text-detail",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_009, chat = Chat(id = 100, type = "private")),
+                            data = "vp_o:10:508",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Тип: простая акция") },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().none { it.text == "⚙️ Правила акции" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can create gift with item promotion using all category trigger`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            val created =
+                testPromotion(
+                    id = 530L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Чай к кальяну",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                )
+            val giftRule =
+                testPromotionRule(
+                    id = 620L,
+                    venueId = 10L,
+                    promotionId = 530L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 0,
+                    status = VenuePromotionStatus.ACTIVE,
+                    ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+                    reward =
+                        PromotionRuleReward(
+                            id = 710L,
+                            ruleId = 620L,
+                            rewardMenuItemId = 801L,
+                            rewardMenuItemName = "Чай",
+                            rewardQty = 1,
+                            maxRewardsPerBatch = 1,
+                            priceMinor = 30_000L,
+                            currency = "RUB",
+                            isAvailable = true,
+                        ),
+                )
+            var giftRuleLookupCount = 0
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Чай к кальяну",
+                    description = "Чай в подарок к кальяну",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                    createdByUserId = 200L,
+                )
+            } returns created
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 530L) } returns created
+            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 530L, any()) } answers {
+                giftRuleLookupCount += 1
+                if (giftRuleLookupCount >= 3) listOf(giftRule) else emptyList()
+            }
+            coEvery { venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.TEA) } returns
+                listOf(PromotionRuleTargetMenuItem(801L, "Чай", MenuSemanticType.TEA))
+            coEvery {
+                venuePromotionRuleRepository.createGiftWithItemRule(
+                    venueId = 10L,
+                    promotionId = 530L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    rewardMenuItemId = 801L,
+                    createdByUserId = 200L,
+                )
+            } returns giftRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_050,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-template-gift",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_050, chat = Chat(id = 100, type = "private")),
+                            data = "vp_tpl:10:GIFT_WITH_ITEM",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_051,
+                    message = Message(messageId = 20_051, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "Чай к кальяну"),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_052,
+                    message =
+                        Message(
+                            messageId = 20_052,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Чай в подарок к кальяну",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_053,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-trigger-category",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_053, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_tcat:10:530:HOOKAH",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_054,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-trigger-all",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_054, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_tall:10:530:HOOKAH",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_055,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-reward-category",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_055, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_rcat:10:530:TEA:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_056,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-reward-item",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_056, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_ritem:10:530:TEA:801:0",
+                        ),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify {
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Чай к кальяну",
+                    description = "Чай в подарок к кальяну",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                    createdByUserId = 200L,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Акция создана как черновик. Настройте условие подарка.",
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите категорию позиции, которая даёт подарок.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Кальяны" && it.callbackData == "vpg_tcat:10:530:HOOKAH" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "На что действует подарок в категории «Кальяны»?",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Все позиции категории «Кальяны»" && it.callbackData == "vpg_tall:10:530:HOOKAH" } &&
+                            buttons.any { it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpg_titems:10:530:HOOKAH:0" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Условие подарка сохранено. Теперь выберите подарок.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите позицию подарка.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Чай" && it.callbackData == "vpg_ritem:10:530:TEA:801:0" }
+                    },
+                )
+                venuePromotionRuleRepository.createGiftWithItemRule(
+                    venueId = 10L,
+                    promotionId = 530L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    rewardMenuItemId = 801L,
+                    createdByUserId = 200L,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Подарок настроен. Акция останется черновиком, пока вы её не включите.",
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Тип: подарок к позиции") &&
+                            it.contains("Правила работают, когда акция включена.") &&
+                            !it.contains("Условие: Кальяны") &&
+                            !it.contains("Подарок: Чай")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                            buttons.any { it.text == "⚙️ Правила акции" && it.callbackData == "vpr_root:10:530" } &&
+                                buttons.any { it.text == "▶️ Включить" && it.callbackData == "vp_on:10:530" } &&
+                                buttons.none { it.text == "🎯 Условие подарка" } &&
+                                buttons.none { it.text == "🎁 Подарок" } &&
+                                buttons.none { it.text == "⚖️ Совместимость акций" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner can create gift trigger from specific menu items and staff is denied`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 531L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Чай к обычному кальяну",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                )
+            val createdRule =
+                testPromotionRule(
+                    id = 621L,
+                    venueId = 10L,
+                    promotionId = 531L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 0,
+                    status = VenuePromotionStatus.ACTIVE,
+                    ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+                    reward =
+                        PromotionRuleReward(
+                            id = 711L,
+                            ruleId = 621L,
+                            rewardMenuItemId = 803L,
+                            rewardMenuItemName = "Чай",
+                            rewardQty = 1,
+                            maxRewardsPerBatch = 1,
+                            priceMinor = 30_000L,
+                            currency = "RUB",
+                            isAvailable = true,
+                        ),
+                )
+            val itemTargetRule =
+                createdRule.copy(
+                    targets =
+                        listOf(
+                            PromotionRuleTarget(
+                                id = 31L,
+                                ruleId = 621L,
+                                targetType = PromotionRuleTargetType.MENU_ITEM,
+                                semanticType = null,
+                                menuItemId = 701L,
+                                menuItemName = "Кальян обычный",
+                            ),
+                        ),
+                )
+            var giftRuleLookupCount = 0
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 531L) } returns promotion
+            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 531L, any()) } answers {
+                giftRuleLookupCount += 1
+                if (giftRuleLookupCount >= 5) listOf(itemTargetRule) else emptyList()
+            }
+            coEvery { venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.HOOKAH) } returns
+                listOf(
+                    PromotionRuleTargetMenuItem(701L, "Кальян обычный", MenuSemanticType.HOOKAH),
+                    PromotionRuleTargetMenuItem(702L, "Премиум кальян", MenuSemanticType.HOOKAH),
+                )
+            coEvery { venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.TEA) } returns
+                listOf(PromotionRuleTargetMenuItem(803L, "Чай", MenuSemanticType.TEA))
+            coEvery {
+                venuePromotionRuleRepository.createGiftWithItemRule(
+                    venueId = 10L,
+                    promotionId = 531L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    rewardMenuItemId = 803L,
+                    createdByUserId = 200L,
+                )
+            } returns createdRule
+            coEvery {
+                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+                    venueId = 10L,
+                    ruleId = 621L,
+                    menuItemIds = listOf(701L),
+                )
+            } returns itemTargetRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_057,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-trigger-items",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_057, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_titems:10:531:HOOKAH:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_058,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-trigger-item-toggle",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_058, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_itog:10:531:HOOKAH:701:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_059,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-trigger-items-done",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_059, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_idone:10:531:HOOKAH",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_060,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-reward-items",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_060, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_rcat:10:531:TEA:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_061,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-reward-specific",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_061, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_ritem:10:531:TEA:803:0",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_062,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-staff-denied",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_062, chat = Chat(id = 101, type = "private")),
+                            data = "vpg_tedit:10:531",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите позиции, которые дают подарок.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Кальян обычный" && it.callbackData == "vpg_itog:10:531:HOOKAH:701:0" } &&
+                            buttons.any { it.text == "Премиум кальян" && it.callbackData == "vpg_itog:10:531:HOOKAH:702:0" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите позиции, которые дают подарок.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Кальян обычный" && it.callbackData == "vpg_itog:10:531:HOOKAH:701:0" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Условие подарка сохранено. Теперь выберите подарок.", null)
+                venuePromotionRuleRepository.createGiftWithItemRule(
+                    venueId = 10L,
+                    promotionId = 531L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    rewardMenuItemId = 803L,
+                    createdByUserId = 200L,
+                )
+                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+                    venueId = 10L,
+                    ruleId = 621L,
+                    menuItemIds = listOf(701L),
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Тип: подарок к позиции") &&
+                            it.contains("Правила работают, когда акция включена.")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "⚙️ Правила акции" && it.callbackData == "vpr_root:10:531" } &&
+                            buttons.none { it.text == "🎯 Условие подарка" } &&
+                            buttons.none { it.text == "🎁 Подарок" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+        }
+
+    @Test
+    fun `owner can create happy hours promotion draft from template`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            val created =
+                testPromotion(
+                    id = 507L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Счастливые часы",
+                    description = "20% на кальяны",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = 200L,
+                )
+            } returns created
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 507L) } returns created
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-template-happy",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_010, chat = Chat(id = 100, type = "private")),
+                            data = "vp_tpl:10:HAPPY_HOURS_PERCENT",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_011,
+                    message =
+                        Message(
+                            messageId = 20_011,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Счастливые часы",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_012,
+                    message =
+                        Message(
+                            messageId = 20_012,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "20% на кальяны",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Напишите описание и условия акции одним сообщением.\nНапример: скидка 20% на кальяны с 18:00 до 20:00 по будням.",
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any { it.text == "↩️ К акциям" && it.callbackData == "vp_root:10" } == true
+                    },
+                )
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Счастливые часы",
+                    description = "20% на кальяны",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = 200L,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Акция создана как черновик. Настройте правило Happy Hours в разделе «Правила акции»: скидку, дни и время проведения.",
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Тип: счастливые часы") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✏️ Описание и условия" && it.callbackData == "vp_ed:10:507" } &&
+                            buttons.none { it.text == "✏️ Условия" } &&
+                            buttons.any { it.text == "⚙️ Правила акции" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `owner opens empty promotion rules screen for draft promotion`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 506L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 506L) } returns promotion
+            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 506L, any()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_007,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rules-empty",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_007, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_root:10:506",
+                        ),
+                ),
+            )
+
+            coVerify {
+                venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 506L, any())
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("⚙️ Правила акции") &&
+                            it.contains("Счастливые часы") &&
+                            it.contains("Правил акции пока нет.")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "➕ Добавить правило" && it.callbackData == "vpr_add:10:506"
+                            }
+                    },
+                )
+            }
+	        }
+
+	    @Test
+	    fun `owner sees clear labels for multiple promotion rules`() =
+	        runBlocking {
+	            val promotion =
+	                testPromotion(
+	                    id = 515L,
+	                    venueId = 10L,
+	                    venueName = "Mix",
+	                    title = "Счастливые часы",
+	                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+	                )
+	            val hookahRule =
+	                testPromotionRule(
+	                    id = 609L,
+	                    venueId = 10L,
+	                    promotionId = 515L,
+	                    targetValue = MenuSemanticType.HOOKAH,
+	                    discountPercent = 20,
+	                    status = VenuePromotionStatus.ACTIVE,
+	                )
+	            val teaRule =
+	                testPromotionRule(
+	                    id = 610L,
+	                    venueId = 10L,
+	                    promotionId = 515L,
+	                    targetValue = MenuSemanticType.TEA,
+	                    discountPercent = 10,
+	                    status = VenuePromotionStatus.ACTIVE,
+	                )
+	            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+	                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+	            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 515L) } returns promotion
+	            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 515L, any()) } returns listOf(hookahRule, teaRule)
+
+	            router.process(
+	                TelegramUpdate(
+	                    updateId = 10_029,
+	                    callbackQuery =
+	                        CallbackQuery(
+	                            id = "cb-promo-rules-multiple",
+	                            from = User(id = 200),
+	                            message = Message(messageId = 20_029, chat = Chat(id = 100, type = "private")),
+	                            data = "vpr_root:10:515",
+	                        ),
+	                ),
+	            )
+
+	            coVerify {
+	                outboxEnqueuer.enqueueSendMessage(
+	                    100,
+	                    match { it.contains("Выберите правило или добавьте новое.") },
+	                    match { markup ->
+	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+	                        buttons.any { it.text == "20% · Кальяны" && it.callbackData == "vpr_o:10:515:609" } &&
+	                            buttons.any { it.text == "10% · Чай" && it.callbackData == "vpr_o:10:515:610" }
+	                    },
+	                )
+	            }
+	        }
+
+	    @Test
+	    fun `owner can create active promotion happy hours rule`() =
+	        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            val promotion =
+                testPromotion(
+                    id = 506L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            val rule = testPromotionRule(id = 601L, venueId = 10L, promotionId = 506L, status = VenuePromotionStatus.ACTIVE)
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 506L) } returns promotion
+            coEvery {
+                venuePromotionRuleRepository.createHappyHoursRule(
+                    venueId = 10L,
+                    promotionId = 506L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 20,
+                    createdByUserId = 200L,
+                )
+            } returns rule
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 601L) } returns rule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_008,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-target",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_008, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_t:10:506:HOOKAH",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_009,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-target-all",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_009, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_tall_new:10:506:HOOKAH",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010,
+                    message = Message(messageId = 20_010, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "20"),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "На что действует скидка в категории «Кальяны»?",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Все позиции категории «Кальяны»" && it.callbackData == "vpr_tall_new:10:506:HOOKAH" } &&
+                            buttons.any { it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpr_titems_new:10:506:HOOKAH:0" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите процент скидки от 1 до 100.\nНапример: 20",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилам" &&
+                            buttons.single().callbackData == "vpr_root:10:506"
+                    },
+                )
+                venuePromotionRuleRepository.createHappyHoursRule(
+                    venueId = 10L,
+                    promotionId = 506L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 20,
+                    createdByUserId = 200L,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Правило создано.", null)
+	                outboxEnqueuer.enqueueSendMessage(
+	                    100,
+	                    match {
+	                            it.contains("⚙️ Правило акции") &&
+	                            it.contains("На что действует: Кальяны") &&
+	                            it.contains("Скидка: 20%") &&
+	                            it.contains("Это правило применяется, когда акция включена.") &&
+	                            !it.contains("preview-only")
+	                    },
+	                    match { markup ->
+	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+	                        buttons.any { it.text == "🎯 На что действует" && it.callbackData == "vpr_tedit:10:506:601" } &&
+	                            buttons.any { it.text == "✏️ Процент скидки" && it.callbackData == "vpr_pct:10:506:601" } &&
+	                            buttons.none { it.text == "▶️ Включить" || it.text == "⏸ Приостановить" || it.text == "🗄 Архивировать" } &&
+	                            buttons.any { it.text == "↩️ К правилам" && it.callbackData == "vpr_root:10:506" }
+	                    },
+	                )
+            }
+        }
+
+    @Test
+    fun `creating duplicate happy hours rule opens existing rule`() =
+        runBlocking {
+            val states =
+                mutableMapOf(
+                    100L to
+                        DialogState(
+                            state = DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT,
+                            payload =
+                                mapOf(
+                                    "venue_id" to "10",
+                                    "promotion_id" to "506",
+                                    "target_value" to "HOOKAH",
+                                ),
+                        ),
+                )
+            val promotion =
+                testPromotion(
+                    id = 506L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            val duplicateRule = testPromotionRule(id = 601L, venueId = 10L, promotionId = 506L, status = VenuePromotionStatus.ACTIVE)
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 506L) } returns promotion
+            coEvery {
+                venuePromotionRuleRepository.findDuplicateHappyHoursRule(
+                    venueId = 10L,
+                    promotionId = 506L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    targetMenuItemIds = emptyList(),
+                    discountPercent = 20,
+                )
+            } returns duplicateRule
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 601L) } returns duplicateRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_133,
+                    message = Message(messageId = 20_133, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "20"),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify {
+                venuePromotionRuleRepository.findDuplicateHappyHoursRule(
+                    venueId = 10L,
+                    promotionId = 506L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    targetMenuItemIds = emptyList(),
+                    discountPercent = 20,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Такое правило уже есть.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Правило акции") && it.contains("Скидка: 20%") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                venuePromotionRuleRepository.createHappyHoursRule(
+                    venueId = any(),
+                    promotionId = any(),
+                    targetValue = any(),
+                    discountPercent = any(),
+                    createdByUserId = any(),
+                )
+            }
+        }
+
+    @Test
+    fun `creating duplicate gift rule opens existing rule`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 530L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Чай к кальяну",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                )
+            val duplicateRule =
+                testPromotionRule(
+                    id = 620L,
+                    venueId = 10L,
+                    promotionId = 530L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 0,
+                    status = VenuePromotionStatus.ACTIVE,
+                    ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+                    reward =
+                        PromotionRuleReward(
+                            id = 710L,
+                            ruleId = 620L,
+                            rewardMenuItemId = 801L,
+                            rewardMenuItemName = "Чай",
+                            rewardQty = 1,
+                            maxRewardsPerBatch = 1,
+                            priceMinor = 30_000L,
+                            currency = "RUB",
+                            isAvailable = true,
+                        ),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 530L) } returns promotion
+            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 530L, any()) } returns emptyList()
+            coEvery {
+                venuePromotionRuleRepository.findDuplicateGiftWithItemRule(
+                    venueId = 10L,
+                    promotionId = 530L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    targetMenuItemIds = emptyList(),
+                    rewardMode = PromotionRewardMode.FIXED_ITEM,
+                    rewardMenuItemId = 801L,
+                )
+            } returns duplicateRule
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 620L) } returns duplicateRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_134,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-trigger-all-duplicate",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_134, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_tall:10:530:HOOKAH",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_135,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-reward-duplicate",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_135, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_ritem:10:530:TEA:801:0",
+                        ),
+                ),
+            )
+
+            coVerify {
+                venuePromotionRuleRepository.findDuplicateGiftWithItemRule(
+                    venueId = 10L,
+                    promotionId = 530L,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    targetMenuItemIds = emptyList(),
+                    rewardMode = PromotionRewardMode.FIXED_ITEM,
+                    rewardMenuItemId = 801L,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Такое правило уже есть.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Правило акции") && it.contains("Тип: Подарок к позиции") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                venuePromotionRuleRepository.createGiftWithItemRule(
+                    venueId = any(),
+                    promotionId = any(),
+                    targetValue = any(),
+                    rewardMenuItemId = any(),
+                    createdByUserId = any(),
+                )
+            }
+        }
+
+    @Test
+    fun `legacy rule lifecycle callback does not update rule and staff is denied`() =
+        runBlocking {
+            val activeRule = testPromotionRule(id = 602L, venueId = 10L, promotionId = 507L, status = VenuePromotionStatus.ACTIVE)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 602L) } returns activeRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_010,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-on",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_010, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_on:10:507:602",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_011,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_011, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_on:10:507:602",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venuePromotionRuleRepository.setRuleStatus(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Правила включаются вместе с акцией. Управляйте статусом на экране акции.",
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+	        }
+
+    @Test
+    fun `owner deletes promotion rule with confirmation while staff is denied`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 534L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            val rule = testPromotionRule(id = 624L, venueId = 10L, promotionId = 534L, status = VenuePromotionStatus.ACTIVE)
+            val archivedRule = rule.copy(status = VenuePromotionStatus.ARCHIVED)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 534L) } returns promotion
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 624L) } returns rule
+            coEvery { venuePromotionRuleRepository.archiveRule(10L, 534L, 624L) } returns archivedRule
+            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 534L, any()) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_130,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-rule-delete-confirm",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_130, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_del:10:534:624",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_131,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-rule-delete-yes",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_131, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_del_yes:10:534:624",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_132,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-rule-delete-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_132, chat = Chat(id = 101, type = "private")),
+                            data = "vpr_del:10:534:624",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Удалить это правило акции?\n\nОно больше не будет применяться к новым заказам. История уже оформленных заказов сохранится.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Да, удалить правило" && it.callbackData == "vpr_del_yes:10:534:624" } &&
+                            buttons.any { it.text == "↩️ Назад к правилу" && it.callbackData == "vpr_o:10:534:624" }
+                    },
+                )
+                venuePromotionRuleRepository.archiveRule(10L, 534L, 624L)
+                outboxEnqueuer.enqueueSendMessage(100, "Правило удалено.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Правил акции пока нет.") },
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+        }
+
+		    @Test
+		    fun `owner can edit promotion rule target and percent while staff is denied`() =
+		        runBlocking {
+	            val promotion =
+	                testPromotion(
+	                    id = 514L,
+	                    venueId = 10L,
+	                    venueName = "Mix",
+	                    title = "Счастливые часы",
+	                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+	                )
+	            val baseRule = testPromotionRule(id = 608L, venueId = 10L, promotionId = 514L)
+	            val targetUpdatedRule = baseRule.copy(targetValue = MenuSemanticType.TEA)
+	            val percentUpdatedRule = targetUpdatedRule.copy(discountPercent = 10)
+	            val states = mutableMapOf<Long, DialogState>()
+	            coEvery { dialogStateRepository.get(any()) } answers {
+	                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+	            }
+	            coEvery { dialogStateRepository.set(any(), any()) } answers {
+	                states[firstArg()] = secondArg()
+	                Unit
+	            }
+	            coEvery { dialogStateRepository.clear(any()) } answers {
+	                states.remove(firstArg<Long>())
+	                Unit
+	            }
+	            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+	                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+	            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+	                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+	            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 514L) } returns promotion
+	            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 608L) } returns
+	                baseRule andThen baseRule andThen targetUpdatedRule andThen targetUpdatedRule andThen targetUpdatedRule andThen percentUpdatedRule
+		            coEvery {
+		                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
+		                    venueId = 10L,
+		                    ruleId = 608L,
+		                    semanticType = MenuSemanticType.TEA,
+		                )
+		            } returns targetUpdatedRule
+	            coEvery {
+	                venuePromotionRuleRepository.updateHappyHoursRule(
+	                    venueId = 10L,
+	                    ruleId = 608L,
+	                    discountPercent = 10,
+	                )
+	            } returns percentUpdatedRule
+
+	            router.process(
+	                TelegramUpdate(
+	                    updateId = 10_022,
+	                    callbackQuery =
+	                        CallbackQuery(
+	                            id = "cb-promo-rule-target-edit",
+	                            from = User(id = 200),
+	                            message = Message(messageId = 20_022, chat = Chat(id = 100, type = "private")),
+	                            data = "vpr_tedit:10:514:608",
+	                        ),
+	                ),
+	            )
+	            router.process(
+	                TelegramUpdate(
+	                    updateId = 10_023,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-target-category",
+		                            from = User(id = 200),
+		                            message = Message(messageId = 20_023, chat = Chat(id = 100, type = "private")),
+		                            data = "vpr_tcat:10:514:608:TEA",
+		                        ),
+		                ),
+		            )
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_024,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-target-save",
+		                            from = User(id = 200),
+		                            message = Message(messageId = 20_024, chat = Chat(id = 100, type = "private")),
+		                            data = "vpr_tall:10:514:608:TEA",
+		                        ),
+		                ),
+		            )
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_025,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-target-staff",
+		                            from = User(id = 201),
+		                            message = Message(messageId = 20_025, chat = Chat(id = 101, type = "private")),
+		                            data = "vpr_tedit:10:514:608",
+		                        ),
+		                ),
+		            )
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_026,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-percent-staff",
+		                            from = User(id = 201),
+		                            message = Message(messageId = 20_026, chat = Chat(id = 101, type = "private")),
+		                            data = "vpr_pct:10:514:608",
+		                        ),
+		                ),
+		            )
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_027,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-percent-edit",
+		                            from = User(id = 200),
+		                            message = Message(messageId = 20_027, chat = Chat(id = 100, type = "private")),
+		                            data = "vpr_pct:10:514:608",
+		                        ),
+		                ),
+		            )
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_028,
+		                    message = Message(messageId = 20_028, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "abc"),
+		                ),
+		            )
+		            assertEquals(DialogStateType.VENUE_PROMOTION_RULE_WAIT_PERCENT, states[100]?.state)
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_029,
+		                    message = Message(messageId = 20_029, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "10"),
+		                ),
+		            )
+
+	            assertEquals(null, states[100])
+	            coVerify {
+		                outboxEnqueuer.enqueueSendMessage(
+		                    100,
+		                    "Выберите категорию для скидки.",
+		                    match { markup ->
+		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+		                        buttons.any { it.text == "Чай" && it.callbackData == "vpr_tcat:10:514:608:TEA" } &&
+		                            buttons.any { it.text == "↩️ К правилу" && it.callbackData == "vpr_o:10:514:608" }
+		                    },
+		                )
+		                outboxEnqueuer.enqueueSendMessage(
+		                    100,
+		                    "На что действует скидка в категории «Чай»?",
+		                    match { markup ->
+		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+		                        buttons.any { it.text == "✅ Все позиции категории «Чай»" && it.callbackData == "vpr_tall:10:514:608:TEA" } &&
+		                            buttons.any { it.text == "🎯 Выбрать отдельные позиции" && it.callbackData == "vpr_titems:10:514:608:TEA:0" }
+		                    },
+		                )
+		                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
+		                    venueId = 10L,
+		                    ruleId = 608L,
+		                    semanticType = MenuSemanticType.TEA,
+		                )
+		                outboxEnqueuer.enqueueSendMessage(100, "Скидка будет действовать на все позиции категории «Чай».", null)
+	                outboxEnqueuer.enqueueSendMessage(
+	                    100,
+	                    "Введите процент скидки от 1 до 100.",
+	                    match { markup ->
+	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+	                        buttons.size == 1 &&
+	                            buttons.single().text == "↩️ К правилу" &&
+	                            buttons.single().callbackData == "vpr_o:10:514:608"
+	                    },
+	                )
+	                outboxEnqueuer.enqueueSendMessage(
+	                    100,
+	                    "Введите процент скидки числом от 1 до 100.",
+	                    match { markup ->
+	                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+	                        buttons.size == 1 &&
+	                            buttons.single().text == "↩️ К правилу" &&
+	                            buttons.single().callbackData == "vpr_o:10:514:608"
+	                    },
+	                )
+	                venuePromotionRuleRepository.updateHappyHoursRule(
+	                    venueId = 10L,
+	                    ruleId = 608L,
+	                    discountPercent = 10,
+	                )
+	                outboxEnqueuer.enqueueSendMessage(100, "Процент скидки сохранён.", null)
+		                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+		            }
+		        }
+
+		    @Test
+		    fun `owner can choose specific menu items for promotion rule target`() =
+		        runBlocking {
+		            val promotion =
+		                testPromotion(
+		                    id = 516L,
+		                    venueId = 10L,
+		                    venueName = "Mix",
+		                    title = "Счастливые часы",
+		                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+		                )
+		            val baseRule = testPromotionRule(id = 611L, venueId = 10L, promotionId = 516L)
+		            val itemTargetRule =
+		                baseRule.copy(
+		                    targets =
+		                        listOf(
+		                            PromotionRuleTarget(
+		                                id = 1L,
+		                                ruleId = 611L,
+		                                targetType = PromotionRuleTargetType.MENU_ITEM,
+		                                semanticType = null,
+		                                menuItemId = 701L,
+		                                menuItemName = "Кальян обычный",
+		                            ),
+		                        ),
+		                )
+		            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+		                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+		            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 516L) } returns promotion
+		            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 611L) } returns
+		                baseRule andThen baseRule andThen itemTargetRule
+		            coEvery { venuePromotionRuleRepository.listMenuItemsForTargetSelection(10L, MenuSemanticType.HOOKAH) } returns
+		                listOf(
+		                    PromotionRuleTargetMenuItem(701L, "Кальян обычный", MenuSemanticType.HOOKAH),
+		                    PromotionRuleTargetMenuItem(702L, "Премиум кальян", MenuSemanticType.HOOKAH),
+		                )
+		            coEvery {
+		                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+		                    venueId = 10L,
+		                    ruleId = 611L,
+		                    menuItemIds = listOf(701L),
+		                )
+		            } returns itemTargetRule
+
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_030,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-items-open",
+		                            from = User(id = 200),
+		                            message = Message(messageId = 20_030, chat = Chat(id = 100, type = "private")),
+		                            data = "vpr_titems:10:516:611:HOOKAH:0",
+		                        ),
+		                ),
+		            )
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_031,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-items-toggle",
+		                            from = User(id = 200),
+		                            message = Message(messageId = 20_031, chat = Chat(id = 100, type = "private")),
+		                            data = "vpr_itog:10:516:611:HOOKAH:701:0",
+		                        ),
+		                ),
+		            )
+		            router.process(
+		                TelegramUpdate(
+		                    updateId = 10_032,
+		                    callbackQuery =
+		                        CallbackQuery(
+		                            id = "cb-promo-rule-items-done",
+		                            from = User(id = 200),
+		                            message = Message(messageId = 20_032, chat = Chat(id = 100, type = "private")),
+		                            data = "vpr_idone:10:516:611:HOOKAH",
+		                        ),
+		                ),
+		            )
+
+		            coVerify {
+		                outboxEnqueuer.enqueueSendMessage(
+		                    100,
+		                    "Выберите позиции категории «Кальяны».",
+		                    match { markup ->
+		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+		                        buttons.any { it.text == "Кальян обычный" && it.callbackData == "vpr_itog:10:516:611:HOOKAH:701:0" } &&
+		                            buttons.any { it.text == "Премиум кальян" && it.callbackData == "vpr_itog:10:516:611:HOOKAH:702:0" }
+		                    },
+		                )
+		                outboxEnqueuer.enqueueSendMessage(
+		                    100,
+		                    "Выберите позиции категории «Кальяны».",
+		                    match { markup ->
+		                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+		                        buttons.any { it.text == "✅ Кальян обычный" && it.callbackData == "vpr_itog:10:516:611:HOOKAH:701:0" }
+		                    },
+		                )
+		                venuePromotionRuleRepository.replaceRuleTargetsWithMenuItems(
+		                    venueId = 10L,
+		                    ruleId = 611L,
+		                    menuItemIds = listOf(701L),
+		                )
+		                outboxEnqueuer.enqueueSendMessage(100, "Скидка будет действовать на выбранные позиции.", null)
+		            }
+		        }
+
+		    @Test
+		    fun `manager can update promotion rule schedule and staff is denied`() =
+		        runBlocking {
+            val baseRule =
+                testPromotionRule(
+                    id = 604L,
+                    venueId = 10L,
+                    promotionId = 509L,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+            val updatedRule = baseRule.copy(startsTime = LocalTime.of(15, 0))
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 604L) } returns baseRule andThen baseRule andThen updatedRule
+            coEvery {
+                venuePromotionRuleRepository.updateRuleSchedule(
+                    venueId = 10L,
+                    ruleId = 604L,
+                    startsTime = LocalTime.of(15, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+            } returns updatedRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_012,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-start",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_012, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_st:10:509:604",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_013,
+                    message = Message(messageId = 20_013, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "15:00"),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_014,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-schedule-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_014, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_s:10:509:604",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите время начала акции в формате HH:mm, например 14:00. После этого бот спросит время окончания.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилу" &&
+                            buttons.single().callbackData == "vpr_o:10:509:604"
+                    },
+                )
+                venuePromotionRuleRepository.updateRuleSchedule(
+                    venueId = 10L,
+                    ruleId = 604L,
+                    startsTime = LocalTime.of(15, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Время начала сохранено.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Правило акции") && it.contains("Расписание: Пн–Пт, 15:00–18:00") },
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any { it.text == "↩️ К правилам" && it.callbackData == "vpr_root:10:509" } == true
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+        }
+
+    @Test
+    fun `owner can update promotion rule end time and stays in rule detail flow`() =
+        runBlocking {
+            val baseRule =
+                testPromotionRule(
+                    id = 606L,
+                    venueId = 10L,
+                    promotionId = 511L,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+            val updatedRule = baseRule.copy(endsTime = LocalTime.of(17, 0))
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 606L) } returns baseRule andThen baseRule andThen updatedRule
+            coEvery {
+                venuePromotionRuleRepository.updateRuleSchedule(
+                    venueId = 10L,
+                    ruleId = 606L,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(17, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+            } returns updatedRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_018,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-end",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_018, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_et:10:511:606",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_019,
+                    message = Message(messageId = 20_019, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "17:00"),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите время окончания акции в формате HH:mm, например 18:00.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилу" &&
+                            buttons.single().callbackData == "vpr_o:10:511:606"
+                    },
+                )
+                venuePromotionRuleRepository.updateRuleSchedule(
+                    venueId = 10L,
+                    ruleId = 606L,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(17, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Время окончания сохранено.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Правило акции") && it.contains("Расписание: Пн–Пт, 14:00–17:00") },
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any { it.text == "↩️ К правилам" && it.callbackData == "vpr_root:10:511" } == true
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Используйте меню ниже.", any())
+            }
+        }
+
+    @Test
+    fun `promotion rule start time input keeps waiting for end time when schedule is incomplete`() =
+        runBlocking {
+            val rule =
+                testPromotionRule(
+                    id = 607L,
+                    venueId = 10L,
+                    promotionId = 512L,
+                    startsTime = null,
+                    endsTime = null,
+                    daysOfWeek = setOf(1, 2, 3),
+                )
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 607L) } returns rule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_020,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-start-incomplete",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_020, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_st:10:512:607",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_021,
+                    message = Message(messageId = 20_021, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "14:00"),
+                ),
+            )
+
+            assertEquals(DialogStateType.VENUE_PROMOTION_RULE_WAIT_END_TIME, states[100]?.state)
+            assertEquals("10", states[100]?.payload?.get("venue_id"))
+            assertEquals("512", states[100]?.payload?.get("promotion_id"))
+            assertEquals("607", states[100]?.payload?.get("rule_id"))
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Время начала сохранено. Теперь введите время окончания акции в формате HH:mm, например 18:00.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилу" &&
+                            buttons.single().callbackData == "vpr_o:10:512:607"
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                venuePromotionRuleRepository.updateRuleSchedule(any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Используйте меню ниже.", any())
+            }
+        }
+
+    @Test
+    fun `promotion rule schedule rejects invalid and overnight time`() =
+        runBlocking {
+            val rule =
+                testPromotionRule(
+                    id = 605L,
+                    venueId = 10L,
+                    promotionId = 510L,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(5),
+                )
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 605L) } returns rule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_015,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-rule-end-invalid",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_015, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_et:10:510:605",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_016,
+                    message = Message(messageId = 20_016, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "abc"),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_017,
+                    message = Message(messageId = 20_017, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "02:00"),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Введите время в формате HH:mm, например 14:00.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилу" &&
+                            buttons.single().callbackData == "vpr_o:10:510:605"
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Время начала должно быть раньше времени окончания. Ночные интервалы пока не поддерживаются.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.size == 1 &&
+                            buttons.single().text == "↩️ К правилу" &&
+                            buttons.single().callbackData == "vpr_o:10:510:605"
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                venuePromotionRuleRepository.updateRuleSchedule(any(), any(), any(), any(), any())
+            }
+            assertEquals(DialogStateType.VENUE_PROMOTION_RULE_WAIT_END_TIME, states[100]?.state)
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Используйте меню ниже.", any())
+            }
+        }
+
+    @Test
+    fun `owner can update promotion rule compatibility while staff is denied`() =
+        runBlocking {
+            val baseRule = testPromotionRule(id = 624L, venueId = 10L, promotionId = 534L)
+            val stackableRule = baseRule.copy(stackable = true)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 624L) } returns
+                baseRule andThen stackableRule andThen stackableRule
+            coEvery {
+                venuePromotionRuleRepository.updateRuleCompatibility(
+                    venueId = 10L,
+                    ruleId = 624L,
+                    stackable = true,
+                    conflictGroup = null,
+                )
+            } returns stackableRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_120,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-rule-compat-open",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_120, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_cmp:10:534:624",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_121,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-rule-compat-save",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_121, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_cmp_set:10:534:624:1",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_122,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-rule-compat-open-updated",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_122, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_cmp:10:534:624",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_123,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-rule-compat-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_123, chat = Chat(id = 101, type = "private")),
+                            data = "vpr_cmp:10:534:624",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("⚖️ Совместимость акций") &&
+                            it.contains("Если несколько акций подходят к одной позиции") &&
+                            it.contains("Текущий режим: не суммировать")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:0" } &&
+                            buttons.any { it.text == "Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:1" }
+                    },
+                )
+                venuePromotionRuleRepository.updateRuleCompatibility(
+                    venueId = 10L,
+                    ruleId = 624L,
+                    stackable = true,
+                    conflictGroup = null,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Совместимость акций сохранена.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("⚙️ Правило акции") &&
+                            it.contains("Совместимость: можно суммировать с другими акциями")
+                    },
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("⚖️ Совместимость акций") &&
+                            it.contains("Текущий режим: можно суммировать с другими акциями")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Не суммировать с похожими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:0" } &&
+                            buttons.any { it.text == "✅ Можно суммировать с другими акциями" && it.callbackData == "vpr_cmp_set:10:534:624:1" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+        }
+
+    @Test
+    fun `gift promotion rule detail shows compatibility action`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 535L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Чай к кальяну",
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                )
+            val giftRule =
+                testPromotionRule(
+                    id = 625L,
+                    venueId = 10L,
+                    promotionId = 535L,
+                    status = VenuePromotionStatus.ACTIVE,
+                    ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+                    reward =
+                        PromotionRuleReward(
+                            id = 303L,
+                            ruleId = 625L,
+                            rewardMenuItemId = 801L,
+                            rewardMenuItemName = "Чай",
+                            rewardQty = 1,
+                            maxRewardsPerBatch = 1,
+                            priceMinor = 30_000L,
+                            currency = "RUB",
+                            isAvailable = true,
+                        ),
+                )
+            val stackableGiftRule = giftRule.copy(stackable = true)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 535L) } returns promotion
+            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 535L) } returns listOf(giftRule)
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 625L) } returns giftRule andThen stackableGiftRule
+            coEvery {
+                venuePromotionRuleRepository.updateRuleCompatibility(
+                    venueId = 10L,
+                    ruleId = 625L,
+                    stackable = true,
+                    conflictGroup = null,
+                )
+            } returns stackableGiftRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_123,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-rules-root",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_123, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_root:10:535",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_124,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-rule-detail",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_124, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_o:10:535:625",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_125,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-rule-compat-save",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_125, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_cmp_set:10:535:625:1",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_126,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-rule-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_126, chat = Chat(id = 101, type = "private")),
+                            data = "vpr_o:10:535:625",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Правила акции") && it.contains("Чай к кальяну") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text.startsWith("Подарок") && it.callbackData == "vpr_o:10:535:625" } &&
+                            buttons.none { it.text == "➕ Добавить правило" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("⚙️ Правило акции") && it.contains("Тип: Подарок к позиции") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "⚖️ Совместимость акций" && it.callbackData == "vpr_cmp:10:535:625" }
+                    },
+                )
+                venuePromotionRuleRepository.updateRuleCompatibility(
+                    venueId = 10L,
+                    ruleId = 625L,
+                    stackable = true,
+                    conflictGroup = null,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Совместимость акций сохранена.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("⚙️ Правило акции") &&
+                            it.contains("Тип: Подарок к позиции") &&
+                            it.contains("Совместимость: можно суммировать с другими акциями")
+                    },
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+        }
+
+    @Test
+    fun `owner opens gift rule schedule from gift promotion and staff is denied`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 532L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Чай к кальяну",
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                )
+            val giftRule =
+                testPromotionRule(
+                    id = 622L,
+                    venueId = 10L,
+                    promotionId = 532L,
+                    status = VenuePromotionStatus.ACTIVE,
+                    ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+                    reward =
+                        PromotionRuleReward(
+                            id = 301L,
+                            ruleId = 622L,
+                            rewardMenuItemId = 801L,
+                            rewardMenuItemName = "Чай",
+                            rewardQty = 1,
+                            maxRewardsPerBatch = 1,
+                            priceMinor = 30_000L,
+                            currency = "RUB",
+                            isAvailable = true,
+                        ),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 532L) } returns promotion
+            coEvery { venuePromotionRuleRepository.listRulesForPromotionManagement(10L, 532L) } returns listOf(giftRule)
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 622L) } returns giftRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_040,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-schedule-open",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_040, chat = Chat(id = 100, type = "private")),
+                            data = "vpg_s:10:532",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_041,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-schedule-staff",
+                            from = User(id = 201),
+                            message = Message(messageId = 20_041, chat = Chat(id = 101, type = "private")),
+                            data = "vpg_s:10:532",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🕒 Время проведения акции") &&
+                            it.contains("Если расписание не задано, акция действует всегда") &&
+                            it.contains("подарок будет добавляться только в этот период")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "✅ Всегда" && it.callbackData == "vpr_sa:10:532:622" } &&
+                            buttons.any { it.text == "📅 Выбрать дни" && it.callbackData == "vpr_sd:10:532:622" } &&
+                            buttons.any { it.text == "🕒 Время проведения" && it.callbackData == "vpr_st:10:532:622" }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(101, "Раздел «Акции» доступен менеджеру или владельцу.", any())
+            }
+        }
+
+    @Test
+    fun `owner updates gift rule schedule and stays in gift detail flow`() =
+        runBlocking {
+            val baseRule =
+                testPromotionRule(
+                    id = 623L,
+                    venueId = 10L,
+                    promotionId = 533L,
+                    status = VenuePromotionStatus.ACTIVE,
+                    ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                    reward =
+                        PromotionRuleReward(
+                            id = 302L,
+                            ruleId = 623L,
+                            rewardMenuItemId = 801L,
+                            rewardMenuItemName = "Чай",
+                            rewardQty = 1,
+                            maxRewardsPerBatch = 1,
+                            priceMinor = 30_000L,
+                            currency = "RUB",
+                            isAvailable = true,
+                        ),
+                )
+            val updatedRule = baseRule.copy(startsTime = LocalTime.of(15, 0))
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRuleRepository.getRuleForManagement(10L, 623L) } returns baseRule andThen baseRule andThen updatedRule
+            coEvery {
+                venuePromotionRuleRepository.updateRuleSchedule(
+                    venueId = 10L,
+                    ruleId = 623L,
+                    startsTime = LocalTime.of(15, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+            } returns updatedRule
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_042,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-gift-rule-start",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_042, chat = Chat(id = 100, type = "private")),
+                            data = "vpr_st:10:533:623",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_043,
+                    message = Message(messageId = 20_043, chat = Chat(id = 100, type = "private"), fromUser = User(id = 200), text = "15:00"),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify {
+                venuePromotionRuleRepository.updateRuleSchedule(
+                    venueId = 10L,
+                    ruleId = 623L,
+                    startsTime = LocalTime.of(15, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Время начала сохранено.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Тип: Подарок к позиции") &&
+                            it.contains("Подарок: Чай") &&
+                            it.contains("Расписание: Пн–Пт, 15:00–18:00") &&
+                            it.contains("Подарок добавляется к заказу автоматически")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎯 Условие подарка" && it.callbackData == "vpg_tedit:10:533" } &&
+                            buttons.any { it.text == "🎁 Подарок" && it.callbackData == "vpg_rew:10:533" } &&
+                            buttons.any { it.text == "🕒 Расписание" && it.callbackData == "vpr_s:10:533:623" } &&
+                            buttons.none { it.text == "✏️ Процент скидки" }
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Используйте меню ниже.", any())
             }
         }
 
@@ -2379,7 +17904,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `start menu mini app button reports unavailable when url missing`() =
+    fun `legacy mini app text entry reports missing url message`() =
         runBlocking {
             router.process(
                 TelegramUpdate(
@@ -2397,14 +17922,39 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Mini App временно недоступен. Попробуйте позже.",
+                    "Mini App не настроен: отсутствует публичный URL. Обратитесь к владельцу платформы.",
                     any(),
                 )
             }
         }
 
     @Test
-    fun `catalog venue menu callback shows dynamic sections`() =
+    fun `guest table mini app text entry reports missing url message`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_006_1,
+                    message =
+                        Message(
+                            messageId = 20_006_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "📱 Заказывать в Mini App",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Mini App не настроен: отсутствует публичный URL. Обратитесь к владельцу платформы.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `catalog venue menu callback explains order menu requires table qr`() =
         runBlocking {
             coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
                 CatalogVenueShort(
@@ -2412,25 +17962,6 @@ class TelegramBotRouterTableTokenTest {
                     name = "Тестовая кальянная",
                     city = "Москва",
                     address = "Тверская, 1",
-                )
-            coEvery { guestMenuRepository.getMenu(10L) } returns
-                MenuModel(
-                    venueId = 10L,
-                    categories =
-                        listOf(
-                            MenuCategoryModel(
-                                id = 500L,
-                                name = "Кальяны",
-                                sortOrder = 0,
-                                items = emptyList(),
-                            ),
-                            MenuCategoryModel(
-                                id = 501L,
-                                name = "Напитки",
-                                sortOrder = 1,
-                                items = emptyList(),
-                            ),
-                        ),
                 )
 
             router.process(
@@ -2454,16 +17985,17 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "🍽 Меню «Тестовая кальянная»\nВыберите раздел.",
+                    "Заказное меню доступно после сканирования QR-кода на столе. " +
+                        "Ознакомительное меню можно посмотреть в разделе ℹ️ Информация.",
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.text == "Кальяны" &&
-                                    button.callbackData == "bot_catalog_venue_menu_section:10:500"
+                                button.text == "ℹ️ Информация" &&
+                                    button.callbackData == "bot_catalog_venue_about:10"
                             } &&
-                            it.inlineKeyboard.flatten().any { button ->
-                                button.text == "Напитки" &&
-                                    button.callbackData == "bot_catalog_venue_menu_section:10:501"
+                            it.inlineKeyboard.flatten().none { button ->
+                                button.callbackData?.startsWith("bot_catalog_venue_menu_section:") == true ||
+                                    button.callbackData == "bot_catalog_venue_menu:10"
                             }
                     },
                 )
@@ -2471,7 +18003,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `catalog venue menu section callback sends section images`() =
+    fun `catalog venue old menu callback does not expose empty structured menu state`() =
         runBlocking {
             coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
                 CatalogVenueShort(
@@ -2480,25 +18012,50 @@ class TelegramBotRouterTableTokenTest {
                     city = "Москва",
                     address = "Тверская, 1",
                 )
-            coEvery { guestMenuRepository.getMenu(10L) } returns
-                MenuModel(
-                    venueId = 10L,
-                    categories =
-                        listOf(
-                            MenuCategoryModel(
-                                id = 500L,
-                                name = "Кальяны",
-                                sortOrder = 0,
-                                items = emptyList(),
-                            ),
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_007_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-venue-empty-menu",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 20_007_1,
+                                    chat = Chat(id = 100, type = "private"),
+                                    fromUser = User(id = 200),
+                                ),
+                            data = "bot_catalog_venue_menu:10",
                         ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Заказное меню доступно после сканирования QR-кода на столе. " +
+                        "Ознакомительное меню можно посмотреть в разделе ℹ️ Информация.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "ℹ️ Информация" &&
+                                    button.callbackData == "bot_catalog_venue_about:10"
+                            }
+                    },
                 )
-            coEvery {
-                venueMenuSectionImagesRepository.listImageUrlsForCategory(venueId = 10L, categoryId = 500L)
-            } returns
-                listOf(
-                    "https://example.com/menu-1.png",
-                    "https://example.com/menu-2.png",
+            }
+        }
+
+    @Test
+    fun `catalog venue old menu section callback does not expose order menu content`() =
+        runBlocking {
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
                 )
 
             router.process(
@@ -2520,26 +18077,21 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueSendPhoto(
+                outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "https://example.com/menu-1.png",
-                    "🍽 Тестовая кальянная\nРаздел: Кальяны",
-                    null,
-                )
-            }
-            coVerify {
-                outboxEnqueuer.enqueueSendPhoto(
-                    100,
-                    "https://example.com/menu-2.png",
-                    null,
+                    "Заказное меню доступно после сканирования QR-кода на столе. " +
+                        "Ознакомительное меню можно посмотреть в разделе ℹ️ Информация.",
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.text == "⬅️ К разделам меню" &&
-                                    button.callbackData == "bot_catalog_venue_menu:10"
+                                button.text == "ℹ️ Информация" &&
+                                    button.callbackData == "bot_catalog_venue_about:10"
                             }
                     },
                 )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendPhoto(any(), any(), any(), any())
             }
         }
 
@@ -2596,6 +18148,53 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `table bot fallback text sends entry text and restores table keyboard`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+
+            val update =
+                TelegramUpdate(
+                    updateId = 10_007,
+                    message =
+                        Message(
+                            messageId = 20_007,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "💬 Заказывать в боте",
+                        ),
+                )
+
+            router.process(update)
+
+            coVerifyOrder {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Продолжаем в боте. Выберите действие.",
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "\u2060",
+                    match {
+                        it is ReplyKeyboardMarkup &&
+                            it.keyboard == TelegramKeyboards.tableContextBotFlow(context).keyboard
+                    },
+                )
+            }
+        }
+
+    @Test
     fun `open menu button in bot flow triggers bot placeholder message`() =
         runBlocking {
             val context =
@@ -2619,7 +18218,17 @@ class TelegramBotRouterTableTokenTest {
                                 id = 500L,
                                 name = "Кальяны",
                                 sortOrder = 0,
-                                items = emptyList(),
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
                             ),
                         ),
                 )
@@ -3175,7 +18784,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery { ordersRepository.findActiveOrderSummaryForTab(11L, any()) } returns ActiveOrderSummary(900L, "ACTIVE")
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, any()) } returns ActiveOrderSummary(900L, "ACTIVE")
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -3258,7 +18867,17 @@ class TelegramBotRouterTableTokenTest {
                                 id = 500L,
                                 name = "Основное меню",
                                 sortOrder = 0,
-                                items = emptyList(),
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
                             ),
                         ),
                 )
@@ -3294,7 +18913,13 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     "Выберите позицию в меню, затем откройте корзину и нажмите «Оформить заказ».",
-                    match { it is InlineKeyboardMarkup },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад к действиям стола" &&
+                                    button.callbackData == "table_actions_back"
+                            }
+                    },
                 )
             }
         }
@@ -3383,7 +19008,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery { ordersRepository.findActiveOrderSummaryForTab(11L, any()) } returns ActiveOrderSummary(900L, "ACTIVE")
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, any()) } returns ActiveOrderSummary(900L, "ACTIVE")
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -3492,7 +19117,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Кальян классический\nЦена: 250.00 ₽\n\n✅ Дозаказ отправлен в активный заказ #900.",
+                    "Кальян классический\nЦена: 250.00 ₽\n\n✅ Дозаказ отправлен в активный Заказ #900.",
                     match { it is InlineKeyboardMarkup },
                 )
             }
@@ -3683,8 +19308,564 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "🧺 Корзина\nИтого: 500.00 ₽",
+                    "🧺 Корзина\nИтого: 500.00 ₽\nКомментарий: —",
                     match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `cart shows loyalty progress line without changing total`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
+            coEvery { loyaltyRepository.getGuestProgress(10L, 200L) } returns
+                GuestLoyaltyProgress(
+                    programId = 301L,
+                    venueId = 10L,
+                    venueName = "Venue",
+                    userId = 200L,
+                    nthValue = 5,
+                    progressCount = 3,
+                    rewardsAvailable = 0,
+                    rewardsReserved = 0,
+                    updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
+                )
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Основное меню",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 25_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-cart-item",
+                            from = User(id = 200),
+                            message = Message(messageId = 35_1, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 25_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-open-cart",
+                            from = User(id = 200),
+                            message = Message(messageId = 35_2, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item_cart",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🧺 Корзина") &&
+                            it.contains("🎁 Лояльность: 3/4 до бесплатного кальяна.") &&
+                            !it.contains("следующий этап") &&
+                            it.contains("Итого: 250.00 ₽") &&
+                            !it.contains("Итого к оплате после акции")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `cart shows promotion preview without changing total`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
+            coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any()) } returns
+                listOf(testPromotionRule(id = 603L, venueId = 10L, promotionId = 508L, status = VenuePromotionStatus.ACTIVE))
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальянное меню",
+                                sortOrder = 0,
+                                categoryType = MenuSemanticType.HOOKAH,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                            itemType = null,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 26,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-cart-item-first",
+                            from = User(id = 200),
+                            message = Message(messageId = 36, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 27,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-cart-item-second",
+                            from = User(id = 200),
+                            message = Message(messageId = 37, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 28,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-open-cart",
+                            from = User(id = 200),
+                            message = Message(messageId = 38, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item_cart",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🧺 Корзина") &&
+                            it.contains("• Кальян классический ×2 — 500 ₽") &&
+                            it.contains("🎁 Счастливые часы: −100 ₽") &&
+                            it.contains("Итого к оплате после акции: 400 ₽") &&
+                            !it.contains("🎁 Акции:") &&
+                            !it.contains("Скидка будет применена при оформлении, если акция ещё активна.")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `cart loyalty redemption suppresses percent preview on same item and totals zero`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
+            coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any()) } returns
+                listOf(
+                    testPromotionRule(
+                        id = 603L,
+                        venueId = 10L,
+                        promotionId = 508L,
+                        discountPercent = 10,
+                        status = VenuePromotionStatus.ACTIVE,
+                    ),
+                )
+            coEvery { loyaltyRepository.previewRedemptionForCart(10L, 200L, any()) } answers {
+                val cartItems = thirdArg<List<LoyaltyCartItem>>()
+                val selected = cartItems.single()
+                LoyaltyRedemptionPreview(
+                    lineId = selected.lineId,
+                    menuItemId = selected.menuItemId,
+                    itemName = selected.itemName,
+                    discountMinor = selected.priceMinor,
+                    currency = selected.currency,
+                )
+            }
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальянное меню",
+                                sortOrder = 0,
+                                categoryType = MenuSemanticType.HOOKAH,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян обычный",
+                                            priceMinor = 110000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                            itemType = null,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 26_101,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-promo-cart-item",
+                            from = User(id = 200),
+                            message = Message(messageId = 36_101, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 26_102,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-loyalty-promo-open-cart",
+                            from = User(id = 200),
+                            message = Message(messageId = 36_102, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item_cart",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🧺 Корзина") &&
+                            it.contains("• Кальян обычный ×1 — 1 100 ₽") &&
+                            it.contains("🎁 Лояльность: бесплатный кальян −1 100 ₽") &&
+                            it.contains("Итого к оплате: 0 ₽") &&
+                            !it.contains("Счастливые часы") &&
+                            !it.contains("Итого к оплате после акции")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `cart blocks checkout until guest selects gift choice`() =
+        runBlocking {
+            val now = Instant.parse("2026-03-30T10:00:00Z")
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            val giftRule =
+                testPromotionRule(
+                    id = 604L,
+                    venueId = 10L,
+                    promotionId = 509L,
+                    status = VenuePromotionStatus.ACTIVE,
+                    ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+                    discountPercent = 0,
+                    reward =
+                        PromotionRuleReward(
+                            id = 704L,
+                            ruleId = 604L,
+                            rewardMenuItemId = 2000L,
+                            rewardMenuItemName = "Чай",
+                            rewardMode = PromotionRewardMode.CHOICE_ITEMS,
+                            rewardQty = 1,
+                            maxRewardsPerBatch = 1,
+                            priceMinor = 30_000L,
+                            currency = "RUB",
+                            isAvailable = true,
+                            options =
+                                listOf(
+                                    PromotionRuleRewardOption(
+                                        id = 1L,
+                                        rewardId = 704L,
+                                        menuItemId = 2000L,
+                                        menuItemName = "Чай",
+                                        priceMinor = 30_000L,
+                                        currency = "RUB",
+                                        isAvailable = true,
+                                    ),
+                                    PromotionRuleRewardOption(
+                                        id = 2L,
+                                        rewardId = 704L,
+                                        menuItemId = 2001L,
+                                        menuItemName = "Лимонад",
+                                        priceMinor = 40_000L,
+                                        currency = "RUB",
+                                        isAvailable = true,
+                                    ),
+                                ),
+                        ),
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
+            coEvery { venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId = 10L, now = any(), limit = any()) } returns listOf(giftRule)
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальянное меню",
+                                sortOrder = 0,
+                                categoryType = MenuSemanticType.HOOKAH,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                            itemType = null,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+            coEvery {
+                tableSessionRepository.resolveActiveSession(
+                    venueId = 10L,
+                    tableId = 11L,
+                    ttl = any(),
+                    now = any(),
+                )
+            } returns
+                TableSessionRecord(
+                    id = 55L,
+                    venueId = 10L,
+                    tableId = 11L,
+                    startedAt = now.minusSeconds(60),
+                    lastActivityAt = now,
+                    expiresAt = now.plusSeconds(7200),
+                    endedAt = null,
+                    status = TableSessionStatus.ACTIVE,
+                )
+            coEvery {
+                guestTabsRepository.ensurePersonalTab(
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                )
+            } returns
+                GuestTabModel(
+                    id = 77L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    type = "PERSONAL",
+                    ownerUserId = 200L,
+                    status = "ACTIVE",
+                )
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-choice-checkout-selected",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it[0].itemId == 1000L },
+                    selectedGiftChoices = match { it == mapOf(604L to 2001L) },
+                    skippedGiftRuleIds = emptySet(),
+                )
+            } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_001,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-add-item",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_101, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_002,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-open-cart",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_102, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item_cart",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_003,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-checkout-blocked",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_103, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_cart_checkout",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-open-options",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_104, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_gift_choice",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_005,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-select",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_105, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_gift_opt:2001",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_006,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-checkout-selected",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_106, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_cart_checkout",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🎁 Доступен подарок: выберите один вариант.") &&
+                            it.contains("Итого к оплате после акции: 250 ₽")
+                    },
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any { it.text == "🎁 Выбрать подарок" && it.callbackData == "bot_menu_gift_choice" } == true
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Вы ещё не выбрали подарок по акции.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "🎁 Выбрать подарок" && it.callbackData == "bot_menu_gift_choice" } &&
+                            buttons.any { it.text == "Оформить без подарка" && it.callbackData == "bot_gift_skip" }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Выберите один вариант") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "Чай" && it.callbackData == "bot_gift_opt:2000" } &&
+                            buttons.any { it.text == "Лимонад" && it.callbackData == "bot_gift_opt:2001" }
+                    },
+                )
+            }
+            coVerify {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-choice-checkout-selected",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it[0].itemId == 1000L },
+                    selectedGiftChoices = match { it == mapOf(604L to 2001L) },
+                    skippedGiftRuleIds = emptySet(),
                 )
             }
         }
@@ -3749,7 +19930,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-inc",
                             from = User(id = 200),
                             message = Message(messageId = 39, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_inc:1000",
+                            data = "bot_menu_cart_inc:1",
                         ),
                 ),
             )
@@ -3764,7 +19945,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "🧺 Корзина\nИтого: 500.00 ₽",
+                    "🧺 Корзина\nИтого: 500.00 ₽\nКомментарий: —",
                     match { it is InlineKeyboardMarkup },
                 )
             }
@@ -3830,7 +20011,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-dec",
                             from = User(id = 200),
                             message = Message(messageId = 41, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_dec:1000",
+                            data = "bot_menu_cart_dec:1",
                         ),
                 ),
             )
@@ -3924,7 +20105,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-remove-item-1",
                             from = User(id = 200),
                             message = Message(messageId = 44, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_remove:1000",
+                            data = "bot_menu_cart_remove:1",
                         ),
                 ),
             )
@@ -3939,7 +20120,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "🧺 Корзина\nИтого: 45.00 ₽",
+                    "🧺 Корзина\nИтого: 45.00 ₽\nКомментарий: —",
                     match { it is InlineKeyboardMarkup },
                 )
             }
@@ -4223,7 +20404,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "✅ Заказ отправлен.\nНомер заказа: #900.\nЧто дальше?",
+                    "✅ Заказ отправлен.\nЗаказ #900.\nЧто дальше?",
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().size == 1 &&
@@ -4237,6 +20418,125 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     "Корзина пуста.",
                     match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `cart built in personal tab is not silently checked out after switching to shared tab`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Основное меню",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+            coEvery {
+                guestTabsRepository.createSharedTab(
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    ownerUserId = 200L,
+                )
+            } returns
+                GuestTabModel(
+                    id = 9L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    type = "SHARED",
+                    ownerUserId = 200L,
+                    status = "ACTIVE",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 104,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-add-personal-before-shared",
+                            from = User(id = 200),
+                            message = Message(messageId = 204, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 105,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-switch-shared",
+                            from = User(id = 200),
+                            message = Message(messageId = 205, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_tabs_create_shared",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 106,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-checkout-after-shared-switch",
+                            from = User(id = 200),
+                            message = Message(messageId = 206, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_cart_checkout",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Корзина была собрана для другого счёта, поэтому я очистил её. Соберите заказ заново для текущего счёта.",
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Корзина пуста.",
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
                 )
             }
         }
@@ -4650,6 +20950,7 @@ class TelegramBotRouterTableTokenTest {
                     createdByUserId = 200L,
                     reason = StaffCallReason.BILL,
                     comment = "Способ оплаты: Картой",
+                    tableSessionId = 55L,
                 )
             } returns 1L
 
@@ -4722,6 +21023,7 @@ class TelegramBotRouterTableTokenTest {
                     createdByUserId = 200L,
                     reason = StaffCallReason.BILL,
                     comment = "Способ оплаты: Картой",
+                    tableSessionId = 55L,
                 )
             }
         }
@@ -4748,6 +21050,7 @@ class TelegramBotRouterTableTokenTest {
                     createdByUserId = 200L,
                     reason = StaffCallReason.COME,
                     comment = null,
+                    tableSessionId = 55L,
                 )
             } returns 1L
 
@@ -4776,6 +21079,7 @@ class TelegramBotRouterTableTokenTest {
                     createdByUserId = 200L,
                     reason = StaffCallReason.COME,
                     comment = null,
+                    tableSessionId = 55L,
                 )
             }
             coVerify {
@@ -4817,13 +21121,33 @@ class TelegramBotRouterTableTokenTest {
                                 id = 500L,
                                 name = "Основное меню",
                                 sortOrder = 0,
-                                items = emptyList(),
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
                             ),
                             MenuCategoryModel(
                                 id = 501L,
                                 name = "Напитки",
                                 sortOrder = 1,
-                                items = emptyList(),
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1001L,
+                                            name = "Лимонад",
+                                            priceMinor = 4500L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
                             ),
                         ),
                 )
@@ -5290,13 +21614,13 @@ class TelegramBotRouterTableTokenTest {
                         status = "ACTIVE",
                     ),
                 )
-            coEvery { ordersRepository.findActiveOrderSummaryForTab(11L, 24L) } returns null
-            coEvery { ordersRepository.findActiveOrderSummaryForTab(11L, 23L) } returns
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 24L) } returns null
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 23L) } returns
                 com.hookah.platform.backend.telegram.ActiveOrderSummary(
                     id = 900L,
                     status = "ACTIVE",
                 )
-            coEvery { ordersRepository.findActiveOrderDetailsForTab(11L, 23L) } returns
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 23L) } returns
                 ActiveOrderDetails(
                     orderId = 900L,
                     status = "ACTIVE",
@@ -5334,7 +21658,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                ordersRepository.findActiveOrderDetailsForTab(11L, 23L)
+                ordersRepository.findActiveOrderDetailsForTab(55L, 23L)
             }
             coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(100, "Активных заказов нет.", any())
@@ -5345,7 +21669,7 @@ class TelegramBotRouterTableTokenTest {
                     match { text ->
                         text.contains("Ваш заказ") &&
                             text.contains("Статус: Принят") &&
-                            text.contains("- Кальян классический ×1")
+                            text.contains("• Кальян классический ×1")
                     },
                     match {
                         it is InlineKeyboardMarkup &&
@@ -5372,7 +21696,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery { ordersRepository.findActiveOrderDetailsForTab(11L, any()) } returns
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, any()) } returns
                 ActiveOrderDetails(
                     orderId = 900L,
                     status = "ACTIVE",
@@ -5427,8 +21751,8 @@ class TelegramBotRouterTableTokenTest {
                     match { text ->
                         text.contains("Ваш заказ") &&
                             text.contains("Статус: Принят") &&
-                            text.contains("- Кальян классический ×2") &&
-                            text.contains("- Лимонад ×1") &&
+                            text.contains("• Кальян классический ×2") &&
+                            text.contains("• Лимонад ×1") &&
                             !text.contains("ACTIVE") &&
                             !text.contains("Батч")
                     },
@@ -5441,4 +21765,2718 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
         }
+
+    @Test
+    fun `active order screen shows promotion breakdown by names`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, any()) } returns
+                ActiveOrderDetails(
+                    orderId = 900L,
+                    status = "ACTIVE",
+                    promotionDiscounts =
+                        listOf(
+                            CreatedOrderPromotionDiscount(
+                                label = "Счастливые часы",
+                                discountMinor = 20000L,
+                                currency = "RUB",
+                                ruleType = "HAPPY_HOURS_PERCENT",
+                            ),
+                            CreatedOrderPromotionDiscount(
+                                label = "Сок в подарок",
+                                discountMinor = 50000L,
+                                currency = "RUB",
+                                ruleType = "GIFT_WITH_ITEM",
+                            ),
+                        ),
+                    batches =
+                        listOf(
+                            OrderBatchDetails(
+                                batchId = 901L,
+                                comment = null,
+                                items =
+                                    listOf(
+                                        OrderBatchItemDetails(
+                                            itemId = 1000L,
+                                            itemName = "Кальян",
+                                            qty = 1,
+                                            priceMinor = 200000L,
+                                            currency = "RUB",
+                                            promoDiscountMinor = 20000L,
+                                        ),
+                                        OrderBatchItemDetails(
+                                            itemId = 1001L,
+                                            itemName = "Сок",
+                                            qty = 1,
+                                            priceMinor = 50000L,
+                                            currency = "RUB",
+                                            promoDiscountMinor = 50000L,
+                                            isPromotionReward = true,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 201,
+                    message =
+                        Message(
+                            messageId = 301,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "📄 Мой заказ",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("🎁 Акции:\n• Счастливые часы: −200 ₽\n• Сок в подарок: −500 ₽") &&
+                            text.contains("Итого к оплате: 1 800 ₽")
+                    },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `change table without active order keeps context and asks staff help`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 300,
+                    message =
+                        Message(
+                            messageId = 400,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🚪 Сменить стол",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { chatContextRepository.clear(100) }
+            coVerify(exactly = 0) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Контекст сброшен. Отсканируйте QR на столе или откройте каталог.",
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Чтобы сменить стол, позовите персонал. Сотрудник проверит свободные столы и поможет пересесть.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🛎 Позвать персонал для смены стола" &&
+                                    button.callbackData == "relocation_call_staff"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад к действиям стола" &&
+                                    button.callbackData == "relocation_back_to_table_actions"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff call notification uses readable reason for staff chat`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Mix",
+                    tableId = 11L,
+                    tableNumber = 105,
+                    tableToken = "TOKEN",
+                    staffChatId = -777L,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery {
+                staffCallRepository.createStaffCall(
+                    venueId = 10L,
+                    tableId = 11L,
+                    createdByUserId = 200L,
+                    reason = StaffCallReason.COME,
+                    comment = null,
+                    tableSessionId = 55L,
+                )
+            } returns 6L
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_301,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-readable-staff-call",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 30_301,
+                                    chat = Chat(id = 100, type = "private"),
+                                    text = null,
+                                ),
+                            data = "staff_call_reason:COME",
+                        ),
+                ),
+            )
+
+            coVerify {
+                staffChatNotifier.notifyStaffCallNow(
+                    match {
+                        it.venueId == 10L &&
+                            it.staffCallId == 6L &&
+                            it.tableLabel == "105" &&
+                            it.reason == StaffCallReason.COME &&
+                            it.comment == null &&
+                            it.tableSessionId == 55L &&
+                            it.orderId == null &&
+                            it.type == StaffCallNotificationType.NORMAL
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `change table with active order keeps context and shows relocation guard`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns
+                ActiveOrderDetails(orderId = 900L, status = "ACTIVE", batches = emptyList())
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 301,
+                    message =
+                        Message(
+                            messageId = 401,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🚪 Сменить стол",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { chatContextRepository.clear(100) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Чтобы сменить стол, позовите персонал. Сотрудник проверит свободные столы и поможет пересесть.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🛎 Позвать персонал для смены стола" &&
+                                    button.callbackData == "relocation_call_staff"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ Назад к действиям стола" &&
+                                    button.callbackData == "relocation_back_to_table_actions"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `change table with non empty draft cart keeps context and shows relocation guard`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальяны",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25_000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 302,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cart-item",
+                            from = User(id = 200),
+                            message = Message(messageId = 402, chat = Chat(id = 100, type = "private")),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 303,
+                    message =
+                        Message(
+                            messageId = 403,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🚪 Сменить стол",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { chatContextRepository.clear(100) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Чтобы сменить стол, позовите персонал. Сотрудник проверит свободные столы и поможет пересесть.",
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `relocation staff call creates other staff call with table session context`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Mix",
+                    tableId = 11L,
+                    tableNumber = 105,
+                    tableToken = "TOKEN",
+                    staffChatId = -777L,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns
+                ActiveOrderDetails(orderId = 900L, status = "ACTIVE", batches = emptyList())
+            coEvery {
+                staffCallRepository.createStaffCall(
+                    venueId = 10L,
+                    tableId = 11L,
+                    createdByUserId = 200L,
+                    reason = StaffCallReason.OTHER,
+                    comment =
+                        match { comment ->
+                            comment.contains("Смена стола.") &&
+                                comment.contains("Текущий стол: №105.") &&
+                                comment.contains("tableSessionId=55.") &&
+                                comment.contains("orderId=900.")
+                        },
+                    tableSessionId = 55L,
+                )
+            } returns 700L
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 304,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "relocation-call",
+                            from = User(id = 200),
+                            message = Message(messageId = 404, chat = Chat(id = 100, type = "private")),
+                            data = "relocation_call_staff",
+                        ),
+                ),
+            )
+
+            coVerify {
+                staffCallRepository.createStaffCall(
+                    venueId = 10L,
+                    tableId = 11L,
+                    createdByUserId = 200L,
+                    reason = StaffCallReason.OTHER,
+                    comment =
+                        match { comment ->
+                            comment.contains("Смена стола.") &&
+                                comment.contains("Текущий стол: №105.") &&
+                                comment.contains("tableSessionId=55.") &&
+                                comment.contains("orderId=900.")
+                        },
+                    tableSessionId = 55L,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Персонал уведомлён, ожидайте.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+            coVerify {
+                staffChatNotifier.notifyStaffCallNow(
+                    match {
+                        it.venueId == 10L &&
+                            it.staffCallId == 700L &&
+                            it.tableLabel == "105" &&
+                            it.reason == StaffCallReason.OTHER &&
+                            it.comment?.contains("Смена стола.") == true &&
+                            it.tableSessionId == 55L &&
+                            it.orderId == 900L &&
+                            it.type == StaffCallNotificationType.RELOCATION
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `relocation staff call without active order still notifies staff chat`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Mix",
+                    tableId = 11L,
+                    tableNumber = 105,
+                    tableToken = "TOKEN",
+                    staffChatId = -777L,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns null
+            coEvery {
+                staffCallRepository.createStaffCall(
+                    venueId = 10L,
+                    tableId = 11L,
+                    createdByUserId = 200L,
+                    reason = StaffCallReason.OTHER,
+                    comment =
+                        match { comment ->
+                            comment.contains("Смена стола.") &&
+                                comment.contains("Текущий стол: №105.") &&
+                                comment.contains("tableSessionId=55.") &&
+                                comment.contains("orderId=none.")
+                        },
+                    tableSessionId = 55L,
+                )
+            } returns 701L
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 306,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "relocation-call-no-order",
+                            from = User(id = 200),
+                            message = Message(messageId = 406, chat = Chat(id = 100, type = "private")),
+                            data = "relocation_call_staff",
+                        ),
+                ),
+            )
+
+            coVerify {
+                staffChatNotifier.notifyStaffCallNow(
+                    match {
+                        it.venueId == 10L &&
+                            it.staffCallId == 701L &&
+                            it.tableLabel == "105" &&
+                            it.reason == StaffCallReason.OTHER &&
+                            it.comment?.contains("Смена стола.") == true &&
+                            it.tableSessionId == 55L &&
+                            it.orderId == null &&
+                            it.type == StaffCallNotificationType.RELOCATION
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `relocation back callback returns table context keyboard`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 305,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "relocation-back",
+                            from = User(id = 200),
+                            message = Message(messageId = 405, chat = Chat(id = 100, type = "private")),
+                            data = "relocation_back_to_table_actions",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите действие.",
+                    match {
+                        it is ReplyKeyboardMarkup &&
+                            it.keyboard == TelegramKeyboards.tableContextBotFlow(context).keyboard
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat order batch accept updates selected batch and edits group message`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.NEW,
+                    nextStatus = OrderBatchStatus.ACCEPTED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_401,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-accept",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_a:10:57",
+                        ),
+                ),
+            )
+
+            coVerify {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.NEW,
+                    nextStatus = OrderBatchStatus.ACCEPTED,
+                    actor = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                            text.contains("Новый заказ №12") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("✅ Принял: @waiter")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().text == "✅ Доставлено" &&
+                            markup.inlineKeyboard.flatten().single().callbackData == "sc_ob_d:10:57"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    "✅ Ваш заказ принят.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-accept", "Готово", false)
+            }
+        }
+
+    @Test
+    fun `staff chat order batch deliver finalizes selected batch and shows close bill action`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.ACCEPTED,
+                    nextStatus = OrderBatchStatus.DELIVERED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_402,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-deliver",
+                            from = User(id = 501L, firstName = "Анна"),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_d:10:57",
+                        ),
+                ),
+            )
+
+            coVerify {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.ACCEPTED,
+                    nextStatus = OrderBatchStatus.DELIVERED,
+                    actor = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                            text.contains("Новый заказ №12") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("✅ Доставлено: Анна")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт" &&
+                            markup.inlineKeyboard.flatten().single().callbackData == "sc_oc_ask:a:j:1l"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    "✅ Ваш заказ доставлен.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-deliver", "Готово", false)
+            }
+        }
+
+    @Test
+    fun `staff chat add-on batch accept notifies guest as reorder`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 58L,
+                    expectedCurrentStatus = OrderBatchStatus.NEW,
+                    nextStatus = OrderBatchStatus.ACCEPTED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 58L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    updatedAt = Instant.parse("2026-03-30T10:05:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetailWithAddOnBatch(addOnStatus = OrderWorkflowStatus.ACCEPTED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_402_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-addon-accept",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 78L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_a:10:58",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    78L,
+                    match { text ->
+                        text.contains("Дозаказ к заказу №12") &&
+                            !text.contains("к счёту") &&
+                            text.contains("✅ Принял: @waiter")
+                    },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Ваш дозаказ принят.", null)
+            }
+        }
+
+    @Test
+    fun `staff chat replacement before accept batch accept is not shown as reorder`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 58L,
+                    expectedCurrentStatus = OrderBatchStatus.NEW,
+                    nextStatus = OrderBatchStatus.ACCEPTED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 58L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    updatedAt = Instant.parse("2026-03-30T10:05:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetailWithAddOnBatch(
+                    firstStatus = OrderWorkflowStatus.NEW,
+                    addOnStatus = OrderWorkflowStatus.ACCEPTED,
+                    firstItemStatus = OrderBatchItemStatus.CANCELED,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_402_11,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-replacement-accept",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 78L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_a:10:58",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    78L,
+                    match { text ->
+                        text.contains("Заказ №12 обновлён") &&
+                            !text.contains("Дозаказ к заказу") &&
+                            text.contains("✅ Принял: @waiter")
+                    },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Замена добавлена к заказу.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Ваш дозаказ принят.", null)
+            }
+        }
+
+    @Test
+    fun `staff chat add-on batch deliver notifies guest as reorder and shows common bill close`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 58L,
+                    expectedCurrentStatus = OrderBatchStatus.ACCEPTED,
+                    nextStatus = OrderBatchStatus.DELIVERED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 58L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    updatedAt = Instant.parse("2026-03-30T10:05:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetailWithAddOnBatch(addOnStatus = OrderWorkflowStatus.DELIVERED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_402_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-addon-deliver",
+                            from = User(id = 501L, firstName = "Анна"),
+                            message = Message(messageId = 78L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_d:10:58",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    78L,
+                    match { text ->
+                        text.contains("Дозаказ к заказу №12") &&
+                            !text.contains("к счёту") &&
+                            text.contains("✅ Доставлено: Анна")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Ваш дозаказ доставлен.", null)
+            }
+        }
+
+    @Test
+    fun `staff chat replacement before accept batch deliver is not shown as reorder`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 58L,
+                    expectedCurrentStatus = OrderBatchStatus.ACCEPTED,
+                    nextStatus = OrderBatchStatus.DELIVERED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 58L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    updatedAt = Instant.parse("2026-03-30T10:05:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetailWithAddOnBatch(
+                    firstStatus = OrderWorkflowStatus.NEW,
+                    addOnStatus = OrderWorkflowStatus.DELIVERED,
+                    firstItemStatus = OrderBatchItemStatus.CANCELED,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_402_12,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-replacement-deliver",
+                            from = User(id = 501L, firstName = "Анна"),
+                            message = Message(messageId = 78L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_d:10:58",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    78L,
+                    match { text ->
+                        text.contains("Заказ №12 обновлён") &&
+                            !text.contains("Дозаказ к заказу") &&
+                            text.contains("✅ Доставлено: Анна")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Ваш заказ доставлен.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Ваш дозаказ доставлен.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Замена доставлена.", null)
+            }
+        }
+
+    @Test
+    fun `staff chat close bill ask shows confirmation without closing order`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_411,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-close-ask",
+                            from = User(id = 501L),
+                            message =
+                                Message(
+                                    messageId = 77L,
+                                    chat = Chat(id = -777L, type = "supergroup"),
+                                    text = "🆕 Новый заказ №12\n\n✅ Доставлено: Анна",
+                                ),
+                            data = "sc_oc_ask:a:j:1l",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                venueOrdersRepository.updateOrderStatus(any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    "🆕 Новый заказ №12\n\n✅ Доставлено: Анна",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().map { it.text } ==
+                            listOf("✅ Да, общий счёт оплачен и закрыт", "↩️ Назад")
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-close-ask", "Подтвердите закрытие", false)
+            }
+        }
+
+    @Test
+    fun `staff chat close bill back restores close action`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_412,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-close-back",
+                            from = User(id = 501L),
+                            message =
+                                Message(
+                                    messageId = 77L,
+                                    chat = Chat(id = -777L, type = "supergroup"),
+                                    text = "🆕 Новый заказ №12\n\n✅ Доставлено: Анна",
+                                ),
+                            data = "sc_oc_back:a:j:1l",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    "🆕 Новый заказ №12\n\n✅ Доставлено: Анна",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт" &&
+                            markup.inlineKeyboard.flatten().single().callbackData == "sc_oc_ask:a:j:1l"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-close-back", "Ок", false)
+            }
+        }
+
+    @Test
+    fun `staff chat close bill confirm closes order notifies guest and edits group message`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.DELIVERED)
+            coEvery {
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = 10L,
+                    orderId = 19L,
+                    nextStatus = OrderWorkflowStatus.CLOSED,
+                    actor = any(),
+                )
+            } returns
+                OrderStatusUpdateResult(
+                    orderId = 19L,
+                    status = OrderWorkflowStatus.CLOSED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_413,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-close-confirm",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_oc_yes:a:j:1l",
+                        ),
+                ),
+            )
+
+            coVerify {
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = 10L,
+                    orderId = 19L,
+                    nextStatus = OrderWorkflowStatus.CLOSED,
+                    actor = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match { text ->
+                        text.contains("✅ Счёт закрыт.") &&
+                            text.contains("Спасибо, что были с нами")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("Новый заказ №12") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("✅ Общий счёт закрыт: @waiter")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-close-confirm", "Счёт закрыт", false)
+            }
+        }
+
+    @Test
+    fun `staff chat close bill from add-on batch closes whole order`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetailWithAddOnBatch(addOnStatus = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.DELIVERED)
+            coEvery {
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = 10L,
+                    orderId = 19L,
+                    nextStatus = OrderWorkflowStatus.CLOSED,
+                    actor = any(),
+                )
+            } returns
+                OrderStatusUpdateResult(
+                    orderId = 19L,
+                    status = OrderWorkflowStatus.CLOSED,
+                    updatedAt = Instant.parse("2026-03-30T10:10:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_413_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-close-addon-confirm",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 78L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_oc_yes:a:j:1m",
+                        ),
+                ),
+            )
+
+            coVerify {
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = 10L,
+                    orderId = 19L,
+                    nextStatus = OrderWorkflowStatus.CLOSED,
+                    actor = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    78L,
+                    match { text ->
+                        text.contains("Дозаказ к заказу №12") &&
+                            text.contains("✅ Общий счёт закрыт: @waiter")
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat close bill by unauthorized user answers no access without update`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(999L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_414,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-close-no-role",
+                            from = User(id = 999L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_oc_yes:a:j:1l",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                venueOrdersRepository.updateOrderStatus(any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-close-no-role", "Нет доступа", true)
+            }
+        }
+
+    @Test
+    fun `staff chat close bill already closed answers already closed`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.CLOSED)
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_415,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-close-already",
+                            from = User(id = 501L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_oc_yes:a:j:1l",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                venueOrdersRepository.updateOrderStatus(any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-close-already", "Счёт уже закрыт.", false)
+            }
+        }
+
+    @Test
+    fun `staff chat accept callback from closed order is stale safe`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.NEW,
+                    nextStatus = OrderBatchStatus.ACCEPTED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.NEW,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = false,
+                )
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.NEW, orderStatus = OrderWorkflowStatus.CLOSED)
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_416,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-accept-closed",
+                            from = User(id = 501L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_a:10:57",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("Статус: общий счёт закрыт") &&
+                            !text.contains("Статус: новый")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-accept-closed", "Счёт уже закрыт.", false)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Ваш заказ принят.", null)
+            }
+        }
+
+    @Test
+    fun `staff chat deliver callback from closed order is stale safe`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.ACCEPTED,
+                    nextStatus = OrderBatchStatus.DELIVERED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = false,
+                )
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED, orderStatus = OrderWorkflowStatus.CLOSED)
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_417,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-deliver-closed",
+                            from = User(id = 501L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_d:10:57",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("Статус: общий счёт закрыт") &&
+                            !text.contains("Статус: принят")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-deliver-closed", "Счёт уже закрыт.", false)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(200L, "✅ Ваш заказ доставлен.", null)
+            }
+        }
+
+    @Test
+    fun `staff chat order action by unauthorized user answers no access without update`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(999L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_403,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-no-role",
+                            from = User(id = 999L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_a:10:57",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                venueOrdersRepository.updateBatchStatus(any(), any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-no-role", "Нет доступа", true)
+            }
+        }
+
+    @Test
+    fun `staff chat order action stale click answers already processed`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.NEW,
+                    nextStatus = OrderBatchStatus.ACCEPTED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = false,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-stale",
+                            from = User(id = 501L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_a:10:57",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-stale", "Уже обработано", false)
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("Гость: Максим") &&
+                            text.contains("Статус: принят")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `staff call active list contains guest name`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(501L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER"))
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { staffCallRepository.listActiveByVenue(venueId = 10L, limit = 20) } returns
+                listOf(
+                    StaffCallQueueItem(
+                        id = 6L,
+                        tableId = 11L,
+                        tableNumber = 105,
+                        reason = StaffCallReason.COME.name,
+                        comment = "Подойдите",
+                        status = StaffCallStatus.NEW.dbValue,
+                        createdAt = Instant.parse("2026-03-30T10:00:00Z"),
+                        guestDisplayName = "Максим",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_1,
+                    message =
+                        Message(
+                            messageId = 87L,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "🛎 Вызовы",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text ->
+                        text.contains("Вызов #6") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("Причина: Консультация")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat staff call ack and done edit group message`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                staffCallRepository.ackStaffCall(10L, 6L, 501L)
+            } returns
+                StaffCallStatusUpdateResult(
+                    staffCallId = 6L,
+                    status = StaffCallStatus.ACK,
+                    applied = true,
+                    tableNumber = 105,
+                    reason = StaffCallReason.COME,
+                    comment = null,
+                    guestDisplayName = "Максим",
+                )
+            coEvery {
+                staffCallRepository.doneStaffCall(10L, 6L, 501L)
+            } returns
+                StaffCallStatusUpdateResult(
+                    staffCallId = 6L,
+                    status = StaffCallStatus.DONE,
+                    applied = true,
+                    tableNumber = 105,
+                    reason = StaffCallReason.COME,
+                    comment = null,
+                    guestDisplayName = "Максим",
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_405,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-call-ack",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 88L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_call_ack:10:6",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_406,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-call-done",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 88L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_call_done:10:6",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    88L,
+                    match { text ->
+                        text.contains("🛎 Вызов персонала") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("✅ Принял вызов: @waiter")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().single().text == "✅ Выполнено" &&
+                            markup.inlineKeyboard.flatten().single().callbackData == "sc_call_done:10:6"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    88L,
+                    match { text ->
+                        text.contains("🛎 Вызов персонала") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("✅ Выполнено: @waiter")
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `callback idempotency does not dedupe by source message id`() =
+        runBlocking {
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_407,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-idempotency",
+                            from = User(id = 501L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "unknown_callback",
+                        ),
+                ),
+            )
+
+            coVerify {
+                idempotencyRepository.tryAcquire(20_407, -777L, null)
+            }
+        }
+
+    @Test
+    fun `staff order queue shows delivered active order`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(501L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER"))
+            coEvery { venueOrdersRepository.listOperationalQueueByOrder(10L, 20) } returns
+                listOf(
+                    OrderQueueItem(
+                        orderId = 19L,
+                        batchId = 57L,
+                        tableNumber = 105,
+                        createdAt = Instant.parse("2026-03-30T10:00:00Z"),
+                        comment = null,
+                        itemsCount = 1,
+                        status = OrderWorkflowStatus.DELIVERED,
+                        activeBatchesCount = 1,
+                        displayNumber = 12,
+                        guestDisplayName = "Максим",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_408,
+                    message =
+                        Message(
+                            messageId = 91L,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "🧾 Заказы",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text ->
+                        text.contains("Заказ №12") &&
+                            text.contains("Стол 105") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("Доставлен")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "staff_venue_orders_order:10:19"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff order detail contains guest name`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.NEW)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_408_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-detail",
+                            from = User(id = 501L),
+                            message = Message(messageId = 91L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_venue_orders_order:10:19",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text ->
+                        text.contains("Заказ №12") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("Состав:")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `delivered active order full bill has close action`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-full-delivered",
+                            from = User(id = 501L),
+                            message = Message(messageId = 92L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_venue_orders_full:10:19",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text ->
+                        text.contains("📋 Счёт по столу #105") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("Статус: Доставлен")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "🔒 Закрыть заказ" &&
+                                    button.callbackData == "staff_venue_orders_status:10:19:closed"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `full bill shows promotion breakdown by names`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                    items =
+                        listOf(
+                            OrderBatchItemDetail(
+                                batchItemId = 500L,
+                                itemId = 1000L,
+                                name = "Кальян",
+                                qty = 1,
+                                priceMinor = 200000L,
+                                currency = "RUB",
+                                promoDiscountMinor = 20000L,
+                            ),
+                            OrderBatchItemDetail(
+                                batchItemId = 501L,
+                                itemId = 1001L,
+                                name = "Сок",
+                                qty = 1,
+                                priceMinor = 50000L,
+                                currency = "RUB",
+                                promoDiscountMinor = 50000L,
+                            ),
+                        ),
+                    promotionDiscounts =
+                        listOf(
+                            OrderPromotionDiscount(
+                                label = "Счастливые часы",
+                                discountMinor = 20000L,
+                                currency = "RUB",
+                                ruleType = "HAPPY_HOURS_PERCENT",
+                            ),
+                            OrderPromotionDiscount(
+                                label = "Сок в подарок",
+                                discountMinor = 50000L,
+                                currency = "RUB",
+                                ruleType = "GIFT_WITH_ITEM",
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-full-promo-breakdown",
+                            from = User(id = 501L),
+                            message = Message(messageId = 92L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_venue_orders_full:10:19",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text ->
+                        text.contains("Сумма до скидок: 2 500 ₽") &&
+                            text.contains("🎁 Акции:\n• Счастливые часы: −200 ₽\n• Сок в подарок: −500 ₽") &&
+                            text.contains("К оплате: 1 800 ₽")
+                    },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `staff order item action has unavailable action`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-item-action",
+                            from = User(id = 501L),
+                            message = Message(messageId = 93L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_order_bill_item:10:19:500",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text ->
+                        text.contains("Что сделать с позицией?") &&
+                            text.contains("Darkside ×2")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "🚫 Позиция закончилась" &&
+                                    button.callbackData == "obi_unav_ask:a:j:dw"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff confirms item unavailable and guest is notified`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+            coEvery {
+                venueOrdersRepository.cancelBatchItemAsUnavailable(
+                    venueId = 10L,
+                    orderId = 19L,
+                    batchItemId = 500L,
+                    actor = any(),
+                )
+            } returns
+                CancelBatchItemResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    batchItemId = 500L,
+                    itemName = "Darkside",
+                    guestUserId = 200L,
+                    applied = true,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-item-unavailable-confirm",
+                            from = User(id = 501L),
+                            message = Message(messageId = 94L, chat = Chat(id = 501L, type = "private")),
+                            data = "obi_unav_ok:a:j:dw",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match { text ->
+                        text.contains("«Darkside» сейчас закончился") &&
+                            text.contains("Мы убрали его из заказа") &&
+                            text.contains("Что сделать?")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().map { it.text } ==
+                            listOf("🍽 Выбрать замену", "✅ Оставить без «Darkside»", "🛎 Позвать персонал") &&
+                            markup.inlineKeyboard.flatten().map { it.callbackData } ==
+                            listOf("giu_menu:a:j:dw", "giu_keep:a:j:dw", "giu_call:a:j:dw")
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text ->
+                        text.contains("✅ Позиция убрана из заказа") &&
+                            text.contains("добавьте её в стоп-лист")
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `guest unavailable keep action only acknowledges without new batch`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_21,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-unavailable-keep",
+                            from = User(id = 200L),
+                            message = Message(messageId = 120L, chat = Chat(id = 200L, type = "private")),
+                            data = "giu_keep:a:j:dw",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    "Хорошо, оставили заказ без «Darkside».",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `guest unavailable replacement action opens current table menu`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+            coEvery { chatContextRepository.get(200L) } returns StoredChatContext(userId = 200L, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 1000L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_22,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-unavailable-replace",
+                            from = User(id = 200L),
+                            message = Message(messageId = 121L, chat = Chat(id = 200L, type = "private")),
+                            data = "giu_menu:a:j:dw",
+                        ),
+                ),
+            )
+
+            coVerify { guestMenuRepository.getMenu(10L) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match { text -> text.contains("Выберите позицию в меню") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `guest unavailable call action opens existing staff call flow`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+            coEvery { chatContextRepository.get(200L) } returns StoredChatContext(userId = 200L, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_23,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-guest-unavailable-call",
+                            from = User(id = 200L),
+                            message = Message(messageId = 122L, chat = Chat(id = 200L, type = "private")),
+                            data = "giu_call:a:j:dw",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    "Чем помочь?",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button -> button.text == "💬 Консультация" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff item unavailable business error is not reported as database unavailable`() =
+        runBlocking {
+            coEvery {
+                venueOrdersRepository.cancelBatchItemAsUnavailable(
+                    venueId = 10L,
+                    orderId = 19L,
+                    batchItemId = 500L,
+                    actor = any(),
+                )
+            } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-item-unavailable-business-error",
+                            from = User(id = 501L),
+                            message = Message(messageId = 95L, chat = Chat(id = 501L, type = "private")),
+                            data = "obi_unav_ok:a:j:dw",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text -> text.contains("Позицию нельзя убрать из этого заказа") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text -> text.contains("База недоступна") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `personal staff accept notifies guest and staff chat status update`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.NEW)
+            coEvery {
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = 10L,
+                    orderId = 19L,
+                    nextStatus = OrderWorkflowStatus.ACCEPTED,
+                    actor = any(),
+                )
+            } returns
+                OrderStatusUpdateResult(
+                    orderId = 19L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_408,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-personal-accept",
+                            from = User(id = 501L),
+                            message = Message(messageId = 91L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_venue_orders_status:10:19:accepted",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    "✅ Ваш заказ принят.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    -777L,
+                    match { text ->
+                        text.contains("Заказ №12") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("стол 105 принят")
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `personal staff delivered notifies guest and staff chat status update`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED, orderStatus = OrderWorkflowStatus.ACCEPTED)
+            coEvery {
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = 10L,
+                    orderId = 19L,
+                    nextStatus = any(),
+                    actor = any(),
+                )
+            } returns
+                OrderStatusUpdateResult(
+                    orderId = 19L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-personal-delivered",
+                            from = User(id = 501L),
+                            message = Message(messageId = 92L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_venue_orders_status:10:19:delivered",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    "✅ Ваш заказ доставлен.",
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    -777L,
+                    match { text ->
+                        text.contains("Заказ №12") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("стол 105 доставлен")
+                    },
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `personal staff close sends final guest message`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED, orderStatus = OrderWorkflowStatus.DELIVERED)
+            coEvery {
+                venueOrdersRepository.updateOrderStatus(
+                    venueId = 10L,
+                    orderId = 19L,
+                    nextStatus = OrderWorkflowStatus.CLOSED,
+                    actor = any(),
+                )
+            } returns
+                OrderStatusUpdateResult(
+                    orderId = 19L,
+                    status = OrderWorkflowStatus.CLOSED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.listOperationalQueueByOrder(10L, 20) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_410,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-personal-close",
+                            from = User(id = 501L),
+                            message = Message(messageId = 93L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_venue_orders_status:10:19:closed",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    200L,
+                    match { text ->
+                        text.contains("✅ Счёт закрыт.") &&
+                            text.contains("Спасибо, что были с нами")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    -777L,
+                    match { text ->
+                        text.contains("Заказ №12") &&
+                            text.contains("Гость: Максим") &&
+                            text.contains("стол 105 закрыт")
+                    },
+                    null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    "🧾 Заказы\n\nАктивных заказов сейчас нет.",
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `quick order confirmation creates active order in current table session and tab`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(DialogStateType.QUICK_ORDER_WAIT_CONFIRM, mapOf("text" to "Принесите угли"))
+            coEvery {
+                ordersRepository.getOrCreateActiveOrderId(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                )
+            } returns 900L
+            coEvery { ordersRepository.createOrderBatch(900L, 200L, "Принесите угли", 1L) } returns 901L
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 201,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "quick-order-confirm-session",
+                            from = User(id = 200),
+                            message = Message(messageId = 301, chat = Chat(id = 100, type = "private")),
+                            data = "quick_order_confirm",
+                        ),
+                ),
+            )
+
+            coVerify {
+                ordersRepository.getOrCreateActiveOrderId(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                )
+            }
+            coVerify {
+                ordersRepository.createOrderBatch(900L, 200L, "Принесите угли", 1L)
+            }
+        }
+
+    private fun hookahMenuCategoryWithOptions(options: List<VenueMenuOption>): VenueMenuCategory =
+        hookahMenuCategoryWithItems(listOf(hookahMenuItem(id = 7001L, options = options)))
+
+    private fun hookahMenuCategoryWithItems(items: List<VenueMenuItem>): VenueMenuCategory =
+        VenueMenuCategory(
+            id = 501L,
+            venueId = 10L,
+            name = "Кальянное меню",
+            sortOrder = 10,
+            items = items,
+        )
+
+    private fun hookahMenuItem(
+        id: Long,
+        categoryId: Long = 501L,
+        name: String = "Авторский кальян",
+        options: List<VenueMenuOption>,
+    ): VenueMenuItem =
+        VenueMenuItem(
+            id = id,
+            venueId = 10L,
+            categoryId = categoryId,
+            name = name,
+            priceMinor = 85_000L,
+            currency = "RUB",
+            isAvailable = true,
+            sortOrder = 10,
+            options = options,
+        )
+
+    private fun repeatableVisitDetail(includeUnavailable: Boolean = false): GuestVisitDetail =
+        GuestVisitDetail(
+            visitId = 44L,
+            venueId = 10L,
+            venueName = "Mix",
+            venueCity = "Москва",
+            occurredAt = Instant.parse("2026-05-12T18:00:00Z"),
+            serviceDate = LocalDate.parse("2026-05-12"),
+            source = VisitSource.ORDER_CLOSED,
+            booking = null,
+            orders =
+                listOf(
+                    GuestVisitOrder(
+                        orderId = 88L,
+                        displayNumber = 8,
+                        displayDate = LocalDate.parse("2026-05-12"),
+                        items =
+                            buildList {
+                                add(
+                                    GuestVisitOrderItem(
+                                        itemId = 101L,
+                                        itemName = "Кальян обычный",
+                                        qty = 1,
+                                        priceMinor = 110_000L,
+                                        currency = "RUB",
+                                        discountPercent = null,
+                                        totalMinor = 110_000L,
+                                    ),
+                                )
+                                if (includeUnavailable) {
+                                    add(
+                                        GuestVisitOrderItem(
+                                            itemId = 102L,
+                                            itemName = "Вода",
+                                            qty = 1,
+                                            priceMinor = 40_000L,
+                                            currency = "RUB",
+                                            discountPercent = null,
+                                            totalMinor = 40_000L,
+                                        ),
+                                    )
+                                }
+                            },
+                        totalMinor = if (includeUnavailable) 150_000L else 110_000L,
+                        currency = "RUB",
+                    ),
+                ),
+            totalMinor = if (includeUnavailable) 150_000L else 110_000L,
+            currency = "RUB",
+        )
+
+    private fun repeatTableContext(venueId: Long): TableContext =
+        TableContext(
+            venueId = venueId,
+            venueName = "Venue",
+            tableId = 11L,
+            tableNumber = 5,
+            tableToken = "TOKEN",
+            staffChatId = null,
+        )
+
+    private fun repeatMenu(
+        venueId: Long,
+        itemId: Long,
+    ): MenuModel =
+        MenuModel(
+            venueId = venueId,
+            categories =
+                listOf(
+                    MenuCategoryModel(
+                        id = 1L,
+                        name = "Кальяны",
+                        sortOrder = 0,
+                        items =
+                            listOf(
+                                MenuItemModel(
+                                    id = itemId,
+                                    name = "Кальян обычный",
+                                    priceMinor = 110_000L,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    sortOrder = 0,
+                                ),
+                            ),
+                    ),
+                ),
+        )
+
+    private fun hookahFlavorOption(
+        id: Long,
+        name: String,
+        itemId: Long = 7001L,
+    ): VenueMenuOption =
+        VenueMenuOption(
+            id = id,
+            venueId = 10L,
+            itemId = itemId,
+            name = name,
+            priceDeltaMinor = 0,
+            isAvailable = true,
+            sortOrder = id.toInt(),
+        )
+
+    private fun lowFeedbackThread(guestUserId: Long = 200L): VisitFeedbackThread =
+        VisitFeedbackThread(
+            feedbackId = 92L,
+            visitId = 44L,
+            venueId = 10L,
+            guestUserId = guestUserId,
+            rating = 2,
+            comment = "Долго ждали заказ",
+            status = VisitFeedbackStatus.SUBMITTED,
+            venueName = "Mix",
+        )
+
+    private fun feedbackMessage(
+        senderType: VisitFeedbackMessageSender,
+        senderUserId: Long?,
+        text: String,
+    ): VisitFeedbackMessageRecord =
+        VisitFeedbackMessageRecord(
+            id = 900L,
+            feedbackId = 92L,
+            visitId = 44L,
+            venueId = 10L,
+            guestUserId = 200L,
+            senderType = senderType,
+            senderUserId = senderUserId,
+            messageText = text,
+            createdAt = Instant.parse("2030-05-10T10:00:00Z"),
+        )
+
+    private fun venueFeedbackSummary(
+        feedbackId: Long = 92L,
+        hasStaffReply: Boolean = true,
+        requiresAnswer: Boolean = true,
+    ): VisitFeedbackVenueSummary =
+        VisitFeedbackVenueSummary(
+            feedbackId = feedbackId,
+            visitId = 44L,
+            venueId = 10L,
+            guestUserId = 200L,
+            guestDisplayName = "Максим",
+            rating = 2,
+            comment = "Долго ждали заказ",
+            status = VisitFeedbackStatus.SUBMITTED,
+            occurredAt = Instant.parse("2026-05-12T18:00:00Z"),
+            serviceDate = LocalDate.parse("2026-05-12"),
+            hasStaffReply = hasStaffReply,
+            requiresAnswer = requiresAnswer,
+        )
+
+    private fun venueFeedbackDetail(): VisitFeedbackVenueDetail =
+        VisitFeedbackVenueDetail(
+            feedbackId = 92L,
+            visitId = 44L,
+            venueId = 10L,
+            venueName = "Mix",
+            guestUserId = 200L,
+            guestDisplayName = "Максим",
+            rating = 2,
+            comment = "Долго ждали заказ",
+            status = VisitFeedbackStatus.SUBMITTED,
+            occurredAt = Instant.parse("2026-05-12T18:00:00Z"),
+            serviceDate = LocalDate.parse("2026-05-12"),
+            hasStaffReply = true,
+            requiresAnswer = true,
+            messages =
+                listOf(
+                    feedbackMessage(VisitFeedbackMessageSender.STAFF, 501L, "Извините, уже разбираемся."),
+                    feedbackMessage(VisitFeedbackMessageSender.GUEST, 200L, "Спасибо за ответ."),
+                ),
+        )
+
+    private fun testPromotion(
+        id: Long,
+        venueId: Long,
+        venueName: String,
+        title: String,
+        status: VenuePromotionStatus = VenuePromotionStatus.ACTIVE,
+        templateType: VenuePromotionTemplateType = VenuePromotionTemplateType.TEXT_ONLY,
+    ): VenuePromotion =
+        VenuePromotion(
+            id = id,
+            venueId = venueId,
+            venueName = venueName,
+            title = title,
+            description = "Описание акции",
+            terms = "Условия акции",
+            startsAt = null,
+            endsAt = null,
+            status = status,
+            createdByUserId = 200L,
+            createdAt = Instant.parse("2026-05-14T10:00:00Z"),
+            updatedAt = Instant.parse("2026-05-14T10:00:00Z"),
+            templateType = templateType,
+        )
+
+    private fun testLoyaltyProgram(
+        id: Long,
+        venueId: Long,
+        nthValue: Int,
+        status: LoyaltyProgramStatus = LoyaltyProgramStatus.DRAFT,
+    ): LoyaltyProgram =
+        LoyaltyProgram(
+            id = id,
+            venueId = venueId,
+            venueName = "Mix",
+            programType = LoyaltyProgramType.NTH_HOOKAH_FREE,
+            status = status,
+            nthValue = nthValue,
+            maxRedemptionsPerVisit = 1,
+            createdByUserId = 200L,
+            createdAt = Instant.parse("2026-05-20T10:00:00Z"),
+            updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
+        )
+
+    private fun testPromotionPreview(
+        id: Long,
+        title: String,
+        templateType: VenuePromotionTemplateType = VenuePromotionTemplateType.TEXT_ONLY,
+    ): PromotionPreview =
+        PromotionPreview(
+            id = id,
+            title = title,
+            templateType = templateType,
+            startsAt = null,
+            endsAt = null,
+        )
+
+    private fun testPromotionVenueFeedItem(
+        venueId: Long,
+        venueName: String,
+        city: String = "Москва",
+        address: String = "Тверская, 1",
+        promotionsCount: Int,
+        previewPromotions: List<PromotionPreview>,
+    ): PromotionVenueFeedItem =
+        PromotionVenueFeedItem(
+            venueId = venueId,
+            venueName = venueName,
+            city = city,
+            address = address,
+            promotionsCount = promotionsCount,
+            previewPromotions = previewPromotions,
+        )
+
+    private fun testPromotionMedia(
+        id: Long,
+        promotionId: Long,
+        fileId: String,
+    ): VenuePromotionMedia =
+        VenuePromotionMedia(
+            id = id,
+            promotionId = promotionId,
+            mediaType = VenuePromotionMediaType.IMAGE,
+            telegramFileId = fileId,
+            caption = null,
+            sortOrder = 0,
+            createdAt = Instant.parse("2026-05-14T10:00:00Z"),
+        )
+
+    private fun testPromotionPlacement(
+        id: Long,
+        promotionId: Long,
+        venueId: Long,
+        venueName: String = "Mix",
+        venueCity: String? = "Москва",
+        venueAddress: String? = "Тверская, 1",
+        promotionTitle: String = "Афиша выходных",
+        surface: PromotionPlacementSurface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+        status: PromotionPlacementStatus = PromotionPlacementStatus.PENDING,
+        primaryImageFileId: String? = "banner-photo-file-id",
+        startsAt: Instant? = null,
+        endsAt: Instant? = null,
+    ): PromotionPlacement =
+        PromotionPlacement(
+            id = id,
+            promotionId = promotionId,
+            venueId = venueId,
+            venueName = venueName,
+            venueCity = venueCity,
+            venueAddress = venueAddress,
+            promotionTitle = promotionTitle,
+            promotionDescription = "Описание акции",
+            promotionTemplateType = VenuePromotionTemplateType.BANNER,
+            promotionStatus = VenuePromotionStatus.ACTIVE,
+            surface = surface,
+            status = status,
+            startsAt = startsAt,
+            endsAt = endsAt,
+            priority = 100,
+            requestedByUserId = 200L,
+            approvedByUserId = null,
+            approvedAt = null,
+            rejectedReason = null,
+            createdAt = Instant.parse("2026-05-14T10:00:00Z"),
+            updatedAt = Instant.parse("2026-05-14T10:00:00Z"),
+            primaryImageFileId = primaryImageFileId,
+        )
+
+    private fun testPromotionVenuePlacement(
+        id: Long,
+        venueId: Long,
+        venueName: String = "Mix",
+        venueCity: String? = "Москва",
+        venueAddress: String? = "Тверская, 1",
+        status: PromotionPlacementStatus = PromotionPlacementStatus.PENDING,
+        startsAt: Instant? = null,
+        endsAt: Instant? = null,
+        activePromotionsCount: Int = 2,
+    ): PromotionVenuePlacement =
+        PromotionVenuePlacement(
+            id = id,
+            venueId = venueId,
+            venueName = venueName,
+            venueCity = venueCity,
+            venueAddress = venueAddress,
+            surface = PromotionPlacementSurface.GLOBAL_PROMOTIONS_TOP,
+            status = status,
+            startsAt = startsAt,
+            endsAt = endsAt,
+            priority = 100,
+            requestedByUserId = 200L,
+            requesterUsername = "owner",
+            requesterFirstName = "Максим",
+            requesterLastName = null,
+            requesterVenueRole = "OWNER",
+            approvedByUserId = null,
+            approvedAt = null,
+            rejectedReason = null,
+            createdAt = Instant.parse("2026-05-14T10:00:00Z"),
+            updatedAt = Instant.parse("2026-05-14T10:00:00Z"),
+            activePromotionsCount = activePromotionsCount,
+        )
+
+    private fun testPromotionRule(
+        id: Long,
+        venueId: Long,
+        promotionId: Long,
+        targetValue: MenuSemanticType = MenuSemanticType.HOOKAH,
+        discountPercent: Int = 20,
+        status: VenuePromotionStatus = VenuePromotionStatus.DRAFT,
+        startsTime: LocalTime? = null,
+        endsTime: LocalTime? = null,
+        daysOfWeek: Set<Int>? = null,
+        ruleType: PromotionRuleType = PromotionRuleType.HAPPY_HOURS_PERCENT,
+        targets: List<PromotionRuleTarget> = emptyList(),
+        reward: PromotionRuleReward? = null,
+    ): VenuePromotionRule =
+        VenuePromotionRule(
+            id = id,
+            promotionId = promotionId,
+            promotionTitle = if (ruleType == PromotionRuleType.GIFT_WITH_ITEM) "Чай к кальяну" else "Счастливые часы",
+            venueId = venueId,
+            ruleType = ruleType,
+            targetType = PromotionRuleTargetType.CATEGORY_TYPE,
+            targetValue = targetValue,
+            discountPercent = discountPercent,
+            startsTime = startsTime,
+            endsTime = endsTime,
+            daysOfWeek = daysOfWeek,
+            status = status,
+            priority = 100,
+            createdByUserId = 200L,
+            createdAt = Instant.parse("2026-05-14T10:00:00Z"),
+            updatedAt = Instant.parse("2026-05-14T10:00:00Z"),
+            targets = targets,
+            reward = reward,
+        )
+
+    private fun staffChatOrderDetail(
+        batchId: Long,
+        status: OrderWorkflowStatus,
+        orderStatus: OrderWorkflowStatus = OrderWorkflowStatus.NEW,
+        items: List<OrderBatchItemDetail> =
+            listOf(
+                OrderBatchItemDetail(
+                    batchItemId = 500L,
+                    itemId = 1000L,
+                    name = "Darkside",
+                    qty = 2,
+                ),
+            ),
+        promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
+    ): OrderDetail =
+        OrderDetail(
+            orderId = 19L,
+            venueId = 10L,
+            tableId = 11L,
+            tableNumber = 105,
+            status = orderStatus,
+            createdAt = Instant.parse("2026-03-30T09:59:00Z"),
+            updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+            displayNumber = 12,
+            displayDate = null,
+            batches =
+                listOf(
+                    OrderBatchDetail(
+                        batchId = batchId,
+                        status = status,
+                        source = "BOT",
+                        comment = "Без мяты",
+                        createdAt = Instant.parse("2026-03-30T10:00:00Z"),
+                        updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                        rejectedReasonCode = null,
+                        rejectedReasonText = null,
+                        authorUserId = 200L,
+                        guestDisplayName = "Максим",
+                        items = items,
+                        promotionDiscounts = promotionDiscounts,
+                    ),
+                ),
+            promotionDiscounts = promotionDiscounts,
+        )
+
+    private fun staffChatOrderDetailWithAddOnBatch(
+        firstStatus: OrderWorkflowStatus = OrderWorkflowStatus.DELIVERED,
+        addOnStatus: OrderWorkflowStatus,
+        orderStatus: OrderWorkflowStatus = OrderWorkflowStatus.NEW,
+        firstItemStatus: OrderBatchItemStatus = OrderBatchItemStatus.ACTIVE,
+    ): OrderDetail =
+        OrderDetail(
+            orderId = 19L,
+            venueId = 10L,
+            tableId = 11L,
+            tableNumber = 105,
+            status = orderStatus,
+            createdAt = Instant.parse("2026-03-30T09:59:00Z"),
+            updatedAt = Instant.parse("2026-03-30T10:05:00Z"),
+            displayNumber = 12,
+            displayDate = null,
+            batches =
+                listOf(
+                    OrderBatchDetail(
+                        batchId = 57L,
+                        status = firstStatus,
+                        source = "BOT",
+                        comment = "Без мяты",
+                        createdAt = Instant.parse("2026-03-30T10:00:00Z"),
+                        updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                        rejectedReasonCode = null,
+                        rejectedReasonText = null,
+                        authorUserId = 200L,
+                        guestDisplayName = "Максим",
+                        items =
+                            listOf(
+                                OrderBatchItemDetail(
+                                    batchItemId = 500L,
+                                    itemId = 1000L,
+                                    name = "Darkside",
+                                    qty = 2,
+                                    itemStatus = firstItemStatus,
+                                ),
+                            ),
+                    ),
+                    OrderBatchDetail(
+                        batchId = 58L,
+                        status = addOnStatus,
+                        source = "BOT",
+                        comment = null,
+                        createdAt = Instant.parse("2026-03-30T10:05:00Z"),
+                        updatedAt = Instant.parse("2026-03-30T10:05:00Z"),
+                        rejectedReasonCode = null,
+                        rejectedReasonText = null,
+                        authorUserId = 200L,
+                        guestDisplayName = "Максим",
+                        items =
+                            listOf(
+                                OrderBatchItemDetail(
+                                    batchItemId = 501L,
+                                    itemId = 1001L,
+                                    name = "Сок",
+                                    qty = 1,
+                                ),
+                            ),
+                    ),
+                ),
+        )
+
+    private fun ReplyMarkup?.hasSingleWebAppButton(expectedUrl: String): Boolean {
+        val button = (this as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten()?.singleOrNull() ?: return false
+        return button.text == "📱 Открыть панель заведения" &&
+            button.webApp?.url == expectedUrl &&
+            button.url == null &&
+            button.callbackData == null
+    }
 }

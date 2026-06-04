@@ -58,6 +58,7 @@ class VenueMenuRoutesTest {
             assertEquals(HttpStatusCode.OK, categoryResponse.status)
             val category = json.decodeFromString(VenueMenuCategoryDto.serializer(), categoryResponse.bodyAsText())
             assertEquals("Drinks", category.name)
+            assertEquals("OTHER", category.categoryType)
 
             val updatedResponse =
                 client.patch("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
@@ -71,6 +72,19 @@ class VenueMenuRoutesTest {
             assertEquals(HttpStatusCode.OK, updatedResponse.status)
             val updated = json.decodeFromString(VenueMenuCategoryDto.serializer(), updatedResponse.bodyAsText())
             assertEquals("Cocktails", updated.name)
+
+            val typedCategoryResponse =
+                client.patch("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"categoryType":"DRINK"}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, typedCategoryResponse.status)
+            val typedCategory = json.decodeFromString(VenueMenuCategoryDto.serializer(), typedCategoryResponse.bodyAsText())
+            assertEquals("DRINK", typedCategory.categoryType)
 
             val itemResponse =
                 client.post("/api/venue/menu/items?venueId=$venueId") {
@@ -95,6 +109,8 @@ class VenueMenuRoutesTest {
             val item = json.decodeFromString(VenueMenuItemDto.serializer(), itemResponse.bodyAsText())
             assertEquals("Lemonade", item.name)
             assertTrue(item.isAvailable)
+            assertEquals(null, item.itemType)
+            assertEquals("DRINK", item.effectiveItemType)
 
             val updateItemResponse =
                 client.patch("/api/venue/menu/items/${item.id}?venueId=$venueId") {
@@ -109,6 +125,20 @@ class VenueMenuRoutesTest {
             val updatedItem = json.decodeFromString(VenueMenuItemDto.serializer(), updateItemResponse.bodyAsText())
             assertEquals("Orange", updatedItem.name)
             assertFalse(updatedItem.isAvailable)
+
+            val typedItemResponse =
+                client.patch("/api/venue/menu/items/${item.id}?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"itemType":"DRINK"}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, typedItemResponse.status)
+            val typedItem = json.decodeFromString(VenueMenuItemDto.serializer(), typedItemResponse.bodyAsText())
+            assertEquals("DRINK", typedItem.itemType)
+            assertEquals("DRINK", typedItem.effectiveItemType)
 
             val deleteItemResponse =
                 client.delete("/api/venue/menu/items/${item.id}?venueId=$venueId") {
@@ -312,6 +342,233 @@ class VenueMenuRoutesTest {
             assertTrue(menu.categories.first().items.isEmpty())
         }
 
+    @Test
+    fun `staff can view menu but cannot manage item or option availability`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-staff-availability")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val staffUserId = 200501L
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            seedVenueWithRole(jdbcUrl, staffUserId, "STAFF", venueId)
+            val managerToken = issueToken(config)
+            val staffToken = issueToken(config, staffUserId)
+
+            val category =
+                client.post("/api/venue/menu/categories?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Hookahs"}""")
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuCategoryDto.serializer(), response.bodyAsText())
+                }
+
+            val item =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Classic",
+                          "priceMinor": 90000,
+                          "currency": "RUB",
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+
+            val option =
+                client.post("/api/venue/menu/options?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"itemId":${item.id},"name":"Mint","priceDeltaMinor":0,"isAvailable":true}""")
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuOptionDto.serializer(), response.bodyAsText())
+                }
+
+            val viewResponse =
+                client.get("/api/venue/menu?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, viewResponse.status)
+            val viewPayload = json.decodeFromString(VenueMenuResponse.serializer(), viewResponse.bodyAsText())
+            assertEquals(1, viewPayload.categories.size)
+
+            val itemAvailabilityResponse =
+                client.patch("/api/venue/menu/items/${item.id}/availability?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"isAvailable":false}""")
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, itemAvailabilityResponse.status)
+            assertApiErrorEnvelope(itemAvailabilityResponse, ApiErrorCodes.FORBIDDEN)
+
+            val optionAvailabilityResponse =
+                client.patch("/api/venue/menu/options/${option.id}/availability?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"isAvailable":false}""")
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, optionAvailabilityResponse.status)
+            assertApiErrorEnvelope(optionAvailabilityResponse, ApiErrorCodes.FORBIDDEN)
+
+            val createCategoryResponse =
+                client.post("/api/venue/menu/categories?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Staff category"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, createCategoryResponse.status)
+            assertApiErrorEnvelope(createCategoryResponse, ApiErrorCodes.FORBIDDEN)
+
+            val updateCategoryResponse =
+                client.patch("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Staff rename"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, updateCategoryResponse.status)
+            assertApiErrorEnvelope(updateCategoryResponse, ApiErrorCodes.FORBIDDEN)
+
+            val editPriceResponse =
+                client.patch("/api/venue/menu/items/${item.id}?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"priceMinor":100000}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, editPriceResponse.status)
+            assertApiErrorEnvelope(editPriceResponse, ApiErrorCodes.FORBIDDEN)
+
+            val editCategoryTypeResponse =
+                client.patch("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"categoryType":"HOOKAH"}""")
+            }
+            assertEquals(HttpStatusCode.Forbidden, editCategoryTypeResponse.status)
+            assertApiErrorEnvelope(editCategoryTypeResponse, ApiErrorCodes.FORBIDDEN)
+
+            val reorderCategoriesResponse =
+                client.post("/api/venue/menu/reorder/categories?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"categoryIds":[${category.id}]}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, reorderCategoriesResponse.status)
+            assertApiErrorEnvelope(reorderCategoriesResponse, ApiErrorCodes.FORBIDDEN)
+
+            val createItemResponse =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Staff item",
+                          "priceMinor": 10000,
+                          "currency": "RUB",
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, createItemResponse.status)
+            assertApiErrorEnvelope(createItemResponse, ApiErrorCodes.FORBIDDEN)
+
+            val reorderItemsResponse =
+                client.post("/api/venue/menu/reorder/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"categoryId":${category.id},"itemIds":[${item.id}]}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, reorderItemsResponse.status)
+            assertApiErrorEnvelope(reorderItemsResponse, ApiErrorCodes.FORBIDDEN)
+
+            val deleteItemResponse =
+                client.delete("/api/venue/menu/items/${item.id}?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, deleteItemResponse.status)
+            assertApiErrorEnvelope(deleteItemResponse, ApiErrorCodes.FORBIDDEN)
+
+            val deleteCategoryResponse =
+                client.delete("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, deleteCategoryResponse.status)
+            assertApiErrorEnvelope(deleteCategoryResponse, ApiErrorCodes.FORBIDDEN)
+
+            val createOptionResponse =
+                client.post("/api/venue/menu/options?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"itemId":${item.id},"name":"Staff option","priceDeltaMinor":0,"isAvailable":true}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, createOptionResponse.status)
+            assertApiErrorEnvelope(createOptionResponse, ApiErrorCodes.FORBIDDEN)
+
+            val updateOptionResponse =
+                client.patch("/api/venue/menu/options/${option.id}?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Staff option rename"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, updateOptionResponse.status)
+            assertApiErrorEnvelope(updateOptionResponse, ApiErrorCodes.FORBIDDEN)
+
+            val deleteOptionResponse =
+                client.delete("/api/venue/menu/options/${option.id}?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, deleteOptionResponse.status)
+            assertApiErrorEnvelope(deleteOptionResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -327,15 +584,19 @@ class VenueMenuRoutesTest {
         )
     }
 
-    private fun issueToken(config: MapApplicationConfig): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long = TELEGRAM_USER_ID,
+    ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
-        return service.issueToken(TELEGRAM_USER_ID).token
+        return service.issueToken(userId).token
     }
 
     private fun seedVenueWithRole(
         jdbcUrl: String,
         userId: Long,
         role: String,
+        venueId: Long? = null,
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -348,8 +609,8 @@ class VenueMenuRoutesTest {
                 statement.setLong(1, userId)
                 statement.executeUpdate()
             }
-            val venueId =
-                connection.prepareStatement(
+            val resolvedVenueId =
+                venueId ?: connection.prepareStatement(
                     """
                     INSERT INTO venues (name, city, address, status)
                     VALUES ('Venue', 'City', 'Address', ?)
@@ -368,20 +629,27 @@ class VenueMenuRoutesTest {
                 VALUES (?, ?, ?)
                 """.trimIndent(),
             ).use { statement ->
-                statement.setLong(1, venueId)
+                statement.setLong(1, resolvedVenueId)
                 statement.setLong(2, userId)
                 statement.setString(3, role)
                 statement.executeUpdate()
             }
-            return venueId
+            return resolvedVenueId
         }
     }
+
+    @Serializable
+    private data class VenueMenuResponse(
+        val venueId: Long,
+        val categories: List<VenueMenuCategoryDto>,
+    )
 
     @Serializable
     private data class VenueMenuCategoryDto(
         val id: Long,
         val name: String,
         val sortOrder: Int,
+        val categoryType: String = "OTHER",
         val items: List<VenueMenuItemDto>,
     )
 
@@ -394,6 +662,8 @@ class VenueMenuRoutesTest {
         val currency: String,
         val isAvailable: Boolean,
         val sortOrder: Int,
+        val itemType: String? = null,
+        val effectiveItemType: String = "OTHER",
         val options: List<VenueMenuOptionDto>,
     )
 

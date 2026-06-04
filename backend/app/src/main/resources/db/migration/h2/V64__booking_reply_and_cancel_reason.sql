@@ -1,0 +1,65 @@
+ALTER TABLE bookings
+    ADD COLUMN IF NOT EXISTS cancel_reason_text CLOB NULL;
+
+ALTER TABLE bookings
+    ADD COLUMN IF NOT EXISTS canceled_by_role VARCHAR(32) NULL;
+
+ALTER TABLE bookings
+    ADD COLUMN IF NOT EXISTS canceled_by_user_id BIGINT NULL;
+
+CREATE TABLE IF NOT EXISTS telegram_dialog_state (
+    chat_id BIGINT PRIMARY KEY,
+    state VARCHAR(64) NOT NULL,
+    payload JSON NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE IF EXISTS telegram_dialog_state
+    DROP CONSTRAINT IF EXISTS telegram_dialog_state_state_check;
+
+ALTER TABLE IF EXISTS telegram_dialog_state
+    ADD CONSTRAINT telegram_dialog_state_state_check
+        CHECK (
+            state IN (
+                'NONE',
+                'QUICK_ORDER_WAIT_TEXT',
+                'QUICK_ORDER_WAIT_CONFIRM',
+                'STAFF_CALL_WAIT_COMMENT',
+                'BOT_JOIN_SHARED_WAIT_CODE',
+                'VENUE_CONNECT_WAIT_NAME',
+                'VENUE_CONNECT_WAIT_CITY',
+                'VENUE_CONNECT_WAIT_CONTACT_CHOICE',
+                'VENUE_CONNECT_WAIT_CONTACT',
+                'VENUE_CONNECT_WAIT_CONTACT_EXTRA',
+                'VENUE_CONNECT_WAIT_COMMENT',
+                'OWNER_VENUE_TERMS_WAIT_TRIAL_CUSTOM_DATE',
+                'OWNER_VENUE_TERMS_WAIT_CURRENT_PRICE',
+                'OWNER_VENUE_TERMS_WAIT_FUTURE_PRICE',
+                'OWNER_VENUE_TERMS_WAIT_FUTURE_PRICE_DATE',
+                'OWNER_VENUE_TERMS_WAIT_NOTE',
+                'OWNER_VENUE_PROFILE_WAIT_NAME',
+                'OWNER_VENUE_PROFILE_WAIT_ADDRESS',
+                'OWNER_VENUE_PROFILE_WAIT_HOURS_OPEN',
+                'OWNER_VENUE_PROFILE_WAIT_HOURS_CLOSE',
+                'OWNER_VENUE_DESCRIPTION_WAIT_SECTION_TITLE',
+                'OWNER_VENUE_DESCRIPTION_WAIT_SECTION_TEXT',
+                'OWNER_VENUE_DESCRIPTION_WAIT_SECTION_MEDIA',
+                'OWNER_VENUE_ORDER_MENU_WAIT_SECTION_TITLE',
+                'OWNER_VENUE_ORDER_MENU_WAIT_SECTION_RENAME',
+                'OWNER_VENUE_ORDER_MENU_WAIT_ITEM_NAME',
+                'OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE',
+                'OWNER_VENUE_ORDER_MENU_WAIT_ITEM_RENAME',
+                'OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE_EDIT',
+                'OWNER_VENUE_ORDER_MENU_WAIT_OPTION_NAME',
+                'OWNER_VENUE_TABLES_WAIT_NUMBER',
+                'OWNER_VENUE_TABLES_WAIT_CAPACITY',
+                'VENUE_STAFF_ORDERS_WAIT_BATCH_CANCEL_REASON',
+                'VENUE_STAFF_ORDERS_WAIT_ORDER_CANCEL_REASON',
+                'VENUE_STAFF_ORDERS_WAIT_ITEM_EXCLUDE_REASON',
+                'VENUE_STAFF_ORDERS_WAIT_ITEM_DISCOUNT_PERCENT',
+                'VENUE_BOOKING_WAIT_GUEST_MESSAGE',
+                'VENUE_BOOKING_CANCEL_WAIT_REASON',
+                'GUEST_BOOKING_WAIT_REPLY',
+                'BOT_MENU_CART_WAIT_COMMENT'
+            )
+        );

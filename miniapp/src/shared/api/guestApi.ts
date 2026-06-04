@@ -3,31 +3,51 @@ import type {
   ActiveOrderResponse,
   AddBatchRequest,
   AddBatchResponse,
+  CartPreviewRequest,
+  CartPreviewResponse,
   CatalogResponse,
   CreateSharedTabRequest,
   CreateTabInviteRequest,
   CreateTabInviteResponse,
+  GuestBookingCancelRequest,
+  GuestBookingConfirmRequest,
+  GuestBookingCreateRequest,
+  GuestBookingListResponse,
+  GuestBookingResponse,
+  GuestFavoriteItemsResponse,
+  GuestFavoriteVenuesResponse,
   GuestTabResponse,
   GuestTabsResponse,
+  GuestVisitDetailResponse,
+  GuestVisitListResponse,
   JoinTabRequest,
   MenuResponse,
   StaffCallRequest,
   StaffCallResponse,
   TableResolveResponse,
+  VenueInfoSectionsResponse,
   VenueResponse
 } from './guestDtos'
 import { ApiErrorCodes, type ApiResult } from './types'
 import { normalizeTableToken } from '../validation/tableToken'
 
-function invalidTableTokenResult<T>(): ApiResult<T> {
+function invalidInputResult<T>(message: string): ApiResult<T> {
   return {
     ok: false,
     error: {
       status: 400,
       code: ApiErrorCodes.INVALID_INPUT,
-      message: 'Некорректный токен стола'
+      message
     }
   }
+}
+
+function invalidTableTokenResult<T>(): ApiResult<T> {
+  return invalidInputResult('Некорректный токен стола')
+}
+
+function invalidPositiveIdResult<T>(name: string): ApiResult<T> {
+  return invalidInputResult(`${name} должен быть положительным числом`)
 }
 
 export async function guestGetCatalog(
@@ -56,20 +76,138 @@ export async function guestGetVenueMenu(
   return requestApi<MenuResponse>(backendUrl, `/api/guest/venue/${venueId}/menu`, { signal }, deps)
 }
 
+export async function guestGetVenueInfoSections(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<VenueInfoSectionsResponse>> {
+  return requestApi<VenueInfoSectionsResponse>(
+    backendUrl,
+    `/api/guest/venue/${venueId}/info-sections`,
+    { signal },
+    deps
+  )
+}
+
+export async function guestCreateBooking(
+  backendUrl: string,
+  payload: GuestBookingCreateRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestBookingResponse>> {
+  if (!Number.isFinite(payload.venueId) || !Number.isInteger(payload.venueId) || payload.venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  return requestApi<GuestBookingResponse>(
+    backendUrl,
+    '/api/guest/booking/create',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestGetBookings(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestBookingListResponse>> {
+  if (!Number.isFinite(venueId) || !Number.isInteger(venueId) || venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  const search = new URLSearchParams({ venueId: String(venueId) })
+  return requestApi<GuestBookingListResponse>(
+    backendUrl,
+    `/api/guest/booking?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function guestCancelBooking(
+  backendUrl: string,
+  venueId: number,
+  payload: GuestBookingCancelRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestBookingResponse>> {
+  if (!Number.isFinite(venueId) || !Number.isInteger(venueId) || venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  if (!Number.isFinite(payload.bookingId) || !Number.isInteger(payload.bookingId) || payload.bookingId <= 0) {
+    return invalidPositiveIdResult('bookingId')
+  }
+  const search = new URLSearchParams({ venueId: String(venueId) })
+  return requestApi<GuestBookingResponse>(
+    backendUrl,
+    `/api/guest/booking/cancel?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestConfirmBooking(
+  backendUrl: string,
+  venueId: number,
+  payload: GuestBookingConfirmRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestBookingResponse>> {
+  if (!Number.isFinite(venueId) || !Number.isInteger(venueId) || venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  if (!Number.isFinite(payload.bookingId) || !Number.isInteger(payload.bookingId) || payload.bookingId <= 0) {
+    return invalidPositiveIdResult('bookingId')
+  }
+  const search = new URLSearchParams({ venueId: String(venueId) })
+  return requestApi<GuestBookingResponse>(
+    backendUrl,
+    `/api/guest/booking/confirm?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
 export async function guestResolveTable(
   backendUrl: string,
   tableToken: string,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { tableSessionId?: number | null; allowCreateSession?: boolean }
 ): Promise<ApiResult<TableResolveResponse>> {
   const normalizedToken = normalizeTableToken(tableToken)
   if (!normalizedToken) {
     return invalidTableTokenResult()
   }
-  const encodedToken = encodeURIComponent(normalizedToken)
+  const search = new URLSearchParams({ tableToken: normalizedToken })
+  if (options?.tableSessionId !== undefined && options.tableSessionId !== null) {
+    if (!Number.isFinite(options.tableSessionId) || !Number.isInteger(options.tableSessionId) || options.tableSessionId <= 0) {
+      return invalidPositiveIdResult('tableSessionId')
+    }
+    search.set('tableSessionId', String(options.tableSessionId))
+  }
+  if (options?.allowCreateSession === true) {
+    search.set('resolveMode', 'create')
+  }
   return requestApi<TableResolveResponse>(
     backendUrl,
-    `/api/guest/table/resolve?tableToken=${encodedToken}`,
+    `/api/guest/table/resolve?${search.toString()}`,
     { signal },
     deps
   )
@@ -78,6 +216,8 @@ export async function guestResolveTable(
 export async function guestGetActiveOrder(
   backendUrl: string,
   tableToken: string,
+  tableSessionId: number,
+  tabId: number,
   deps: RequestDependencies,
   signal?: AbortSignal
 ): Promise<ApiResult<ActiveOrderResponse>> {
@@ -85,10 +225,20 @@ export async function guestGetActiveOrder(
   if (!normalizedToken) {
     return invalidTableTokenResult()
   }
-  const encodedToken = encodeURIComponent(normalizedToken)
+  if (!Number.isFinite(tableSessionId) || !Number.isInteger(tableSessionId) || tableSessionId <= 0) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  if (!Number.isFinite(tabId) || !Number.isInteger(tabId) || tabId <= 0) {
+    return invalidPositiveIdResult('tabId')
+  }
+  const search = new URLSearchParams({
+    tableToken: normalizedToken,
+    tableSessionId: String(tableSessionId),
+    tabId: String(tabId)
+  })
   return requestApi<ActiveOrderResponse>(
     backendUrl,
-    `/api/guest/order/active?tableToken=${encodedToken}`,
+    `/api/guest/order/active?${search.toString()}`,
     { signal },
     deps
   )
@@ -108,6 +258,36 @@ export async function guestAddBatch(
   return requestApi<AddBatchResponse>(
     backendUrl,
     '/api/guest/order/add-batch',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestPayload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestPreviewCart(
+  backendUrl: string,
+  payload: CartPreviewRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<CartPreviewResponse>> {
+  const normalizedToken = normalizeTableToken(payload.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  if (!Number.isFinite(payload.tableSessionId) || !Number.isInteger(payload.tableSessionId) || payload.tableSessionId <= 0) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  if (!Number.isFinite(payload.tabId) || !Number.isInteger(payload.tabId) || payload.tabId <= 0) {
+    return invalidPositiveIdResult('tabId')
+  }
+  const requestPayload: CartPreviewRequest = { ...payload, tableToken: normalizedToken }
+  return requestApi<CartPreviewResponse>(
+    backendUrl,
+    '/api/guest/order/preview',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -210,6 +390,65 @@ export async function guestCreateTabInvite(
       body: JSON.stringify(payload),
       signal
     },
+    deps
+  )
+}
+
+export async function guestGetVisits(
+  backendUrl: string,
+  params: { limit?: number; cursor?: number | null },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestVisitListResponse>> {
+  const search = new URLSearchParams()
+  if (params.limit !== undefined) {
+    search.set('limit', String(params.limit))
+  }
+  if (params.cursor !== undefined && params.cursor !== null) {
+    search.set('cursor', String(params.cursor))
+  }
+  const suffix = search.toString()
+  return requestApi<GuestVisitListResponse>(backendUrl, `/api/guest/visits${suffix ? `?${suffix}` : ''}`, { signal }, deps)
+}
+
+export async function guestGetVisitDetail(
+  backendUrl: string,
+  visitId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestVisitDetailResponse>> {
+  if (!Number.isFinite(visitId) || !Number.isInteger(visitId) || visitId <= 0) {
+    return invalidPositiveIdResult('visitId')
+  }
+  return requestApi<GuestVisitDetailResponse>(
+    backendUrl,
+    `/api/guest/visits/${encodeURIComponent(String(visitId))}`,
+    { signal },
+    deps
+  )
+}
+
+export async function guestGetFavoriteVenues(
+  backendUrl: string,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestFavoriteVenuesResponse>> {
+  return requestApi<GuestFavoriteVenuesResponse>(backendUrl, '/api/guest/favorites/venues', { signal }, deps)
+}
+
+export async function guestGetFavoriteItems(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestFavoriteItemsResponse>> {
+  if (!Number.isFinite(venueId) || !Number.isInteger(venueId) || venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  return requestApi<GuestFavoriteItemsResponse>(
+    backendUrl,
+    `/api/guest/favorites/items?venueId=${encodeURIComponent(String(venueId))}`,
+    { signal },
     deps
   )
 }

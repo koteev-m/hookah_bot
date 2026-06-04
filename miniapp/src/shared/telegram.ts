@@ -44,6 +44,7 @@ export type TelegramContext = {
   isTelegram: boolean
   initData: string | null
   tableToken: string | null
+  tableSessionId: number | null
   tableTokenStatus: 'missing' | 'invalid' | 'valid'
   tableTokenAutoResolve: boolean
   startParam: string | null
@@ -82,30 +83,6 @@ function getSearchParams(): URLSearchParams | null {
   return new URLSearchParams(window.location.search)
 }
 
-function getSessionStorageToken(): string | null {
-  if (typeof window === 'undefined') {
-    return null
-  }
-  try {
-    const token = window.sessionStorage.getItem(tableTokenSessionStorageKey)
-    return token ? token : null
-  } catch {
-    return null
-  }
-}
-
-function getLocalStorageToken(): string | null {
-  if (typeof window === 'undefined') {
-    return null
-  }
-  try {
-    const token = window.localStorage.getItem(tableTokenLocalStorageKey)
-    return token ? token : null
-  } catch {
-    return null
-  }
-}
-
 function setSessionStorageToken(token: string): void {
   if (typeof window === 'undefined') {
     return
@@ -126,18 +103,6 @@ function setLocalStorageToken(token: string): void {
   } catch {
     // ignore local storage errors
   }
-}
-
-function getStoredTableToken(): string | null {
-  const token = getSessionStorageToken() ?? getLocalStorageToken()
-  if (!token) {
-    return null
-  }
-  const validation = validateTableToken(token)
-  if (!validation.ok) {
-    return null
-  }
-  return validation.value
 }
 
 export function rememberTableToken(token: string): void {
@@ -165,10 +130,18 @@ function getQueryParam(params: URLSearchParams | null, key: string): string | nu
   return value ? value : null
 }
 
+function parsePositiveNumber(value: string | null | undefined): number | null {
+  const normalized = normalizeNonEmpty(value)
+  if (!normalized || !/^\d+$/.test(normalized)) {
+    return null
+  }
+  const parsed = Number(normalized)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
 export function getTelegramContext(): TelegramContext {
   const webApp = getWebApp()
   const params = getSearchParams()
-  const storedTableToken = getStoredTableToken()
   const initDataFromWebApp = webApp?.initData ? webApp.initData : null
   const initData =
     initDataFromWebApp ??
@@ -201,8 +174,8 @@ export function getTelegramContext(): TelegramContext {
     { value: webApp?.initDataUnsafe?.startParam, source: 'initDataUnsafe_startParam' }
   ]
   const selectedStartParam = startParamCandidates.find((candidate) => normalizeNonEmpty(candidate.value))
-  const startParamSource = selectedStartParam?.source ?? (storedTableToken ? 'storage' : null)
-  const startParam = normalizeNonEmpty(selectedStartParam?.value) ?? storedTableToken
+  const startParamSource = selectedStartParam?.source ?? null
+  const startParam = normalizeNonEmpty(selectedStartParam?.value)
   const screen = normalizeNonEmpty(getQueryParam(params, 'screen'))
   const hasExplicitStartSignal =
     startParamSource !== null &&
@@ -222,6 +195,9 @@ export function getTelegramContext(): TelegramContext {
       tableToken = validation.value
     }
   }
+  const tableSessionId =
+    parsePositiveNumber(getQueryParam(params, 'tableSessionId')) ??
+    parsePositiveNumber(getQueryParam(params, 'table_session_id'))
   const botUsername = normalizeNonEmpty(getQueryParam(params, 'tgWebAppBotUsername'))
   const rawUserId = webApp?.initDataUnsafe?.user?.id
   const telegramUserId = typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : null
@@ -229,6 +205,7 @@ export function getTelegramContext(): TelegramContext {
     isTelegram: Boolean(webApp),
     initData,
     tableToken,
+    tableSessionId,
     tableTokenStatus,
     tableTokenAutoResolve,
     startParam,

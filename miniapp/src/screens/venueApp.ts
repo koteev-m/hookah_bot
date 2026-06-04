@@ -213,8 +213,30 @@ function venueRoleLabel(role: VenueAccessDto['role']) {
 
 function venueSelectorLabel(venue: VenueAccessDto): string {
   const base = venue.venueName?.trim() || `Заведение #${venue.venueId}`
-  const meta = [venue.venueCity?.trim(), venue.venueStatus?.trim()].filter(Boolean)
+  const meta = [venue.venueCity?.trim(), venueStatusLabel(venue.venueStatus)].filter(Boolean)
   return meta.length ? `${base} · ${meta.join(' · ')}` : base
+}
+
+function venueStatusLabel(status?: string | null): string | null {
+  if (!status) return null
+  switch (status.trim().toUpperCase()) {
+    case 'PUBLISHED':
+      return 'Опубликовано'
+    case 'HIDDEN':
+      return 'Скрыто'
+    case 'DRAFT':
+      return 'Черновик'
+    case 'PAUSED':
+      return 'На паузе'
+    case 'SUSPENDED':
+      return 'Заблокировано'
+    case 'ARCHIVED':
+      return 'Архив'
+    case 'DELETED':
+      return 'Удалено'
+    default:
+      return status
+  }
 }
 
 export function mountVenueApp(options: VenueAppOptions) {

@@ -55,6 +55,69 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
         }
     }
 
+    suspend fun tryClaimAndEnqueue(
+        notificationKey: Long,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+    ): StaffChatNotificationClaim {
+        val ds = dataSource ?: return StaffChatNotificationClaim.ERROR
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.autoCommit = false
+                try {
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO telegram_staff_chat_notifications (batch_id, chat_id, sent_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, notificationKey)
+                        statement.setLong(2, chatId)
+                        statement.executeUpdate()
+                    }
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO telegram_outbox (chat_id, method, payload_json)
+                        VALUES (?, ?, ?)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, chatId)
+                        statement.setString(2, method)
+                        statement.setString(3, payloadJson)
+                        statement.executeUpdate()
+                    }
+                    connection.commit()
+                    StaffChatNotificationClaim.CLAIMED
+                } catch (e: SQLException) {
+                    connection.rollback()
+                    if (e.sqlState == "23505") {
+                        StaffChatNotificationClaim.ALREADY
+                    } else {
+                        logger.warn(
+                            "Failed to claim and enqueue staff chat notification key={}: {}",
+                            notificationKey,
+                            sanitizeTelegramForLog(e.message),
+                        )
+                        logger.debugTelegramException(e) { "tryClaimAndEnqueue exception key=$notificationKey" }
+                        StaffChatNotificationClaim.ERROR
+                    }
+                } catch (e: Exception) {
+                    connection.rollback()
+                    logger.warn(
+                        "Failed to claim and enqueue staff chat notification key={}: {}",
+                        notificationKey,
+                        sanitizeTelegramForLog(e.message),
+                    )
+                    logger.debugTelegramException(e) { "tryClaimAndEnqueue exception key=$notificationKey" }
+                    StaffChatNotificationClaim.ERROR
+                } finally {
+                    connection.autoCommit = true
+                }
+            }
+        }
+    }
+
     suspend fun releaseClaim(batchId: Long): Boolean {
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {

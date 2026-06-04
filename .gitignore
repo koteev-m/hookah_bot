@@ -17,3 +17,10 @@ miniapp/dist/
 
 # Environment
 .env
+
+# Local/generated tooling artifacts
+.chat/
+.cursor/
+.kotlin/
+.tmp-checks/
+Task

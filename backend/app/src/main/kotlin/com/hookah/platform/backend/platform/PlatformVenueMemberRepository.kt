@@ -19,6 +19,8 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         userId: Long,
         role: String,
         invitedByUserId: Long?,
+        venueOwnerAccountRepository: VenueOwnerAccountRepository? = null,
+        enforceQuota: Boolean = false,
     ): PlatformOwnerAssignmentResult {
         val ds = dataSource ?: return PlatformOwnerAssignmentResult.DatabaseError
         return withContext(Dispatchers.IO) {
@@ -29,6 +31,41 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                     try {
                         if (!venueExists(connection, venueId)) {
                             return@use rollbackAndReturn(connection) { PlatformOwnerAssignmentResult.NotFound }
+                        }
+                        if (enforceQuota) {
+                            val quotaRepository =
+                                venueOwnerAccountRepository
+                                    ?: return@use rollbackAndReturn(connection) {
+                                        PlatformOwnerAssignmentResult.DatabaseError
+                                    }
+                            when (
+                                val preparation =
+                                    quotaRepository.prepareOwnerAssignmentInTransaction(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        ownerUserId = userId,
+                                        defaultLimit = 1,
+                                        updatedByUserId = invitedByUserId,
+                                    )
+                            ) {
+                                is OwnerAccountAssignmentPreparationResult.Success -> Unit
+                                is OwnerAccountAssignmentPreparationResult.QuotaExceeded ->
+                                    return@use rollbackAndReturn(connection) {
+                                        PlatformOwnerAssignmentResult.QuotaExceeded(preparation.summary)
+                                    }
+                                OwnerAccountAssignmentPreparationResult.OwnerAccountMismatch ->
+                                    return@use rollbackAndReturn(connection) {
+                                        PlatformOwnerAssignmentResult.OwnerAccountMismatch
+                                    }
+                                OwnerAccountAssignmentPreparationResult.NotFound ->
+                                    return@use rollbackAndReturn(connection) {
+                                        PlatformOwnerAssignmentResult.NotFound
+                                    }
+                                OwnerAccountAssignmentPreparationResult.DatabaseError ->
+                                    return@use rollbackAndReturn(connection) {
+                                        PlatformOwnerAssignmentResult.DatabaseError
+                                    }
+                            }
                         }
                         val existing = loadMember(connection, venueId, userId)
                         if (existing != null) {
@@ -214,6 +251,10 @@ data class PlatformVenueMember(
 
 sealed interface PlatformOwnerAssignmentResult {
     data class Success(val member: PlatformVenueMember, val alreadyMember: Boolean) : PlatformOwnerAssignmentResult
+
+    data class QuotaExceeded(val summary: VenueOwnerQuotaSummary) : PlatformOwnerAssignmentResult
+
+    data object OwnerAccountMismatch : PlatformOwnerAssignmentResult
 
     data object NotFound : PlatformOwnerAssignmentResult
 

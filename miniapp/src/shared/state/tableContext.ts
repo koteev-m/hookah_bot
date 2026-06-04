@@ -20,7 +20,11 @@ export type TableContextSnapshot = {
   tableToken: string | null
   tableId: number | null
   tableSessionId: number | null
+  tableSessionStatus: string | null
+  tableSessionActive: boolean
+  tableSessionInactiveReason: string | null
   tableNumber: string | null
+  venueName: string | null
   venueId: number | null
   available: boolean | null
   unavailableReason: string | null
@@ -37,6 +41,7 @@ export type TableStatusPresentation = {
 }
 
 const isDebug = isDebugEnabled()
+const tableSessionStorageKey = 'hookah_guest_table_session_context'
 const listeners = new Set<(snapshot: TableContextSnapshot) => void>()
 let currentSnapshot = buildEmptySnapshot('missing')
 let activeController: AbortController | null = null
@@ -69,6 +74,55 @@ function resolveBlockReasonText(reason: string | null): string {
   }
 }
 
+function resolveTableSessionInactiveText(reason: string | null): string {
+  switch (reason) {
+    case 'TABLE_SESSION_EXPIRED':
+    case 'TABLE_SESSION_ENDED':
+    default:
+      return 'Контекст стола устарел'
+  }
+}
+
+type StoredTableSessionContext = {
+  tableToken: string
+  tableSessionId: number
+}
+
+function loadStoredTableSessionContext(tableToken: string): number | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  try {
+    const raw = window.sessionStorage.getItem(tableSessionStorageKey)
+    if (!raw) {
+      return null
+    }
+    const parsed = JSON.parse(raw) as Partial<StoredTableSessionContext>
+    if (
+      parsed.tableToken === tableToken &&
+      typeof parsed.tableSessionId === 'number' &&
+      Number.isFinite(parsed.tableSessionId) &&
+      parsed.tableSessionId > 0
+    ) {
+      return parsed.tableSessionId
+    }
+  } catch {
+    // ignore stale storage
+  }
+  return null
+}
+
+function rememberTableSessionContext(tableToken: string, tableSessionId: number) {
+  if (typeof window === 'undefined' || tableSessionId <= 0) {
+    return
+  }
+  try {
+    window.sessionStorage.setItem(tableSessionStorageKey, JSON.stringify({ tableToken, tableSessionId }))
+  } catch {
+    // ignore session storage errors
+  }
+}
+
 function buildEmptySnapshot(
   status: TableContextStatus,
   tableToken: string | null = null
@@ -78,7 +132,11 @@ function buildEmptySnapshot(
     tableToken,
     tableId: null,
     tableSessionId: null,
+    tableSessionStatus: null,
+    tableSessionActive: false,
+    tableSessionInactiveReason: null,
     tableNumber: null,
+    venueName: null,
     venueId: null,
     available: null,
     unavailableReason: null,
@@ -93,18 +151,28 @@ function buildResolvedSnapshot(
   payload: TableResolveResponse,
   tableToken: string
 ): TableContextSnapshot {
-  const blockReasonText = payload.available ? null : resolveBlockReasonText(payload.unavailableReason)
+  const tableSessionActive = payload.tableSessionActive !== false
+  const tableSessionInactiveReason = payload.tableSessionInactiveReason ?? null
+  const blockReasonText = payload.available
+    ? tableSessionActive
+      ? null
+      : resolveTableSessionInactiveText(tableSessionInactiveReason)
+    : resolveBlockReasonText(payload.unavailableReason)
   return {
     status: 'resolved',
     tableToken,
     tableId: payload.tableId,
     tableSessionId: payload.tableSessionId,
+    tableSessionStatus: payload.tableSessionStatus,
+    tableSessionActive,
+    tableSessionInactiveReason,
     tableNumber: payload.tableNumber,
+    venueName: payload.venueName,
     venueId: payload.venueId,
     available: payload.available,
     unavailableReason: payload.unavailableReason,
     tableLabel: `Стол №${payload.tableNumber}`,
-    orderAllowed: payload.available,
+    orderAllowed: payload.available && tableSessionActive,
     blockReasonText,
     error: null
   }
@@ -127,8 +195,8 @@ export function subscribe(listener: (snapshot: TableContextSnapshot) => void): (
   }
 }
 
-export async function refresh(): Promise<void> {
-  const { tableTokenStatus, tableToken } = getTelegramContext()
+export async function refresh(options?: { forceResolveSession?: boolean }): Promise<void> {
+  const { tableTokenStatus, tableToken, tableSessionId } = getTelegramContext()
   if (tableTokenStatus !== 'valid' || !tableToken) {
     if (activeController) {
       activeController.abort()
@@ -139,6 +207,17 @@ export async function refresh(): Promise<void> {
   }
 
   const nextToken = tableToken
+  const currentSessionId =
+    !options?.forceResolveSession &&
+    tableSessionId === null &&
+    currentSnapshot.status === 'resolved' &&
+    currentSnapshot.tableToken === nextToken
+      ? currentSnapshot.tableSessionId
+      : null
+  const storedSessionId =
+    !options?.forceResolveSession && tableSessionId === null && currentSessionId === null
+      ? loadStoredTableSessionContext(nextToken)
+      : null
   if (activeController) {
     activeController.abort()
   }
@@ -149,7 +228,10 @@ export async function refresh(): Promise<void> {
 
   const backendUrl = getBackendBaseUrl()
   const deps = buildApiDeps()
-  const request = guestResolveTable(backendUrl, nextToken, deps, controller.signal)
+  const request = guestResolveTable(backendUrl, nextToken, deps, controller.signal, {
+    tableSessionId: options?.forceResolveSession === true ? null : tableSessionId ?? currentSessionId ?? storedSessionId,
+    allowCreateSession: options?.forceResolveSession === true
+  })
   inFlight = request.then((result) => {
     if (controller.signal.aborted || requestId !== requestCounter) {
       return
@@ -168,6 +250,7 @@ export async function refresh(): Promise<void> {
     }
 
     rememberTableToken(nextToken)
+    rememberTableSessionContext(nextToken, result.data.tableSessionId)
     updateSnapshot(buildResolvedSnapshot(result.data, nextToken))
   })
 
@@ -190,8 +273,8 @@ export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPr
   switch (snapshot.status) {
     case 'missing':
       return {
-        title: 'Вы за столом?',
-        details: 'Чтобы открыть меню и сделать заказ к своему столу, отсканируйте QR-код на столе.',
+        title: 'Заказ за столом',
+        details: 'Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.',
         severity: 'warn'
       }
     case 'invalid':
@@ -212,8 +295,19 @@ export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPr
       }
       return { title: 'Не удалось загрузить стол. Попробуйте позже.', severity: 'error' }
     case 'resolved': {
+      if (!snapshot.tableSessionActive) {
+        return {
+          title: 'Контекст стола устарел',
+          details: 'Чтобы заказать или вызвать персонал, отсканируйте QR на столе заново.',
+          severity: 'warn'
+        }
+      }
       if (snapshot.available) {
-        return { title: snapshot.tableLabel ?? 'Стол', severity: 'ok' }
+        const tableTitle = snapshot.tableNumber ? `столом №${snapshot.tableNumber}` : 'столом'
+        return {
+          title: snapshot.venueName ? `Вы за ${tableTitle} · ${snapshot.venueName}` : `Вы за ${tableTitle}`,
+          severity: 'ok'
+        }
       }
       return { title: snapshot.blockReasonText ?? 'Заведение недоступно', severity: 'error' }
     }

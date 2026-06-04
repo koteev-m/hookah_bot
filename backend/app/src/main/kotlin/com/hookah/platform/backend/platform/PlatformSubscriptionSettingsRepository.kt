@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Timestamp
 import java.sql.Types
 import java.time.LocalDate
 import java.util.Locale
@@ -163,6 +164,65 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         }
     }
 
+    suspend fun applyCommercialTerms(
+        venueId: Long,
+        trialEndDate: LocalDate?,
+        basePriceMinor: Int,
+        futurePrice: PlatformPriceScheduleItem?,
+        actorUserId: Long,
+    ): PlatformSubscriptionSnapshot? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val initialAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        if (!venueExists(connection, venueId)) {
+                            rollbackBestEffort(connection)
+                            return@use null
+                        }
+                        val settings =
+                            PlatformSubscriptionSettings(
+                                venueId = venueId,
+                                trialEndDate = trialEndDate,
+                                paidStartDate = trialEndDate ?: LocalDate.now(),
+                                basePriceMinor = basePriceMinor,
+                                priceOverrideMinor = null,
+                                currency = DEFAULT_CURRENCY,
+                            )
+                        upsertSettings(connection, settings, actorUserId)
+                        replaceScheduleInConnection(
+                            connection = connection,
+                            venueId = venueId,
+                            items = listOfNotNull(futurePrice),
+                            actorUserId = actorUserId,
+                        )
+                        upsertSubscriptionLifecycle(
+                            connection = connection,
+                            venueId = venueId,
+                            trialEndDate = trialEndDate,
+                        )
+                        val schedule = loadSchedule(connection, venueId)
+                        val effectivePriceToday = resolveEffectivePrice(settings, schedule, LocalDate.now())
+                        connection.commit()
+                        PlatformSubscriptionSnapshot(settings, schedule, effectivePriceToday)
+                    } catch (e: CancellationException) {
+                        rollbackBestEffort(connection)
+                        throw e
+                    } catch (e: SQLException) {
+                        rollbackBestEffort(connection)
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = initialAutoCommit }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     private fun resolveSettingsUpdate(
         venueId: Long,
         existing: PlatformSubscriptionSettings?,
@@ -254,6 +314,108 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                     )
                 }
                 return items
+            }
+        }
+    }
+
+    private fun replaceScheduleInConnection(
+        connection: Connection,
+        venueId: Long,
+        items: List<PlatformPriceScheduleItem>,
+        actorUserId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            DELETE FROM venue_price_schedule
+            WHERE venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeUpdate()
+        }
+        if (items.isEmpty()) {
+            return
+        }
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_price_schedule (
+                venue_id,
+                effective_from,
+                price_minor,
+                currency,
+                updated_at,
+                updated_by_user_id
+            )
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            items.forEach { item ->
+                statement.setLong(1, venueId)
+                statement.setDate(2, java.sql.Date.valueOf(item.effectiveFrom))
+                statement.setInt(3, item.priceMinor)
+                statement.setString(4, item.currency)
+                statement.setLong(5, actorUserId)
+                statement.addBatch()
+            }
+            statement.executeBatch()
+        }
+    }
+
+    private fun upsertSubscriptionLifecycle(
+        connection: Connection,
+        venueId: Long,
+        trialEndDate: LocalDate?,
+    ) {
+        val status = if (trialEndDate == null) "ACTIVE" else "TRIAL"
+        val paidStartDate = trialEndDate ?: LocalDate.now()
+        connection.prepareStatement(
+            """
+            UPDATE venue_subscriptions
+            SET status = ?,
+                trial_end = ?,
+                paid_start = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, status)
+            setTimestampOrNull(statement, 2, trialEndDate)
+            statement.setTimestamp(3, Timestamp.valueOf(paidStartDate.atStartOfDay()))
+            statement.setLong(4, venueId)
+            val updated = statement.executeUpdate()
+            if (updated > 0) {
+                return
+            }
+        }
+        try {
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, status)
+                setTimestampOrNull(statement, 3, trialEndDate)
+                statement.setTimestamp(4, Timestamp.valueOf(paidStartDate.atStartOfDay()))
+                statement.executeUpdate()
+            }
+        } catch (e: SQLException) {
+            connection.prepareStatement(
+                """
+                UPDATE venue_subscriptions
+                SET status = ?,
+                    trial_end = ?,
+                    paid_start = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE venue_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, status)
+                setTimestampOrNull(statement, 2, trialEndDate)
+                statement.setTimestamp(3, Timestamp.valueOf(paidStartDate.atStartOfDay()))
+                statement.setLong(4, venueId)
+                statement.executeUpdate()
             }
         }
     }
@@ -379,6 +541,18 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
             statement.setNull(index, Types.INTEGER)
         } else {
             statement.setInt(index, value)
+        }
+    }
+
+    private fun setTimestampOrNull(
+        statement: java.sql.PreparedStatement,
+        index: Int,
+        value: LocalDate?,
+    ) {
+        if (value == null) {
+            statement.setNull(index, Types.TIMESTAMP)
+        } else {
+            statement.setTimestamp(index, Timestamp.valueOf(value.atStartOfDay()))
         }
     }
 

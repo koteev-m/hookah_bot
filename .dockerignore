@@ -10,3 +10,7 @@ node_modules
 **/out
 .DS_Store
 .env
+.env.local
+.env.*.local
+miniapp/.env.local
+miniapp/.env.*.local

@@ -10,6 +10,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 data class SendMessagePayload(
     @SerialName("chat_id") val chatId: Long,
     val text: String,
+    @SerialName("parse_mode") val parseMode: String? = null,
     @SerialName("reply_markup") val replyMarkup: JsonElement? = null,
 )
 
@@ -53,8 +54,14 @@ fun buildSendMessagePayload(
     chatId: Long,
     text: String,
     replyMarkup: ReplyMarkup?,
+    parseMode: String? = null,
 ): SendMessagePayload {
-    return SendMessagePayload(chatId = chatId, text = text, replyMarkup = buildReplyMarkupPayload(json, replyMarkup))
+    return SendMessagePayload(
+        chatId = chatId,
+        text = text,
+        parseMode = parseMode,
+        replyMarkup = buildReplyMarkupPayload(json, replyMarkup),
+    )
 }
 
 fun buildEditMessageTextPayload(

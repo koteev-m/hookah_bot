@@ -9,6 +9,7 @@ import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -21,10 +22,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.sql.DriverManager
 import java.sql.Statement
+import java.sql.Timestamp
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class PlatformVenueRoutesTest {
@@ -170,6 +174,219 @@ class PlatformVenueRoutesTest {
         }
 
     @Test
+    fun `platform owner can set venue owner quota`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-quota-update")
+            val ownerId = 7217L
+            val targetOwnerId = 8333L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, ownerId)
+            seedUser(jdbcUrl, targetOwnerId)
+            val token = issueToken(config, userId = ownerId)
+
+            val response =
+                client.put("/api/platform/venue-owner-accounts/$targetOwnerId/quota") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"allowedVenuesCount":2,"notes":"manual limit","commercialNote":"terms"}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload =
+                json.decodeFromString(
+                    PlatformVenueOwnerAccountResponse.serializer(),
+                    response.bodyAsText(),
+                )
+            assertEquals(targetOwnerId, payload.account.primaryOwnerUserId)
+            assertEquals(2, payload.account.allowedVenuesCount)
+            assertEquals(0, payload.quota.usedVenuesCount)
+            assertEquals(2, payload.quota.availableVenuesCount)
+        }
+
+    @Test
+    fun `owner assignment cannot bypass exhausted venue quota`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-quota-blocks")
+            val ownerId = 7317L
+            val targetOwnerId = 8444L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, ownerId)
+            seedUser(jdbcUrl, targetOwnerId)
+            val existingVenueId = seedVenue(jdbcUrl)
+            val targetVenueId = seedVenue(jdbcUrl)
+            val ownerAccountId = seedOwnerAccount(jdbcUrl, targetOwnerId, allowedVenuesCount = 1)
+            linkVenueToOwnerAccount(jdbcUrl, existingVenueId, ownerAccountId)
+            val token = issueToken(config, userId = ownerId)
+
+            val response =
+                client.post("/api/platform/venues/$targetVenueId/owners") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformOwnerAssignRequest.serializer(),
+                            PlatformOwnerAssignRequest(userId = targetOwnerId),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+        }
+
+    @Test
+    fun `assign owner rejects admin role alias`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-venues-reject-admin-owner")
+            val ownerId = 7117L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, ownerId)
+            seedUser(jdbcUrl, 8222L)
+            val token = issueToken(config, userId = ownerId)
+
+            val assignResponse =
+                client.post("/api/platform/venues/$venueId/owners") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformOwnerAssignRequest.serializer(),
+                            PlatformOwnerAssignRequest(userId = 8222L, role = "ADMIN"),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, assignResponse.status)
+            assertApiErrorEnvelope(assignResponse, ApiErrorCodes.INVALID_INPUT)
+        }
+
+    @Test
+    fun `platform cockpit can list venue open detail and see subscription basics`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-cockpit-smoke")
+            val ownerId = 8123L
+            val venueOwnerId = 9123L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, ownerId)
+            seedUser(jdbcUrl, venueOwnerId)
+            val venueId = seedVenue(jdbcUrl)
+            seedOwnerMembership(jdbcUrl, venueId, venueOwnerId)
+            seedSubscription(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                status = "ACTIVE",
+                trialEnd = Instant.now().plus(7, ChronoUnit.DAYS),
+                paidStart = Instant.now().minus(1, ChronoUnit.DAYS),
+            )
+            val token = issueToken(config, userId = ownerId)
+
+            val listResponse =
+                client.get("/api/platform/venues?limit=10") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val listPayload =
+                json.decodeFromString(
+                    PlatformVenueListResponse.serializer(),
+                    listResponse.bodyAsText(),
+                )
+            val listedVenue = listPayload.venues.single { it.id == venueId }
+            assertEquals("Seed", listedVenue.name)
+            assertEquals("DRAFT", listedVenue.status)
+            assertEquals(1, listedVenue.ownersCount)
+            assertNotNull(listedVenue.subscriptionSummary)
+            assertEquals(true, listedVenue.subscriptionSummary.isPaid)
+
+            val detailResponse =
+                client.get("/api/platform/venues/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, detailResponse.status)
+            val detailPayload =
+                json.decodeFromString(
+                    PlatformVenueDetailResponse.serializer(),
+                    detailResponse.bodyAsText(),
+                )
+            assertEquals(venueId, detailPayload.venue.id)
+            assertEquals("City", detailPayload.venue.city)
+            assertEquals("Address", detailPayload.venue.address)
+            assertEquals(listOf(venueOwnerId), detailPayload.owners.map { it.userId })
+            assertNotNull(detailPayload.subscriptionSummary)
+            assertEquals(true, detailPayload.subscriptionSummary.isPaid)
+        }
+
+    @Test
+    fun `platform venue list excludes deleted venues but keeps archived filter`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-venues-deleted-filter")
+            val ownerId = 8124L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val activeId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED)
+            val archivedId = seedVenue(jdbcUrl, VenueStatus.ARCHIVED)
+            val deletedId = seedVenue(jdbcUrl, VenueStatus.DELETED)
+            val token = issueToken(config, userId = ownerId)
+
+            val listResponse =
+                client.get("/api/platform/venues?limit=10") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val listPayload =
+                json.decodeFromString(
+                    PlatformVenueListResponse.serializer(),
+                    listResponse.bodyAsText(),
+                )
+            assertTrue(listPayload.venues.any { it.id == activeId })
+            assertTrue(listPayload.venues.any { it.id == archivedId })
+            assertTrue(listPayload.venues.none { it.id == deletedId })
+
+            val archiveResponse =
+                client.get("/api/platform/venues?status=ARCHIVED&limit=10") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, archiveResponse.status)
+            val archivePayload =
+                json.decodeFromString(
+                    PlatformVenueListResponse.serializer(),
+                    archiveResponse.bodyAsText(),
+                )
+            assertEquals(listOf(archivedId), archivePayload.venues.map { it.id })
+        }
+
+    @Test
     fun `owner invite creates invite and accept makes owner`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-owner-invite")
@@ -229,6 +446,7 @@ class PlatformVenueRoutesTest {
                 )
             assertEquals(venueId, acceptPayload.venueId)
             assertEquals("OWNER", acceptPayload.member.role)
+            assertEquals(inviteeId, loadPrimaryOwnerForVenueAccount(jdbcUrl, venueId))
         }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -259,7 +477,10 @@ class PlatformVenueRoutesTest {
         return service.issueToken(userId).token
     }
 
-    private fun seedVenue(jdbcUrl: String): Long {
+    private fun seedVenue(
+        jdbcUrl: String,
+        status: VenueStatus = VenueStatus.DRAFT,
+    ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -268,7 +489,7 @@ class PlatformVenueRoutesTest {
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
-                statement.setString(1, VenueStatus.DRAFT.dbValue)
+                statement.setString(1, status.dbValue)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) return rs.getLong(1)
@@ -296,9 +517,155 @@ class PlatformVenueRoutesTest {
         }
     }
 
+    private fun seedOwnerMembership(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_members (venue_id, user_id, role)
+                VALUES (?, ?, 'OWNER')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedSubscription(
+        jdbcUrl: String,
+        venueId: Long,
+        status: String,
+        trialEnd: Instant?,
+        paidStart: Instant?,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, status)
+                statement.setTimestamp(3, trialEnd?.let { Timestamp.from(it) })
+                statement.setTimestamp(4, paidStart?.let { Timestamp.from(it) })
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedOwnerAccount(
+        jdbcUrl: String,
+        ownerUserId: Long,
+        allowedVenuesCount: Int,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_owner_accounts (primary_owner_user_id, allowed_venues_count)
+                VALUES (?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, ownerUserId)
+                statement.setInt(2, allowedVenuesCount)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert owner account")
+    }
+
+    private fun linkVenueToOwnerAccount(
+        jdbcUrl: String,
+        venueId: Long,
+        ownerAccountId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE venues
+                SET owner_account_id = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ownerAccountId)
+                statement.setLong(2, venueId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun loadPrimaryOwnerForVenueAccount(
+        jdbcUrl: String,
+        venueId: Long,
+    ): Long? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT voa.primary_owner_user_id
+                FROM venues v
+                JOIN venue_owner_accounts voa ON voa.id = v.owner_account_id
+                WHERE v.id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    return if (rs.next()) rs.getLong("primary_owner_user_id") else null
+                }
+            }
+        }
+    }
+
     @Serializable
     private data class PlatformVenueResponse(
         val venue: PlatformVenueDetailDto,
+    )
+
+    @Serializable
+    private data class PlatformVenueListResponse(
+        val venues: List<PlatformVenueSummaryDto>,
+    )
+
+    @Serializable
+    private data class PlatformVenueSummaryDto(
+        val id: Long,
+        val name: String,
+        val city: String? = null,
+        val status: String,
+        val createdAt: String,
+        val ownersCount: Int,
+        val subscriptionSummary: PlatformSubscriptionSummaryDto? = null,
+    )
+
+    @Serializable
+    private data class PlatformVenueDetailResponse(
+        val venue: PlatformVenueDetailDto,
+        val owners: List<PlatformVenueOwnerDto>,
+        val subscriptionSummary: PlatformSubscriptionSummaryDto? = null,
+    )
+
+    @Serializable
+    private data class PlatformVenueOwnerDto(
+        val userId: Long,
+        val role: String,
+        val username: String? = null,
+        val firstName: String? = null,
+        val lastName: String? = null,
+    )
+
+    @Serializable
+    private data class PlatformSubscriptionSummaryDto(
+        val trialEndDate: String? = null,
+        val paidStartDate: String? = null,
+        val isPaid: Boolean? = null,
     )
 
     @Serializable

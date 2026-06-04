@@ -4,6 +4,9 @@ import com.hookah.platform.backend.analytics.AnalyticsEventRecord
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
+import com.hookah.platform.backend.promotions.PromotionRuleCartItem
+import com.hookah.platform.backend.promotions.PromotionRuleEngine
 import com.hookah.platform.backend.telegram.ActiveOrderSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,6 +15,7 @@ import java.sql.Date
 import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Types
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import javax.sql.DataSource
@@ -28,6 +32,8 @@ data class OrderBatchItemDetails(
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,
+    val promoDiscountMinor: Long = 0L,
+    val isPromotionReward: Boolean = false,
 )
 
 data class OrderBatchDetails(
@@ -42,6 +48,7 @@ data class ActiveOrderDetails(
     val batches: List<OrderBatchDetails>,
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
+    val promotionDiscounts: List<CreatedOrderPromotionDiscount> = emptyList(),
 )
 
 data class CreatedOrderBatch(
@@ -50,6 +57,48 @@ data class CreatedOrderBatch(
     val idempotencyReplay: Boolean,
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
+    val isFirstBatch: Boolean = true,
+    val promotionDiscounts: List<CreatedOrderPromotionDiscount> = emptyList(),
+    val items: List<CreatedOrderBatchItem> = emptyList(),
+)
+
+data class CreatedOrderPromotionDiscount(
+    val label: String,
+    val discountMinor: Long,
+    val currency: String,
+    val ruleType: String? = null,
+)
+
+data class CreatedOrderBatchItem(
+    val itemId: Long,
+    val itemName: String,
+    val qty: Int,
+    val priceMinor: Long,
+    val currency: String,
+    val promoDiscountMinor: Long = 0L,
+    val isPromotionReward: Boolean = false,
+)
+
+data class GuestOrderCartPreview(
+    val items: List<GuestOrderCartPreviewItem>,
+    val grossTotalMinor: Long,
+    val promoDiscountTotalMinor: Long,
+    val loyaltyDiscountTotalMinor: Long,
+    val finalPayableTotalMinor: Long,
+    val currency: String,
+    val discounts: List<CreatedOrderPromotionDiscount>,
+)
+
+data class GuestOrderCartPreviewItem(
+    val itemId: Long,
+    val itemName: String,
+    val qty: Int,
+    val priceMinor: Long,
+    val currency: String,
+    val lineGrossMinor: Long,
+    val discountMinor: Long,
+    val linePayableMinor: Long,
+    val isPromotionReward: Boolean = false,
 )
 
 data class UserActiveOrderSummary(
@@ -61,6 +110,7 @@ data class UserActiveOrderSummary(
     val items: List<UserActiveOrderItemSummary> = emptyList(),
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
+    val promotionDiscounts: List<CreatedOrderPromotionDiscount> = emptyList(),
 )
 
 data class UserActiveOrderItemSummary(
@@ -70,6 +120,8 @@ data class UserActiveOrderItemSummary(
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,
+    val promoDiscountMinor: Long = 0L,
+    val isPromotionReward: Boolean = false,
 )
 
 private data class ActiveOrderHeader(
@@ -87,29 +139,32 @@ private data class OrderDisplay(
 class OrdersRepository(
     private val dataSource: DataSource?,
     private val analyticsEventRepository: AnalyticsEventRepository? = null,
+    private val promotionApplicationRepository: PromotionApplicationRepository? = null,
+    private val venuePromotionRuleRepository: VenuePromotionRuleRepository? = null,
+    private val loyaltyRepository: LoyaltyRepository? = null,
 ) {
-    suspend fun findActiveOrderId(tableId: Long): Long? {
+    suspend fun findActiveOrderId(tableSessionId: Long): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
-                    "SELECT id FROM orders WHERE table_id = ? AND status = 'ACTIVE'",
+                    "SELECT id FROM orders WHERE table_session_id = ? AND status = 'ACTIVE'",
                 ).use { statement ->
-                    statement.setLong(1, tableId)
+                    statement.setLong(1, tableSessionId)
                     statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
                 }
             }
         }
     }
 
-    suspend fun findActiveOrderSummary(tableId: Long): ActiveOrderSummary? {
+    suspend fun findActiveOrderSummary(tableSessionId: Long): ActiveOrderSummary? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 connection.prepareStatement(
-                    "SELECT id, status, display_number, display_date FROM orders WHERE table_id = ? AND status = 'ACTIVE'",
+                    "SELECT id, status, display_number, display_date FROM orders WHERE table_session_id = ? AND status = 'ACTIVE'",
                 ).use { statement ->
-                    statement.setLong(1, tableId)
+                    statement.setLong(1, tableSessionId)
                     statement.executeQuery().use { rs ->
                         if (rs.next()) {
                             ActiveOrderSummary(
@@ -128,7 +183,7 @@ class OrdersRepository(
     }
 
     suspend fun findActiveOrderSummaryForTab(
-        tableId: Long,
+        tableSessionId: Long,
         tabId: Long,
     ): ActiveOrderSummary? {
         val ds = dataSource ?: return null
@@ -138,7 +193,7 @@ class OrdersRepository(
                     """
                     SELECT o.id, o.status, o.display_number, o.display_date
                     FROM orders o
-                    WHERE o.table_id = ?
+                    WHERE o.table_session_id = ?
                       AND o.status = 'ACTIVE'
                       AND EXISTS (
                         SELECT 1
@@ -150,7 +205,7 @@ class OrdersRepository(
                     LIMIT 1
                     """.trimIndent(),
                 ).use { statement ->
-                    statement.setLong(1, tableId)
+                    statement.setLong(1, tableSessionId)
                     statement.setLong(2, tabId)
                     statement.executeQuery().use { rs ->
                         if (rs.next()) {
@@ -169,16 +224,16 @@ class OrdersRepository(
         }
     }
 
-    suspend fun findActiveOrderDetails(tableId: Long): ActiveOrderDetails? {
+    suspend fun findActiveOrderDetails(tableSessionId: Long): ActiveOrderDetails? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     val order =
                         connection.prepareStatement(
-                            "SELECT id, status, display_number, display_date FROM orders WHERE table_id = ? AND status = 'ACTIVE'",
+                            "SELECT id, status, display_number, display_date FROM orders WHERE table_session_id = ? AND status = 'ACTIVE'",
                         ).use { statement ->
-                            statement.setLong(1, tableId)
+                            statement.setLong(1, tableSessionId)
                             statement.executeQuery().use { rs ->
                                 if (rs.next()) {
                                     ActiveOrderHeader(
@@ -223,6 +278,7 @@ class OrdersRepository(
                         status = order.status,
                         displayNumber = order.displayNumber,
                         displayDate = order.displayDate,
+                        promotionDiscounts = loadPromotionDiscountsForBatches(connection, order.orderId, batches.map { it.first }),
                         batches =
                             batches.map { (batchId, comment) ->
                                 OrderBatchDetails(
@@ -240,7 +296,7 @@ class OrdersRepository(
     }
 
     suspend fun findActiveOrderDetailsForTab(
-        tableId: Long,
+        tableSessionId: Long,
         tabId: Long,
     ): ActiveOrderDetails? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -252,7 +308,7 @@ class OrdersRepository(
                             """
                             SELECT o.id, o.status, o.display_number, o.display_date
                             FROM orders o
-                            WHERE o.table_id = ?
+                            WHERE o.table_session_id = ?
                               AND o.status = 'ACTIVE'
                               AND EXISTS (
                                 SELECT 1
@@ -264,7 +320,7 @@ class OrdersRepository(
                             LIMIT 1
                             """.trimIndent(),
                         ).use { statement ->
-                            statement.setLong(1, tableId)
+                            statement.setLong(1, tableSessionId)
                             statement.setLong(2, tabId)
                             statement.executeQuery().use { rs ->
                                 if (rs.next()) {
@@ -315,6 +371,7 @@ class OrdersRepository(
                         status = order.status,
                         displayNumber = order.displayNumber,
                         displayDate = order.displayDate,
+                        promotionDiscounts = loadPromotionDiscountsForBatches(connection, order.orderId, batches.map { it.first }),
                         batches =
                             batches.map { (batchId, comment) ->
                                 OrderBatchDetails(
@@ -342,17 +399,35 @@ class OrdersRepository(
                     connection.prepareStatement(
                         """
                         SELECT DISTINCT o.id, o.venue_id, v.name AS venue_name, o.status, o.display_number, o.display_date
-                        FROM guest_batch_idempotency gbi
-                        JOIN orders o ON o.id = gbi.order_id
+                        FROM orders o
                         JOIN venues v ON v.id = o.venue_id
-                        WHERE gbi.user_id = ?
-                          AND o.status = 'ACTIVE'
+                        WHERE o.status = 'ACTIVE'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM order_batches ob
+                              LEFT JOIN guest_batch_idempotency gbi
+                                ON gbi.batch_id = ob.id
+                               AND gbi.user_id = ?
+                              WHERE ob.order_id = o.id
+                                AND (
+                                    ob.author_user_id = ?
+                                    OR gbi.user_id IS NOT NULL
+                                    OR EXISTS (
+                                        SELECT 1
+                                        FROM tab_member tm
+                                        WHERE tm.tab_id = ob.tab_id
+                                          AND tm.user_id = ?
+                                    )
+                                )
+                          )
                         ORDER BY o.id DESC
                         LIMIT ?
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
-                        statement.setInt(2, limit)
+                        statement.setLong(2, userId)
+                        statement.setLong(3, userId)
+                        statement.setInt(4, limit)
                         statement.executeQuery().use { rs ->
                             buildList {
                                 while (rs.next()) {
@@ -364,9 +439,10 @@ class OrdersRepository(
                                             venueName = rs.getString("venue_name"),
                                             status = rs.getString("status"),
                                             tabType = loadUserTabTypeForOrder(connection, userId, orderId),
-                                            items = loadOrderItemsSummary(connection, orderId),
+                                            items = loadOrderItemsSummaryForUser(connection, orderId, userId),
                                             displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
                                             displayDate = rs.getDate("display_date")?.toLocalDate(),
+                                            promotionDiscounts = loadPromotionDiscountsForOrder(connection, orderId),
                                         ),
                                     )
                                 }
@@ -388,11 +464,22 @@ class OrdersRepository(
         connection.prepareStatement(
             """
             SELECT t.type
-            FROM guest_batch_idempotency gbi
-            JOIN order_batches ob ON ob.id = gbi.batch_id
+            FROM order_batches ob
             JOIN tab t ON t.id = ob.tab_id
-            WHERE gbi.user_id = ?
-              AND gbi.order_id = ?
+            LEFT JOIN guest_batch_idempotency gbi
+              ON gbi.batch_id = ob.id
+             AND gbi.user_id = ?
+            WHERE ob.order_id = ?
+              AND (
+                  ob.author_user_id = ?
+                  OR gbi.user_id IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM tab_member tm
+                      WHERE tm.tab_id = ob.tab_id
+                        AND tm.user_id = ?
+                  )
+              )
             ORDER BY CASE
                 WHEN t.type = 'SHARED' THEN 0
                 WHEN t.type = 'PERSONAL' THEN 1
@@ -403,14 +490,17 @@ class OrdersRepository(
         ).use { statement ->
             statement.setLong(1, userId)
             statement.setLong(2, orderId)
+            statement.setLong(3, userId)
+            statement.setLong(4, userId)
             statement.executeQuery().use { rs ->
                 if (rs.next()) rs.getString("type") else null
             }
         }
 
-    private fun loadOrderItemsSummary(
+    private fun loadOrderItemsSummaryForUser(
         connection: Connection,
         orderId: Long,
+        userId: Long,
     ): List<UserActiveOrderItemSummary> =
         connection.prepareStatement(
             """
@@ -420,21 +510,46 @@ class OrdersRepository(
                 SUM(obi.qty) AS qty,
                 mi.price_minor,
                 mi.currency,
-                obi.discount_percent
+                obi.discount_percent,
+                COALESCE(SUM(promo.discount_minor), 0) AS promo_discount_minor,
+                CASE WHEN opri.reward_order_batch_item_id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward
             FROM order_batches ob
             JOIN order_batch_items obi ON obi.order_batch_id = ob.id
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN (
+                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                FROM order_batch_item_promotion_adjustments
+                GROUP BY order_batch_item_id
+            ) promo ON promo.order_batch_item_id = obi.id
+            LEFT JOIN order_promotion_reward_items opri ON opri.reward_order_batch_item_id = obi.id
+            LEFT JOIN guest_batch_idempotency gbi
+              ON gbi.batch_id = ob.id
+             AND gbi.user_id = ?
             WHERE ob.order_id = ?
               AND ob.status <> 'REJECTED'
               AND ob.status <> 'CLOSED'
               AND ob.rejected_reason_code IS NULL
               AND ob.rejected_reason_text IS NULL
               AND obi.is_excluded = FALSE
-            GROUP BY obi.menu_item_id, mi.name, mi.price_minor, mi.currency, obi.discount_percent
+              AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+              AND (
+                  ob.author_user_id = ?
+                  OR gbi.user_id IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM tab_member tm
+                      WHERE tm.tab_id = ob.tab_id
+                        AND tm.user_id = ?
+                  )
+              )
+            GROUP BY obi.menu_item_id, mi.name, mi.price_minor, mi.currency, obi.discount_percent, opri.reward_order_batch_item_id
             ORDER BY MIN(obi.id) ASC
             """.trimIndent(),
         ).use { statement ->
-            statement.setLong(1, orderId)
+            statement.setLong(1, userId)
+            statement.setLong(2, orderId)
+            statement.setLong(3, userId)
+            statement.setLong(4, userId)
             statement.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
@@ -449,6 +564,8 @@ class OrdersRepository(
                                 priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
                                 currency = rs.getString("currency"),
                                 discountPercent = rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value },
+                                promoDiscountMinor = rs.getLong("promo_discount_minor"),
+                                isPromotionReward = rs.getBoolean("is_promotion_reward"),
                             ),
                         )
                     }
@@ -459,24 +576,26 @@ class OrdersRepository(
     suspend fun getOrCreateActiveOrderId(
         tableId: Long,
         venueId: Long,
+        tableSessionId: Long,
+        venueZoneId: ZoneId = ZoneId.systemDefault(),
     ): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
-                    val existing = findActiveOrderForUpdate(connection, tableId)
+                    val existing = findActiveOrderForUpdate(connection, tableSessionId)
                     if (existing != null) {
                         connection.commit()
                         return@use existing
                     }
                     val orderId =
                         try {
-                            insertActiveOrder(connection, venueId, tableId)
+                            insertActiveOrder(connection, venueId, tableId, tableSessionId, venueZoneId)
                         } catch (e: SQLException) {
                             if (e.sqlState == "23505") {
                                 connection.rollback()
-                                val activeId = findActiveOrderForUpdate(connection, tableId)
+                                val activeId = findActiveOrderForUpdate(connection, tableSessionId)
                                 connection.commit()
                                 return@use activeId
                             }
@@ -498,24 +617,30 @@ class OrdersRepository(
         orderId: Long,
         authorUserId: Long?,
         guestComment: String,
+        tabId: Long? = null,
     ): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val sql =
                     """
-                    INSERT INTO order_batches (order_id, author_user_id, source, status, guest_comment)
-                    VALUES (?, ?, 'CHAT', 'NEW', ?)
+                    INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment)
+                    VALUES (?, ?, ?, 'CHAT', 'NEW', ?)
                     RETURNING id
                     """.trimIndent()
                 connection.prepareStatement(sql).use { statement ->
                     statement.setLong(1, orderId)
-                    if (authorUserId != null) {
-                        statement.setLong(2, authorUserId)
+                    if (tabId != null) {
+                        statement.setLong(2, tabId)
                     } else {
                         statement.setNull(2, java.sql.Types.BIGINT)
                     }
-                    statement.setString(3, guestComment)
+                    if (authorUserId != null) {
+                        statement.setLong(3, authorUserId)
+                    } else {
+                        statement.setNull(3, java.sql.Types.BIGINT)
+                    }
+                    statement.setString(4, guestComment)
                     statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
                 }
             }
@@ -531,6 +656,9 @@ class OrdersRepository(
         tabId: Long,
         comment: String?,
         items: List<OrderBatchItemInput>,
+        venueZoneId: ZoneId = ZoneId.systemDefault(),
+        selectedGiftChoices: Map<Long, Long> = emptyMap(),
+        skippedGiftRuleIds: Set<Long> = emptySet(),
     ): CreatedOrderBatch? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -539,6 +667,11 @@ class OrdersRepository(
                     connection.autoCommit = false
                     try {
                         if (!lockTable(connection, tableId)) {
+                            connection.rollback()
+                            return@use null
+                        }
+                        val checkoutMenuItems = loadCheckoutMenuItems(connection, venueId, items.map { it.itemId }.toSet())
+                        if (checkoutMenuItems.size != items.map { it.itemId }.toSet().size) {
                             connection.rollback()
                             return@use null
                         }
@@ -552,6 +685,7 @@ class OrdersRepository(
                             )
                         if (existing != null) {
                             val orderDisplay = loadOrderDisplay(connection, existing.orderId)
+                            val promotionDiscounts = loadPromotionDiscountsForBatch(connection, existing.batchId)
                             connection.commit()
                             return@use CreatedOrderBatch(
                                 orderId = existing.orderId,
@@ -559,15 +693,42 @@ class OrdersRepository(
                                 idempotencyReplay = true,
                                 displayNumber = orderDisplay.displayNumber,
                                 displayDate = orderDisplay.displayDate,
+                                promotionDiscounts = promotionDiscounts,
                             )
                         }
 
+                        val existingOrderId = findActiveOrderForUpdate(connection, tableSessionId)
                         val orderId =
-                            findActiveOrderForUpdate(connection, tableId)
-                                ?: insertActiveOrder(connection, venueId, tableId)
+                            existingOrderId
+                                ?: insertActiveOrder(connection, venueId, tableId, tableSessionId, venueZoneId)
                         val orderDisplay = loadOrderDisplay(connection, orderId)
                         val batchId = insertOrderBatch(connection, orderId, tabId, comment)
-                        insertBatchItems(connection, batchId, items)
+                        val insertedItems = insertBatchItems(connection, batchId, items)
+                        val loyaltyRedemption =
+                            applyLoyaltyRedemptionForBatch(
+                                connection = connection,
+                                orderId = orderId,
+                                batchId = batchId,
+                                venueId = venueId,
+                                userId = userId,
+                                insertedItems = insertedItems,
+                                checkoutMenuItems = checkoutMenuItems,
+                            )
+                        val promotionResult =
+                            applyPromotionRulesForBatch(
+                                connection = connection,
+                                orderId = orderId,
+                                batchId = batchId,
+                                venueId = venueId,
+                                userId = userId,
+                                insertedItems = insertedItems,
+                                checkoutMenuItems = checkoutMenuItems,
+                                venueZoneId = venueZoneId,
+                                selectedGiftChoices = selectedGiftChoices,
+                                skippedGiftRuleIds = skippedGiftRuleIds,
+                                excludedBatchItemIds = setOfNotNull(loyaltyRedemption?.redeemedOrderBatchItemId),
+                            )
+                        val createdItems = loadCreatedOrderBatchItems(connection, batchId)
                         insertBatchIdempotency(
                             connection = connection,
                             venueId = venueId,
@@ -607,6 +768,9 @@ class OrdersRepository(
                             idempotencyReplay = false,
                             displayNumber = orderDisplay.displayNumber,
                             displayDate = orderDisplay.displayDate,
+                            isFirstBatch = existingOrderId == null,
+                            promotionDiscounts = promotionResult.discounts + listOfNotNull(loyaltyRedemption?.discount),
+                            items = createdItems,
                         )
                     } catch (e: SQLException) {
                         connection.rollback()
@@ -624,6 +788,7 @@ class OrdersRepository(
                                     idempotencyReplay = true,
                                     displayNumber = existing.displayNumber,
                                     displayDate = existing.displayDate,
+                                    promotionDiscounts = loadPromotionDiscountsForBatch(connection, existing.batchId),
                                 )
                             }
                         }
@@ -666,12 +831,12 @@ class OrdersRepository(
 
     private fun findActiveOrderForUpdate(
         connection: Connection,
-        tableId: Long,
+        tableSessionId: Long,
     ): Long? {
         return connection.prepareStatement(
-            "SELECT id FROM orders WHERE table_id = ? AND status = 'ACTIVE' FOR UPDATE",
+            "SELECT id FROM orders WHERE table_session_id = ? AND status = 'ACTIVE' FOR UPDATE",
         ).use { statement ->
-            statement.setLong(1, tableId)
+            statement.setLong(1, tableSessionId)
             statement.executeQuery().use { rs -> if (rs.next()) rs.getLong("id") else null }
         }
     }
@@ -680,21 +845,24 @@ class OrdersRepository(
         connection: Connection,
         venueId: Long,
         tableId: Long,
+        tableSessionId: Long,
+        venueZoneId: ZoneId = ZoneId.systemDefault(),
     ): Long {
         lockVenue(connection, venueId)
-        val displayDate = LocalDate.now(ZoneId.systemDefault())
+        val displayDate = LocalDate.now(venueZoneId)
         val displayNumber = nextOrderDisplayNumber(connection, venueId, displayDate)
         return connection.prepareStatement(
             """
-            INSERT INTO orders (venue_id, table_id, status, display_number, display_date)
-            VALUES (?, ?, 'ACTIVE', ?, ?)
+            INSERT INTO orders (venue_id, table_id, table_session_id, status, display_number, display_date)
+            VALUES (?, ?, ?, 'ACTIVE', ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, tableId)
-            statement.setInt(3, displayNumber)
-            statement.setDate(4, Date.valueOf(displayDate))
+            statement.setLong(3, tableSessionId)
+            statement.setInt(4, displayNumber)
+            statement.setDate(5, Date.valueOf(displayDate))
             statement.executeUpdate()
             statement.generatedKeys.use { rs -> if (rs.next()) rs.getLong(1) else error("Failed to create order") }
         }
@@ -770,28 +938,772 @@ class OrdersRepository(
         connection: Connection,
         batchId: Long,
         items: List<OrderBatchItemInput>,
-    ) {
+    ): List<InsertedOrderBatchItem> {
+        val insertedItems = mutableListOf<InsertedOrderBatchItem>()
         connection.prepareStatement(
             """
             INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty)
             VALUES (?, ?, ?)
             """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             items.forEach { item ->
                 statement.setLong(1, batchId)
                 statement.setLong(2, item.itemId)
                 statement.setInt(3, item.qty)
-                statement.addBatch()
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    if (!keys.next()) error("Failed to insert batch item")
+                    insertedItems.add(
+                        InsertedOrderBatchItem(
+                            batchItemId = keys.getLong(1),
+                            menuItemId = item.itemId,
+                            qty = item.qty,
+                        ),
+                    )
+                }
             }
-            statement.executeBatch()
+        }
+        return insertedItems
+    }
+
+    private fun insertBatchItem(
+        connection: Connection,
+        batchId: Long,
+        item: OrderBatchItemInput,
+    ): InsertedOrderBatchItem =
+        connection.prepareStatement(
+            """
+            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty)
+            VALUES (?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, batchId)
+            statement.setLong(2, item.itemId)
+            statement.setInt(3, item.qty)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                if (!keys.next()) error("Failed to insert batch item")
+                InsertedOrderBatchItem(
+                    batchItemId = keys.getLong(1),
+                    menuItemId = item.itemId,
+                    qty = item.qty,
+                )
+            }
+        }
+
+    private fun loadCheckoutMenuItems(
+        connection: Connection,
+        venueId: Long,
+        itemIds: Set<Long>,
+    ): Map<Long, CheckoutMenuItem> {
+        if (itemIds.isEmpty()) return emptyMap()
+        val placeholders = itemIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            SELECT mi.id,
+                   mi.name,
+                   mi.price_minor,
+                   mi.currency,
+                   COALESCE(mi.item_type, mc.category_type, 'OTHER') AS effective_type
+            FROM menu_items mi
+            LEFT JOIN menu_categories mc ON mc.id = mi.category_id
+            WHERE mi.venue_id = ?
+              AND mi.is_available = TRUE
+              AND mi.id IN ($placeholders)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            itemIds.forEachIndexed { index, itemId ->
+                statement.setLong(index + 2, itemId)
+            }
+            statement.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) {
+                        val itemId = rs.getLong("id")
+                        put(
+                            itemId,
+                            CheckoutMenuItem(
+                                itemId = itemId,
+                                name = rs.getString("name")?.takeIf { it.isNotBlank() } ?: "Позиция #$itemId",
+                                priceMinor = rs.getLong("price_minor"),
+                                currency = rs.getString("currency")?.takeIf { it.isNotBlank() } ?: "RUB",
+                                effectiveType = MenuSemanticType.fromDb(rs.getString("effective_type")),
+                            ),
+                        )
+                    }
+                }
+            }
         }
     }
+
+    suspend fun previewGuestOrderBatch(
+        venueId: Long,
+        userId: Long,
+        items: List<OrderBatchItemInput>,
+        venueZoneId: ZoneId = ZoneId.systemDefault(),
+    ): GuestOrderCartPreview? {
+        if (items.isEmpty()) {
+            return null
+        }
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val itemIds = items.map { it.itemId }.toSet()
+        val inputs =
+            withContext(Dispatchers.IO) {
+                try {
+                    ds.connection.use { connection ->
+                        val checkoutMenuItems = loadCheckoutMenuItems(connection, venueId, itemIds)
+                        if (checkoutMenuItems.size != itemIds.size) {
+                            return@use null
+                        }
+                        val rules =
+                            venuePromotionRuleRepository
+                                ?.listActiveRulesForVenueAt(connection, venueId, Instant.now())
+                                .orEmpty()
+                        CartPreviewInputs(checkoutMenuItems = checkoutMenuItems, activeRules = rules)
+                    }
+                } catch (e: SQLException) {
+                    throw DatabaseUnavailableException()
+                }
+            } ?: return null
+
+        val baseItems =
+            items.mapNotNull { input ->
+                val menuItem = inputs.checkoutMenuItems[input.itemId] ?: return@mapNotNull null
+                CartPreviewBaseItem(
+                    lineId = input.itemId,
+                    itemId = input.itemId,
+                    itemName = menuItem.name,
+                    qty = input.qty,
+                    priceMinor = menuItem.priceMinor,
+                    currency = menuItem.currency,
+                    effectiveType = menuItem.effectiveType,
+                )
+            }
+        if (baseItems.size != items.size) {
+            return null
+        }
+
+        val loyaltyPreview =
+            loyaltyRepository?.previewRedemptionForCart(
+                venueId = venueId,
+                userId = userId,
+                items =
+                    baseItems.map { item ->
+                        LoyaltyCartItem(
+                            lineId = item.lineId,
+                            menuItemId = item.itemId,
+                            itemName = item.itemName,
+                            qty = item.qty,
+                            priceMinor = item.priceMinor,
+                            currency = item.currency,
+                        )
+                    },
+            )
+        val loyaltyLineIds = setOfNotNull(loyaltyPreview?.lineId)
+        val promotionPreview =
+            PromotionRuleEngine.preview(
+                venueId = venueId,
+                now = Instant.now(),
+                venueZoneId = venueZoneId,
+                cartItems =
+                    baseItems
+                        .filterNot { item -> item.lineId in loyaltyLineIds }
+                        .map { item ->
+                            PromotionRuleCartItem(
+                                lineId = item.lineId,
+                                menuItemId = item.itemId,
+                                itemName = item.itemName,
+                                qty = item.qty,
+                                priceMinor = item.priceMinor,
+                                currency = item.currency,
+                                effectiveType = item.effectiveType,
+                            )
+                        },
+                activeRules = inputs.activeRules,
+            )
+        val rulesById = inputs.activeRules.associateBy { it.id }
+        val promoDiscounts =
+            promotionPreview.adjustments
+                .groupBy { adjustment ->
+                    val rule = rulesById[adjustment.ruleId]
+                    CartPreviewDiscountKey(
+                        label = adjustment.label.takeIf { it.isNotBlank() } ?: "Акция",
+                        ruleType = rule?.ruleType?.dbValue,
+                        currency = adjustment.currency,
+                    )
+                }
+                .map { (key, adjustments) ->
+                    CreatedOrderPromotionDiscount(
+                        label = key.label,
+                        discountMinor = adjustments.sumOf { it.discountMinor },
+                        currency = key.currency,
+                        ruleType = key.ruleType,
+                    )
+                }
+        val giftDiscounts =
+            promotionPreview.gifts.map { gift ->
+                val rule = rulesById[gift.ruleId]
+                CreatedOrderPromotionDiscount(
+                    label = gift.label.takeIf { it.isNotBlank() } ?: "${gift.rewardItemName} в подарок",
+                    discountMinor = gift.rewardPriceMinor * gift.rewardQty.toLong(),
+                    currency = gift.currency,
+                    ruleType = rule?.ruleType?.dbValue,
+                )
+            }
+        val loyaltyDiscount =
+            loyaltyPreview?.let { preview ->
+                CreatedOrderPromotionDiscount(
+                    label = "Лояльность: бесплатный кальян",
+                    discountMinor = preview.discountMinor,
+                    currency = preview.currency,
+                    ruleType = "LOYALTY_NTH_HOOKAH",
+                )
+            }
+        val promoDiscountsByLine =
+            promotionPreview.adjustments
+                .mapNotNull { adjustment -> adjustment.lineId?.let { lineId -> lineId to adjustment.discountMinor } }
+                .groupBy({ it.first }, { it.second })
+                .mapValues { (_, discounts) -> discounts.sum() }
+        val previewItems =
+            baseItems.map { item ->
+                val promoDiscount = promoDiscountsByLine[item.lineId] ?: 0L
+                val loyaltyDiscount = if (loyaltyPreview?.lineId == item.lineId) loyaltyPreview.discountMinor else 0L
+                val discount = promoDiscount + loyaltyDiscount
+                val gross = item.lineGrossMinor()
+                GuestOrderCartPreviewItem(
+                    itemId = item.itemId,
+                    itemName = item.itemName,
+                    qty = item.qty,
+                    priceMinor = item.priceMinor,
+                    currency = item.currency,
+                    lineGrossMinor = gross,
+                    discountMinor = discount,
+                    linePayableMinor = (gross - discount).coerceAtLeast(0L),
+                )
+            } +
+                promotionPreview.gifts.map { gift ->
+                    val gross = gift.rewardPriceMinor * gift.rewardQty.toLong()
+                    GuestOrderCartPreviewItem(
+                        itemId = gift.rewardMenuItemId,
+                        itemName = gift.rewardItemName,
+                        qty = gift.rewardQty,
+                        priceMinor = gift.rewardPriceMinor,
+                        currency = gift.currency,
+                        lineGrossMinor = gross,
+                        discountMinor = gross,
+                        linePayableMinor = 0L,
+                        isPromotionReward = true,
+                    )
+                }
+        val allDiscounts = promoDiscounts + giftDiscounts + listOfNotNull(loyaltyDiscount)
+        val currency =
+            previewItems.firstOrNull { it.currency.isNotBlank() }?.currency
+                ?: allDiscounts.firstOrNull { it.currency.isNotBlank() }?.currency
+                ?: "RUB"
+        return GuestOrderCartPreview(
+            items = previewItems,
+            grossTotalMinor = previewItems.sumOf { it.lineGrossMinor },
+            promoDiscountTotalMinor = (promoDiscounts + giftDiscounts).sumOf { it.discountMinor },
+            loyaltyDiscountTotalMinor = loyaltyDiscount?.discountMinor ?: 0L,
+            finalPayableTotalMinor = previewItems.sumOf { it.linePayableMinor },
+            currency = currency,
+            discounts = allDiscounts,
+        )
+    }
+
+    private fun applyPromotionRulesForBatch(
+        connection: Connection,
+        orderId: Long,
+        batchId: Long,
+        venueId: Long,
+        userId: Long,
+        insertedItems: List<InsertedOrderBatchItem>,
+        checkoutMenuItems: Map<Long, CheckoutMenuItem>,
+        venueZoneId: ZoneId,
+        selectedGiftChoices: Map<Long, Long> = emptyMap(),
+        skippedGiftRuleIds: Set<Long> = emptySet(),
+        excludedBatchItemIds: Set<Long> = emptySet(),
+    ): PromotionRulesApplicationResult {
+        val applicationRepository = promotionApplicationRepository ?: return PromotionRulesApplicationResult()
+        val ruleRepository = venuePromotionRuleRepository ?: return PromotionRulesApplicationResult()
+        if (insertedItems.isEmpty()) return PromotionRulesApplicationResult()
+        val now = Instant.now()
+        val rules = ruleRepository.listActiveRulesForVenueAt(connection, venueId, now)
+        if (rules.isEmpty()) return PromotionRulesApplicationResult()
+        val cartItems =
+            insertedItems.mapNotNull { inserted ->
+                if (inserted.batchItemId in excludedBatchItemIds) return@mapNotNull null
+                val menuItem = checkoutMenuItems[inserted.menuItemId] ?: return@mapNotNull null
+                PromotionRuleCartItem(
+                    lineId = inserted.batchItemId,
+                    menuItemId = inserted.menuItemId,
+                    itemName = menuItem.name,
+                    qty = inserted.qty,
+                    priceMinor = menuItem.priceMinor,
+                    currency = menuItem.currency,
+                    effectiveType = menuItem.effectiveType,
+                )
+            }
+        val preview =
+            PromotionRuleEngine.preview(
+                venueId = venueId,
+                now = now,
+                venueZoneId = venueZoneId,
+                cartItems = cartItems,
+                activeRules = rules,
+                selectedGiftChoices = selectedGiftChoices,
+                skippedGiftRuleIds = skippedGiftRuleIds,
+            )
+        val freshRewardItems =
+            loadCheckoutMenuItems(
+                connection = connection,
+                venueId = venueId,
+                itemIds = preview.gifts.map { it.rewardMenuItemId }.toSet(),
+            )
+        val eligibleGifts =
+            preview.gifts.filter { gift -> freshRewardItems.containsKey(gift.rewardMenuItemId) }
+        if (preview.adjustments.isEmpty() && eligibleGifts.isEmpty()) return PromotionRulesApplicationResult()
+        val rulesById = rules.associateBy { it.id }
+        val insertedByBatchItemId = insertedItems.associateBy { it.batchItemId }
+        val percentApplications =
+            preview.adjustments
+                .filter { adjustment -> adjustment.lineId != null && adjustment.discountMinor > 0L }
+                .groupBy { adjustment -> adjustment.ruleId to adjustment.currency }
+                .mapNotNull { (key, adjustments) ->
+                    val (ruleId, currency) = key
+                    val rule = rulesById[ruleId] ?: return@mapNotNull null
+                    val title = rule.promotionTitle?.takeIf { it.isNotBlank() } ?: "Счастливые часы"
+                    val adjustmentInputs =
+                        adjustments.mapNotNull { adjustment ->
+                            val batchItemId = adjustment.lineId ?: return@mapNotNull null
+                            val inserted = insertedByBatchItemId[batchItemId] ?: return@mapNotNull null
+                            val menuItem = checkoutMenuItems[inserted.menuItemId] ?: return@mapNotNull null
+                            PromotionAdjustmentInput(
+                                orderBatchItemId = batchItemId,
+                                menuItemId = inserted.menuItemId,
+                                discountMinor = adjustment.discountMinor,
+                                discountPercent = adjustment.percent,
+                                originalPriceMinor = menuItem.priceMinor,
+                                quantity = inserted.qty,
+                                currency = currency,
+                            )
+                        }
+                    if (adjustmentInputs.isEmpty()) {
+                        null
+                    } else {
+                        PromotionApplicationInput(
+                            orderId = orderId,
+                            batchId = batchId,
+                            venueId = venueId,
+                            userId = userId,
+                            promotionId = rule.promotionId,
+                            ruleId = rule.id,
+                            titleSnapshot = title,
+                            ruleType = rule.ruleType.dbValue,
+                            targetType = rule.targetType.dbValue,
+                            targetValue = rule.targetValue.dbValue,
+                            discountPercent = rule.discountPercent,
+                            discountTotalMinor = adjustmentInputs.sumOf { it.discountMinor },
+                            currency = currency,
+                            dedupeKey = "batch:$batchId:rule:${rule.id}:$currency",
+                            adjustments = adjustmentInputs,
+                        )
+                    }
+                }
+        val giftApplications =
+            eligibleGifts.mapNotNull { gift ->
+                val rule = rulesById[gift.ruleId] ?: return@mapNotNull null
+                val rewardMenuItem = freshRewardItems[gift.rewardMenuItemId] ?: return@mapNotNull null
+                val rewardInserted =
+                    insertBatchItem(
+                        connection = connection,
+                        batchId = batchId,
+                        item = OrderBatchItemInput(itemId = gift.rewardMenuItemId, qty = gift.rewardQty),
+                    )
+                val discountMinor = rewardMenuItem.priceMinor * gift.rewardQty.toLong()
+                val label = gift.label.takeIf { it.isNotBlank() } ?: "${rewardMenuItem.name} в подарок"
+                PromotionApplicationInput(
+                    orderId = orderId,
+                    batchId = batchId,
+                    venueId = venueId,
+                    userId = userId,
+                    promotionId = rule.promotionId,
+                    ruleId = rule.id,
+                    titleSnapshot = label,
+                    ruleType = rule.ruleType.dbValue,
+                    targetType = rule.targetType.dbValue,
+                    targetValue = rule.targetValue.dbValue,
+                    discountPercent = null,
+                    discountTotalMinor = discountMinor,
+                    currency = rewardMenuItem.currency,
+                    dedupeKey = "batch:$batchId:rule:${rule.id}:gift:${gift.rewardMenuItemId}:${rewardMenuItem.currency}",
+                    adjustments =
+                        listOf(
+                            PromotionAdjustmentInput(
+                                orderBatchItemId = rewardInserted.batchItemId,
+                                menuItemId = gift.rewardMenuItemId,
+                                discountMinor = discountMinor,
+                                discountPercent = 100,
+                                originalPriceMinor = rewardMenuItem.priceMinor,
+                                quantity = gift.rewardQty,
+                                currency = rewardMenuItem.currency,
+                            ),
+                        ),
+                    rewardItems =
+                        listOf(
+                            PromotionRewardItemInput(
+                                triggerOrderBatchItemId = gift.triggerLineId,
+                                rewardOrderBatchItemId = rewardInserted.batchItemId,
+                                rewardMenuItemId = gift.rewardMenuItemId,
+                                rewardQty = gift.rewardQty,
+                                labelSnapshot = label,
+                            ),
+                        ),
+                )
+            }
+        val applications = percentApplications + giftApplications
+        applicationRepository.persistApplications(connection, applications)
+        return PromotionRulesApplicationResult(
+            discounts =
+                applications.map { application ->
+            CreatedOrderPromotionDiscount(
+                label = application.titleSnapshot,
+                discountMinor = application.discountTotalMinor,
+                currency = application.currency,
+                        ruleType = application.ruleType,
+            )
+                },
+        )
+    }
+
+    private fun applyLoyaltyRedemptionForBatch(
+        connection: Connection,
+        orderId: Long,
+        batchId: Long,
+        venueId: Long,
+        userId: Long,
+        insertedItems: List<InsertedOrderBatchItem>,
+        checkoutMenuItems: Map<Long, CheckoutMenuItem>,
+    ): LoyaltyRedemptionResult? {
+        val repository = loyaltyRepository ?: return null
+        val checkoutItems =
+            insertedItems.mapNotNull { inserted ->
+                val menuItem = checkoutMenuItems[inserted.menuItemId] ?: return@mapNotNull null
+                LoyaltyCheckoutItem(
+                    orderBatchItemId = inserted.batchItemId,
+                    menuItemId = inserted.menuItemId,
+                    itemName = menuItem.name,
+                    qty = inserted.qty,
+                    priceMinor = menuItem.priceMinor,
+                    currency = menuItem.currency,
+                    effectiveType = menuItem.effectiveType,
+                )
+            }
+        return repository.applyRedemptionForBatch(
+            connection = connection,
+            orderId = orderId,
+            batchId = batchId,
+            venueId = venueId,
+            userId = userId,
+            checkoutItems = checkoutItems,
+        )
+    }
+
+    private fun loadPromotionDiscountsForBatch(
+        connection: Connection,
+        batchId: Long,
+    ): List<CreatedOrderPromotionDiscount> =
+        connection.prepareStatement(
+            """
+            WITH application_discounts AS (
+                SELECT
+                    CASE
+                        WHEN opa.rule_type = 'GIFT_WITH_ITEM' THEN COALESCE(MAX(opri.label_snapshot), opa.title_snapshot)
+                        ELSE opa.title_snapshot
+                    END AS promo_label,
+                    opa.rule_type,
+                    opa.currency,
+                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
+                    MIN(opa.id) AS first_application_id
+                FROM order_promotion_applications opa
+                JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
+                JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
+                JOIN order_batches ob ON ob.id = obi.order_batch_id
+                LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
+                WHERE opa.batch_id = ?
+                  AND ob.status <> 'REJECTED'
+                  AND ob.status <> 'CLOSED'
+                  AND ob.rejected_reason_code IS NULL
+                  AND ob.rejected_reason_text IS NULL
+                  AND obi.is_excluded = FALSE
+                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                GROUP BY opa.id, opa.title_snapshot, opa.rule_type, opa.currency
+            )
+            SELECT promo_label,
+                   rule_type,
+                   currency,
+                   COALESCE(SUM(discount_minor), 0) AS discount_minor
+            FROM application_discounts
+            GROUP BY promo_label, rule_type, currency
+            ORDER BY MIN(first_application_id)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val discountMinor = rs.getLong("discount_minor")
+                        if (discountMinor > 0L) {
+                            add(
+                                CreatedOrderPromotionDiscount(
+                                    label = rs.getString("promo_label"),
+                                    discountMinor = discountMinor,
+                                    currency = rs.getString("currency"),
+                                    ruleType = rs.getString("rule_type"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun loadPromotionDiscountsForOrder(
+        connection: Connection,
+        orderId: Long,
+    ): List<CreatedOrderPromotionDiscount> =
+        connection.prepareStatement(
+            """
+            WITH application_discounts AS (
+                SELECT
+                    CASE
+                        WHEN opa.rule_type = 'GIFT_WITH_ITEM' THEN COALESCE(MAX(opri.label_snapshot), opa.title_snapshot)
+                        ELSE opa.title_snapshot
+                    END AS promo_label,
+                    opa.rule_type,
+                    opa.currency,
+                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
+                    MIN(opa.id) AS first_application_id
+                FROM order_promotion_applications opa
+                JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
+                JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
+                JOIN order_batches ob ON ob.id = obi.order_batch_id
+                LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
+                WHERE opa.order_id = ?
+                  AND ob.status <> 'REJECTED'
+                  AND ob.status <> 'CLOSED'
+                  AND ob.rejected_reason_code IS NULL
+                  AND ob.rejected_reason_text IS NULL
+                  AND obi.is_excluded = FALSE
+                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                GROUP BY opa.id, opa.title_snapshot, opa.rule_type, opa.currency
+            )
+            SELECT promo_label,
+                   rule_type,
+                   currency,
+                   COALESCE(SUM(discount_minor), 0) AS discount_minor
+            FROM application_discounts
+            GROUP BY promo_label, rule_type, currency
+            ORDER BY MIN(first_application_id)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, orderId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val discountMinor = rs.getLong("discount_minor")
+                        if (discountMinor > 0L) {
+                            add(
+                                CreatedOrderPromotionDiscount(
+                                    label = rs.getString("promo_label"),
+                                    discountMinor = discountMinor,
+                                    currency = rs.getString("currency"),
+                                    ruleType = rs.getString("rule_type"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun loadPromotionDiscountsForBatches(
+        connection: Connection,
+        orderId: Long,
+        batchIds: List<Long>,
+    ): List<CreatedOrderPromotionDiscount> {
+        if (batchIds.isEmpty()) return emptyList()
+        val placeholders = batchIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            WITH application_discounts AS (
+                SELECT
+                    CASE
+                        WHEN opa.rule_type = 'GIFT_WITH_ITEM' THEN COALESCE(MAX(opri.label_snapshot), opa.title_snapshot)
+                        ELSE opa.title_snapshot
+                    END AS promo_label,
+                    opa.rule_type,
+                    opa.currency,
+                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
+                    MIN(opa.id) AS first_application_id
+                FROM order_promotion_applications opa
+                JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
+                JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
+                JOIN order_batches ob ON ob.id = obi.order_batch_id
+                LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
+                WHERE opa.order_id = ?
+                  AND ob.id IN ($placeholders)
+                  AND ob.status <> 'REJECTED'
+                  AND ob.status <> 'CLOSED'
+                  AND ob.rejected_reason_code IS NULL
+                  AND ob.rejected_reason_text IS NULL
+                  AND obi.is_excluded = FALSE
+                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                GROUP BY opa.id, opa.title_snapshot, opa.rule_type, opa.currency
+            )
+            SELECT promo_label,
+                   rule_type,
+                   currency,
+                   COALESCE(SUM(discount_minor), 0) AS discount_minor
+            FROM application_discounts
+            GROUP BY promo_label, rule_type, currency
+            ORDER BY MIN(first_application_id)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, orderId)
+            batchIds.forEachIndexed { index, batchId ->
+                statement.setLong(index + 2, batchId)
+            }
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val discountMinor = rs.getLong("discount_minor")
+                        if (discountMinor > 0L) {
+                            add(
+                                CreatedOrderPromotionDiscount(
+                                    label = rs.getString("promo_label"),
+                                    discountMinor = discountMinor,
+                                    currency = rs.getString("currency"),
+                                    ruleType = rs.getString("rule_type"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun buildCreatedOrderBatchItems(
+        insertedItems: List<InsertedOrderBatchItem>,
+        checkoutMenuItems: Map<Long, CheckoutMenuItem>,
+    ): List<CreatedOrderBatchItem> =
+        insertedItems.mapNotNull { inserted ->
+            val menuItem = checkoutMenuItems[inserted.menuItemId] ?: return@mapNotNull null
+            CreatedOrderBatchItem(
+                itemId = inserted.menuItemId,
+                itemName = menuItem.name,
+                qty = inserted.qty,
+                priceMinor = menuItem.priceMinor,
+                currency = menuItem.currency,
+            )
+        }
+
+    private fun loadCreatedOrderBatchItems(
+        connection: Connection,
+        batchId: Long,
+    ): List<CreatedOrderBatchItem> =
+        connection.prepareStatement(
+            """
+            SELECT obi.menu_item_id,
+                   COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
+                   obi.qty,
+                   COALESCE(mi.price_minor, 0) AS price_minor,
+                   COALESCE(mi.currency, 'RUB') AS currency,
+                   COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
+                   CASE WHEN opri.id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward
+            FROM order_batch_items obi
+            LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN (
+                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                FROM order_batch_item_promotion_adjustments
+                GROUP BY order_batch_item_id
+            ) promo ON promo.order_batch_item_id = obi.id
+            LEFT JOIN order_promotion_reward_items opri ON opri.reward_order_batch_item_id = obi.id
+            WHERE obi.order_batch_id = ?
+              AND obi.is_excluded = FALSE
+              AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+            ORDER BY obi.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            CreatedOrderBatchItem(
+                                itemId = rs.getLong("menu_item_id"),
+                                itemName = rs.getString("item_name"),
+                                qty = rs.getInt("qty"),
+                                priceMinor = rs.getLong("price_minor"),
+                                currency = rs.getString("currency"),
+                                promoDiscountMinor = rs.getLong("promo_discount_minor"),
+                                isPromotionReward = rs.getBoolean("is_promotion_reward"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
 
     private data class StoredBatchIdempotency(
         val orderId: Long,
         val batchId: Long,
         val displayNumber: Int?,
         val displayDate: LocalDate?,
+    )
+
+    private data class InsertedOrderBatchItem(
+        val batchItemId: Long,
+        val menuItemId: Long,
+        val qty: Int,
+    )
+
+    private data class PromotionRulesApplicationResult(
+        val discounts: List<CreatedOrderPromotionDiscount> = emptyList(),
+    )
+
+    private data class CartPreviewInputs(
+        val checkoutMenuItems: Map<Long, CheckoutMenuItem>,
+        val activeRules: List<VenuePromotionRule>,
+    )
+
+    private data class CartPreviewBaseItem(
+        val lineId: Long,
+        val itemId: Long,
+        val itemName: String,
+        val qty: Int,
+        val priceMinor: Long,
+        val currency: String,
+        val effectiveType: MenuSemanticType,
+    ) {
+        fun lineGrossMinor(): Long = priceMinor * qty.toLong()
+    }
+
+    private data class CartPreviewDiscountKey(
+        val label: String,
+        val ruleType: String?,
+        val currency: String,
+    )
+
+    private data class CheckoutMenuItem(
+        val itemId: Long,
+        val name: String,
+        val priceMinor: Long,
+        val currency: String,
+        val effectiveType: MenuSemanticType,
     )
 
     private fun findBatchIdempotency(
@@ -894,13 +1806,22 @@ class OrdersRepository(
                    obi.menu_item_id,
                    obi.qty,
                    obi.discount_percent,
+                   COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
+                   CASE WHEN opri.id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward,
                    mi.name AS item_name,
                    mi.price_minor,
                    mi.currency
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN (
+                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                FROM order_batch_item_promotion_adjustments
+                GROUP BY order_batch_item_id
+            ) promo ON promo.order_batch_item_id = obi.id
+            LEFT JOIN order_promotion_reward_items opri ON opri.reward_order_batch_item_id = obi.id
             WHERE obi.order_batch_id IN ($placeholders)
               AND obi.is_excluded = FALSE
+              AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
             ORDER BY obi.order_batch_id, obi.id
             """.trimIndent()
         return connection.prepareStatement(sql).use { statement ->
@@ -921,6 +1842,8 @@ class OrdersRepository(
                             priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
                             currency = rs.getString("currency"),
                             discountPercent = rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value },
+                            promoDiscountMinor = rs.getLong("promo_discount_minor"),
+                            isPromotionReward = rs.getBoolean("is_promotion_reward"),
                         ),
                     )
                 }

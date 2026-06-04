@@ -30,6 +30,7 @@ data class PlatformVenueListResponse(
 data class PlatformVenueSummaryDto(
     val id: Long,
     val name: String,
+    val city: String? = null,
     val status: String,
     val createdAt: String,
     val ownersCount: Int,
@@ -61,6 +62,8 @@ data class PlatformVenueDetailDto(
     val name: String,
     val city: String? = null,
     val address: String? = null,
+    val guestContact: String? = null,
+    val cardDescription: String? = null,
     val status: String,
     val createdAt: String,
     val deletedAt: String? = null,
@@ -168,12 +171,44 @@ data class PlatformOwnerInviteResponse(
     val deepLink: String?,
 )
 
+@Serializable
+data class PlatformVenueOwnerAccountResponse(
+    val account: PlatformVenueOwnerAccountDto,
+    val quota: PlatformVenueOwnerQuotaDto,
+)
+
+@Serializable
+data class PlatformVenueOwnerAccountDto(
+    val id: Long,
+    val primaryOwnerUserId: Long,
+    val allowedVenuesCount: Int,
+    val notes: String? = null,
+    val commercialNote: String? = null,
+    val createdAt: String,
+    val updatedAt: String,
+    val updatedByUserId: Long? = null,
+)
+
+@Serializable
+data class PlatformVenueOwnerQuotaDto(
+    val usedVenuesCount: Int,
+    val availableVenuesCount: Int,
+)
+
+@Serializable
+data class PlatformVenueOwnerQuotaUpdateRequest(
+    val allowedVenuesCount: Int,
+    val notes: String? = null,
+    val commercialNote: String? = null,
+)
+
 fun Route.platformVenueRoutes(
     platformConfig: PlatformConfig,
     venueRepository: PlatformVenueRepository,
     auditLogRepository: AuditLogRepository,
     subscriptionSettingsRepository: PlatformSubscriptionSettingsRepository,
     platformVenueMemberRepository: PlatformVenueMemberRepository,
+    venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: StaffInviteRepository,
     staffInviteConfig: StaffInviteConfig,
 ) {
@@ -370,7 +405,7 @@ fun Route.platformVenueRoutes(
                 VenueStatusChangeResult.NotFound -> throw NotFoundException()
                 VenueStatusChangeResult.InvalidTransition -> throw InvalidInputException("Invalid status transition")
                 VenueStatusChangeResult.MissingOwner -> throw InvalidInputException(
-                    "Venue must have at least one owner or admin before publishing",
+                    "Venue must have at least one owner before publishing",
                 )
                 VenueStatusChangeResult.AlreadyDeleted -> throw InvalidInputException("Venue already deleted")
                 VenueStatusChangeResult.DatabaseError ->
@@ -385,7 +420,17 @@ fun Route.platformVenueRoutes(
                     ?: throw InvalidInputException("venueId must be a number")
             val request = call.receive<PlatformOwnerAssignRequest>()
             val role = parseOwnerRole(request.role)
-            when (val result = platformVenueMemberRepository.assignOwner(venueId, request.userId, role, actorUserId)) {
+            when (
+                val result =
+                    platformVenueMemberRepository.assignOwner(
+                        venueId = venueId,
+                        userId = request.userId,
+                        role = role,
+                        invitedByUserId = actorUserId,
+                        venueOwnerAccountRepository = venueOwnerAccountRepository,
+                        enforceQuota = true,
+                    )
+            ) {
                 is PlatformOwnerAssignmentResult.Success -> {
                     auditLogRepository.appendJson(
                         actorUserId = actorUserId,
@@ -407,6 +452,13 @@ fun Route.platformVenueRoutes(
                         ),
                     )
                 }
+                is PlatformOwnerAssignmentResult.QuotaExceeded -> throw InvalidInputException(
+                    "Venue owner quota exceeded: used ${result.summary.usedVenuesCount} of " +
+                        "${result.summary.account.allowedVenuesCount}",
+                )
+                PlatformOwnerAssignmentResult.OwnerAccountMismatch -> throw InvalidInputException(
+                    "Venue is already linked to another owner account",
+                )
                 PlatformOwnerAssignmentResult.NotFound -> throw NotFoundException()
                 PlatformOwnerAssignmentResult.DatabaseError ->
                     throw com.hookah.platform.backend.api.DatabaseUnavailableException()
@@ -431,10 +483,59 @@ fun Route.platformVenueRoutes(
                 PlatformOwnerInviteResponse(
                     code = result.code,
                     expiresAt = result.expiresAt.toString(),
-                    instructions = "Передайте код владельцу. Он должен открыть мини‑приложение и принять инвайт.",
+                    instructions = "Передайте владельцу команду для бота: /start staff_invite_${result.code}.",
                     deepLink = null,
                 ),
             )
+        }
+    }
+
+    route("/platform/venue-owner-accounts") {
+        get("/{ownerUserId}") {
+            call.requirePlatformOwner(platformConfig)
+            val ownerUserId =
+                call.parameters["ownerUserId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("ownerUserId must be a number")
+            val account = venueOwnerAccountRepository.findByOwner(ownerUserId) ?: throw NotFoundException()
+            val summary = venueOwnerAccountRepository.getQuotaSummary(account.id) ?: throw NotFoundException()
+            call.respond(summary.toResponse())
+        }
+
+        put("/{ownerUserId}/quota") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val ownerUserId =
+                call.parameters["ownerUserId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("ownerUserId must be a number")
+            val request = call.receive<PlatformVenueOwnerQuotaUpdateRequest>()
+            if (request.allowedVenuesCount < 0) {
+                throw InvalidInputException("allowedVenuesCount must be >= 0")
+            }
+            val account =
+                venueOwnerAccountRepository.getOrCreateForOwner(
+                    userId = ownerUserId,
+                    defaultLimit = request.allowedVenuesCount,
+                    updatedByUserId = actorUserId,
+                )
+            val summary =
+                venueOwnerAccountRepository.setAllowedVenuesCount(
+                    ownerAccountId = account.id,
+                    count = request.allowedVenuesCount,
+                    updatedByUserId = actorUserId,
+                    notes = request.notes?.trim().orEmpty().ifBlank { null },
+                    commercialNote = request.commercialNote?.trim().orEmpty().ifBlank { null },
+                ) ?: throw NotFoundException()
+            auditLogRepository.appendJson(
+                actorUserId = actorUserId,
+                action = "VENUE_OWNER_QUOTA_UPDATE",
+                entityType = "venue_owner_account",
+                entityId = account.id,
+                payload =
+                    buildJsonObject {
+                        put("ownerUserId", ownerUserId)
+                        put("allowedVenuesCount", request.allowedVenuesCount)
+                    },
+            )
+            call.respond(summary.toResponse())
         }
     }
 }
@@ -443,6 +544,7 @@ private fun PlatformVenueSummary.toSummaryDto(): PlatformVenueSummaryDto =
     PlatformVenueSummaryDto(
         id = id,
         name = name,
+        city = city,
         status = status.dbValue,
         createdAt = createdAt.toString(),
         ownersCount = ownersCount,
@@ -455,6 +557,8 @@ private fun PlatformVenueDetail.toDetailDto(): PlatformVenueDetailDto =
         name = name,
         city = city,
         address = address,
+        guestContact = guestContact,
+        cardDescription = cardDescription,
         status = status.dbValue,
         createdAt = createdAt.toString(),
         deletedAt = deletedAt?.toString(),
@@ -474,6 +578,26 @@ private fun PlatformSubscriptionSummary.toDto(): PlatformSubscriptionSummaryDto 
         trialEndDate = trialEndDate?.toString(),
         paidStartDate = paidStartDate?.toString(),
         isPaid = isPaid,
+    )
+
+private fun VenueOwnerQuotaSummary.toResponse(): PlatformVenueOwnerAccountResponse =
+    PlatformVenueOwnerAccountResponse(
+        account =
+            PlatformVenueOwnerAccountDto(
+                id = account.id,
+                primaryOwnerUserId = account.primaryOwnerUserId,
+                allowedVenuesCount = account.allowedVenuesCount,
+                notes = account.notes,
+                commercialNote = account.commercialNote,
+                createdAt = account.createdAt.toString(),
+                updatedAt = account.updatedAt.toString(),
+                updatedByUserId = account.updatedByUserId,
+            ),
+        quota =
+            PlatformVenueOwnerQuotaDto(
+                usedVenuesCount = usedVenuesCount,
+                availableVenuesCount = availableVenuesCount,
+            ),
     )
 
 private fun PlatformSubscriptionSnapshot.toResponse(): PlatformSubscriptionSettingsResponse =
@@ -617,8 +741,8 @@ private fun parseOwnerRole(rawRole: String?): String {
     val role = rawRole?.trim()?.takeIf { it.isNotEmpty() } ?: "OWNER"
     return when (role.uppercase()) {
         "OWNER" -> "OWNER"
-        "ADMIN" -> "ADMIN"
-        else -> throw InvalidInputException("role must be OWNER or ADMIN")
+        "ADMIN" -> throw InvalidInputException("ADMIN is a legacy alias and cannot be assigned")
+        else -> throw InvalidInputException("role must be OWNER")
     }
 }
 

@@ -19,7 +19,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT v.id, v.name, v.city, v.address, v.status
+                        SELECT v.id, v.name, v.city, v.address, v.guest_contact, v.card_description, v.status
                         FROM venues v
                         LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
                         WHERE v.status = ?
@@ -53,7 +53,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT id, name, city, address, status
+                        SELECT id, name, city, address, guest_contact, card_description, status
                         FROM venues
                         WHERE id = ?
                         """.trimIndent(),
@@ -81,6 +81,8 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
             name = rs.getString("name"),
             city = rs.getString("city"),
             address = rs.getString("address"),
+            guestContact = rs.getString("guest_contact"),
+            cardDescription = rs.getString("card_description"),
             status = status,
         )
     }
@@ -92,4 +94,6 @@ data class VenueShort(
     val city: String?,
     val address: String?,
     val status: VenueStatus,
+    val guestContact: String? = null,
+    val cardDescription: String? = null,
 )

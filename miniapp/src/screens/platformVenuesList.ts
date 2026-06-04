@@ -26,6 +26,10 @@ type ListRefs = {
   subscriptionFilter: HTMLSelectElement
   searchInput: HTMLInputElement
   createButton: HTMLButtonElement
+  onboardingButton: HTMLButtonElement
+  placementsButton: HTMLButtonElement
+  supportButton: HTMLButtonElement
+  analyticsButton: HTMLButtonElement
   list: HTMLDivElement
 }
 
@@ -48,6 +52,20 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
 
 function buildListDom(root: HTMLDivElement): ListRefs {
   const wrapper = el('div', { className: 'venue-orders' })
+  const cockpitCard = el('div', { className: 'card' })
+  const cockpitTitle = el('h2', { text: 'Панель платформы' })
+  const cockpitLead = el('p', {
+    text:
+      'Здесь доступны рабочие операции по заведениям и подпискам. Разделы без полной Mini App parity показывают безопасное объяснение, а не частично работающие controls.'
+  })
+  const cockpitActions = el('div', { className: 'venue-inline-actions' })
+  const onboardingButton = el('button', { className: 'button-small button-secondary', text: 'Подключение' }) as HTMLButtonElement
+  const placementsButton = el('button', { className: 'button-small button-secondary', text: 'Размещения' }) as HTMLButtonElement
+  const supportButton = el('button', { className: 'button-small button-secondary', text: 'Поддержка' }) as HTMLButtonElement
+  const analyticsButton = el('button', { className: 'button-small button-secondary', text: 'Аналитика' }) as HTMLButtonElement
+  append(cockpitActions, onboardingButton, placementsButton, supportButton, analyticsButton)
+  append(cockpitCard, cockpitTitle, cockpitLead, cockpitActions)
+
   const header = el('div', { className: 'card' })
   const title = el('h2', { text: 'Заведения' })
   const controls = el('div', { className: 'venue-form-grid' })
@@ -90,7 +108,7 @@ function buildListDom(root: HTMLDivElement): ListRefs {
 
   const list = el('div', { className: 'venue-orders-list' })
 
-  append(wrapper, header, status, error, list)
+  append(wrapper, cockpitCard, header, status, error, list)
   root.replaceChildren(wrapper)
 
   return {
@@ -104,6 +122,10 @@ function buildListDom(root: HTMLDivElement): ListRefs {
     subscriptionFilter,
     searchInput,
     createButton,
+    onboardingButton,
+    placementsButton,
+    supportButton,
+    analyticsButton,
     list
   }
 }
@@ -235,6 +257,10 @@ export function renderPlatformVenuesListScreen(options: PlatformVenuesListOption
   }
 
   const disposables = [
+    on(refs.onboardingButton, 'click', () => onNavigate('#/onboarding')),
+    on(refs.placementsButton, 'click', () => onNavigate('#/placements')),
+    on(refs.supportButton, 'click', () => onNavigate('#/support')),
+    on(refs.analyticsButton, 'click', () => onNavigate('#/analytics')),
     on(refs.statusFilter, 'change', filtersHandler),
     on(refs.subscriptionFilter, 'change', filtersHandler),
     on(refs.searchInput, 'input', searchHandler),

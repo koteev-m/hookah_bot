@@ -11,6 +11,8 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
+import com.hookah.platform.backend.platform.OwnerAccountAssignmentPreparationResult
+import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -77,12 +79,16 @@ fun Route.venueStaffRoutes(
     venueStaffRepository: VenueStaffRepository,
     staffInviteRepository: StaffInviteRepository,
     staffInviteConfig: StaffInviteConfig,
+    venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
 ) {
     route("/venue") {
         get("/{venueId}/staff") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            resolveVenueRole(venueAccessRepository, userId, venueId)
+            val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (requesterRole == VenueRole.STAFF) {
+                throw ForbiddenException()
+            }
             val members = venueStaffRepository.listMembers(venueId)
             call.respond(
                 VenueStaffListResponse(
@@ -97,6 +103,9 @@ fun Route.venueStaffRoutes(
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
             val request = call.receive<StaffInviteRequest>()
             val targetRole = parseVenueRole(request.role)
+            if (targetRole == VenueRole.OWNER) {
+                throw InvalidInputException("OWNER cannot be assigned from venue staff invite flow")
+            }
             if (requesterRole == VenueRole.STAFF) {
                 throw ForbiddenException()
             }
@@ -116,7 +125,7 @@ fun Route.venueStaffRoutes(
                     inviteCode = result.code,
                     expiresAt = result.expiresAt.toString(),
                     ttlSeconds = result.ttlSeconds,
-                    instructions = "Передайте код сотруднику. Он должен открыть мини‑приложение и принять инвайт.",
+                    instructions = "Передайте сотруднику команду для бота: /start staff_invite_${result.code}.",
                 ),
             )
         }
@@ -128,7 +137,21 @@ fun Route.venueStaffRoutes(
                 staffInviteRepository.acceptInvite(
                     code = request.inviteCode,
                     userId = userId,
-                    createMember = { connection, venueId, role, invitedByUserId ->
+                    createMember = createMember@{ connection, venueId, role, invitedByUserId ->
+                        if (role.equals(VenueRole.OWNER.name, ignoreCase = true)) {
+                            when (
+                                venueOwnerAccountRepository.prepareOwnerAssignmentInTransaction(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    ownerUserId = userId,
+                                    defaultLimit = 1,
+                                    updatedByUserId = invitedByUserId,
+                                )
+                            ) {
+                                is OwnerAccountAssignmentPreparationResult.Success -> Unit
+                                else -> return@createMember null
+                            }
+                        }
                         venueStaffRepository.createMemberInTransaction(
                             connection,
                             venueId,
@@ -204,6 +227,9 @@ private fun VenueStaffMember.toDto(): VenueStaffMemberDto =
     )
 
 private fun parseVenueRole(rawRole: String): VenueRole {
+    if (rawRole.trim().equals("ADMIN", ignoreCase = true)) {
+        throw InvalidInputException("ADMIN is a legacy alias and cannot be assigned")
+    }
     val role = VenueRoleMapping.fromDb(rawRole)
     return role ?: throw InvalidInputException("role must be one of OWNER, MANAGER, STAFF")
 }
