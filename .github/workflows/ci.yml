@@ -301,6 +301,30 @@ jobs:
               ;;
           esac
 
+  miniapp-e2e-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        node: [20]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies
+        working-directory: miniapp
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: miniapp
+        run: npx playwright install --with-deps chromium
+      - name: Run Mini App browser smoke
+        working-directory: miniapp
+        run: npm run e2e:smoke
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20

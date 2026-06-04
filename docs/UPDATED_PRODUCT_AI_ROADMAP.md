@@ -22,7 +22,7 @@
 
 > Market launch требует production-ready Telegram bot + Mini App core. AI входит в продукт как assistant layer. Telegram Guest Mode, Telegram Business / Secretary Bots, Managed branded bots и Bot-to-Bot agents не являются обязательными для первого запуска.
 
-Текущий фокус перед пилотом: product P0/P1 закрыт, staging smoke и CI release validation зелёные; следующий риск находится в operational readiness - monitoring, deploy/runbook hardening and rollback ownership. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
+Текущий фокус перед пилотом: product P0/P1 закрыт, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
 
 Актуальный post-fix snapshot:
 
@@ -44,6 +44,8 @@ Recently verified:
 - Pilot Smoke Fix Pack #1.1 was deployed and affected staging re-smoke passed on 2026-06-04: health/db/miniapp, Telegram Mini App `initData`, Guest pre-QR info/media loading, venue selector Russian status labels and explicit archive restore copy all passed.
 - The previous P1 `Guest pre-QR endless "Загрузка информации..."` issue is resolved in staging.
 - CI release validation is green on the latest release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and aggregate job all passed.
+- Deploy/runbook hardening is in place: health-check wait/retry, restart/rollback/log commands and staging/pilot first-response path are documented.
+- Minimal Playwright browser smoke covers Guest Mini App pre-QR info/photo-menu vs table-context structured menu separation.
 
 ## 2. Sources Merged
 
@@ -149,7 +151,7 @@ Remaining P1:
 - final staging smoke after each release batch;
 - real venue settings screen, or keep bot as canonical;
 - venue stats screen;
-- deeper operational frontend smoke/e2e coverage.
+- deeper operational frontend smoke/e2e coverage beyond the minimal Guest Mini App browser smoke.
 
 ### Platform Owner
 
@@ -235,7 +237,6 @@ Closed readiness blocks:
 
 Remaining before pilot:
 
-- finish operational readiness ownership for monitoring, deploy health checks, restart/rollback and incident response;
 - repeat real Telegram runtime smoke using `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` after any additional release batch;
 - keep accepted P2 follow-ups out of the pilot blocker list unless a smoke regression reclassifies them.
 
@@ -251,12 +252,12 @@ Done:
 - Mini App static/proxy `/miniapp/` route handling for local and staging;
 - V102 PostgreSQL/H2 migration for platform-owner lifecycle dialog states.
 - CI release validation uses split backend jobs and is green for the latest release snapshot: ktlint, compile, release-critical routes, venue booking/RBAC, Telegram lightweight tests, migration sanity, compose, Mini App build, backend Docker build and backend aggregate.
+- Deploy health-check wait/retry, restart/rollback/log runbook and staging/pilot first response are documented.
+- Minimal Playwright browser smoke is wired for Guest Mini App pre-QR/table menu separation.
 
 Remaining P1:
 
 - final staging smoke after each additional release batch;
-- monitoring/runbook hardening for deploy, restart, rollback, alerting and incident response;
-- harden deploy health-check wait/retry if curl sees early reset after container restart.
 
 ### Internal AI Assistant Core
 
@@ -548,16 +549,11 @@ Before market launch, close:
 
 ### Launch-Critical Follow-Up
 
-1. Monitoring and deploy runbook hardening
-   - Why: product smoke and CI are green; the remaining launch risk is operational visibility and a repeatable incident/restart/rollback path.
-   - Acceptance: staging deploy health checks have retry/wait behavior, restart/rollback commands are documented, health/DB/Mini App/bot notification failure signals are visible, and the pilot operator knows the escalation path.
-   - Source: `docs/OPERATIONS.md`, `docs/STAGING_DEPLOYMENT.md`, `scripts/deploy-staging.sh`.
-
-2. Production config / infra readiness
+1. Production config / infra readiness
    - Why: tunnel/local config is not launch infra.
    - Acceptance: stable backend/Mini App URLs, webhook URL, WebApp URL, CORS, secrets and environment profile documented.
 
-3. Billing/subscription baseline
+2. Billing/subscription baseline
    - Why: platform launch needs clear venue state.
    - Acceptance: trial/paid/past-due/suspended rules are clear and visible; manual operational path exists.
 
@@ -571,7 +567,7 @@ Before market launch, close:
 - platform support/tickets;
 - platform analytics;
 - owner invite/deep link acceptance hardening;
-- frontend/browser e2e automation.
+- expand frontend/browser e2e automation beyond the minimal Guest Mini App smoke.
 
 ### P2 / Future
 
@@ -741,12 +737,12 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 ## 12. Next Development Block
 
-Recommended next block: monitoring and deploy runbook hardening.
+Recommended next block: cross-channel bill snapshot automation.
 
 Prompt:
 
 ```text
-Ты senior Kotlin/Ktor + Vite Mini App + Telegram Bot DevOps/release engineer.
+Ты senior Kotlin/Ktor + Vite Mini App + Telegram Bot QA engineer.
 
 Контекст:
 Canonical roadmap: docs/UPDATED_PRODUCT_AI_ROADMAP.md.
@@ -754,18 +750,18 @@ Mini App smoke checklist: docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md.
 P0/P1 product readiness blocks are closed in code.
 Current staging Telegram runtime smoke passed on 2026-06-04 after Pilot Smoke Fix Pack #1 and #1.1.
 CI release validation is green: backend ktlint, compile, split backend test jobs, migration sanity, compose, Mini App build, backend Docker build and aggregate all passed.
+Deploy/runbook hardening is done.
+Minimal Guest Mini App Playwright browser smoke is done.
 
 Goal:
-Сделать minimal monitoring/deploy runbook hardening pack before inviting pilot users.
+Сделать минимальную cross-channel bill snapshot automation для pilot regression confidence.
 
 Scope:
-1. Inspect current deploy script, staging runbook and operations docs.
-2. Harden deploy health-check wait/retry if the backend briefly resets connections during restart.
-3. Document restart, rollback and post-deploy sanity commands.
-4. Add/verify lightweight health/log checks for backend, DB, Mini App static serving and Telegram bot polling/notification errors.
-5. Keep secrets masked and do not change product behavior.
+1. Inspect current Telegram bot bill rendering and Mini App full bill DTO/UI.
+2. Add fixture/read-model snapshot coverage for core bill totals and discount lines where shared code already exists.
+3. Do not redesign billing, payments or promotions.
+4. Keep tests deterministic and avoid staging/secrets.
 
 Do not add new product scope.
-Do not add monitoring SaaS unless already configured.
-Acceptance: deploy/runbook is repeatable by the pilot operator and exposes health/log failure signals without touching business logic.
+Acceptance: a regression test fails if Telegram and Mini App bill totals/line labels drift for the pilot-critical bill scenario.
 ```

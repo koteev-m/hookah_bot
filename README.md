@@ -70,6 +70,7 @@ CI проверяет backend маленькими release-батчами вме
   --console=plain
 
 cd miniapp && npm run build
+cd miniapp && npm run e2e:smoke
 docker compose config --quiet
 docker build -f backend/Dockerfile .
 ```

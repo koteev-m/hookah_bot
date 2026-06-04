@@ -2,10 +2,11 @@
 
 Дата: 2026-06-04.
 
-Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` сейчас есть только `dev`, `build`, `preview`; frontend/browser e2e harness в проекте не найден. Поэтому стратегия на этот шаг гибридная:
+Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
 - backend/API regression tests покрывают критичные контракты;
 - `npm run build` покрывает TypeScript/Vite production build;
+- `npm run e2e:smoke` покрывает browser-level Guest Mini App smoke с mocked Telegram initData/API context;
 - ручной checklist покрывает Telegram WebApp runtime, `initData`, navigation и cross-channel parity.
 
 Актуальный scope после последних fix-pack'ов:
@@ -47,7 +48,7 @@ Remaining:
 - no open P0/P1 from the current pilot smoke and affected re-smokes is recorded in this checklist;
 - repeat this smoke after any additional release batch;
 - operational readiness remains the next launch-supporting block: monitoring, deploy health-check wait/retry, restart/rollback and incident runbook ownership;
-- P2 follow-ups remain: frontend/browser e2e harness, cross-channel bill snapshot automation, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
+- P2 follow-ups remain: expand frontend/browser e2e beyond the minimal Guest smoke, cross-channel bill snapshot automation, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
 
@@ -349,7 +350,7 @@ Expected:
 
 ## 9. Known Gaps
 
-- No frontend/browser e2e harness exists yet.
+- Minimal Playwright browser smoke exists for Guest Mini App pre-QR/table menu separation; wider Venue/Platform/browser coverage is still pending.
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
 - Manual comparison with Telegram full bill remains required until a cross-channel snapshot test is introduced.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
@@ -357,9 +358,8 @@ Expected:
 
 ## 10. Recommended Next Test Investment
 
-1. Add a lightweight Playwright/Vite preview smoke harness once Mini App routing stabilizes.
-2. Add fixture-driven UI tests for:
+1. Expand the lightweight Playwright/Vite smoke harness with fixture-driven UI tests for:
    - guest cart/order/staff call;
    - venue order detail/full bill;
    - platform safe sections.
-3. Add cross-channel snapshot tests for bill formatting if Telegram and Mini App renderers become shared/read-model based.
+2. Add cross-channel snapshot tests for bill formatting if Telegram and Mini App renderers become shared/read-model based.
