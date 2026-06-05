@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
@@ -727,6 +730,114 @@ class StaffChatNotifierTest {
         }
 
     @Test
+    fun `bill update notification enqueues current discounted total without claim`() =
+        runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(
+                    id = 1L,
+                    name = "Venue",
+                    staffChatId = 777L,
+                )
+            val payloadSlot = slot<String>()
+            coEvery { notificationRepository.enqueue(777L, "sendMessage", capture(payloadSlot)) } returns true
+
+            val result =
+                notifier.notifyBillUpdatedNow(
+                    StaffBillUpdatedNotification(
+                        venueId = 1L,
+                        orderId = 2L,
+                        displayNumber = 12,
+                        tableLabel = "7",
+                        change = StaffBillUpdateChange.MANUAL_DISCOUNT,
+                        bill =
+                            billSnapshot(
+                                grossTotalMinor = 20_000,
+                                manualDiscountTotalMinor = 2_000,
+                                finalPayableTotalMinor = 18_000,
+                                activeItems =
+                                    listOf(
+                                        activeItemSnapshot(
+                                            name = "Авторский кальян",
+                                            lineGrossMinor = 20_000,
+                                            manualDiscountMinor = 2_000,
+                                            linePayableMinor = 18_000,
+                                            discountPercent = 10,
+                                        ),
+                                    ),
+                            ),
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("Счёт обновлён №12"), payload)
+            assertTrue(payload.contains("Стол: 7"), payload)
+            assertTrue(payload.contains("Изменение: ручная скидка"), payload)
+            assertTrue(payload.contains("Авторский кальян ×1 — 180 ₽"), payload)
+            assertTrue(payload.contains("Сумма до скидок: 200 ₽"), payload)
+            assertTrue(payload.contains("Ручные скидки: −20 ₽"), payload)
+            assertTrue(payload.contains("К оплате: 180 ₽"), payload)
+            coVerify { notificationRepository.enqueue(777L, "sendMessage", any()) }
+            coVerify(exactly = 0) { notificationRepository.tryClaimAndEnqueue(any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `bill update notification describes exclusion and restore with current totals`() {
+        val excludedText =
+            buildStaffBillUpdatedNotificationText(
+                venueName = "Venue",
+                tableLabel = "3",
+                displayNumber = 15,
+                change = StaffBillUpdateChange.ITEM_EXCLUDED,
+                bill =
+                    billSnapshot(
+                        grossTotalMinor = 0,
+                        excludedTotalMinor = 5_000,
+                        finalPayableTotalMinor = 0,
+                        activeItems = emptyList(),
+                        excludedItems =
+                            listOf(
+                                excludedItemSnapshot(
+                                    name = "Чай",
+                                    lineGrossMinor = 5_000,
+                                    reason = "Комплимент",
+                                ),
+                            ),
+                    ),
+            )
+        val restoredText =
+            buildStaffBillUpdatedNotificationText(
+                venueName = "Venue",
+                tableLabel = "3",
+                displayNumber = 15,
+                change = StaffBillUpdateChange.ITEM_RESTORED,
+                bill =
+                    billSnapshot(
+                        grossTotalMinor = 5_000,
+                        finalPayableTotalMinor = 5_000,
+                        activeItems =
+                            listOf(
+                                activeItemSnapshot(
+                                    name = "Чай",
+                                    lineGrossMinor = 5_000,
+                                    linePayableMinor = 5_000,
+                                ),
+                            ),
+                    ),
+            )
+
+        assertTrue(excludedText.contains("Изменение: позиция исключена"), excludedText)
+        assertTrue(excludedText.contains("• нет активных позиций"), excludedText)
+        assertTrue(excludedText.contains("Чай ×1 — 50 ₽; причина: Комплимент"), excludedText)
+        assertTrue(excludedText.contains("Исключено: −50 ₽"), excludedText)
+        assertTrue(excludedText.contains("К оплате: 0 ₽"), excludedText)
+        assertTrue(restoredText.contains("Изменение: позиция восстановлена"), restoredText)
+        assertTrue(restoredText.contains("Чай ×1 — 50 ₽"), restoredText)
+        assertTrue(restoredText.contains("К оплате: 50 ₽"), restoredText)
+    }
+
+    @Test
     fun `notifyNewBatch is still sent when staff chat is linked and order notifications are disabled`() =
         runBlocking {
             coEvery { venueSettingsRepository.find(1L) } returns
@@ -789,4 +900,68 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.FAILED_ENQUEUE, result)
         }
+
+    private fun billSnapshot(
+        grossTotalMinor: Long,
+        manualDiscountTotalMinor: Long = 0,
+        excludedTotalMinor: Long = 0,
+        finalPayableTotalMinor: Long,
+        activeItems: List<OrderBillActiveItemSnapshot>,
+        excludedItems: List<OrderBillExcludedItemSnapshot> = emptyList(),
+    ): OrderBillSnapshot =
+        OrderBillSnapshot(
+            grossTotalMinor = grossTotalMinor,
+            manualDiscountTotalMinor = manualDiscountTotalMinor,
+            promoDiscountTotalMinor = 0,
+            loyaltyDiscountTotalMinor = 0,
+            excludedTotalMinor = excludedTotalMinor,
+            canceledTotalMinor = 0,
+            rejectedTotalMinor = 0,
+            finalPayableTotalMinor = finalPayableTotalMinor,
+            currency = "RUB",
+            activeItems = activeItems,
+            promoDiscounts = emptyList(),
+            loyaltyDiscounts = emptyList(),
+            excludedItems = excludedItems,
+        )
+
+    private fun activeItemSnapshot(
+        name: String,
+        lineGrossMinor: Long,
+        manualDiscountMinor: Long = 0,
+        linePayableMinor: Long,
+        discountPercent: Int? = null,
+    ): OrderBillActiveItemSnapshot =
+        OrderBillActiveItemSnapshot(
+            batchId = 1L,
+            batchLabel = "Основной заказ",
+            batchItemId = 10L,
+            itemId = 20L,
+            name = name,
+            qty = 1,
+            lineGrossMinor = lineGrossMinor,
+            manualDiscountMinor = manualDiscountMinor,
+            promoDiscountMinor = 0,
+            linePayableMinor = linePayableMinor,
+            currency = "RUB",
+            discountPercent = discountPercent,
+        )
+
+    private fun excludedItemSnapshot(
+        name: String,
+        lineGrossMinor: Long,
+        reason: String,
+    ): OrderBillExcludedItemSnapshot =
+        OrderBillExcludedItemSnapshot(
+            batchId = 1L,
+            batchLabel = "Основной заказ",
+            batchItemId = 10L,
+            itemId = 20L,
+            name = name,
+            qty = 1,
+            lineGrossMinor = lineGrossMinor,
+            currency = "RUB",
+            status = "excluded",
+            reason = reason,
+        )
 }

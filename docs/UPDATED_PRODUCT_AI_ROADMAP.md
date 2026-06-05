@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-06-04.
+Дата обновления: 2026-06-05.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -46,6 +46,7 @@ Recently verified:
 - CI release validation is green on the latest release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and aggregate job all passed.
 - Deploy/runbook hardening is in place: health-check wait/retry, restart/rollback/log commands and staging/pilot first-response path are documented.
 - Minimal Playwright browser smoke covers Guest Mini App pre-QR info/photo-menu vs table-context structured menu separation.
+- Current P1 fix-pack in progress: staff Telegram chat bill refresh after manual discount, item exclusion and restore. Backend implementation and local validation are done; staging re-smoke is pending.
 
 ## 2. Sources Merged
 
@@ -149,6 +150,7 @@ Done:
 Remaining P1:
 
 - final staging smoke after each release batch;
+- staging re-smoke for staff Telegram chat bill refresh after manual discount, item exclusion and restore;
 - real venue settings screen, or keep bot as canonical;
 - venue stats screen;
 - deeper operational frontend smoke/e2e coverage beyond the minimal Guest Mini App browser smoke.

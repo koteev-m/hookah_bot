@@ -1,5 +1,9 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
@@ -72,6 +76,21 @@ enum class BookingStaffNotificationEvent(val dedupeCode: Long) {
     VENUE_CANCELLED(4L),
 }
 
+data class StaffBillUpdatedNotification(
+    val venueId: Long,
+    val orderId: Long,
+    val displayNumber: Int?,
+    val tableLabel: String,
+    val change: StaffBillUpdateChange,
+    val bill: OrderBillSnapshot,
+)
+
+enum class StaffBillUpdateChange {
+    MANUAL_DISCOUNT,
+    ITEM_EXCLUDED,
+    ITEM_RESTORED,
+}
+
 enum class StaffChatNotificationResult {
     SENT_OR_QUEUED,
     SKIPPED_NO_STAFF_CHAT,
@@ -79,6 +98,10 @@ enum class StaffChatNotificationResult {
     SKIPPED_DUPLICATE,
     SKIPPED_INACTIVE,
     FAILED_ENQUEUE,
+}
+
+interface StaffBillUpdateNotifier {
+    suspend fun notifyBillUpdatedNow(event: StaffBillUpdatedNotification): StaffChatNotificationResult
 }
 
 private enum class StaffChatNotificationSetting {
@@ -94,7 +117,7 @@ class StaffChatNotifier(
     private val isTelegramActive: () -> Boolean,
     private val scope: CoroutineScope,
     private val json: Json = Json { ignoreUnknownKeys = true },
-) {
+) : StaffBillUpdateNotifier {
     private val logger = LoggerFactory.getLogger(StaffChatNotifier::class.java)
 
     fun notifyNewBatch(event: NewBatchNotification) {
@@ -195,6 +218,21 @@ class StaffChatNotifier(
                 },
         )
 
+    override suspend fun notifyBillUpdatedNow(event: StaffBillUpdatedNotification): StaffChatNotificationResult =
+        notifyTextWithoutClaimNow(
+            venueId = event.venueId,
+            setting = StaffChatNotificationSetting.ORDERS,
+            messageBuilder = { venue ->
+                buildStaffBillUpdatedNotificationText(
+                    venueName = venue.name,
+                    tableLabel = event.tableLabel,
+                    displayNumber = event.displayNumber,
+                    change = event.change,
+                    bill = event.bill,
+                )
+            },
+        )
+
     private suspend fun notifyTextNow(
         venueId: Long,
         notificationKey: Long,
@@ -241,6 +279,46 @@ class StaffChatNotifier(
                 StaffChatNotificationClaim.ERROR -> StaffChatNotificationResult.FAILED_ENQUEUE
             }
         logResult(venueId, notificationKey, result)
+        return result
+    }
+
+    private suspend fun notifyTextWithoutClaimNow(
+        venueId: Long,
+        setting: StaffChatNotificationSetting?,
+        messageBuilder: (com.hookah.platform.backend.telegram.db.VenueShort) -> String,
+        replyMarkup: ReplyMarkup? = ReplyKeyboardRemove(removeKeyboard = true),
+    ): StaffChatNotificationResult {
+        if (!isTelegramActive()) {
+            logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_INACTIVE)
+            return StaffChatNotificationResult.SKIPPED_INACTIVE
+        }
+        val venue = venueRepository.findVenueById(venueId)
+        val chatId = venue?.staffChatId
+        if (venue == null || chatId == null) {
+            logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
+            return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
+        }
+        if (!isEnabled(venueId, setting, staffChatLinked = true)) {
+            logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_DISABLED)
+            return StaffChatNotificationResult.SKIPPED_DISABLED
+        }
+        val payloadJson =
+            json.encodeToString(
+                SendMessagePayload.serializer(),
+                buildSendMessagePayload(
+                    json = json,
+                    chatId = chatId,
+                    text = messageBuilder(venue),
+                    replyMarkup = replyMarkup,
+                ),
+            )
+        val result =
+            if (notificationRepository.enqueue(chatId, "sendMessage", payloadJson)) {
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            } else {
+                StaffChatNotificationResult.FAILED_ENQUEUE
+            }
+        logResult(venueId, notificationKey = 0L, result)
         return result
     }
 
@@ -386,6 +464,94 @@ private fun formatStaffChatPromotionDiscounts(discounts: List<NewBatchPromotionD
         lines.forEach { (label, amount) ->
             append("\n• ").append(label).append(": ").append(amount)
         }
+    }
+}
+
+internal fun buildStaffBillUpdatedNotificationText(
+    venueName: String,
+    tableLabel: String,
+    displayNumber: Int?,
+    change: StaffBillUpdateChange,
+    bill: OrderBillSnapshot,
+): String =
+    buildString {
+        append("⚠️ Счёт обновлён")
+        displayNumber?.let { append(" №").append(it) }
+        append('\n')
+        append("Заведение: ").append(venueName).append('\n')
+        append("Стол: ").append(tableLabel).append('\n')
+        append("Изменение: ").append(staffBillUpdateChangeLabel(change)).append('\n')
+        append("\nАктивные позиции:\n")
+        append(formatStaffBillActiveItems(bill.activeItems, bill.currency))
+        val excludedItems = bill.excludedItems.filter { item -> item.status == "excluded" }
+        if (excludedItems.isNotEmpty()) {
+            append("\n\nИсключено из счёта:\n")
+            append(formatStaffBillExcludedItems(excludedItems))
+        }
+        append("\n\nСумма до скидок: ").append(formatStaffChatMoney(bill.grossTotalMinor, bill.currency))
+        if (bill.manualDiscountTotalMinor > 0L) {
+            append("\nРучные скидки: −").append(formatStaffChatMoney(bill.manualDiscountTotalMinor, bill.currency))
+        }
+        appendStaffBillDiscountLines("Акции", bill.promoDiscounts)
+        appendStaffBillDiscountLines("Лояльность", bill.loyaltyDiscounts)
+        if (bill.excludedTotalMinor > 0L) {
+            append("\nИсключено: −").append(formatStaffChatMoney(bill.excludedTotalMinor, bill.currency))
+        }
+        append("\nК оплате: ").append(formatStaffChatMoney(bill.finalPayableTotalMinor, bill.currency))
+        append("\n\nПроверьте актуальный счёт перед закрытием.")
+    }
+
+private fun staffBillUpdateChangeLabel(change: StaffBillUpdateChange): String =
+    when (change) {
+        StaffBillUpdateChange.MANUAL_DISCOUNT -> "ручная скидка"
+        StaffBillUpdateChange.ITEM_EXCLUDED -> "позиция исключена"
+        StaffBillUpdateChange.ITEM_RESTORED -> "позиция восстановлена"
+    }
+
+private fun formatStaffBillActiveItems(
+    items: List<OrderBillActiveItemSnapshot>,
+    fallbackCurrency: String,
+): String =
+    items
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString("\n") { item ->
+            buildString {
+                append("• ").append(item.name).append(" ×").append(item.qty)
+                append(" — ")
+                append(formatStaffChatMoney(item.linePayableMinor, item.currency ?: fallbackCurrency))
+                item.discountPercent?.let { discountPercent ->
+                    append(" (скидка ").append(discountPercent).append("%)")
+                }
+            }
+        }
+        ?: "• нет активных позиций"
+
+private fun formatStaffBillExcludedItems(items: List<OrderBillExcludedItemSnapshot>): String =
+    items.joinToString("\n") { item ->
+        buildString {
+            append("• ").append(item.name).append(" ×").append(item.qty)
+            append(" — ").append(formatStaffChatMoney(item.lineGrossMinor, item.currency))
+            item.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+                append("; причина: ").append(reason)
+            }
+        }
+    }
+
+private fun StringBuilder.appendStaffBillDiscountLines(
+    title: String,
+    discounts: List<OrderBillDiscountSnapshot>,
+) {
+    val lines =
+        discounts
+            .filter { discount -> discount.discountMinor > 0L && discount.currency.isNotBlank() }
+            .map { discount ->
+                val label = discount.label.takeIf { it.isNotBlank() } ?: title
+                label to "−${formatStaffChatMoney(discount.discountMinor, discount.currency)}"
+            }
+    if (lines.isEmpty()) return
+    append('\n').append(title).append(':')
+    lines.forEach { (label, amount) ->
+        append("\n• ").append(label).append(": ").append(amount)
     }
 }
 

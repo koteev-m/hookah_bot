@@ -118,6 +118,39 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
         }
     }
 
+    suspend fun enqueue(
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+    ): Boolean {
+        val ds = dataSource ?: return false
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                try {
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO telegram_outbox (chat_id, method, payload_json)
+                        VALUES (?, ?, ?)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, chatId)
+                        statement.setString(2, method)
+                        statement.setString(3, payloadJson)
+                        statement.executeUpdate() > 0
+                    }
+                } catch (e: Exception) {
+                    logger.warn(
+                        "Failed to enqueue staff chat message chatId={}: {}",
+                        chatId,
+                        sanitizeTelegramForLog(e.message),
+                    )
+                    logger.debugTelegramException(e) { "enqueue staff chat message exception chatId=$chatId" }
+                    false
+                }
+            }
+        }
+    }
+
     suspend fun releaseClaim(batchId: Long): Boolean {
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {

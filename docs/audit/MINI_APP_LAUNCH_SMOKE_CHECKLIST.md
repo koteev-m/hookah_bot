@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-06-04.
+Дата: 2026-06-05.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -22,6 +22,7 @@
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
 - CI release validation is green for the current release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and backend aggregate passed.
 - Cross-channel bill snapshot automation covers Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, exclusions and restore.
+- P1 pending for the current release batch: staff Telegram chat must refresh after manual discount, item exclusion and restore so operators do not act on stale bill totals. Backend implementation and local validation are done; staging re-smoke is pending.
 - Platform owner lifecycle and commercial terms flows are in smoke scope.
 
 ## Current Staging Smoke Status
@@ -46,7 +47,7 @@ Confirmed:
 
 Remaining:
 
-- no open P0/P1 from the current pilot smoke and affected re-smokes is recorded in this checklist;
+- P1 pending: re-smoke staff Telegram chat bill refresh after manual discount, item exclusion and restore;
 - repeat this smoke after any additional release batch;
 - operational readiness remains the next launch-supporting block: monitoring, deploy health-check wait/retry, restart/rollback and incident runbook ownership;
 - P2 follow-ups remain: expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
@@ -237,12 +238,14 @@ Steps:
    - итог к оплате.
 12. Compare final payable total with Telegram full bill for the same order.
 13. As MANAGER/OWNER, apply manual discount and exclude/restore item.
-14. As STAFF, confirm bill edit controls are hidden.
-15. As STAFF, close delivered bill/order.
-16. Open `Вызовы`, accept and close a staff call.
-17. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel as allowed.
-18. Open `Поддержка`.
-19. Confirm the screen explains manual platform support and has no fake ticket controls.
+14. Confirm staff Telegram chat receives `⚠️ Счёт обновлён` with the updated total after each bill-affecting change.
+15. Confirm staff Telegram chat updated total matches Venue Mini App and Guest Mini App full bill totals.
+16. As STAFF, confirm bill edit controls are hidden.
+17. As STAFF, close delivered bill/order.
+18. Open `Вызовы`, accept and close a staff call.
+19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel as allowed.
+20. Open `Поддержка`.
+21. Confirm the screen explains manual platform support and has no fake ticket controls.
 
 ### STAFF booking RBAC split smoke status
 
@@ -355,6 +358,7 @@ Expected:
 - Minimal Playwright browser smoke exists for Guest Mini App pre-QR/table menu separation; wider Venue/Platform/browser coverage is still pending.
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
+- Staff Telegram chat bill refresh after manual discount/exclude/restore is a current P1 re-smoke item for the next release batch.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 

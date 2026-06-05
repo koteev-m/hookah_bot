@@ -89,6 +89,7 @@ import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.platform.platformRoutes
 import com.hookah.platform.backend.security.constantTimeEquals
 import com.hookah.platform.backend.telegram.InMemoryTelegramRateLimiter
+import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramApiClient
@@ -231,6 +232,7 @@ private data class VersionResponse(
 internal data class ModuleOverrides(
     val tableTokenResolver: (suspend (String) -> TableContext?)? = null,
     val telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
+    val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean {
@@ -1121,6 +1123,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     venueOrdersRepository = venueOrdersRepository,
                     outboxEnqueuer = telegramOutboxEnqueuer,
+                    staffBillUpdateNotifier = overrides.staffBillUpdateNotifier ?: staffChatNotifier,
                 )
                 venueBookingRoutes(
                     venueAccessRepository = venueAccessRepository,

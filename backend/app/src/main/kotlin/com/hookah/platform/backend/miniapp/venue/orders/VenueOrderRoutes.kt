@@ -9,6 +9,9 @@ import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.telegram.StaffBillUpdateChange
+import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
+import com.hookah.platform.backend.telegram.StaffBillUpdatedNotification
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.call
@@ -30,6 +33,7 @@ fun Route.venueOrderRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueOrdersRepository: VenueOrdersRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer? = null,
+    staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
 ) {
     route("/venue") {
         get("/orders/queue") {
@@ -295,7 +299,14 @@ fun Route.venueOrderRoutes(
                     reasonText = reasonText.take(200),
                     actor = OrderActionActor(userId, role),
                 )
-            call.respondBillMutationResult(venueOrdersRepository, venueId, orderId, applied)
+            call.respondBillMutationResult(
+                venueOrdersRepository = venueOrdersRepository,
+                venueId = venueId,
+                orderId = orderId,
+                applied = applied,
+                staffBillUpdateNotifier = staffBillUpdateNotifier,
+                staffBillUpdateChange = StaffBillUpdateChange.ITEM_EXCLUDED,
+            )
         }
 
         post("/orders/{orderId}/items/{batchItemId}/restore") {
@@ -316,7 +327,14 @@ fun Route.venueOrderRoutes(
                     batchItemId = batchItemId,
                     actor = OrderActionActor(userId, role),
                 )
-            call.respondBillMutationResult(venueOrdersRepository, venueId, orderId, applied)
+            call.respondBillMutationResult(
+                venueOrdersRepository = venueOrdersRepository,
+                venueId = venueId,
+                orderId = orderId,
+                applied = applied,
+                staffBillUpdateNotifier = staffBillUpdateNotifier,
+                staffBillUpdateChange = StaffBillUpdateChange.ITEM_RESTORED,
+            )
         }
 
         post("/orders/{orderId}/items/{batchItemId}/discount") {
@@ -342,7 +360,14 @@ fun Route.venueOrderRoutes(
                     discountPercent = request.discountPercent,
                     actor = OrderActionActor(userId, role),
                 )
-            call.respondBillMutationResult(venueOrdersRepository, venueId, orderId, applied)
+            call.respondBillMutationResult(
+                venueOrdersRepository = venueOrdersRepository,
+                venueId = venueId,
+                orderId = orderId,
+                applied = applied,
+                staffBillUpdateNotifier = staffBillUpdateNotifier,
+                staffBillUpdateChange = StaffBillUpdateChange.MANUAL_DISCOUNT,
+            )
         }
     }
 }
@@ -372,6 +397,8 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondBillMutati
     venueId: Long,
     orderId: Long,
     applied: Boolean,
+    staffBillUpdateNotifier: StaffBillUpdateNotifier?,
+    staffBillUpdateChange: StaffBillUpdateChange,
 ) {
     val detail =
         venueOrdersRepository.loadOrderDetail(venueId, orderId)
@@ -379,6 +406,16 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondBillMutati
     if (!applied) {
         throw InvalidInputException("Bill item update was not applied")
     }
+    staffBillUpdateNotifier?.notifyBillUpdatedNow(
+        StaffBillUpdatedNotification(
+            venueId = venueId,
+            orderId = orderId,
+            displayNumber = detail.displayNumber,
+            tableLabel = detail.tableNumber.toString(),
+            change = staffBillUpdateChange,
+            bill = detail.toOrderBillSnapshot(DEFAULT_CURRENCY),
+        ),
+    )
     respond(OrderBillItemAdjustmentResponse(order = detail.toDto()))
 }
 

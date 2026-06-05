@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
@@ -10,6 +11,11 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
+import com.hookah.platform.backend.telegram.StaffBillUpdateChange
+import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
+import com.hookah.platform.backend.telegram.StaffBillUpdatedNotification
+import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -1001,6 +1007,82 @@ class VenueOrderRoutesTest {
         }
 
     @Test
+    fun `bill item adjustments notify staff chat with current snapshots`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("orders-bill-edit-staff-chat")
+            val config = buildConfig(jdbcUrl)
+            val staffBillUpdateNotifier = RecordingStaffBillUpdateNotifier()
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffBillUpdateNotifier = staffBillUpdateNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val tableId = seedTable(jdbcUrl, venueId, 15)
+            val itemId = seedMenu(jdbcUrl, venueId, "Чай", 5_000)
+            val orderId = seedOrder(jdbcUrl, venueId, tableId, "ACTIVE", displayNumber = 310)
+            val batchId = seedBatch(jdbcUrl, orderId, "NEW", Instant.now())
+            val batchItemId = seedBatchItem(jdbcUrl, batchId, itemId)
+            val token = issueToken(config)
+
+            val discountResponse =
+                client.post("/api/venue/orders/$orderId/items/$batchItemId/discount?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"discountPercent":10}""")
+                }
+            val excludeResponse =
+                client.post("/api/venue/orders/$orderId/items/$batchItemId/exclude?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"reasonText":"Комплимент"}""")
+                }
+            val restoreResponse =
+                client.post("/api/venue/orders/$orderId/items/$batchItemId/restore?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, discountResponse.status)
+            assertEquals(HttpStatusCode.OK, excludeResponse.status)
+            assertEquals(HttpStatusCode.OK, restoreResponse.status)
+            val discountEvent =
+                staffBillUpdateNotifier.events.single { event ->
+                    event.change == StaffBillUpdateChange.MANUAL_DISCOUNT
+                }
+            val excludeEvent =
+                staffBillUpdateNotifier.events.single { event ->
+                    event.change == StaffBillUpdateChange.ITEM_EXCLUDED
+                }
+            val restoreEvent =
+                staffBillUpdateNotifier.events.single { event ->
+                    event.change == StaffBillUpdateChange.ITEM_RESTORED
+                }
+            assertEquals(
+                listOf(
+                    StaffBillUpdateChange.MANUAL_DISCOUNT,
+                    StaffBillUpdateChange.ITEM_EXCLUDED,
+                    StaffBillUpdateChange.ITEM_RESTORED,
+                ),
+                staffBillUpdateNotifier.events.map { event -> event.change },
+            )
+            assertEquals(310, discountEvent.displayNumber)
+            assertEquals(4_500, discountEvent.bill.finalPayableTotalMinor)
+            assertEquals(0, excludeEvent.bill.finalPayableTotalMinor)
+            assertEquals(5_000, excludeEvent.bill.excludedTotalMinor)
+            assertEquals(4_500, restoreEvent.bill.finalPayableTotalMinor)
+            assertEquals(0, restoreEvent.bill.excludedTotalMinor)
+        }
+
+    @Test
     fun `staff cannot edit bill items`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("orders-bill-edit-staff")
@@ -1798,6 +1880,15 @@ class VenueOrderRoutesTest {
         val fromStatus: String,
         val toStatus: String,
     )
+
+    private class RecordingStaffBillUpdateNotifier : StaffBillUpdateNotifier {
+        val events = mutableListOf<StaffBillUpdatedNotification>()
+
+        override suspend fun notifyBillUpdatedNow(event: StaffBillUpdatedNotification): StaffChatNotificationResult {
+            events += event
+            return StaffChatNotificationResult.SENT_OR_QUEUED
+        }
+    }
 
     private companion object {
         const val TELEGRAM_USER_ID: Long = 909L
