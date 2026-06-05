@@ -3,8 +3,10 @@ package com.hookah.platform.backend.telegram
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
+import com.hookah.platform.backend.telegram.db.StaffChatOrderMessage
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettings
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
@@ -17,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -730,7 +733,7 @@ class StaffChatNotifierTest {
         }
 
     @Test
-    fun `bill update notification enqueues current discounted total without claim`() =
+    fun `bill update notification edits live staff chat message with current discounted total`() =
         runBlocking {
             coEvery { venueSettingsRepository.find(1L) } returns null
             coEvery { venueRepository.findVenueById(1L) } returns
@@ -740,7 +743,22 @@ class StaffChatNotifierTest {
                     staffChatId = 777L,
                 )
             val payloadSlot = slot<String>()
-            coEvery { notificationRepository.enqueue(777L, "sendMessage", capture(payloadSlot)) } returns true
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(
+                    orderId = 2L,
+                    venueId = 1L,
+                    chatId = 777L,
+                    messageId = 55L,
+                )
+            coEvery {
+                notificationRepository.enqueueOrderMessage(
+                    orderId = 2L,
+                    venueId = 1L,
+                    chatId = 777L,
+                    method = "editMessageText",
+                    payloadJson = capture(payloadSlot),
+                )
+            } returns true
 
             val result =
                 notifier.notifyBillUpdatedNow(
@@ -750,6 +768,9 @@ class StaffChatNotifierTest {
                         displayNumber = 12,
                         tableLabel = "7",
                         change = StaffBillUpdateChange.MANUAL_DISCOUNT,
+                        status = OrderWorkflowStatus.ACCEPTED,
+                        actionBatchId = 10L,
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
                         bill =
                             billSnapshot(
                                 grossTotalMinor = 20_000,
@@ -771,14 +792,18 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("Счёт обновлён №12"), payload)
+            assertTrue(payload.contains("Заказ №12"), payload)
+            assertTrue(payload.contains("\"message_id\":55"), payload)
             assertTrue(payload.contains("Стол: 7"), payload)
+            assertTrue(payload.contains("Статус: принят"), payload)
             assertTrue(payload.contains("Изменение: ручная скидка"), payload)
             assertTrue(payload.contains("Авторский кальян ×1 — 180 ₽"), payload)
             assertTrue(payload.contains("Сумма до скидок: 200 ₽"), payload)
             assertTrue(payload.contains("Ручные скидки: −20 ₽"), payload)
             assertTrue(payload.contains("К оплате: 180 ₽"), payload)
-            coVerify { notificationRepository.enqueue(777L, "sendMessage", any()) }
+            assertTrue(payload.contains("Обновлено: 05.06.2026 12:34 UTC"), payload)
+            coVerify { notificationRepository.enqueueOrderMessage(2L, 1L, 777L, "editMessageText", any()) }
+            coVerify(exactly = 0) { notificationRepository.enqueue(777L, "sendMessage", any()) }
             coVerify(exactly = 0) { notificationRepository.tryClaimAndEnqueue(any(), any(), any(), any()) }
         }
 

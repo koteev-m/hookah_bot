@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -2999,7 +3000,15 @@ class TelegramKeyboardsTest {
     fun `staff chat order batch actions use short callbacks`() {
         val accept = TelegramKeyboards.inlineStaffChatOrderBatchAccept(17L, 57L).inlineKeyboard.flatten().single()
         val deliver = TelegramKeyboards.inlineStaffChatOrderBatchDeliver(17L, 57L).inlineKeyboard.flatten().single()
-        val close = TelegramKeyboards.inlineStaffChatOrderCloseBill(17L, 19L, 57L).inlineKeyboard.flatten().single()
+        val close = TelegramKeyboards.inlineStaffChatOrderCloseBill(17L, 19L, 57L).inlineKeyboard.flatten()
+        val liveAccepted =
+            TelegramKeyboards.inlineStaffChatOrderActions(
+                venueId = 17L,
+                orderId = 19L,
+                batchId = 57L,
+                status = OrderWorkflowStatus.ACCEPTED,
+                webAppUrl = "https://mini.app/miniapp/?mode=venue&venueId=17",
+            ).inlineKeyboard.flatten()
         val closeConfirm =
             TelegramKeyboards.inlineStaffChatOrderCloseBillConfirm(
                 17L,
@@ -3010,12 +3019,19 @@ class TelegramKeyboardsTest {
         assertEquals("✅ Принять", accept.text)
         assertEquals("sc_ob_a:17:57", accept.callbackData)
         assertTrue(accept.callbackData!!.length <= 64)
-        assertEquals("✅ Доставлено", deliver.text)
+        assertEquals("🚚 Доставлено", deliver.text)
         assertEquals("sc_ob_d:17:57", deliver.callbackData)
         assertTrue(deliver.callbackData!!.length <= 64)
-        assertEquals("🧾 Закрыть общий счёт", close.text)
-        assertEquals("sc_oc_ask:h:j:1l", close.callbackData)
-        assertTrue(close.callbackData!!.length <= 64)
+        assertEquals("🧾 Закрыть счёт", close[0].text)
+        assertEquals("sc_oc_ask:h:j:1l", close[0].callbackData)
+        assertTrue(close[0].callbackData!!.length <= 64)
+        assertEquals("🔄 Обновить", close[1].text)
+        assertEquals("sc_or:h:j:1l", close[1].callbackData)
+        assertTrue(close[1].callbackData!!.length <= 64)
+        assertEquals("🚚 Доставлено", liveAccepted[0].text)
+        assertEquals("🔄 Обновить", liveAccepted[1].text)
+        assertEquals("📱 Открыть Mini App", liveAccepted[2].text)
+        assertEquals("https://mini.app/miniapp/?mode=venue&venueId=17", liveAccepted[2].webApp?.url)
         assertEquals("✅ Да, общий счёт оплачен и закрыт", closeConfirm[0].text)
         assertEquals("sc_oc_yes:h:j:1l", closeConfirm[0].callbackData)
         assertTrue(closeConfirm[0].callbackData!!.length <= 64)

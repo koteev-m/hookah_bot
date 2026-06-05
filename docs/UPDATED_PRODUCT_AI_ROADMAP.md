@@ -574,6 +574,7 @@ Before market launch, close:
 
 ### P2 / Future
 
+- TODO: implement bot cart ↔ Mini App cart sync so cart items added in Telegram bot are visible in Mini App and vice versa.
 - richer venue cards;
 - media-heavy menu polish;
 - advanced analytics;

@@ -1644,6 +1644,16 @@ class TelegramBotRouter(
                     data = data,
                 )
             }
+            data?.startsWith("sc_or:") == true -> {
+                callbackAnswered = true
+                handleStaffChatOrderRefresh(
+                    chatId = chatId,
+                    messageId = sourceMessageId,
+                    callbackQueryId = callbackQuery.id,
+                    user = callbackQuery.from,
+                    data = data,
+                )
+            }
             data?.startsWith("sc_oc_yes:") == true -> {
                 callbackAnswered = true
                 handleStaffChatOrderCloseConfirm(
@@ -20444,16 +20454,13 @@ class TelegramBotRouter(
                 else -> "✅ Обновлено: $actor"
             }
         val replyMarkup =
-            when (nextStatus) {
-                OrderBatchStatus.ACCEPTED -> TelegramKeyboards.inlineStaffChatOrderBatchDeliver(venueId, batchId)
-                OrderBatchStatus.DELIVERED ->
-                    TelegramKeyboards.inlineStaffChatOrderCloseBill(
-                        venueId,
-                        result.orderId,
-                        batchId,
-                    )
-                else -> null
-            }
+            TelegramKeyboards.inlineStaffChatOrderActions(
+                venueId = venueId,
+                orderId = result.orderId,
+                batchId = batchId,
+                status = nextStatus.toWorkflow(),
+                webAppUrl = venueMiniAppUrl(venueId),
+            )
         notifyGuestAboutStaffChatBatchStatusChange(
             venueId = venueId,
             orderId = result.orderId,
@@ -20575,10 +20582,12 @@ class TelegramBotRouter(
                 batchId = action.batchId,
                 statusLine = "Статус: доставлен",
                 replyMarkup =
-                    TelegramKeyboards.inlineStaffChatOrderCloseBill(
-                        action.venueId,
-                        action.orderId,
-                        action.batchId,
+                    TelegramKeyboards.inlineStaffChatOrderActions(
+                        venueId = action.venueId,
+                        orderId = action.orderId,
+                        batchId = action.batchId,
+                        status = OrderWorkflowStatus.DELIVERED,
+                        webAppUrl = venueMiniAppUrl(action.venueId),
                     ),
                 textOverride = currentText,
             )
@@ -20613,6 +20622,66 @@ class TelegramBotRouter(
             logger.warn("staff chat close confirm failed: {}", sanitizeTelegramForLog(e.message))
             logger.debugTelegramException(e) { "staff chat close confirm exception" }
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось закрыть счёт", showAlert = true)
+        }
+    }
+
+    private suspend fun handleStaffChatOrderRefresh(
+        chatId: Long,
+        messageId: Long?,
+        callbackQueryId: String,
+        user: User,
+        data: String,
+    ) {
+        try {
+            val action =
+                parseStaffChatOrderCloseActionData(data, "sc_or:") ?: run {
+                    enqueueCallbackAnswer(
+                        chatId,
+                        callbackQueryId,
+                        text = "Не удалось обновить сообщение",
+                        showAlert = true,
+                    )
+                    return
+                }
+            val role = resolveVenueRoleForStaffChatAction(user.id, action.venueId)
+            if (role == null) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Нет доступа", showAlert = true)
+                return
+            }
+            val detail =
+                try {
+                    venueOrdersRepository.loadOrderDetail(venueId = action.venueId, orderId = action.orderId)
+                } catch (e: DatabaseUnavailableException) {
+                    enqueueCallbackAnswer(chatId, callbackQueryId, text = "База недоступна", showAlert = true)
+                    return
+                }
+            if (detail == null) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Заказ не найден", showAlert = true)
+                return
+            }
+            editStaffChatOrderBatchMessage(
+                chatId = chatId,
+                messageId = messageId,
+                venueId = action.venueId,
+                orderId = action.orderId,
+                batchId = staffChatActionBatchId(detail),
+                statusLine = staffChatOrderCurrentStatusLine(detail.status),
+                replyMarkup =
+                    TelegramKeyboards.inlineStaffChatOrderActions(
+                        venueId = action.venueId,
+                        orderId = action.orderId,
+                        batchId = staffChatActionBatchId(detail),
+                        status = detail.status,
+                        webAppUrl = venueMiniAppUrl(action.venueId),
+                    ),
+            )
+            enqueueCallbackAnswer(chatId, callbackQueryId, text = "Обновлено")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("staff chat order refresh failed: {}", sanitizeTelegramForLog(e.message))
+            logger.debugTelegramException(e) { "staff chat order refresh exception" }
+            enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось обновить сообщение", showAlert = true)
         }
     }
 
@@ -20818,16 +20887,13 @@ class TelegramBotRouter(
         batchId: Long,
     ) {
         val replyMarkup =
-            when (result.status) {
-                OrderWorkflowStatus.ACCEPTED -> TelegramKeyboards.inlineStaffChatOrderBatchDeliver(venueId, batchId)
-                OrderWorkflowStatus.DELIVERED ->
-                    TelegramKeyboards.inlineStaffChatOrderCloseBill(
-                        venueId,
-                        result.orderId,
-                        batchId,
-                    )
-                else -> null
-            }
+            TelegramKeyboards.inlineStaffChatOrderActions(
+                venueId = venueId,
+                orderId = result.orderId,
+                batchId = batchId,
+                status = result.status,
+                webAppUrl = venueMiniAppUrl(venueId),
+            )
         editStaffChatOrderBatchMessage(
             chatId = chatId,
             messageId = messageId,
@@ -20862,6 +20928,12 @@ class TelegramBotRouter(
                 } catch (e: DatabaseUnavailableException) {
                     null
                 } ?: return
+        staffChatNotifier?.rememberOrderMessageNow(
+            venueId = venueId,
+            orderId = orderId,
+            chatId = chatId,
+            messageId = messageId,
+        )
         enqueueEditMessage(chatId, messageId, text, replyMarkup)
     }
 
@@ -20873,40 +20945,13 @@ class TelegramBotRouter(
     ): String? {
         val venueName = venueRepository.findVenueById(venueId)?.name ?: "Заведение"
         val detail = venueOrdersRepository.loadOrderDetail(venueId = venueId, orderId = orderId) ?: return null
-        val batch = detail.batches.firstOrNull { it.batchId == batchId } ?: return null
-        val activeItems = batch.items.filter { item -> isActiveBillItem(item) }
-        val batchCurrency = activeItems.firstOrNull { !it.currency.isNullOrBlank() }?.currency
-        val batchPayableMinor =
-            activeItems
-                .mapNotNull { item -> venueOrderBillItemPayableMinor(item) }
-                .takeIf { it.isNotEmpty() }
-                ?.sum()
-        val isFirstBatch =
-            detail.batches
-                .sortedWith(compareBy({ it.createdAt }, { it.batchId }))
-                .firstOrNull()
-                ?.batchId == batchId
-        return buildNewBatchNotificationText(
+        return buildStaffOrderLiveMessageText(
             venueName = venueName,
             tableLabel = detail.tableNumber.toString(),
-            itemsSummary = staffChatOrderItemsSummary(batch),
-            comment = batch.comment,
             displayNumber = detail.displayNumber,
-            isFirstBatch = isFirstBatch,
-            isReplacementBeforeAccept = isReplacementBeforeAcceptBatch(detail, batch),
-            statusLine = statusLine,
-            guestDisplayName = batch.guestDisplayName,
-            promotionDiscounts =
-                batch.promotionDiscounts.map { discount ->
-                    NewBatchPromotionDiscount(
-                        label = discount.label,
-                        discountMinor = discount.discountMinor,
-                        currency = discount.currency,
-                        ruleType = discount.ruleType,
-                    )
-                },
-            totalPayableMinor = batchPayableMinor,
-            totalCurrency = batchCurrency,
+            status = detail.status,
+            bill = detail.toOrderBillSnapshot(),
+            updatedAt = detail.updatedAt,
         )
     }
 
@@ -20962,6 +21007,25 @@ class TelegramBotRouter(
             OrderWorkflowStatus.CLOSED -> "Статус: общий счёт закрыт"
             OrderWorkflowStatus.NEW -> "Статус: новый"
         }
+
+    private fun staffChatActionBatchId(detail: OrderDetail): Long =
+        when (detail.status) {
+            OrderWorkflowStatus.NEW ->
+                detail.batches.lastOrNull { batch -> batch.status == OrderWorkflowStatus.NEW }
+            OrderWorkflowStatus.ACCEPTED,
+            OrderWorkflowStatus.COOKING,
+            OrderWorkflowStatus.DELIVERING,
+            ->
+                detail.batches.lastOrNull { batch ->
+                    batch.status == OrderWorkflowStatus.ACCEPTED ||
+                        batch.status == OrderWorkflowStatus.COOKING ||
+                        batch.status == OrderWorkflowStatus.DELIVERING
+                }
+            OrderWorkflowStatus.DELIVERED ->
+                detail.batches.lastOrNull { batch -> batch.status == OrderWorkflowStatus.DELIVERED }
+            OrderWorkflowStatus.CLOSED ->
+                detail.batches.lastOrNull()
+        }?.batchId ?: detail.batches.lastOrNull()?.batchId ?: detail.orderId
 
     private suspend fun notifyGuestAboutStaffChatBatchStatusChange(
         venueId: Long,

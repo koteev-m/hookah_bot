@@ -101,6 +101,7 @@ import com.hookah.platform.backend.telegram.TelegramInboundUpdateWorker
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.TelegramOutboxWorker
 import com.hookah.platform.backend.telegram.TelegramUpdate
+import com.hookah.platform.backend.telegram.buildWebAppUrl
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
@@ -549,6 +550,17 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             isTelegramActive = { telegramConfig.enabled && !telegramConfig.token.isNullOrBlank() },
             scope = staffChatNotifierScope,
             json = telegramJson,
+            venueMiniAppUrl = { venueId ->
+                telegramConfig.webAppPublicUrl?.let { url ->
+                    buildWebAppUrl(
+                        url,
+                        mapOf(
+                            "mode" to "venue",
+                            "venueId" to venueId.toString(),
+                        ),
+                    )
+                }
+            },
         )
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
         telegramScope =
@@ -1065,6 +1077,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         staffChatNotifier = staffChatNotifier,
                         userRepository = userRepository,
                         venueSettingsRepository = venueSettingsRepository,
+                        venueOrdersRepository = venueOrdersRepository,
                     )
                     guestBookingRoutes(
                         guestVenueRepository = guestVenueRepository,

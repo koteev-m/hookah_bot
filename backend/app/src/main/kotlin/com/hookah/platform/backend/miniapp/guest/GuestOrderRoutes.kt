@@ -21,6 +21,8 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.NewBatchPromotionDiscount
@@ -65,6 +67,7 @@ fun Route.guestOrderRoutes(
     staffChatNotifier: StaffChatNotifier?,
     userRepository: UserRepository = UserRepository(null),
     venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
+    venueOrdersRepository: VenueOrdersRepository = VenueOrdersRepository(null),
 ) {
     get("/order/active") {
         val rawToken = call.request.queryParameters["tableToken"]
@@ -258,6 +261,7 @@ fun Route.guestOrderRoutes(
                     guestMenuRepository = guestMenuRepository,
                     userRepository = userRepository,
                     userId = userId,
+                    venueOrdersRepository = venueOrdersRepository,
                 )
             }
 
@@ -459,6 +463,7 @@ private suspend fun notifyStaffChat(
     guestMenuRepository: GuestMenuRepository,
     userRepository: UserRepository,
     userId: Long,
+    venueOrdersRepository: VenueOrdersRepository,
 ) {
     if (notifier == null) {
         return
@@ -471,6 +476,7 @@ private suspend fun notifyStaffChat(
             ?.sumOf { item -> item.priceMinor * item.qty }
             ?.let { gross -> gross - batch.promotionDiscounts.sumOf { it.discountMinor } }
             ?.coerceAtLeast(0L)
+    val detail = runCatching { venueOrdersRepository.loadOrderDetail(table.venueId, batch.orderId) }.getOrNull()
     notifier.notifyNewBatchNow(
         NewBatchNotification(
             venueId = table.venueId,
@@ -495,6 +501,9 @@ private suspend fun notifyStaffChat(
                 },
             totalPayableMinor = totalPayableMinor,
             totalCurrency = totalCurrency,
+            status = detail?.status,
+            bill = detail?.toOrderBillSnapshot(DEFAULT_CURRENCY),
+            updatedAt = detail?.updatedAt,
         ),
     )
 }

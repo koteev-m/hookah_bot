@@ -26,6 +26,7 @@ data class TelegramOutboxMessage(
     val method: String,
     val payloadJson: String,
     val attempts: Int,
+    val staffLiveOrderId: Long? = null,
 )
 
 class TelegramOutboxRepository(private val dataSource: DataSource?) {
@@ -77,11 +78,20 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
                     try {
                         val selectSql =
                             """
-                            SELECT id, chat_id, method, payload_json, attempts
-                            FROM telegram_outbox
-                            WHERE status IN (?, ?)
-                              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-                            ORDER BY created_at, id
+                            SELECT o.id,
+                                   o.chat_id,
+                                   o.method,
+                                   o.payload_json,
+                                   o.attempts,
+                                   (
+                                       SELECT live.order_id
+                                       FROM telegram_staff_chat_order_outbox_links live
+                                       WHERE live.outbox_id = o.id
+                                   ) AS staff_live_order_id
+                            FROM telegram_outbox o
+                            WHERE o.status IN (?, ?)
+                              AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?)
+                            ORDER BY o.created_at, o.id
                             LIMIT ?
                             FOR UPDATE SKIP LOCKED
                             """.trimIndent()
@@ -98,6 +108,8 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
                                     val method = resultSet.getString("method")
                                     val payloadJson = resultSet.getString("payload_json")
                                     val attempts = resultSet.getInt("attempts") + 1
+                                    val staffLiveOrderId =
+                                        resultSet.getLong("staff_live_order_id").takeIf { !resultSet.wasNull() }
                                     items.add(
                                         TelegramOutboxMessage(
                                             id = id,
@@ -105,6 +117,7 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
                                             method = method,
                                             payloadJson = payloadJson,
                                             attempts = attempts,
+                                            staffLiveOrderId = staffLiveOrderId,
                                         ),
                                     )
                                 }
@@ -209,6 +222,101 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
                 throw DatabaseUnavailableException()
             } catch (e: Throwable) {
                 logFailure("queueDepth", e)
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun updateStaffChatOrderMessageId(
+        orderId: Long,
+        chatId: Long,
+        messageId: Long,
+    ) {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        UPDATE telegram_staff_chat_order_messages
+                        SET chat_id = ?, message_id = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE order_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, chatId)
+                        statement.setLong(2, messageId)
+                        statement.setLong(3, orderId)
+                        statement.executeUpdate()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                logFailure("updateStaffChatOrderMessageId", e)
+                throw DatabaseUnavailableException()
+            } catch (e: Throwable) {
+                logFailure("updateStaffChatOrderMessageId", e)
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun enqueueStaffChatOrderFallback(
+        orderId: Long,
+        chatId: Long,
+        payloadJson: String,
+    ) {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val outboxId =
+                            connection.prepareStatement(
+                                """
+                                INSERT INTO telegram_outbox (chat_id, method, payload_json)
+                                VALUES (?, ?, ?)
+                                """.trimIndent(),
+                                java.sql.Statement.RETURN_GENERATED_KEYS,
+                            ).use { statement ->
+                                statement.setLong(1, chatId)
+                                statement.setString(2, "sendMessage")
+                                statement.setString(3, payloadJson)
+                                statement.executeUpdate()
+                                statement.generatedKeys.use { keys ->
+                                    if (keys.next()) {
+                                        keys.getLong(1)
+                                    } else {
+                                        error("telegram_outbox id was not generated")
+                                    }
+                                }
+                            }
+                        connection.prepareStatement(
+                            """
+                            INSERT INTO telegram_staff_chat_order_outbox_links (outbox_id, order_id)
+                            VALUES (?, ?)
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, outboxId)
+                            statement.setLong(2, orderId)
+                            statement.executeUpdate()
+                        }
+                        connection.commit()
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                logFailure("enqueueStaffChatOrderFallback", e)
+                throw DatabaseUnavailableException()
+            } catch (e: Throwable) {
+                logFailure("enqueueStaffChatOrderFallback", e)
                 throw DatabaseUnavailableException()
             }
         }

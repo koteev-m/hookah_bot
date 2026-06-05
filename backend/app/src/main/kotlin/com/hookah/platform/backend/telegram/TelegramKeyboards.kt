@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
+
 object TelegramKeyboards {
     fun venueManagerMenu(
         showAiAssistant: Boolean = false,
@@ -5184,32 +5186,99 @@ object TelegramKeyboards {
         venueId: Long,
         batchId: Long,
     ): InlineKeyboardMarkup =
-        InlineKeyboardMarkup(
-            inlineKeyboard =
-                listOf(
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "✅ Принять",
-                            callbackData = "sc_ob_a:$venueId:$batchId",
-                        ),
-                    ),
-                ),
+        inlineStaffChatOrderActions(
+            venueId = venueId,
+            orderId = null,
+            batchId = batchId,
+            status = OrderWorkflowStatus.NEW,
+            webAppUrl = null,
         )
+
+    fun inlineStaffChatOrderActions(
+        venueId: Long,
+        orderId: Long?,
+        batchId: Long,
+        status: OrderWorkflowStatus,
+        webAppUrl: String?,
+    ): InlineKeyboardMarkup {
+        val rows =
+            buildList {
+                when (status) {
+                    OrderWorkflowStatus.NEW ->
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "✅ Принять",
+                                    callbackData = "sc_ob_a:$venueId:$batchId",
+                                ),
+                            ),
+                        )
+                    OrderWorkflowStatus.ACCEPTED,
+                    OrderWorkflowStatus.COOKING,
+                    OrderWorkflowStatus.DELIVERING,
+                    ->
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "🚚 Доставлено",
+                                    callbackData = "sc_ob_d:$venueId:$batchId",
+                                ),
+                            ),
+                        )
+                    OrderWorkflowStatus.DELIVERED -> {
+                        if (orderId != null) {
+                            add(
+                                listOf(
+                                    InlineKeyboardButton(
+                                        text = "🧾 Закрыть счёт",
+                                        callbackData =
+                                            staffChatOrderCloseCallback(
+                                                prefix = "sc_oc_ask",
+                                                venueId = venueId,
+                                                orderId = orderId,
+                                                batchId = batchId,
+                                            ),
+                                    ),
+                                ),
+                            )
+                        }
+                    }
+                    OrderWorkflowStatus.CLOSED -> Unit
+                }
+                if (status != OrderWorkflowStatus.CLOSED && orderId != null) {
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "🔄 Обновить",
+                                callbackData = staffChatOrderCloseCallback("sc_or", venueId, orderId, batchId),
+                            ),
+                        ),
+                    )
+                }
+                if (status != OrderWorkflowStatus.CLOSED && webAppUrl != null) {
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "📱 Открыть Mini App",
+                                webApp = WebAppInfo(webAppUrl),
+                            ),
+                        ),
+                    )
+                }
+            }
+        return InlineKeyboardMarkup(inlineKeyboard = rows)
+    }
 
     fun inlineStaffChatOrderBatchDeliver(
         venueId: Long,
         batchId: Long,
     ): InlineKeyboardMarkup =
-        InlineKeyboardMarkup(
-            inlineKeyboard =
-                listOf(
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "✅ Доставлено",
-                            callbackData = "sc_ob_d:$venueId:$batchId",
-                        ),
-                    ),
-                ),
+        inlineStaffChatOrderActions(
+            venueId = venueId,
+            orderId = null,
+            batchId = batchId,
+            status = OrderWorkflowStatus.ACCEPTED,
+            webAppUrl = null,
         )
 
     fun inlineStaffChatOrderCloseBill(
@@ -5217,16 +5286,12 @@ object TelegramKeyboards {
         orderId: Long,
         batchId: Long,
     ): InlineKeyboardMarkup =
-        InlineKeyboardMarkup(
-            inlineKeyboard =
-                listOf(
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "🧾 Закрыть общий счёт",
-                            callbackData = staffChatOrderCloseCallback("sc_oc_ask", venueId, orderId, batchId),
-                        ),
-                    ),
-                ),
+        inlineStaffChatOrderActions(
+            venueId = venueId,
+            orderId = orderId,
+            batchId = batchId,
+            status = OrderWorkflowStatus.DELIVERED,
+            webAppUrl = null,
         )
 
     fun inlineStaffChatOrderCloseBillConfirm(

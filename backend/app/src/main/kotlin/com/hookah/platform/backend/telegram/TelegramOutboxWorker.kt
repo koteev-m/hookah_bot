@@ -11,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import org.slf4j.LoggerFactory
@@ -102,7 +103,7 @@ class TelegramOutboxWorker(
             }
 
         when (result) {
-            is TelegramCallResult.Success -> markSent(message)
+            is TelegramCallResult.Success -> markSent(message, result)
             is TelegramCallResult.Failure -> handleFailure(message, result)
         }
     }
@@ -115,6 +116,10 @@ class TelegramOutboxWorker(
             markFailed(message, result.description)
             return
         }
+        if (message.method == "editMessageText" && isMessageNotModified(result.description)) {
+            markSent(message, TelegramCallResult.Success(responseJson = null))
+            return
+        }
         if (shouldRetry(result.errorCode)) {
             scheduleRetry(
                 message,
@@ -123,6 +128,9 @@ class TelegramOutboxWorker(
                 result.errorCode,
             )
             return
+        }
+        if (message.method == "editMessageText" && message.staffLiveOrderId != null) {
+            enqueueLiveOrderFallback(message)
         }
         markFailed(message, result.description)
     }
@@ -133,8 +141,14 @@ class TelegramOutboxWorker(
         return errorCode >= 500
     }
 
-    private suspend fun markSent(message: TelegramOutboxMessage) {
+    private suspend fun markSent(
+        message: TelegramOutboxMessage,
+        result: TelegramCallResult.Success,
+    ) {
         metrics?.incrementOutboundSendSuccess()
+        if (message.method == "sendMessage" && message.staffLiveOrderId != null && result.responseJson != null) {
+            rememberLiveOrderMessageId(message, result.responseJson)
+        }
         try {
             repository.markSent(message.id, nowProvider())
         } catch (e: CancellationException) {
@@ -144,6 +158,81 @@ class TelegramOutboxWorker(
             logger.debugTelegramException(e) { "Telegram outbox mark sent exception" }
         }
     }
+
+    private suspend fun rememberLiveOrderMessageId(
+        message: TelegramOutboxMessage,
+        responseJson: JsonElement,
+    ) {
+        val orderId = message.staffLiveOrderId ?: return
+        val messageId =
+            runCatching { json.decodeFromJsonElement(MessageId.serializer(), responseJson).messageId }
+                .onFailure { throwable ->
+                    logger.warn(
+                        "Telegram outbox live order message_id decode failed order_id={}: {}",
+                        orderId,
+                        sanitizeTelegramForLog(throwable.message),
+                    )
+                    logger.debugTelegramException(throwable) { "live order message_id decode exception" }
+                }.getOrNull() ?: return
+        try {
+            repository.updateStaffChatOrderMessageId(
+                orderId = orderId,
+                chatId = message.chatId,
+                messageId = messageId,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn(
+                "Telegram outbox live order message_id save failed order_id={}: {}",
+                orderId,
+                sanitizeTelegramForLog(e.message),
+            )
+            logger.debugTelegramException(e) { "live order message_id save exception" }
+        }
+    }
+
+    private suspend fun enqueueLiveOrderFallback(message: TelegramOutboxMessage) {
+        val orderId = message.staffLiveOrderId ?: return
+        val payload =
+            runCatching { json.decodeFromString<EditMessageTextPayload>(message.payloadJson) }
+                .onFailure { throwable ->
+                    logger.warn(
+                        "Telegram outbox live order fallback payload decode failed order_id={}: {}",
+                        orderId,
+                        sanitizeTelegramForLog(throwable.message),
+                    )
+                    logger.debugTelegramException(throwable) { "live order fallback payload decode exception" }
+                }.getOrNull() ?: return
+        val fallbackPayload =
+            SendMessagePayload(
+                chatId = payload.chatId,
+                text = payload.text,
+                replyMarkup = payload.replyMarkup,
+            )
+        try {
+            repository.enqueueStaffChatOrderFallback(
+                orderId = orderId,
+                chatId = payload.chatId,
+                payloadJson = json.encodeToString(SendMessagePayload.serializer(), fallbackPayload),
+            )
+            logger.warn("Telegram outbox queued live order fallback message order_id={}", orderId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn(
+                "Telegram outbox live order fallback enqueue failed order_id={}: {}",
+                orderId,
+                sanitizeTelegramForLog(e.message),
+            )
+            logger.debugTelegramException(e) { "live order fallback enqueue exception" }
+        }
+    }
+
+    private fun isMessageNotModified(description: String?): Boolean =
+        description
+            ?.contains("message is not modified", ignoreCase = true)
+            ?: false
 
     private suspend fun markFailed(
         message: TelegramOutboxMessage,

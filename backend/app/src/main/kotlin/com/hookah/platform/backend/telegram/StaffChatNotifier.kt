@@ -4,6 +4,7 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnaps
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
@@ -14,6 +15,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 data class NewBatchNotification(
@@ -30,6 +34,9 @@ data class NewBatchNotification(
     val promotionDiscounts: List<NewBatchPromotionDiscount> = emptyList(),
     val totalPayableMinor: Long? = null,
     val totalCurrency: String? = null,
+    val status: OrderWorkflowStatus? = null,
+    val bill: OrderBillSnapshot? = null,
+    val updatedAt: Instant? = null,
 )
 
 data class NewBatchPromotionDiscount(
@@ -83,12 +90,16 @@ data class StaffBillUpdatedNotification(
     val tableLabel: String,
     val change: StaffBillUpdateChange,
     val bill: OrderBillSnapshot,
+    val status: OrderWorkflowStatus,
+    val actionBatchId: Long,
+    val updatedAt: Instant,
 )
 
 enum class StaffBillUpdateChange {
     MANUAL_DISCOUNT,
     ITEM_EXCLUDED,
     ITEM_RESTORED,
+    STATUS_UPDATED,
 }
 
 enum class StaffChatNotificationResult {
@@ -110,6 +121,18 @@ private enum class StaffChatNotificationSetting {
     CANCELLATIONS,
 }
 
+private data class StaffOrderLiveMessage(
+    val venueId: Long,
+    val orderId: Long,
+    val actionBatchId: Long,
+    val displayNumber: Int?,
+    val tableLabel: String,
+    val status: OrderWorkflowStatus,
+    val bill: OrderBillSnapshot,
+    val updatedAt: Instant,
+    val change: StaffBillUpdateChange? = null,
+)
+
 class StaffChatNotifier(
     private val venueRepository: VenueRepository,
     private val notificationRepository: StaffChatNotificationRepository,
@@ -117,6 +140,7 @@ class StaffChatNotifier(
     private val isTelegramActive: () -> Boolean,
     private val scope: CoroutineScope,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    private val venueMiniAppUrl: (Long) -> String? = { null },
 ) : StaffBillUpdateNotifier {
     private val logger = LoggerFactory.getLogger(StaffChatNotifier::class.java)
 
@@ -135,6 +159,22 @@ class StaffChatNotifier(
     }
 
     suspend fun notifyNewBatchNow(event: NewBatchNotification): StaffChatNotificationResult {
+        if (event.status != null && event.bill != null && event.updatedAt != null) {
+            return notifyLiveOrderMessageNow(
+                event =
+                    StaffOrderLiveMessage(
+                        venueId = event.venueId,
+                        orderId = event.orderId,
+                        actionBatchId = event.batchId,
+                        displayNumber = event.displayNumber,
+                        tableLabel = event.tableLabel,
+                        status = event.status,
+                        bill = event.bill,
+                        updatedAt = event.updatedAt,
+                    ),
+                notificationKey = event.batchId,
+            )
+        }
         val summary = event.itemsSummary?.takeIf { it.isNotBlank() } ?: "без деталей"
         val comment = event.comment?.takeIf { it.isNotBlank() }
         val links = comment?.let { extractLinks(it) }.orEmpty()
@@ -158,7 +198,14 @@ class StaffChatNotifier(
                     totalCurrency = event.totalCurrency,
                 )
             },
-            replyMarkup = TelegramKeyboards.inlineStaffChatOrderBatchAccept(event.venueId, event.batchId),
+            replyMarkup =
+                TelegramKeyboards.inlineStaffChatOrderActions(
+                    venueId = event.venueId,
+                    orderId = event.orderId,
+                    batchId = event.batchId,
+                    status = OrderWorkflowStatus.NEW,
+                    webAppUrl = venueMiniAppUrl(event.venueId),
+                ),
         )
     }
 
@@ -219,19 +266,129 @@ class StaffChatNotifier(
         )
 
     override suspend fun notifyBillUpdatedNow(event: StaffBillUpdatedNotification): StaffChatNotificationResult =
-        notifyTextWithoutClaimNow(
-            venueId = event.venueId,
-            setting = StaffChatNotificationSetting.ORDERS,
-            messageBuilder = { venue ->
-                buildStaffBillUpdatedNotificationText(
-                    venueName = venue.name,
-                    tableLabel = event.tableLabel,
+        notifyLiveOrderMessageNow(
+            event =
+                StaffOrderLiveMessage(
+                    venueId = event.venueId,
+                    orderId = event.orderId,
+                    actionBatchId = event.actionBatchId,
                     displayNumber = event.displayNumber,
-                    change = event.change,
+                    tableLabel = event.tableLabel,
+                    status = event.status,
                     bill = event.bill,
-                )
-            },
+                    updatedAt = event.updatedAt,
+                    change = event.change,
+                ),
+            notificationKey = null,
         )
+
+    suspend fun rememberOrderMessageNow(
+        venueId: Long,
+        orderId: Long,
+        chatId: Long,
+        messageId: Long,
+    ): Boolean =
+        notificationRepository.upsertOrderMessage(
+            orderId = orderId,
+            venueId = venueId,
+            chatId = chatId,
+            messageId = messageId,
+        )
+
+    private suspend fun notifyLiveOrderMessageNow(
+        event: StaffOrderLiveMessage,
+        notificationKey: Long?,
+    ): StaffChatNotificationResult {
+        val logKey = notificationKey ?: event.orderId
+        if (!isTelegramActive()) {
+            logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_INACTIVE)
+            return StaffChatNotificationResult.SKIPPED_INACTIVE
+        }
+        val venue = venueRepository.findVenueById(event.venueId)
+        val chatId = venue?.staffChatId
+        if (venue == null || chatId == null) {
+            logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
+            return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
+        }
+        if (!isEnabled(event.venueId, StaffChatNotificationSetting.ORDERS, staffChatLinked = true)) {
+            logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_DISABLED)
+            return StaffChatNotificationResult.SKIPPED_DISABLED
+        }
+        val text =
+            buildStaffOrderLiveMessageText(
+                venueName = venue.name,
+                tableLabel = event.tableLabel,
+                displayNumber = event.displayNumber,
+                status = event.status,
+                bill = event.bill,
+                updatedAt = event.updatedAt,
+                change = event.change,
+            )
+        val replyMarkup =
+            TelegramKeyboards.inlineStaffChatOrderActions(
+                venueId = event.venueId,
+                orderId = event.orderId,
+                batchId = event.actionBatchId,
+                status = event.status,
+                webAppUrl = venueMiniAppUrl(event.venueId),
+            )
+        val existingMessage = notificationRepository.findOrderMessage(event.orderId)
+        val (method, payloadJson) =
+            if (existingMessage?.messageId != null) {
+                "editMessageText" to
+                    json.encodeToString(
+                        EditMessageTextPayload.serializer(),
+                        buildEditMessageTextPayload(
+                            json = json,
+                            chatId = chatId,
+                            messageId = existingMessage.messageId,
+                            text = text,
+                            replyMarkup = replyMarkup,
+                        ),
+                    )
+            } else {
+                "sendMessage" to
+                    json.encodeToString(
+                        SendMessagePayload.serializer(),
+                        buildSendMessagePayload(
+                            json = json,
+                            chatId = chatId,
+                            text = text,
+                            replyMarkup = replyMarkup,
+                        ),
+                    )
+            }
+        val claimResult =
+            if (notificationKey != null) {
+                notificationRepository.tryClaimAndEnqueueOrderMessage(
+                    notificationKey = notificationKey,
+                    orderId = event.orderId,
+                    venueId = event.venueId,
+                    chatId = chatId,
+                    method = method,
+                    payloadJson = payloadJson,
+                )
+            } else if (notificationRepository.enqueueOrderMessage(
+                    orderId = event.orderId,
+                    venueId = event.venueId,
+                    chatId = chatId,
+                    method = method,
+                    payloadJson = payloadJson,
+                )
+            ) {
+                StaffChatNotificationClaim.CLAIMED
+            } else {
+                StaffChatNotificationClaim.ERROR
+            }
+        val result =
+            when (claimResult) {
+                StaffChatNotificationClaim.CLAIMED -> StaffChatNotificationResult.SENT_OR_QUEUED
+                StaffChatNotificationClaim.ALREADY -> StaffChatNotificationResult.SKIPPED_DUPLICATE
+                StaffChatNotificationClaim.ERROR -> StaffChatNotificationResult.FAILED_ENQUEUE
+            }
+        logResult(event.venueId, logKey, result)
+        return result
+    }
 
     private suspend fun notifyTextNow(
         venueId: Long,
@@ -467,6 +624,51 @@ private fun formatStaffChatPromotionDiscounts(discounts: List<NewBatchPromotionD
     }
 }
 
+private val staffChatLiveMessageUpdatedAtFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'UTC'").withZone(ZoneOffset.UTC)
+
+internal fun buildStaffOrderLiveMessageText(
+    venueName: String,
+    tableLabel: String,
+    displayNumber: Int?,
+    status: OrderWorkflowStatus,
+    bill: OrderBillSnapshot,
+    updatedAt: Instant,
+    change: StaffBillUpdateChange? = null,
+): String =
+    buildString {
+        append("🧾 Заказ")
+        displayNumber?.let { append(" №").append(it) }
+        append('\n')
+        append("Заведение: ").append(venueName).append('\n')
+        append("Стол: ").append(tableLabel).append('\n')
+        append("Статус: ").append(staffOrderStatusLabel(status)).append('\n')
+        change?.let { updateChange ->
+            append("Изменение: ").append(staffBillUpdateChangeLabel(updateChange)).append('\n')
+        }
+        append("\nАктивные позиции:\n")
+        append(formatStaffBillActiveItems(bill.activeItems, bill.currency))
+        val excludedItems = bill.excludedItems.filter { item -> item.status == "excluded" }
+        if (excludedItems.isNotEmpty()) {
+            append("\n\nИсключено из счёта:\n")
+            append(formatStaffBillExcludedItems(excludedItems))
+        }
+        append("\n\nСумма до скидок: ").append(formatStaffChatMoney(bill.grossTotalMinor, bill.currency))
+        if (bill.manualDiscountTotalMinor > 0L) {
+            append("\nРучные скидки: −").append(formatStaffChatMoney(bill.manualDiscountTotalMinor, bill.currency))
+        }
+        appendStaffBillDiscountLines("Акции", bill.promoDiscounts)
+        appendStaffBillDiscountLines("Лояльность", bill.loyaltyDiscounts)
+        if (bill.excludedTotalMinor > 0L) {
+            append("\nИсключено: −").append(formatStaffChatMoney(bill.excludedTotalMinor, bill.currency))
+        }
+        append("\nК оплате: ").append(formatStaffChatMoney(bill.finalPayableTotalMinor, bill.currency))
+        append("\nОбновлено: ").append(staffChatLiveMessageUpdatedAtFormatter.format(updatedAt))
+        if (status == OrderWorkflowStatus.CLOSED) {
+            append("\n\nСчёт закрыт.")
+        }
+    }
+
 internal fun buildStaffBillUpdatedNotificationText(
     venueName: String,
     tableLabel: String,
@@ -506,6 +708,17 @@ private fun staffBillUpdateChangeLabel(change: StaffBillUpdateChange): String =
         StaffBillUpdateChange.MANUAL_DISCOUNT -> "ручная скидка"
         StaffBillUpdateChange.ITEM_EXCLUDED -> "позиция исключена"
         StaffBillUpdateChange.ITEM_RESTORED -> "позиция восстановлена"
+        StaffBillUpdateChange.STATUS_UPDATED -> "статус заказа"
+    }
+
+private fun staffOrderStatusLabel(status: OrderWorkflowStatus): String =
+    when (status) {
+        OrderWorkflowStatus.NEW -> "новый"
+        OrderWorkflowStatus.ACCEPTED -> "принят"
+        OrderWorkflowStatus.COOKING -> "готовится"
+        OrderWorkflowStatus.DELIVERING -> "выносится"
+        OrderWorkflowStatus.DELIVERED -> "доставлен"
+        OrderWorkflowStatus.CLOSED -> "счёт закрыт"
     }
 
 private fun formatStaffBillActiveItems(

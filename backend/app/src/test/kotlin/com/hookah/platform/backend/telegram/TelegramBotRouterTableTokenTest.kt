@@ -22805,7 +22805,11 @@ class TelegramBotRouterTableTokenTest {
                 )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
+                )
 
             router.process(
                 TelegramUpdate(
@@ -22834,14 +22838,16 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                        text.contains("Новый заказ №12") &&
-                            text.contains("Гость: Максим") &&
-                            text.contains("✅ Принял: @waiter")
+                        text.contains("🧾 Заказ №12") &&
+                            text.contains("Стол: 105") &&
+                            text.contains("Статус: принят") &&
+                            text.contains("Активные позиции:") &&
+                            text.contains("Darkside ×2")
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().single().text == "✅ Доставлено" &&
-                            markup.inlineKeyboard.flatten().single().callbackData == "sc_ob_d:10:57"
+                            markup.hasInlineButton("🚚 Доставлено", "sc_ob_d:10:57") &&
+                            markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1l")
                     },
                 )
             }
@@ -22880,7 +22886,11 @@ class TelegramBotRouterTableTokenTest {
                 )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.DELIVERED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                )
 
             router.process(
                 TelegramUpdate(
@@ -22909,14 +22919,16 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                        text.contains("Новый заказ №12") &&
-                            text.contains("Гость: Максим") &&
-                            text.contains("✅ Доставлено: Анна")
+                        text.contains("🧾 Заказ №12") &&
+                            text.contains("Стол: 105") &&
+                            text.contains("Статус: доставлен") &&
+                            text.contains("Активные позиции:") &&
+                            text.contains("Darkside ×2")
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт" &&
-                            markup.inlineKeyboard.flatten().single().callbackData == "sc_oc_ask:a:j:1l"
+                            markup.hasInlineButton("🧾 Закрыть счёт", "sc_oc_ask:a:j:1l") &&
+                            markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1l")
                     },
                 )
             }
@@ -22955,7 +22967,10 @@ class TelegramBotRouterTableTokenTest {
                 )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetailWithAddOnBatch(addOnStatus = OrderWorkflowStatus.ACCEPTED)
+                staffChatOrderDetailWithAddOnBatch(
+                    addOnStatus = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
+                )
 
             router.process(
                 TelegramUpdate(
@@ -22975,9 +22990,11 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     78L,
                     match { text ->
-                        text.contains("Дозаказ к заказу №12") &&
-                            !text.contains("к счёту") &&
-                            text.contains("✅ Принял: @waiter")
+                        text.contains("🧾 Заказ №12") &&
+                            !text.contains("Дозаказ к заказу") &&
+                            text.contains("Статус: принят") &&
+                            text.contains("Darkside ×2") &&
+                            text.contains("Сок ×1")
                     },
                     any(),
                 )
@@ -23013,6 +23030,7 @@ class TelegramBotRouterTableTokenTest {
                 staffChatOrderDetailWithAddOnBatch(
                     firstStatus = OrderWorkflowStatus.NEW,
                     addOnStatus = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
                     firstItemStatus = OrderBatchItemStatus.CANCELED,
                 )
 
@@ -23034,9 +23052,10 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     78L,
                     match { text ->
-                        text.contains("Заказ №12 обновлён") &&
+                        text.contains("🧾 Заказ №12") &&
                             !text.contains("Дозаказ к заказу") &&
-                            text.contains("✅ Принял: @waiter")
+                            text.contains("Статус: принят") &&
+                            text.contains("Сок ×1")
                     },
                     any(),
                 )
@@ -23072,7 +23091,10 @@ class TelegramBotRouterTableTokenTest {
                 )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetailWithAddOnBatch(addOnStatus = OrderWorkflowStatus.DELIVERED)
+                staffChatOrderDetailWithAddOnBatch(
+                    addOnStatus = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                )
 
             router.process(
                 TelegramUpdate(
@@ -23092,13 +23114,16 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     78L,
                     match { text ->
-                        text.contains("Дозаказ к заказу №12") &&
-                            !text.contains("к счёту") &&
-                            text.contains("✅ Доставлено: Анна")
+                        text.contains("🧾 Заказ №12") &&
+                            !text.contains("Дозаказ к заказу") &&
+                            text.contains("Статус: доставлен") &&
+                            text.contains("Darkside ×2") &&
+                            text.contains("Сок ×1")
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт"
+                            markup.hasInlineButton("🧾 Закрыть счёт", "sc_oc_ask:a:j:1m") &&
+                            markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1m")
                     },
                 )
             }
@@ -23133,6 +23158,7 @@ class TelegramBotRouterTableTokenTest {
                 staffChatOrderDetailWithAddOnBatch(
                     firstStatus = OrderWorkflowStatus.NEW,
                     addOnStatus = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
                     firstItemStatus = OrderBatchItemStatus.CANCELED,
                 )
 
@@ -23154,13 +23180,15 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     78L,
                     match { text ->
-                        text.contains("Заказ №12 обновлён") &&
+                        text.contains("🧾 Заказ №12") &&
                             !text.contains("Дозаказ к заказу") &&
-                            text.contains("✅ Доставлено: Анна")
+                            text.contains("Статус: доставлен") &&
+                            text.contains("Сок ×1")
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт"
+                            markup.hasInlineButton("🧾 Закрыть счёт", "sc_oc_ask:a:j:1m") &&
+                            markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1m")
                     },
                 )
             }
@@ -23250,8 +23278,8 @@ class TelegramBotRouterTableTokenTest {
                     "🆕 Новый заказ №12\n\n✅ Доставлено: Анна",
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().single().text == "🧾 Закрыть общий счёт" &&
-                            markup.inlineKeyboard.flatten().single().callbackData == "sc_oc_ask:a:j:1l"
+                            markup.hasInlineButton("🧾 Закрыть счёт", "sc_oc_ask:a:j:1l") &&
+                            markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1l")
                     },
                 )
             }
@@ -23265,11 +23293,18 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
-            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(
-                    batchId = 57L,
-                    status = OrderWorkflowStatus.DELIVERED,
-                    orderStatus = OrderWorkflowStatus.DELIVERED,
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returnsMany
+                listOf(
+                    staffChatOrderDetail(
+                        batchId = 57L,
+                        status = OrderWorkflowStatus.DELIVERED,
+                        orderStatus = OrderWorkflowStatus.DELIVERED,
+                    ),
+                    staffChatOrderDetail(
+                        batchId = 57L,
+                        status = OrderWorkflowStatus.DELIVERED,
+                        orderStatus = OrderWorkflowStatus.CLOSED,
+                    ),
                 )
             coEvery {
                 venueOrdersRepository.updateOrderStatus(
@@ -23323,9 +23358,9 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                        text.contains("Новый заказ №12") &&
-                            text.contains("Гость: Максим") &&
-                            text.contains("✅ Общий счёт закрыт: @waiter")
+                        text.contains("🧾 Заказ №12") &&
+                            text.contains("Статус: счёт закрыт") &&
+                            text.contains("Счёт закрыт.")
                     },
                     null,
                 )
@@ -23340,10 +23375,16 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
-            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetailWithAddOnBatch(
-                    addOnStatus = OrderWorkflowStatus.DELIVERED,
-                    orderStatus = OrderWorkflowStatus.DELIVERED,
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returnsMany
+                listOf(
+                    staffChatOrderDetailWithAddOnBatch(
+                        addOnStatus = OrderWorkflowStatus.DELIVERED,
+                        orderStatus = OrderWorkflowStatus.DELIVERED,
+                    ),
+                    staffChatOrderDetailWithAddOnBatch(
+                        addOnStatus = OrderWorkflowStatus.DELIVERED,
+                        orderStatus = OrderWorkflowStatus.CLOSED,
+                    ),
                 )
             coEvery {
                 venueOrdersRepository.updateOrderStatus(
@@ -23387,8 +23428,10 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     78L,
                     match { text ->
-                        text.contains("Дозаказ к заказу №12") &&
-                            text.contains("✅ Общий счёт закрыт: @waiter")
+                        text.contains("🧾 Заказ №12") &&
+                            !text.contains("Дозаказ к заказу") &&
+                            text.contains("Статус: счёт закрыт") &&
+                            text.contains("Счёт закрыт.")
                     },
                     null,
                 )
@@ -23502,7 +23545,7 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                        text.contains("Статус: общий счёт закрыт") &&
+                        text.contains("Статус: счёт закрыт") &&
                             !text.contains("Статус: новый")
                     },
                     null,
@@ -23563,7 +23606,7 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                        text.contains("Статус: общий счёт закрыт") &&
+                        text.contains("Статус: счёт закрыт") &&
                             !text.contains("Статус: принят")
                     },
                     null,
@@ -23626,7 +23669,11 @@ class TelegramBotRouterTableTokenTest {
                 )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
-                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
+                )
 
             router.process(
                 TelegramUpdate(
@@ -23649,11 +23696,58 @@ class TelegramBotRouterTableTokenTest {
                     -777L,
                     77L,
                     match { text ->
-                        text.contains("Гость: Максим") &&
+                        text.contains("🧾 Заказ №12") &&
                             text.contains("Статус: принят")
                     },
                     match { it is InlineKeyboardMarkup },
                 )
+            }
+        }
+
+    @Test
+    fun `staff chat order refresh edits live message from current backend state`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-refresh",
+                            from = User(id = 501L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_or:a:j:1l",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("🧾 Заказ №12") &&
+                            text.contains("Статус: принят") &&
+                            text.contains("Darkside ×2")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("🚚 Доставлено", "sc_ob_d:10:57") &&
+                            markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1l")
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-refresh", "Обновлено", false)
             }
         }
 
@@ -25002,4 +25096,12 @@ class TelegramBotRouterTableTokenTest {
             button.url == null &&
             button.callbackData == null
     }
+
+    private fun InlineKeyboardMarkup.hasInlineButton(
+        text: String,
+        callbackData: String,
+    ): Boolean =
+        inlineKeyboard.flatten().any { button ->
+            button.text == text && button.callbackData == callbackData
+        }
 }

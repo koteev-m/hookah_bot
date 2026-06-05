@@ -195,6 +195,13 @@ fun Route.venueOrderRoutes(
             } else {
                 notifyGuestAboutOrderStatusChange(outboxEnqueuer, detailBeforeUpdate, nextStatus)
             }
+            notifyStaffChatOrderLiveMessage(
+                staffBillUpdateNotifier = staffBillUpdateNotifier,
+                venueOrdersRepository = venueOrdersRepository,
+                venueId = venueId,
+                orderId = orderId,
+                change = StaffBillUpdateChange.STATUS_UPDATED,
+            )
             call.respond(
                 OrderStatusResponse(
                     orderId = result.orderId,
@@ -266,6 +273,13 @@ fun Route.venueOrderRoutes(
                 throw InvalidInputException("Invalid status transition")
             }
             notifyGuestsAboutOrderClosed(outboxEnqueuer, detailBeforeUpdate)
+            notifyStaffChatOrderLiveMessage(
+                staffBillUpdateNotifier = staffBillUpdateNotifier,
+                venueOrdersRepository = venueOrdersRepository,
+                venueId = venueId,
+                orderId = orderId,
+                change = StaffBillUpdateChange.STATUS_UPDATED,
+            )
             call.respond(
                 OrderStatusResponse(
                     orderId = result.orderId,
@@ -414,10 +428,56 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondBillMutati
             tableLabel = detail.tableNumber.toString(),
             change = staffBillUpdateChange,
             bill = detail.toOrderBillSnapshot(DEFAULT_CURRENCY),
+            status = detail.status,
+            actionBatchId = staffChatActionBatchId(detail),
+            updatedAt = detail.updatedAt,
         ),
     )
     respond(OrderBillItemAdjustmentResponse(order = detail.toDto()))
 }
+
+private suspend fun notifyStaffChatOrderLiveMessage(
+    staffBillUpdateNotifier: StaffBillUpdateNotifier?,
+    venueOrdersRepository: VenueOrdersRepository,
+    venueId: Long,
+    orderId: Long,
+    change: StaffBillUpdateChange,
+) {
+    val notifier = staffBillUpdateNotifier ?: return
+    val detail = venueOrdersRepository.loadOrderDetail(venueId, orderId) ?: return
+    notifier.notifyBillUpdatedNow(
+        StaffBillUpdatedNotification(
+            venueId = venueId,
+            orderId = orderId,
+            displayNumber = detail.displayNumber,
+            tableLabel = detail.tableNumber.toString(),
+            change = change,
+            bill = detail.toOrderBillSnapshot(DEFAULT_CURRENCY),
+            status = detail.status,
+            actionBatchId = staffChatActionBatchId(detail),
+            updatedAt = detail.updatedAt,
+        ),
+    )
+}
+
+private fun staffChatActionBatchId(detail: OrderDetail): Long =
+    when (detail.status) {
+        OrderWorkflowStatus.NEW ->
+            detail.batches.lastOrNull { batch -> batch.status == OrderWorkflowStatus.NEW }
+        OrderWorkflowStatus.ACCEPTED,
+        OrderWorkflowStatus.COOKING,
+        OrderWorkflowStatus.DELIVERING,
+        ->
+            detail.batches.lastOrNull { batch ->
+                batch.status == OrderWorkflowStatus.ACCEPTED ||
+                    batch.status == OrderWorkflowStatus.COOKING ||
+                    batch.status == OrderWorkflowStatus.DELIVERING
+            }
+        OrderWorkflowStatus.DELIVERED ->
+            detail.batches.lastOrNull { batch -> batch.status == OrderWorkflowStatus.DELIVERED }
+        OrderWorkflowStatus.CLOSED ->
+            detail.batches.lastOrNull()
+    }?.batchId ?: detail.batches.lastOrNull()?.batchId ?: detail.orderId
 
 private suspend fun applyVenueOrderStatusTransition(
     venueOrdersRepository: VenueOrdersRepository,
