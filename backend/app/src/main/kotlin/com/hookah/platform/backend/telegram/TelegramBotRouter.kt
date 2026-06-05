@@ -48,6 +48,7 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderPromotionDiscount
 import com.hookah.platform.backend.miniapp.venue.orders.OrderQueueItem
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteDeclineResult
@@ -23408,11 +23409,7 @@ class TelegramBotRouter(
                         .filter { item -> item.itemStatus == OrderBatchItemStatus.CANCELED }
                         .map { item -> label to item }
                 }
-        var totalMinor = 0L
-        var grossMinor = 0L
-        var manualDiscountMinor = 0L
-        var promoDiscountMinor = 0L
-        var totalCurrency: String? = null
+        val billSnapshot = detail.toOrderBillSnapshot()
         return buildString {
             append("📋 Счёт по столу #${detail.tableNumber}")
             append("\n")
@@ -23445,19 +23442,6 @@ class TelegramBotRouter(
                             val payableMinor = venueOrderBillItemPayableMinor(item)
                             if (priceText != null && payableMinor != null && !item.currency.isNullOrBlank()) {
                                 append(" — $priceText")
-                                val baseTotalMinor = item.priceMinor?.let { it * item.qty } ?: 0L
-                                grossMinor += baseTotalMinor
-                                val manualDiscountForItem =
-                                    item.discountPercent
-                                        ?.takeIf { it in 1..100 }
-                                        ?.let { baseTotalMinor * it / 100 }
-                                        ?: 0L
-                                manualDiscountMinor += manualDiscountForItem
-                                promoDiscountMinor += item.promoDiscountMinor.coerceAtLeast(0L)
-                                totalMinor += payableMinor
-                                if (totalCurrency == null) {
-                                    totalCurrency = item.currency
-                                }
                             }
                         }
                     }
@@ -23465,18 +23449,37 @@ class TelegramBotRouter(
             }
             append("\n\n🧾 Итого:")
             append("\n")
-            val currency = totalCurrency
-            if (currency != null) {
-                append("\nСумма до скидок: ").append(formatCompactMoney(grossMinor, currency))
-                append("\nРучные скидки: −").append(formatCompactMoney(manualDiscountMinor, currency))
+            val hasPricedActiveItems = billSnapshot.activeItems.any { item -> !item.currency.isNullOrBlank() }
+            if (hasPricedActiveItems) {
+                append("\nСумма до скидок: ")
+                    .append(
+                        formatCompactMoney(
+                            billSnapshot.grossTotalMinor,
+                            billSnapshot.currency,
+                        ),
+                    )
+                append("\nРучные скидки: −")
+                    .append(
+                        formatCompactMoney(
+                            billSnapshot.manualDiscountTotalMinor,
+                            billSnapshot.currency,
+                        ),
+                    )
                 val promoSummary = formatVenuePromotionDiscountSummary(detail.promotionDiscounts)
                 if (promoSummary != null) {
                     append('\n')
                     append(promoSummary.joinToString("\n"))
                 } else {
-                    append("\nАкции: −").append(formatCompactMoney(promoDiscountMinor, currency))
+                    val promoDiscountMinor = billSnapshot.activeItems.sumOf { item -> item.promoDiscountMinor }
+                    append("\nАкции: −").append(formatCompactMoney(promoDiscountMinor, billSnapshot.currency))
                 }
-                append("\nК оплате: ").append(formatCompactMoney(totalMinor, currency))
+                append("\nК оплате: ")
+                    .append(
+                        formatCompactMoney(
+                            billSnapshot.finalPayableTotalMinor,
+                            billSnapshot.currency,
+                        ),
+                    )
             } else {
                 append("—")
             }

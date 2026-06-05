@@ -254,6 +254,7 @@ Done:
 - CI release validation uses split backend jobs and is green for the latest release snapshot: ktlint, compile, release-critical routes, venue booking/RBAC, Telegram lightweight tests, migration sanity, compose, Mini App build, backend Docker build and backend aggregate.
 - Deploy health-check wait/retry, restart/rollback/log runbook and staging/pilot first response are documented.
 - Minimal Playwright browser smoke is wired for Guest Mini App pre-QR/table menu separation.
+- Cross-channel bill snapshot automation covers Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, exclusions and restore.
 
 Remaining P1:
 
@@ -737,7 +738,13 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 ## 12. Next Development Block
 
-Recommended next block: cross-channel bill snapshot automation.
+Latest completed block: cross-channel bill snapshot automation.
+
+Status: backend regression coverage now protects Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, excluded items and restored items.
+
+Next block should be chosen from the remaining accepted P2/follow-up list after this batch validates. Do not restart growth, loyalty, support, analytics or Telegram-native AI scope until pilot operations remain stable after the next release batch.
+
+Historical implementation prompt:
 
 Prompt:
 

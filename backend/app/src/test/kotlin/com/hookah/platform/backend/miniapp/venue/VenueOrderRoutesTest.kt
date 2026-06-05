@@ -3,6 +3,12 @@ package com.hookah.platform.backend.miniapp.venue
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -15,8 +21,10 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
@@ -736,6 +744,100 @@ class VenueOrderRoutesTest {
         }
 
     @Test
+    fun `mini app full bill matches staff bill snapshot for discounts exclusions and restore`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("orders-bill-channel-parity")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val tableId = seedTable(jdbcUrl, venueId, 15)
+            val hookahItemId = seedMenu(jdbcUrl, venueId, "Авторский кальян", 120_000)
+            val teaItemId = seedMenu(jdbcUrl, venueId, "Чайник", 40_000)
+            val dessertItemId = seedMenu(jdbcUrl, venueId, "Десерт", 30_000)
+            val orderId = seedOrder(jdbcUrl, venueId, tableId, "ACTIVE", displayNumber = 77)
+            val batchId = seedBatch(jdbcUrl, orderId, "DELIVERED", Instant.parse("2026-06-04T12:00:00Z"))
+            seedBatchItem(
+                jdbcUrl = jdbcUrl,
+                batchId = batchId,
+                menuItemId = hookahItemId,
+                discountPercent = 10,
+            )
+            val teaBatchItemId =
+                seedBatchItem(
+                    jdbcUrl = jdbcUrl,
+                    batchId = batchId,
+                    menuItemId = teaItemId,
+                    qty = 2,
+                )
+            val dessertBatchItemId =
+                seedBatchItem(
+                    jdbcUrl = jdbcUrl,
+                    batchId = batchId,
+                    menuItemId = dessertItemId,
+                )
+            seedPromotionAdjustment(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                orderId = orderId,
+                batchId = batchId,
+                batchItemId = teaBatchItemId,
+                menuItemId = teaItemId,
+                title = "Чайная пара",
+                ruleType = "HAPPY_HOURS_PERCENT",
+                discountMinor = 20_000,
+                discountPercent = 25,
+                originalPriceMinor = 80_000,
+            )
+            val token = issueToken(config)
+
+            val excludeResponse =
+                client.post("/api/venue/orders/$orderId/items/$dessertBatchItemId/exclude?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"reasonText":"Гость отказался"}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, excludeResponse.status)
+            val excludedPayload =
+                json.decodeFromString(
+                    OrderBillItemAdjustmentResponse.serializer(),
+                    excludeResponse.bodyAsText(),
+                )
+            val excludedSnapshot = loadStaffBillSnapshot(jdbcUrl, venueId, orderId)
+            assertMiniAppBillMatchesStaffSnapshot(excludedPayload.order, excludedSnapshot)
+            assertEquals(200_000, excludedPayload.order.bill.grossTotalMinor)
+            assertEquals(12_000, excludedPayload.order.bill.manualDiscountTotalMinor)
+            assertEquals(20_000, excludedPayload.order.bill.promoDiscountTotalMinor)
+            assertEquals(30_000, excludedPayload.order.bill.excludedTotalMinor)
+            assertEquals(168_000, excludedPayload.order.bill.finalPayableTotalMinor)
+
+            val restoreResponse =
+                client.post("/api/venue/orders/$orderId/items/$dessertBatchItemId/restore?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, restoreResponse.status)
+            val restoredPayload =
+                json.decodeFromString(
+                    OrderBillItemAdjustmentResponse.serializer(),
+                    restoreResponse.bodyAsText(),
+                )
+            val restoredSnapshot = loadStaffBillSnapshot(jdbcUrl, venueId, orderId)
+            assertMiniAppBillMatchesStaffSnapshot(restoredPayload.order, restoredSnapshot)
+            assertEquals(230_000, restoredPayload.order.bill.grossTotalMinor)
+            assertEquals(0, restoredPayload.order.bill.excludedTotalMinor)
+            assertEquals(198_000, restoredPayload.order.bill.finalPayableTotalMinor)
+            assertTrue(restoredSnapshot.activeItems.any { item -> item.name == "Десерт" })
+        }
+
+    @Test
     fun `bill item adjustments do not leak to another order with same menu item`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("orders-bill-edit-scoped")
@@ -1433,6 +1535,160 @@ class VenueOrderRoutesTest {
         }
     }
 
+    private fun loadStaffBillSnapshot(
+        jdbcUrl: String,
+        venueId: Long,
+        orderId: Long,
+    ): OrderBillSnapshot =
+        runBlocking {
+            VenueOrdersRepository(h2DataSource(jdbcUrl))
+                .loadOrderDetail(venueId = venueId, orderId = orderId)
+        }?.toOrderBillSnapshot()
+            ?: error("Missing order detail for bill snapshot")
+
+    private fun assertMiniAppBillMatchesStaffSnapshot(
+        order: OrderDetailDto,
+        snapshot: OrderBillSnapshot,
+    ) {
+        val bill = order.bill
+        assertEquals(snapshot.grossTotalMinor, bill.grossTotalMinor)
+        assertEquals(snapshot.manualDiscountTotalMinor, bill.manualDiscountTotalMinor)
+        assertEquals(snapshot.promoDiscountTotalMinor, bill.promoDiscountTotalMinor)
+        assertEquals(snapshot.loyaltyDiscountTotalMinor, bill.loyaltyDiscountTotalMinor)
+        assertEquals(snapshot.excludedTotalMinor, bill.excludedTotalMinor)
+        assertEquals(snapshot.canceledTotalMinor, bill.canceledTotalMinor)
+        assertEquals(snapshot.rejectedTotalMinor, bill.rejectedTotalMinor)
+        assertEquals(snapshot.finalPayableTotalMinor, bill.finalPayableTotalMinor)
+        assertEquals(snapshot.currency, bill.currency)
+        assertEquals(
+            snapshot.promoDiscounts.map { discount -> discount.toAssertDto() },
+            bill.promoDiscounts.map { discount -> discount.toAssertDto() },
+        )
+        assertEquals(
+            snapshot.loyaltyDiscounts.map { discount -> discount.toAssertDto() },
+            bill.loyaltyDiscounts.map { discount -> discount.toAssertDto() },
+        )
+        assertEquals(
+            snapshot.excludedItems.map { item -> item.toAssertDto() },
+            bill.excludedItems.map { item -> item.toAssertDto() },
+        )
+        assertEquals(
+            snapshot.activeItems.map { item -> item.toAssertDto() },
+            order.activeBillItems().map { item -> item.toAssertDto() },
+        )
+    }
+
+    private fun h2DataSource(jdbcUrl: String): JdbcDataSource =
+        JdbcDataSource().apply {
+            setURL(jdbcUrl)
+            user = "sa"
+            password = ""
+        }
+
+    private fun OrderDetailDto.activeBillItems(): List<OrderBatchItemDto> =
+        batches
+            .flatMap { batch -> batch.items }
+            .filter { item -> !item.isExcluded && item.itemStatus.equals("active", ignoreCase = true) }
+
+    private fun OrderBillActiveItemSnapshot.toAssertDto(): BillActiveItemAssertDto =
+        BillActiveItemAssertDto(
+            batchItemId = batchItemId,
+            itemId = itemId,
+            name = name,
+            qty = qty,
+            lineGrossMinor = lineGrossMinor,
+            manualDiscountMinor = manualDiscountMinor,
+            promoDiscountMinor = promoDiscountMinor,
+            linePayableMinor = linePayableMinor,
+            currency = currency,
+            discountPercent = discountPercent,
+        )
+
+    private fun OrderBatchItemDto.toAssertDto(): BillActiveItemAssertDto =
+        BillActiveItemAssertDto(
+            batchItemId = batchItemId,
+            itemId = itemId,
+            name = name,
+            qty = qty,
+            lineGrossMinor = lineGrossMinor,
+            manualDiscountMinor = manualDiscountMinor,
+            promoDiscountMinor = promoDiscountMinor,
+            linePayableMinor = linePayableMinor,
+            currency = currency,
+            discountPercent = discountPercent,
+        )
+
+    private fun OrderBillDiscountSnapshot.toAssertDto(): BillDiscountAssertDto =
+        BillDiscountAssertDto(
+            label = label,
+            discountMinor = discountMinor,
+            currency = currency,
+            ruleType = ruleType,
+        )
+
+    private fun OrderBillDiscountDto.toAssertDto(): BillDiscountAssertDto =
+        BillDiscountAssertDto(
+            label = label,
+            discountMinor = discountMinor,
+            currency = currency,
+            ruleType = ruleType,
+        )
+
+    private fun OrderBillExcludedItemSnapshot.toAssertDto(): BillExcludedItemAssertDto =
+        BillExcludedItemAssertDto(
+            batchItemId = batchItemId,
+            itemId = itemId,
+            name = name,
+            qty = qty,
+            lineGrossMinor = lineGrossMinor,
+            currency = currency,
+            status = status,
+            reason = reason,
+        )
+
+    private fun OrderBillExcludedItemDto.toAssertDto(): BillExcludedItemAssertDto =
+        BillExcludedItemAssertDto(
+            batchItemId = batchItemId,
+            itemId = itemId,
+            name = name,
+            qty = qty,
+            lineGrossMinor = lineGrossMinor,
+            currency = currency,
+            status = status,
+            reason = reason,
+        )
+
+    private data class BillActiveItemAssertDto(
+        val batchItemId: Long,
+        val itemId: Long,
+        val name: String,
+        val qty: Int,
+        val lineGrossMinor: Long,
+        val manualDiscountMinor: Long,
+        val promoDiscountMinor: Long,
+        val linePayableMinor: Long,
+        val currency: String?,
+        val discountPercent: Int?,
+    )
+
+    private data class BillDiscountAssertDto(
+        val label: String,
+        val discountMinor: Long,
+        val currency: String,
+        val ruleType: String?,
+    )
+
+    private data class BillExcludedItemAssertDto(
+        val batchItemId: Long,
+        val itemId: Long,
+        val name: String,
+        val qty: Int,
+        val lineGrossMinor: Long,
+        val currency: String,
+        val status: String,
+        val reason: String?,
+    )
+
     @Serializable
     private data class OrdersQueueResponse(
         val items: List<OrderQueueItemDto>,
@@ -1471,6 +1727,8 @@ class VenueOrderRoutesTest {
     private data class OrderBatchItemDto(
         val batchItemId: Long = 0,
         val itemId: Long,
+        val name: String = "",
+        val qty: Int = 0,
         val priceMinor: Long? = null,
         val currency: String? = null,
         val lineGrossMinor: Long = 0,
@@ -1480,6 +1738,7 @@ class VenueOrderRoutesTest {
         val isExcluded: Boolean = false,
         val excludedReasonText: String? = null,
         val discountPercent: Int? = null,
+        val itemStatus: String = "active",
     )
 
     @Serializable
@@ -1492,6 +1751,7 @@ class VenueOrderRoutesTest {
         val canceledTotalMinor: Long,
         val rejectedTotalMinor: Long,
         val finalPayableTotalMinor: Long,
+        val currency: String = "RUB",
         val promoDiscounts: List<OrderBillDiscountDto> = emptyList(),
         val loyaltyDiscounts: List<OrderBillDiscountDto> = emptyList(),
         val excludedItems: List<OrderBillExcludedItemDto> = emptyList(),
@@ -1500,13 +1760,20 @@ class VenueOrderRoutesTest {
     @Serializable
     private data class OrderBillDiscountDto(
         val label: String,
+        val discountMinor: Long = 0,
+        val currency: String = "",
+        val ruleType: String? = null,
     )
 
     @Serializable
     private data class OrderBillExcludedItemDto(
+        val batchItemId: Long = 0,
+        val itemId: Long = 0,
         val status: String,
         val name: String,
+        val qty: Int = 0,
         val lineGrossMinor: Long,
+        val currency: String = "RUB",
         val reason: String? = null,
     )
 

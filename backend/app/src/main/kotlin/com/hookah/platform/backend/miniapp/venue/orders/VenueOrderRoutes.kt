@@ -567,67 +567,22 @@ private fun OrderBatchItemDetail.toDto(batch: OrderBatchDetail): OrderBatchItemD
 }
 
 private fun OrderDetail.buildBillDto(): OrderBillDto {
-    val billableItems =
-        batches
-            .filterNot { batch -> isCancelledBatch(batch) }
-            .flatMap { batch -> batch.items.filter { item -> item.isActiveBillItem() } }
-    val promoDiscounts = promotionDiscounts.filterNot { it.isLoyaltyDiscount() }
-    val loyaltyDiscounts = promotionDiscounts.filter { it.isLoyaltyDiscount() }
-    val excludedItems = buildExcludedItemDtos()
+    val snapshot = toOrderBillSnapshot(DEFAULT_CURRENCY)
     return OrderBillDto(
-        grossTotalMinor = billableItems.sumOf { it.lineGrossMinor() },
-        manualDiscountTotalMinor = billableItems.sumOf { it.manualDiscountMinor() },
-        promoDiscountTotalMinor = promoDiscounts.sumOf { it.discountMinor },
-        loyaltyDiscountTotalMinor = loyaltyDiscounts.sumOf { it.discountMinor },
-        excludedTotalMinor = excludedItems.filter { it.status == "excluded" }.sumOf { it.lineGrossMinor },
-        canceledTotalMinor = excludedItems.filter { it.status == "canceled" }.sumOf { it.lineGrossMinor },
-        rejectedTotalMinor = excludedItems.filter { it.status == "rejected_batch" }.sumOf { it.lineGrossMinor },
-        finalPayableTotalMinor = billableItems.sumOf { it.payableMinor() },
-        currency = resolveCurrency(),
-        promoDiscounts = promoDiscounts.map { it.toDto() },
-        loyaltyDiscounts = loyaltyDiscounts.map { it.toDto() },
-        excludedItems = excludedItems,
+        grossTotalMinor = snapshot.grossTotalMinor,
+        manualDiscountTotalMinor = snapshot.manualDiscountTotalMinor,
+        promoDiscountTotalMinor = snapshot.promoDiscountTotalMinor,
+        loyaltyDiscountTotalMinor = snapshot.loyaltyDiscountTotalMinor,
+        excludedTotalMinor = snapshot.excludedTotalMinor,
+        canceledTotalMinor = snapshot.canceledTotalMinor,
+        rejectedTotalMinor = snapshot.rejectedTotalMinor,
+        finalPayableTotalMinor = snapshot.finalPayableTotalMinor,
+        currency = snapshot.currency,
+        promoDiscounts = snapshot.promoDiscounts.map { it.toDto() },
+        loyaltyDiscounts = snapshot.loyaltyDiscounts.map { it.toDto() },
+        excludedItems = snapshot.excludedItems.map { it.toDto() },
     )
 }
-
-private fun OrderDetail.buildExcludedItemDtos(): List<OrderBillExcludedItemDto> =
-    batches.flatMapIndexed { index, batch ->
-        val batchLabel = batchLabel(index)
-        batch.items.mapNotNull { item ->
-            val status =
-                when {
-                    isCancelledBatch(batch) -> "rejected_batch"
-                    item.itemStatus == OrderBatchItemStatus.CANCELED -> "canceled"
-                    item.isExcluded -> "excluded"
-                    else -> null
-                } ?: return@mapNotNull null
-            OrderBillExcludedItemDto(
-                batchId = batch.batchId,
-                batchLabel = batchLabel,
-                batchItemId = item.batchItemId,
-                itemId = item.itemId,
-                name = item.name,
-                qty = item.qty,
-                lineGrossMinor = item.lineGrossMinor(),
-                currency = item.currency?.takeIf { it.isNotBlank() } ?: DEFAULT_CURRENCY,
-                status = status,
-                reason =
-                    when (status) {
-                        "rejected_batch" -> batch.rejectedReasonText ?: batch.rejectedReasonCode
-                        "canceled" -> item.canceledReasonText ?: item.canceledReasonCode
-                        else -> item.excludedReasonText
-                    },
-            )
-        }
-    }
-
-private fun OrderDetail.resolveCurrency(): String =
-    batches
-        .flatMap { it.items }
-        .firstOrNull { !it.currency.isNullOrBlank() }
-        ?.currency
-        ?: promotionDiscounts.firstOrNull { it.currency.isNotBlank() }?.currency
-        ?: DEFAULT_CURRENCY
 
 private fun OrderBatchItemDetail.lineGrossMinor(): Long = priceMinor?.let { it * qty } ?: 0L
 
@@ -644,10 +599,6 @@ private fun isCancelledBatch(batch: OrderBatchDetail): Boolean =
         !batch.rejectedReasonCode.isNullOrBlank() ||
         !batch.rejectedReasonText.isNullOrBlank()
 
-private fun OrderPromotionDiscount.isLoyaltyDiscount(): Boolean =
-    ruleType.equals("LOYALTY_NTH_HOOKAH", ignoreCase = true) ||
-        label.contains("Лояльность", ignoreCase = true)
-
 private fun OrderPromotionDiscount.toDto(): OrderBillDiscountDto =
     OrderBillDiscountDto(
         label = label,
@@ -656,7 +607,27 @@ private fun OrderPromotionDiscount.toDto(): OrderBillDiscountDto =
         ruleType = ruleType,
     )
 
-private fun batchLabel(index: Int): String = if (index == 0) "Основной заказ" else "Дозаказ $index"
+private fun OrderBillDiscountSnapshot.toDto(): OrderBillDiscountDto =
+    OrderBillDiscountDto(
+        label = label,
+        discountMinor = discountMinor,
+        currency = currency,
+        ruleType = ruleType,
+    )
+
+private fun OrderBillExcludedItemSnapshot.toDto(): OrderBillExcludedItemDto =
+    OrderBillExcludedItemDto(
+        batchId = batchId,
+        batchLabel = batchLabel,
+        batchItemId = batchItemId,
+        itemId = itemId,
+        name = name,
+        qty = qty,
+        lineGrossMinor = lineGrossMinor,
+        currency = currency,
+        status = status,
+        reason = reason,
+    )
 
 private fun formatInstant(value: java.time.Instant): String {
     return instantFormatter.format(value.atOffset(ZoneOffset.UTC))

@@ -21,6 +21,7 @@
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
 - CI release validation is green for the current release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and backend aggregate passed.
+- Cross-channel bill snapshot automation covers Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, exclusions and restore.
 - Platform owner lifecycle and commercial terms flows are in smoke scope.
 
 ## Current Staging Smoke Status
@@ -48,7 +49,7 @@ Remaining:
 - no open P0/P1 from the current pilot smoke and affected re-smokes is recorded in this checklist;
 - repeat this smoke after any additional release batch;
 - operational readiness remains the next launch-supporting block: monitoring, deploy health-check wait/retry, restart/rollback and incident runbook ownership;
-- P2 follow-ups remain: expand frontend/browser e2e beyond the minimal Guest smoke, cross-channel bill snapshot automation, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
+- P2 follow-ups remain: expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
 
@@ -88,6 +89,7 @@ Manual runtime coverage for each release batch:
   - order list exposes `displayNumber`;
   - order detail exposes management bill DTO;
   - bill includes gross, manual discounts, promo discounts, loyalty discounts, excluded, canceled/rejected and final payable totals.
+  - cross-channel bill snapshot compares Mini App full bill DTO with Telegram/staff bill totals for manual discounts, promo discounts, excluded items and restored items.
 - `VenueOrdersRepositoryTest`
   - promotion breakdown is grouped by readable labels;
   - loyalty accrual/redemption side effects remain consistent when orders close.
@@ -352,7 +354,7 @@ Expected:
 
 - Minimal Playwright browser smoke exists for Guest Mini App pre-QR/table menu separation; wider Venue/Platform/browser coverage is still pending.
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
-- Manual comparison with Telegram full bill remains required until a cross-channel snapshot test is introduced.
+- Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
@@ -362,4 +364,4 @@ Expected:
    - guest cart/order/staff call;
    - venue order detail/full bill;
    - platform safe sections.
-2. Add cross-channel snapshot tests for bill formatting if Telegram and Mini App renderers become shared/read-model based.
+2. Extend cross-channel bill snapshots only if new money-affecting adjustments are added.
