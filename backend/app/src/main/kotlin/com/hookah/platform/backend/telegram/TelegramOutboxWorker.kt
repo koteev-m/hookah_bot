@@ -132,6 +132,14 @@ class TelegramOutboxWorker(
         if (message.method == "editMessageText" && message.staffLiveOrderId != null) {
             enqueueLiveOrderFallback(message)
         }
+        logger.warn(
+            "Telegram outbox permanent failure id={} method={} live_order_id={} error_code={} reason={}",
+            message.id,
+            message.method,
+            message.staffLiveOrderId,
+            result.errorCode,
+            sanitizeTelegramForLog(result.description),
+        )
         markFailed(message, result.description)
     }
 

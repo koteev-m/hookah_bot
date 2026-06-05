@@ -5260,7 +5260,7 @@ object TelegramKeyboards {
                         listOf(
                             InlineKeyboardButton(
                                 text = "📱 Открыть Mini App",
-                                webApp = WebAppInfo(webAppUrl),
+                                url = webAppUrl,
                             ),
                         ),
                     )

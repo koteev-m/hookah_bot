@@ -19,6 +19,9 @@ import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
+import com.hookah.platform.backend.telegram.db.VenueRepository
+import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -33,6 +36,8 @@ import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import io.mockk.coEvery
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.Json
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
@@ -44,6 +49,7 @@ import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -456,6 +462,74 @@ class GuestOrderRoutesTest {
             assertEquals(OrderWorkflowStatus.NEW, secondNotification.status)
             assertNotNull(secondNotification.updatedAt)
             assertEquals(3_000, secondNotification.bill?.finalPayableTotalMinor)
+        }
+
+    @Test
+    fun `add-batch enqueues linked staff chat sendMessage for first guest order`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-staff-chat-outbox")
+            val config = buildConfig(jdbcUrl)
+            val dataSource = h2DataSource(jdbcUrl)
+            val staffChatNotifier =
+                StaffChatNotifier(
+                    venueRepository = VenueRepository(dataSource),
+                    notificationRepository = StaffChatNotificationRepository(dataSource),
+                    venueSettingsRepository = VenueSettingsRepository(dataSource),
+                    isTelegramActive = { true },
+                    scope = CoroutineScope(Dispatchers.Default),
+                    json = json,
+                    venueMiniAppUrl = { venueId -> "https://mini.app/miniapp/?mode=venue&venueId=$venueId" },
+                )
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            linkStaffChat(jdbcUrl, venueId, 777L)
+            val tableId = seedTable(jdbcUrl, venueId, 14)
+            seedTableToken(jdbcUrl, tableId, "staff-chat-outbox-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Outbox item", priceMinor = 1_000)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "staff-chat-outbox-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "staff-chat-outbox-1",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    comment = "Outbox",
+                )
+
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val payload = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText())
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertStaffChatOrderMessage(jdbcUrl, payload.orderId, chatId = 777L, messageId = null)
+            val outboxRows = linkedStaffChatOutboxRows(jdbcUrl, payload.orderId)
+            assertEquals(1, outboxRows.size)
+            val outbox = outboxRows.single()
+            assertEquals("sendMessage", outbox.method)
+            assertEquals(payload.orderId, outbox.orderId)
+            assertTrue(outbox.payloadJson.contains("✅ Принять"), outbox.payloadJson)
+            assertTrue(outbox.payloadJson.contains("🔄 Обновить"), outbox.payloadJson)
+            assertTrue(outbox.payloadJson.contains("📱 Открыть Mini App"), outbox.payloadJson)
+            assertTrue(outbox.payloadJson.contains("\"url\":\"https://mini.app/miniapp/?mode=venue&venueId=$venueId\""))
+            assertFalse(outbox.payloadJson.contains("\"web_app\""), outbox.payloadJson)
         }
 
     @Test
@@ -1978,6 +2052,26 @@ class GuestOrderRoutesTest {
         error("Failed to insert venue")
     }
 
+    private fun linkStaffChat(
+        jdbcUrl: String,
+        venueId: Long,
+        staffChatId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE venues
+                SET staff_chat_id = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, staffChatId)
+                statement.setLong(2, venueId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun seedTable(
         jdbcUrl: String,
         venueId: Long,
@@ -2161,6 +2255,62 @@ class GuestOrderRoutesTest {
             setURL(jdbcUrl)
             user = "sa"
             password = ""
+        }
+
+    private fun assertStaffChatOrderMessage(
+        jdbcUrl: String,
+        orderId: Long,
+        chatId: Long,
+        messageId: Long?,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT chat_id, message_id
+                FROM telegram_staff_chat_order_messages
+                WHERE order_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next(), "Expected staff chat order message row for order $orderId")
+                    assertEquals(chatId, rs.getLong("chat_id"))
+                    val actualMessageId = rs.getLong("message_id").takeIf { !rs.wasNull() }
+                    assertEquals(messageId, actualMessageId)
+                    assertFalse(rs.next(), "Expected one staff chat order message row for order $orderId")
+                }
+            }
+        }
+    }
+
+    private fun linkedStaffChatOutboxRows(
+        jdbcUrl: String,
+        orderId: Long,
+    ): List<LinkedStaffChatOutboxRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT o.method, o.payload_json, live.order_id
+                FROM telegram_outbox o
+                JOIN telegram_staff_chat_order_outbox_links live ON live.outbox_id = o.id
+                WHERE live.order_id = ?
+                ORDER BY o.id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    val rows = mutableListOf<LinkedStaffChatOutboxRow>()
+                    while (rs.next()) {
+                        rows +=
+                            LinkedStaffChatOutboxRow(
+                                method = rs.getString("method"),
+                                payloadJson = rs.getString("payload_json"),
+                                orderId = rs.getLong("order_id"),
+                            )
+                    }
+                    rows
+                }
+            }
         }
 
     private fun ensureUser(
@@ -2747,4 +2897,10 @@ class GuestOrderRoutesTest {
     private companion object {
         const val TELEGRAM_USER_ID: Long = 456L
     }
+
+    private data class LinkedStaffChatOutboxRow(
+        val method: String,
+        val payloadJson: String,
+        val orderId: Long,
+    )
 }
