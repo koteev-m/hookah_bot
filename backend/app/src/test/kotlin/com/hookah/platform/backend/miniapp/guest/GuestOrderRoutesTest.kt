@@ -11,9 +11,13 @@ import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
+import com.hookah.platform.backend.telegram.NewBatchNotification
+import com.hookah.platform.backend.telegram.StaffChatNotificationResult
+import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -27,6 +31,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import io.mockk.coEvery
+import io.mockk.mockk
 import kotlinx.serialization.json.Json
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
@@ -365,6 +371,156 @@ class GuestOrderRoutesTest {
             assertEquals(HttpStatusCode.OK, secondResponse.status)
             assertEquals(firstPayload.orderId, secondPayload.orderId)
             assertTrue(firstPayload.batchId != secondPayload.batchId)
+        }
+
+    @Test
+    fun `add-batch notifies staff chat live message for first and additional batch`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-staff-chat-live")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val notifications = mutableListOf<NewBatchNotification>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } answers {
+                notifications += invocation.args[0] as NewBatchNotification
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            }
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 12)
+            seedTableToken(jdbcUrl, tableId, "staff-chat-live-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Live item", priceMinor = 1_000)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val firstRequest =
+                AddBatchRequest(
+                    tableToken = "staff-chat-live-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "staff-chat-live-1",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    comment = "First",
+                )
+            val secondRequest =
+                firstRequest.copy(
+                    idempotencyKey = "staff-chat-live-2",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 2)),
+                    comment = "Additional",
+                )
+
+            val firstResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), firstRequest))
+                }
+            val secondResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), secondRequest))
+                }
+            val firstPayload = json.decodeFromString(AddBatchResponse.serializer(), firstResponse.bodyAsText())
+            val secondPayload = json.decodeFromString(AddBatchResponse.serializer(), secondResponse.bodyAsText())
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(HttpStatusCode.OK, secondResponse.status)
+            assertEquals(firstPayload.orderId, secondPayload.orderId)
+            assertEquals(2, notifications.size)
+
+            val firstNotification = notifications[0]
+            val secondNotification = notifications[1]
+            assertEquals(venueId, firstNotification.venueId)
+            assertEquals(firstPayload.orderId, firstNotification.orderId)
+            assertEquals(firstPayload.batchId, firstNotification.batchId)
+            assertTrue(firstNotification.isFirstBatch)
+            assertEquals(OrderWorkflowStatus.NEW, firstNotification.status)
+            assertNotNull(firstNotification.updatedAt)
+            assertEquals(1_000, firstNotification.bill?.finalPayableTotalMinor)
+
+            assertEquals(venueId, secondNotification.venueId)
+            assertEquals(secondPayload.orderId, secondNotification.orderId)
+            assertEquals(secondPayload.batchId, secondNotification.batchId)
+            assertTrue(!secondNotification.isFirstBatch)
+            assertEquals(OrderWorkflowStatus.NEW, secondNotification.status)
+            assertNotNull(secondNotification.updatedAt)
+            assertEquals(3_000, secondNotification.bill?.finalPayableTotalMinor)
+        }
+
+    @Test
+    fun `add-batch idempotency replay still invokes staff chat notifier for recovery dedupe`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-staff-chat-replay")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val notifications = mutableListOf<NewBatchNotification>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } answers {
+                notifications += invocation.args[0] as NewBatchNotification
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            }
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 13)
+            seedTableToken(jdbcUrl, tableId, "staff-chat-replay-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Replay item", priceMinor = 1_000)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "staff-chat-replay-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "staff-chat-replay-1",
+                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    comment = "Replay",
+                )
+
+            val firstResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val secondResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val firstPayload = json.decodeFromString(AddBatchResponse.serializer(), firstResponse.bodyAsText())
+            val secondPayload = json.decodeFromString(AddBatchResponse.serializer(), secondResponse.bodyAsText())
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(HttpStatusCode.OK, secondResponse.status)
+            assertEquals(firstPayload.orderId, secondPayload.orderId)
+            assertEquals(firstPayload.batchId, secondPayload.batchId)
+            assertEquals(2, notifications.size)
+            assertEquals(firstPayload.batchId, notifications[0].batchId)
+            assertEquals(firstPayload.batchId, notifications[1].batchId)
+            assertEquals(1_000, notifications[1].bill?.finalPayableTotalMinor)
         }
 
     @Test

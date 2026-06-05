@@ -514,9 +514,14 @@ class StaffChatNotifier(
         result: StaffChatNotificationResult,
     ) {
         when (result) {
-            StaffChatNotificationResult.SENT_OR_QUEUED,
-            StaffChatNotificationResult.SKIPPED_DUPLICATE,
-            ->
+            StaffChatNotificationResult.SENT_OR_QUEUED ->
+                logger.info(
+                    "Staff chat notification result={} venue_id={} key={}",
+                    result,
+                    venueId,
+                    notificationKey,
+                )
+            StaffChatNotificationResult.SKIPPED_DUPLICATE ->
                 logger.debug(
                     "Staff chat notification result={} venue_id={} key={}",
                     result,

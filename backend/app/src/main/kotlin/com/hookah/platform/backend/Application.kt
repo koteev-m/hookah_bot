@@ -233,6 +233,7 @@ private data class VersionResponse(
 internal data class ModuleOverrides(
     val tableTokenResolver: (suspend (String) -> TableContext?)? = null,
     val telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
+    val staffChatNotifier: StaffChatNotifier? = null,
     val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
 )
 
@@ -562,6 +563,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 }
             },
         )
+    val guestStaffChatNotifier = overrides.staffChatNotifier ?: staffChatNotifier
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
         telegramScope =
             CoroutineScope(
@@ -1074,7 +1076,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
                         guestTabsRepository = guestTabsRepository,
-                        staffChatNotifier = staffChatNotifier,
+                        staffChatNotifier = guestStaffChatNotifier,
                         userRepository = userRepository,
                         venueSettingsRepository = venueSettingsRepository,
                         venueOrdersRepository = venueOrdersRepository,
@@ -1085,7 +1087,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestBookingRepository = guestBookingRepository,
                         venueRepository = venueRepository,
                         outboxEnqueuer = telegramOutboxEnqueuer,
-                        staffChatNotifier = staffChatNotifier,
+                        staffChatNotifier = guestStaffChatNotifier,
                         userRepository = userRepository,
                         venueSettingsRepository = venueSettingsRepository,
                     )
@@ -1099,7 +1101,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         staffCallRepository = staffCallRepository,
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
-                        staffChatNotifier = staffChatNotifier,
+                        staffChatNotifier = guestStaffChatNotifier,
                         userRepository = userRepository,
                     )
                     get("/_ping") {

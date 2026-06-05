@@ -251,19 +251,17 @@ fun Route.guestOrderRoutes(
                     venueZoneId = venueSettingsRepository.resolveZoneId(table.venueId),
                 ) ?: throw NotFoundException()
 
-            if (!batch.idempotencyReplay) {
-                notifyStaffChat(
-                    notifier = staffChatNotifier,
-                    table = table,
-                    batch = batch,
-                    comment = comment,
-                    items = normalizedItems,
-                    guestMenuRepository = guestMenuRepository,
-                    userRepository = userRepository,
-                    userId = userId,
-                    venueOrdersRepository = venueOrdersRepository,
-                )
-            }
+            notifyStaffChat(
+                notifier = staffChatNotifier,
+                table = table,
+                batch = batch,
+                comment = comment,
+                items = normalizedItems,
+                guestMenuRepository = guestMenuRepository,
+                userRepository = userRepository,
+                userId = userId,
+                venueOrdersRepository = venueOrdersRepository,
+            )
 
             call.respond(
                 AddBatchResponse(
