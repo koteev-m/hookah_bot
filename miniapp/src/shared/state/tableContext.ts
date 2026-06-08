@@ -204,7 +204,15 @@ export function subscribe(listener: (snapshot: TableContextSnapshot) => void): (
 
 export async function refresh(options?: { forceResolveSession?: boolean }): Promise<void> {
   const { tableTokenStatus, tableToken, tableSessionId } = getTelegramContext()
-  if (tableTokenStatus !== 'valid' || !tableToken) {
+  const hasResolvedSnapshotToken =
+    !options?.forceResolveSession &&
+    tableTokenStatus === 'missing' &&
+    currentSnapshot.status === 'resolved' &&
+    Boolean(currentSnapshot.tableToken)
+  const nextToken = tableTokenStatus === 'valid' && tableToken ? tableToken : hasResolvedSnapshotToken ? currentSnapshot.tableToken : null
+  const contextTableSessionId =
+    tableTokenStatus === 'valid' && tableToken ? tableSessionId : hasResolvedSnapshotToken ? currentSnapshot.tableSessionId : null
+  if (!nextToken) {
     if (activeController) {
       activeController.abort()
       activeController = null
@@ -213,16 +221,15 @@ export async function refresh(options?: { forceResolveSession?: boolean }): Prom
     return
   }
 
-  const nextToken = tableToken
   const currentSessionId =
     !options?.forceResolveSession &&
-    tableSessionId === null &&
+    contextTableSessionId === null &&
     currentSnapshot.status === 'resolved' &&
     currentSnapshot.tableToken === nextToken
       ? currentSnapshot.tableSessionId
       : null
   const storedSessionId =
-    !options?.forceResolveSession && tableSessionId === null && currentSessionId === null
+    !options?.forceResolveSession && contextTableSessionId === null && currentSessionId === null
       ? loadStoredTableSessionContext(nextToken)
       : null
   if (activeController) {
@@ -236,7 +243,7 @@ export async function refresh(options?: { forceResolveSession?: boolean }): Prom
   const backendUrl = getBackendBaseUrl()
   const deps = buildApiDeps()
   const request = guestResolveTable(backendUrl, nextToken, deps, controller.signal, {
-    tableSessionId: options?.forceResolveSession === true ? null : tableSessionId ?? currentSessionId ?? storedSessionId,
+    tableSessionId: options?.forceResolveSession === true ? null : contextTableSessionId ?? currentSessionId ?? storedSessionId,
     allowCreateSession: options?.forceResolveSession === true
   })
   inFlight = request.then((result) => {

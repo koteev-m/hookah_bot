@@ -207,6 +207,66 @@ async function mockGuestApi(page: Page, options: { restoreContext?: RestoreConte
     )
   })
 
+  await page.route('**/api/guest/tabs?**', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        tabs: [
+          {
+            id: 88,
+            tableSessionId: 77,
+            type: 'PERSONAL',
+            ownerUserId: 123456789,
+            status: 'ACTIVE'
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/guest/order/active?**', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        order: {
+          orderId: 900,
+          displayNumber: 123,
+          venueId: 1,
+          tableId: 7,
+          tableSessionId: 77,
+          tabId: 88,
+          tableNumber: '4',
+          status: 'ACTIVE',
+          grossTotalMinor: 150000,
+          manualDiscountTotalMinor: 0,
+          promoDiscountTotalMinor: 0,
+          loyaltyDiscountTotalMinor: 0,
+          finalPayableTotalMinor: 150000,
+          currency: 'RUB',
+          discounts: [],
+          batches: [
+            {
+              batchId: 333,
+              comment: null,
+              items: [
+                {
+                  itemId: 200,
+                  qty: 1,
+                  name: 'Double Apple',
+                  priceMinor: 150000,
+                  currency: 'RUB',
+                  lineGrossMinor: 150000,
+                  manualDiscountMinor: 0,
+                  promoDiscountMinor: 0,
+                  linePayableMinor: 150000,
+                  isPromotionReward: false
+                }
+              ]
+            }
+          ]
+        }
+      })
+    )
+  })
+
   return {
     getStructuredMenuCalls: () => structuredMenuCalls,
     setRestoreContext: (context: RestoreContext | null) => {
@@ -259,6 +319,21 @@ test('startup without URL table token restores active table context', async ({ p
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Корзина' })).toBeVisible()
+})
+
+test('my order after restored table context keeps table scope', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Double Apple')).toBeVisible()
+  await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
+  await expect(page.getByText('Корзина и заказ доступны после сканирования QR-кода стола.')).toHaveCount(0)
 })
 
 test('explicit QR table token wins over restore context', async ({ page }) => {
