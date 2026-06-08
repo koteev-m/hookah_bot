@@ -23,6 +23,7 @@
 - CI release validation is green for the current release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and backend aggregate passed.
 - Cross-channel bill snapshot automation covers Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, exclusions and restore.
 - Live staff-chat order messages, bill-affecting refresh, button lifecycle, venue-local timestamps and main order vs doporders clarity passed staging smoke.
+- Guest table session persistence/restore and Telegram BackButton navigation passed staging smoke on 2026-06-08: reopen without repeat QR restores table context, guest menu/order/profile/support navigation keeps context, and BackButton no longer loops.
 - Platform owner lifecycle and commercial terms flows are in smoke scope.
 
 ## Current Staging Smoke Status
@@ -44,11 +45,11 @@ Confirmed:
 - venue selector shows venue names and Russian status labels;
 - platform archived venue action copy is explicit that restore immediately publishes with current backend behavior.
 - CI release validation passed for the current release snapshot: backend ktlint, backend compile, release-critical routes, venue booking/RBAC, Telegram lightweight tests, migration sanity, compose, Mini App build, backend Docker build and aggregate.
+- Guest table session restore passed on staging on 2026-06-08: returning guest opens the active table context without rescanning QR, `Мой заказ` and adjacent guest screens keep `tableSessionId`/`tabId` context, and Telegram BackButton does not loop between screens.
 
 Remaining:
 
 - repeat this smoke after any additional release batch;
-- P1 implemented locally / staging smoke pending: Guest table session restore should let a returning guest re-enter an active table context safely without rescanning QR;
 - P1 follow-up: paid venue/shift extension needs a scoped product/API design before implementation;
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -359,7 +360,7 @@ Expected:
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
-- Guest table session restore is implemented locally but still needs staging smoke in real Telegram WebApp runtime before it is marked closed.
+- Guest table session restore and Telegram BackButton navigation passed staging smoke; keep restore, QR priority, account-switch isolation and no-loop BackButton behavior in regression smoke.
 - Paid venue/shift extension is not yet implemented; treat it as a product/API design block, not as a normal menu item.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
@@ -376,13 +377,13 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next smoke target: `P1 Guest table session persistence/restore`.
+Recommended next implementation block: `P1 Paid venue/shift extension` product/API design.
 
-Manual smoke after implementation:
+Manual smoke after future implementation:
 
-1. Open Guest Mini App from a table QR and create or join an active table context.
-2. Leave/reopen Mini App without rescanning QR and confirm the guest returns to the table-order context.
-3. Confirm active order/cart/bill visibility remains scoped to the restored `tableSessionId`/`tabId`.
-4. Switch Telegram accounts/users and confirm the previous user's table context is not restored.
-5. Close the bill/session and confirm a later Mini App open returns to the normal pre-QR/catalog context.
-6. Rescan QR and confirm the existing QR/table flow still restores the correct context.
+1. Guest requests paid venue/shift extension from active table context without using the ordinary order menu.
+2. Staff/manager sees a clear extension request with venue/table/session context.
+3. Manager/staff can approve one-hour extension repeatedly where allowed.
+4. Approved extension adds the agreed charge to the current bill and updates Guest/Venue/Telegram bill views.
+5. Operational venue/session closing time extends consistently.
+6. Rejection/no-response path is clear and does not mutate the bill.
