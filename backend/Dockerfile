@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # Mini App build stage
 FROM node:20-bookworm-slim AS miniapp-build
 WORKDIR /workspace/miniapp
