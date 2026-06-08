@@ -35,6 +35,7 @@ import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
+import com.hookah.platform.backend.telegram.toStaffOrderBatchLiveBlocks
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -501,6 +502,7 @@ private suspend fun notifyStaffChat(
             totalCurrency = totalCurrency,
             status = detail?.status,
             bill = detail?.toOrderBillSnapshot(DEFAULT_CURRENCY),
+            batches = detail?.toStaffOrderBatchLiveBlocks().orEmpty(),
             updatedAt = detail?.updatedAt,
         ),
     )

@@ -454,6 +454,10 @@ class GuestOrderRoutesTest {
             assertEquals(OrderWorkflowStatus.NEW, firstNotification.status)
             assertNotNull(firstNotification.updatedAt)
             assertEquals(1_000, firstNotification.bill?.finalPayableTotalMinor)
+            assertEquals(1, firstNotification.batches.size)
+            assertEquals(firstPayload.batchId, firstNotification.batches.single().batchId)
+            assertEquals("Основной заказ", firstNotification.batches.single().label)
+            assertEquals(OrderWorkflowStatus.NEW, firstNotification.batches.single().status)
 
             assertEquals(venueId, secondNotification.venueId)
             assertEquals(secondPayload.orderId, secondNotification.orderId)
@@ -462,6 +466,11 @@ class GuestOrderRoutesTest {
             assertEquals(OrderWorkflowStatus.NEW, secondNotification.status)
             assertNotNull(secondNotification.updatedAt)
             assertEquals(3_000, secondNotification.bill?.finalPayableTotalMinor)
+            assertEquals(2, secondNotification.batches.size)
+            assertEquals("Основной заказ", secondNotification.batches[0].label)
+            assertEquals("Дозаказ №1", secondNotification.batches[1].label)
+            assertEquals(secondPayload.batchId, secondNotification.batches[1].batchId)
+            assertEquals(OrderWorkflowStatus.NEW, secondNotification.batches[1].status)
         }
 
     @Test

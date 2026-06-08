@@ -3042,6 +3042,33 @@ class TelegramKeyboardsTest {
     }
 
     @Test
+    fun `staff chat live order actions can name selected batch target`() {
+        val acceptAddOn =
+            TelegramKeyboards.inlineStaffChatOrderActions(
+                venueId = 17L,
+                orderId = 19L,
+                batchId = 58L,
+                status = OrderWorkflowStatus.NEW,
+                webAppUrl = null,
+                batchLabel = "Дозаказ №1",
+            ).inlineKeyboard.flatten()
+        val deliverMain =
+            TelegramKeyboards.inlineStaffChatOrderActions(
+                venueId = 17L,
+                orderId = 19L,
+                batchId = 57L,
+                status = OrderWorkflowStatus.ACCEPTED,
+                webAppUrl = null,
+                batchLabel = "Основной заказ",
+            ).inlineKeyboard.flatten()
+
+        assertEquals("✅ Принять дозаказ №1", acceptAddOn[0].text)
+        assertEquals("sc_ob_a:17:58", acceptAddOn[0].callbackData)
+        assertEquals("🚚 Доставлен основной заказ", deliverMain[0].text)
+        assertEquals("sc_ob_d:17:57", deliverMain[0].callbackData)
+    }
+
+    @Test
     fun `guest item unavailable actions contain replacement keep and staff call`() {
         val buttons =
             TelegramKeyboards.inlineGuestItemUnavailableActions(

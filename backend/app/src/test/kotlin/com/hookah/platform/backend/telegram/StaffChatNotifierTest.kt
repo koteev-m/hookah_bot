@@ -808,6 +808,150 @@ class StaffChatNotifierTest {
         }
 
     @Test
+    fun `live order message separates main order and doporder blocks`() {
+        val text =
+            buildStaffOrderLiveMessageText(
+                venueName = "Venue",
+                tableLabel = "7",
+                displayNumber = 12,
+                status = OrderWorkflowStatus.NEW,
+                bill =
+                    billSnapshot(
+                        grossTotalMinor = 30_000,
+                        finalPayableTotalMinor = 30_000,
+                        activeItems =
+                            listOf(
+                                activeItemSnapshot(
+                                    batchId = 10L,
+                                    batchLabel = "Основной заказ",
+                                    name = "Авторский кальян",
+                                    lineGrossMinor = 20_000,
+                                    linePayableMinor = 20_000,
+                                ),
+                                activeItemSnapshot(
+                                    batchId = 11L,
+                                    batchLabel = "Дозаказ №1",
+                                    name = "Чай",
+                                    lineGrossMinor = 10_000,
+                                    linePayableMinor = 10_000,
+                                ),
+                            ),
+                    ),
+                batches =
+                    listOf(
+                        StaffOrderBatchLiveBlock(
+                            batchId = 10L,
+                            label = "Основной заказ",
+                            status = OrderWorkflowStatus.DELIVERED,
+                            comment = "Без мяты",
+                        ),
+                        StaffOrderBatchLiveBlock(
+                            batchId = 11L,
+                            label = "Дозаказ №1",
+                            status = OrderWorkflowStatus.NEW,
+                            comment = null,
+                        ),
+                    ),
+                updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+            )
+
+        assertTrue(text.contains("Основной заказ — доставлен"), text)
+        assertTrue(text.contains("Комментарий: Без мяты"), text)
+        assertTrue(text.contains("Авторский кальян ×1 — 200 ₽"), text)
+        assertTrue(text.contains("Дозаказ №1 — новый"), text)
+        assertTrue(text.contains("Чай ×1 — 100 ₽"), text)
+        assertTrue(text.contains("К оплате: 300 ₽"), text)
+    }
+
+    @Test
+    fun `live order notification targets new doporder action when main order is delivered`() =
+        runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(
+                    id = 1L,
+                    name = "Venue",
+                    staffChatId = 777L,
+                )
+            val payloadSlot = slot<String>()
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(
+                    orderId = 2L,
+                    venueId = 1L,
+                    chatId = 777L,
+                    messageId = 55L,
+                )
+            coEvery {
+                notificationRepository.enqueueOrderMessage(
+                    orderId = 2L,
+                    venueId = 1L,
+                    chatId = 777L,
+                    method = "editMessageText",
+                    payloadJson = capture(payloadSlot),
+                )
+            } returns true
+
+            val result =
+                notifier.notifyBillUpdatedNow(
+                    StaffBillUpdatedNotification(
+                        venueId = 1L,
+                        orderId = 2L,
+                        displayNumber = 12,
+                        tableLabel = "7",
+                        change = StaffBillUpdateChange.STATUS_UPDATED,
+                        status = OrderWorkflowStatus.NEW,
+                        actionBatchId = 11L,
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+                        bill =
+                            billSnapshot(
+                                grossTotalMinor = 30_000,
+                                finalPayableTotalMinor = 30_000,
+                                activeItems =
+                                    listOf(
+                                        activeItemSnapshot(
+                                            batchId = 10L,
+                                            batchLabel = "Основной заказ",
+                                            name = "Авторский кальян",
+                                            lineGrossMinor = 20_000,
+                                            linePayableMinor = 20_000,
+                                        ),
+                                        activeItemSnapshot(
+                                            batchId = 11L,
+                                            batchLabel = "Дозаказ №1",
+                                            name = "Чай",
+                                            lineGrossMinor = 10_000,
+                                            linePayableMinor = 10_000,
+                                        ),
+                                    ),
+                            ),
+                        batches =
+                            listOf(
+                                StaffOrderBatchLiveBlock(
+                                    batchId = 10L,
+                                    label = "Основной заказ",
+                                    status = OrderWorkflowStatus.DELIVERED,
+                                    comment = null,
+                                ),
+                                StaffOrderBatchLiveBlock(
+                                    batchId = 11L,
+                                    label = "Дозаказ №1",
+                                    status = OrderWorkflowStatus.NEW,
+                                    comment = null,
+                                ),
+                            ),
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("Основной заказ — доставлен"), payload)
+            assertTrue(payload.contains("Дозаказ №1 — новый"), payload)
+            assertTrue(payload.contains("✅ Принять дозаказ №1"), payload)
+            assertTrue(payload.contains("sc_ob_a:1:11"), payload)
+            assertFalse(payload.contains("✅ Принять основной заказ"), payload)
+        }
+
+    @Test
     fun `bill update notification describes exclusion and restore with current totals`() {
         val excludedText =
             buildStaffBillUpdatedNotificationText(
@@ -951,6 +1095,8 @@ class StaffChatNotifierTest {
         )
 
     private fun activeItemSnapshot(
+        batchId: Long = 1L,
+        batchLabel: String = "Основной заказ",
         name: String,
         lineGrossMinor: Long,
         manualDiscountMinor: Long = 0,
@@ -958,8 +1104,8 @@ class StaffChatNotifierTest {
         discountPercent: Int? = null,
     ): OrderBillActiveItemSnapshot =
         OrderBillActiveItemSnapshot(
-            batchId = 1L,
-            batchLabel = "Основной заказ",
+            batchId = batchId,
+            batchLabel = batchLabel,
             batchItemId = 10L,
             itemId = 20L,
             name = name,

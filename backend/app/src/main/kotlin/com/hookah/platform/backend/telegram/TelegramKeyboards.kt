@@ -5200,6 +5200,7 @@ object TelegramKeyboards {
         batchId: Long,
         status: OrderWorkflowStatus,
         webAppUrl: String?,
+        batchLabel: String? = null,
     ): InlineKeyboardMarkup {
         val rows =
             buildList {
@@ -5208,7 +5209,7 @@ object TelegramKeyboards {
                         add(
                             listOf(
                                 InlineKeyboardButton(
-                                    text = "✅ Принять",
+                                    text = staffChatOrderAcceptButtonText(batchLabel),
                                     callbackData = "sc_ob_a:$venueId:$batchId",
                                 ),
                             ),
@@ -5220,7 +5221,7 @@ object TelegramKeyboards {
                         add(
                             listOf(
                                 InlineKeyboardButton(
-                                    text = "🚚 Доставлено",
+                                    text = staffChatOrderDeliverButtonText(batchLabel),
                                     callbackData = "sc_ob_d:$venueId:$batchId",
                                 ),
                             ),
@@ -5385,6 +5386,28 @@ object TelegramKeyboards {
         orderId: Long,
         batchId: Long,
     ): String = "$prefix:${compactCallbackId(venueId)}:${compactCallbackId(orderId)}:${compactCallbackId(batchId)}"
+
+    private fun staffChatOrderAcceptButtonText(batchLabel: String?): String {
+        val target = staffChatOrderActionTargetLabel(batchLabel) ?: return "✅ Принять"
+        return "✅ Принять $target"
+    }
+
+    private fun staffChatOrderDeliverButtonText(batchLabel: String?): String {
+        val target = staffChatOrderActionTargetLabel(batchLabel) ?: return "🚚 Доставлено"
+        return "🚚 Доставлен $target"
+    }
+
+    private fun staffChatOrderActionTargetLabel(batchLabel: String?): String? {
+        val normalized = batchLabel?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        if (normalized.equals("Основной заказ", ignoreCase = true)) {
+            return "основной заказ"
+        }
+        val addOnMatch = Regex("""(?i)^Дозаказ\s*№?\s*(\d+)$""").find(normalized)
+        if (addOnMatch != null) {
+            return "дозаказ №${addOnMatch.groupValues[1]}"
+        }
+        return normalized.replaceFirstChar { char -> char.lowercase() }
+    }
 
     private fun compactCallbackId(value: Long): String = java.lang.Long.toString(value, 36)
 

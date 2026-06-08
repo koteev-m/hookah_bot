@@ -14,6 +14,7 @@ import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffBillUpdatedNotification
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.toStaffOrderBatchLiveBlocks
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -428,6 +429,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondBillMutati
             tableLabel = detail.tableNumber.toString(),
             change = staffBillUpdateChange,
             bill = detail.toOrderBillSnapshot(DEFAULT_CURRENCY),
+            batches = detail.toStaffOrderBatchLiveBlocks(),
             status = detail.status,
             actionBatchId = staffChatActionBatchId(detail),
             updatedAt = detail.updatedAt,
@@ -453,6 +455,7 @@ private suspend fun notifyStaffChatOrderLiveMessage(
             tableLabel = detail.tableNumber.toString(),
             change = change,
             bill = detail.toOrderBillSnapshot(DEFAULT_CURRENCY),
+            batches = detail.toStaffOrderBatchLiveBlocks(),
             status = detail.status,
             actionBatchId = staffChatActionBatchId(detail),
             updatedAt = detail.updatedAt,

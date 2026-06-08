@@ -20454,13 +20454,15 @@ class TelegramBotRouter(
                 else -> "✅ Обновлено: $actor"
             }
         val replyMarkup =
-            TelegramKeyboards.inlineStaffChatOrderActions(
-                venueId = venueId,
-                orderId = result.orderId,
-                batchId = batchId,
-                status = nextStatus.toWorkflow(),
-                webAppUrl = venueMiniAppUrl(venueId),
-            )
+            buildStaffChatLiveOrderActions(venueId = venueId, orderId = result.orderId)
+                ?: TelegramKeyboards.inlineStaffChatOrderActions(
+                    venueId = venueId,
+                    orderId = result.orderId,
+                    batchId = batchId,
+                    status = nextStatus.toWorkflow(),
+                    webAppUrl = venueMiniAppUrl(venueId),
+                    batchLabel = null,
+                )
         notifyGuestAboutStaffChatBatchStatusChange(
             venueId = venueId,
             orderId = result.orderId,
@@ -20582,13 +20584,15 @@ class TelegramBotRouter(
                 batchId = action.batchId,
                 statusLine = "Статус: доставлен",
                 replyMarkup =
-                    TelegramKeyboards.inlineStaffChatOrderActions(
-                        venueId = action.venueId,
-                        orderId = action.orderId,
-                        batchId = action.batchId,
-                        status = OrderWorkflowStatus.DELIVERED,
-                        webAppUrl = venueMiniAppUrl(action.venueId),
-                    ),
+                    buildStaffChatLiveOrderActions(venueId = action.venueId, orderId = action.orderId)
+                        ?: TelegramKeyboards.inlineStaffChatOrderActions(
+                            venueId = action.venueId,
+                            orderId = action.orderId,
+                            batchId = action.batchId,
+                            status = OrderWorkflowStatus.DELIVERED,
+                            webAppUrl = venueMiniAppUrl(action.venueId),
+                            batchLabel = null,
+                        ),
                 textOverride = currentText,
             )
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Ок")
@@ -20667,12 +20671,9 @@ class TelegramBotRouter(
                 batchId = staffChatActionBatchId(detail),
                 statusLine = staffChatOrderCurrentStatusLine(detail.status),
                 replyMarkup =
-                    TelegramKeyboards.inlineStaffChatOrderActions(
+                    staffChatLiveOrderActions(
                         venueId = action.venueId,
-                        orderId = action.orderId,
-                        batchId = staffChatActionBatchId(detail),
-                        status = detail.status,
-                        webAppUrl = venueMiniAppUrl(action.venueId),
+                        detail = detail,
                     ),
             )
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Обновлено")
@@ -20887,13 +20888,15 @@ class TelegramBotRouter(
         batchId: Long,
     ) {
         val replyMarkup =
-            TelegramKeyboards.inlineStaffChatOrderActions(
-                venueId = venueId,
-                orderId = result.orderId,
-                batchId = batchId,
-                status = result.status,
-                webAppUrl = venueMiniAppUrl(venueId),
-            )
+            buildStaffChatLiveOrderActions(venueId = venueId, orderId = result.orderId)
+                ?: TelegramKeyboards.inlineStaffChatOrderActions(
+                    venueId = venueId,
+                    orderId = result.orderId,
+                    batchId = batchId,
+                    status = result.status,
+                    webAppUrl = venueMiniAppUrl(venueId),
+                    batchLabel = null,
+                )
         editStaffChatOrderBatchMessage(
             chatId = chatId,
             messageId = messageId,
@@ -20951,6 +20954,7 @@ class TelegramBotRouter(
             displayNumber = detail.displayNumber,
             status = detail.status,
             bill = detail.toOrderBillSnapshot(),
+            batches = detail.toStaffOrderBatchLiveBlocks(),
             updatedAt = detail.updatedAt,
         )
     }
@@ -21026,6 +21030,100 @@ class TelegramBotRouter(
             OrderWorkflowStatus.CLOSED ->
                 detail.batches.lastOrNull()
         }?.batchId ?: detail.batches.lastOrNull()?.batchId ?: detail.orderId
+
+    private suspend fun buildStaffChatLiveOrderActions(
+        venueId: Long,
+        orderId: Long,
+    ): InlineKeyboardMarkup? {
+        val detail =
+            runCatching { venueOrdersRepository.loadOrderDetail(venueId = venueId, orderId = orderId) }
+                .getOrNull()
+                ?: return null
+        if (detail.orderId != orderId || detail.batches.isEmpty()) {
+            return null
+        }
+        return staffChatLiveOrderActions(venueId = venueId, detail = detail)
+    }
+
+    private fun staffChatLiveOrderActions(
+        venueId: Long,
+        detail: OrderDetail,
+    ): InlineKeyboardMarkup {
+        val target = staffChatLiveOrderActionTarget(detail)
+        return TelegramKeyboards.inlineStaffChatOrderActions(
+            venueId = venueId,
+            orderId = detail.orderId,
+            batchId = target.batchId,
+            status = target.status,
+            webAppUrl = venueMiniAppUrl(venueId),
+            batchLabel = staffChatBatchLabel(detail, target.batchId),
+        )
+    }
+
+    private data class StaffChatLiveOrderActionTarget(
+        val batchId: Long,
+        val status: OrderWorkflowStatus,
+    )
+
+    private fun staffChatLiveOrderActionTarget(detail: OrderDetail): StaffChatLiveOrderActionTarget {
+        if (detail.status == OrderWorkflowStatus.CLOSED) {
+            return StaffChatLiveOrderActionTarget(
+                batchId = staffChatActionBatchId(detail),
+                status = OrderWorkflowStatus.CLOSED,
+            )
+        }
+        val activeBatches =
+            detail.batches.filter { batch ->
+                batch.status != OrderWorkflowStatus.CLOSED && batch.hasOperationalItems()
+            }
+        val nextBatch =
+            activeBatches.firstOrNull { batch -> batch.status == OrderWorkflowStatus.NEW }
+                ?: activeBatches.firstOrNull { batch ->
+                    batch.status == OrderWorkflowStatus.ACCEPTED ||
+                        batch.status == OrderWorkflowStatus.COOKING ||
+                        batch.status == OrderWorkflowStatus.DELIVERING
+                }
+        if (nextBatch != null) {
+            return StaffChatLiveOrderActionTarget(
+                batchId = nextBatch.batchId,
+                status = nextBatch.status,
+            )
+        }
+        val deliveredBatch = activeBatches.lastOrNull { batch -> batch.status == OrderWorkflowStatus.DELIVERED }
+        val allActiveBatchesDelivered =
+            activeBatches.isNotEmpty() &&
+                activeBatches.all { batch -> batch.status == OrderWorkflowStatus.DELIVERED }
+        return StaffChatLiveOrderActionTarget(
+            batchId = deliveredBatch?.batchId ?: staffChatActionBatchId(detail),
+            status =
+                if (allActiveBatchesDelivered) {
+                    OrderWorkflowStatus.DELIVERED
+                } else {
+                    detail.status
+                },
+        )
+    }
+
+    private fun staffChatBatchLabel(
+        detail: OrderDetail,
+        batchId: Long,
+    ): String? {
+        val index = detail.batches.indexOfFirst { batch -> batch.batchId == batchId }
+        if (index < 0) {
+            return null
+        }
+        return if (index == 0) {
+            "Основной заказ"
+        } else {
+            "Дозаказ №$index"
+        }
+    }
+
+    private fun OrderBatchDetail.hasOperationalItems(): Boolean =
+        items.any { item ->
+            item.itemStatus == OrderBatchItemStatus.ACTIVE && !item.isExcluded
+        } ||
+            items.any { item -> item.isExcluded }
 
     private suspend fun notifyGuestAboutStaffChatBatchStatusChange(
         venueId: Long,

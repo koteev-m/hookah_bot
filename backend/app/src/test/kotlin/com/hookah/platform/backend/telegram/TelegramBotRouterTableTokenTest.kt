@@ -22841,12 +22841,12 @@ class TelegramBotRouterTableTokenTest {
                         text.contains("🧾 Заказ №12") &&
                             text.contains("Стол: 105") &&
                             text.contains("Статус: принят") &&
-                            text.contains("Активные позиции:") &&
+                            text.contains("Основной заказ — принят") &&
                             text.contains("Darkside ×2")
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.hasInlineButton("🚚 Доставлено", "sc_ob_d:10:57") &&
+                            markup.hasInlineButton("🚚 Доставлен основной заказ", "sc_ob_d:10:57") &&
                             markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1l")
                     },
                 )
@@ -22922,7 +22922,7 @@ class TelegramBotRouterTableTokenTest {
                         text.contains("🧾 Заказ №12") &&
                             text.contains("Стол: 105") &&
                             text.contains("Статус: доставлен") &&
-                            text.contains("Активные позиции:") &&
+                            text.contains("Основной заказ — доставлен") &&
                             text.contains("Darkside ×2")
                     },
                     match { markup ->
@@ -22991,12 +22991,16 @@ class TelegramBotRouterTableTokenTest {
                     78L,
                     match { text ->
                         text.contains("🧾 Заказ №12") &&
-                            !text.contains("Дозаказ к заказу") &&
                             text.contains("Статус: принят") &&
+                            text.contains("Основной заказ — доставлен") &&
+                            text.contains("Дозаказ №1 — принят") &&
                             text.contains("Darkside ×2") &&
                             text.contains("Сок ×1")
                     },
-                    any(),
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("🚚 Доставлен дозаказ №1", "sc_ob_d:10:58")
+                    },
                 )
             }
             coVerify {
@@ -23053,8 +23057,8 @@ class TelegramBotRouterTableTokenTest {
                     78L,
                     match { text ->
                         text.contains("🧾 Заказ №12") &&
-                            !text.contains("Дозаказ к заказу") &&
                             text.contains("Статус: принят") &&
+                            text.contains("Дозаказ №1 — принят") &&
                             text.contains("Сок ×1")
                     },
                     any(),
@@ -23115,8 +23119,9 @@ class TelegramBotRouterTableTokenTest {
                     78L,
                     match { text ->
                         text.contains("🧾 Заказ №12") &&
-                            !text.contains("Дозаказ к заказу") &&
                             text.contains("Статус: доставлен") &&
+                            text.contains("Основной заказ — доставлен") &&
+                            text.contains("Дозаказ №1 — доставлен") &&
                             text.contains("Darkside ×2") &&
                             text.contains("Сок ×1")
                     },
@@ -23181,8 +23186,8 @@ class TelegramBotRouterTableTokenTest {
                     78L,
                     match { text ->
                         text.contains("🧾 Заказ №12") &&
-                            !text.contains("Дозаказ к заказу") &&
                             text.contains("Статус: доставлен") &&
+                            text.contains("Дозаказ №1 — доставлен") &&
                             text.contains("Сок ×1")
                     },
                     match { markup ->
@@ -23741,7 +23746,7 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.hasInlineButton("🚚 Доставлено", "sc_ob_d:10:57") &&
+                            markup.hasInlineButton("🚚 Доставлен основной заказ", "sc_ob_d:10:57") &&
                             markup.hasInlineButton("🔄 Обновить", "sc_or:a:j:1l")
                     },
                 )

@@ -4,6 +4,7 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnaps
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
@@ -36,6 +37,7 @@ data class NewBatchNotification(
     val totalCurrency: String? = null,
     val status: OrderWorkflowStatus? = null,
     val bill: OrderBillSnapshot? = null,
+    val batches: List<StaffOrderBatchLiveBlock> = emptyList(),
     val updatedAt: Instant? = null,
 )
 
@@ -90,9 +92,17 @@ data class StaffBillUpdatedNotification(
     val tableLabel: String,
     val change: StaffBillUpdateChange,
     val bill: OrderBillSnapshot,
+    val batches: List<StaffOrderBatchLiveBlock> = emptyList(),
     val status: OrderWorkflowStatus,
     val actionBatchId: Long,
     val updatedAt: Instant,
+)
+
+data class StaffOrderBatchLiveBlock(
+    val batchId: Long,
+    val label: String,
+    val status: OrderWorkflowStatus,
+    val comment: String?,
 )
 
 enum class StaffBillUpdateChange {
@@ -129,6 +139,7 @@ private data class StaffOrderLiveMessage(
     val tableLabel: String,
     val status: OrderWorkflowStatus,
     val bill: OrderBillSnapshot,
+    val batches: List<StaffOrderBatchLiveBlock>,
     val updatedAt: Instant,
     val change: StaffBillUpdateChange? = null,
 )
@@ -170,6 +181,7 @@ class StaffChatNotifier(
                         tableLabel = event.tableLabel,
                         status = event.status,
                         bill = event.bill,
+                        batches = event.batches,
                         updatedAt = event.updatedAt,
                     ),
                 notificationKey = event.batchId,
@@ -276,6 +288,7 @@ class StaffChatNotifier(
                     tableLabel = event.tableLabel,
                     status = event.status,
                     bill = event.bill,
+                    batches = event.batches,
                     updatedAt = event.updatedAt,
                     change = event.change,
                 ),
@@ -321,16 +334,19 @@ class StaffChatNotifier(
                 displayNumber = event.displayNumber,
                 status = event.status,
                 bill = event.bill,
+                batches = event.batches,
                 updatedAt = event.updatedAt,
                 change = event.change,
             )
+        val actionTarget = staffOrderLiveActionTarget(event)
         val replyMarkup =
             TelegramKeyboards.inlineStaffChatOrderActions(
                 venueId = event.venueId,
                 orderId = event.orderId,
-                batchId = event.actionBatchId,
-                status = event.status,
+                batchId = actionTarget.batchId,
+                status = actionTarget.status,
                 webAppUrl = venueMiniAppUrl(event.venueId),
+                batchLabel = actionTarget.label,
             )
         val existingMessage = notificationRepository.findOrderMessage(event.orderId)
         val (method, payloadJson) =
@@ -632,12 +648,23 @@ private fun formatStaffChatPromotionDiscounts(discounts: List<NewBatchPromotionD
 private val staffChatLiveMessageUpdatedAtFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'UTC'").withZone(ZoneOffset.UTC)
 
+internal fun OrderDetail.toStaffOrderBatchLiveBlocks(): List<StaffOrderBatchLiveBlock> =
+    batches.mapIndexed { index, batch ->
+        StaffOrderBatchLiveBlock(
+            batchId = batch.batchId,
+            label = staffOrderBatchLabel(index),
+            status = batch.status,
+            comment = batch.comment,
+        )
+    }
+
 internal fun buildStaffOrderLiveMessageText(
     venueName: String,
     tableLabel: String,
     displayNumber: Int?,
     status: OrderWorkflowStatus,
     bill: OrderBillSnapshot,
+    batches: List<StaffOrderBatchLiveBlock> = emptyList(),
     updatedAt: Instant,
     change: StaffBillUpdateChange? = null,
 ): String =
@@ -651,12 +678,17 @@ internal fun buildStaffOrderLiveMessageText(
         change?.let { updateChange ->
             append("Изменение: ").append(staffBillUpdateChangeLabel(updateChange)).append('\n')
         }
-        append("\nАктивные позиции:\n")
-        append(formatStaffBillActiveItems(bill.activeItems, bill.currency))
         val excludedItems = bill.excludedItems.filter { item -> item.status == "excluded" }
-        if (excludedItems.isNotEmpty()) {
-            append("\n\nИсключено из счёта:\n")
-            append(formatStaffBillExcludedItems(excludedItems))
+        if (batches.isEmpty()) {
+            append("\nАктивные позиции:\n")
+            append(formatStaffBillActiveItems(bill.activeItems, bill.currency))
+            if (excludedItems.isNotEmpty()) {
+                append("\n\nИсключено из счёта:\n")
+                append(formatStaffBillExcludedItems(excludedItems))
+            }
+        } else {
+            append("\n")
+            append(formatStaffOrderBatchBlocks(batches, bill, status))
         }
         append("\n\nСумма до скидок: ").append(formatStaffChatMoney(bill.grossTotalMinor, bill.currency))
         if (bill.manualDiscountTotalMinor > 0L) {
@@ -671,6 +703,100 @@ internal fun buildStaffOrderLiveMessageText(
         append("\nОбновлено: ").append(staffChatLiveMessageUpdatedAtFormatter.format(updatedAt))
         if (status == OrderWorkflowStatus.CLOSED) {
             append("\n\nСчёт закрыт.")
+        }
+    }
+
+private data class StaffOrderActionTarget(
+    val batchId: Long,
+    val status: OrderWorkflowStatus,
+    val label: String?,
+)
+
+private fun staffOrderLiveActionTarget(event: StaffOrderLiveMessage): StaffOrderActionTarget {
+    if (event.status == OrderWorkflowStatus.CLOSED) {
+        return StaffOrderActionTarget(
+            batchId = event.actionBatchId,
+            status = OrderWorkflowStatus.CLOSED,
+            label = staffOrderBatchLabelFor(event.actionBatchId, event.batches),
+        )
+    }
+    val activeBatches =
+        event.batches.filter { batch ->
+            batch.status != OrderWorkflowStatus.CLOSED && event.hasOperationalItems(batch.batchId)
+        }
+    val nextBatch =
+        activeBatches.firstOrNull { batch -> batch.status == OrderWorkflowStatus.NEW }
+            ?: activeBatches.firstOrNull { batch ->
+                batch.status == OrderWorkflowStatus.ACCEPTED ||
+                    batch.status == OrderWorkflowStatus.COOKING ||
+                    batch.status == OrderWorkflowStatus.DELIVERING
+            }
+    if (nextBatch != null) {
+        return StaffOrderActionTarget(
+            batchId = nextBatch.batchId,
+            status = nextBatch.status,
+            label = nextBatch.label,
+        )
+    }
+    val deliveredBatch =
+        activeBatches.lastOrNull { batch -> batch.status == OrderWorkflowStatus.DELIVERED }
+    val allActiveBatchesDelivered =
+        activeBatches.isNotEmpty() &&
+            activeBatches.all { batch -> batch.status == OrderWorkflowStatus.DELIVERED }
+    return StaffOrderActionTarget(
+        batchId = deliveredBatch?.batchId ?: event.actionBatchId,
+        status =
+            if (allActiveBatchesDelivered) {
+                OrderWorkflowStatus.DELIVERED
+            } else {
+                event.status
+            },
+        label = deliveredBatch?.label ?: staffOrderBatchLabelFor(event.actionBatchId, event.batches),
+    )
+}
+
+private fun StaffOrderLiveMessage.hasOperationalItems(batchId: Long): Boolean =
+    bill.activeItems.any { item -> item.batchId == batchId } ||
+        bill.excludedItems.any { item ->
+            item.batchId == batchId && item.status == "excluded"
+        }
+
+private fun formatStaffOrderBatchBlocks(
+    batches: List<StaffOrderBatchLiveBlock>,
+    bill: OrderBillSnapshot,
+    orderStatus: OrderWorkflowStatus,
+): String =
+    batches.joinToString(separator = "\n\n") { batch ->
+        val activeItems = bill.activeItems.filter { item -> item.batchId == batch.batchId }
+        val nonPayableItems = bill.excludedItems.filter { item -> item.batchId == batch.batchId }
+        buildString {
+            append(batch.label)
+            append(" — ")
+            append(
+                if (orderStatus == OrderWorkflowStatus.CLOSED) {
+                    staffOrderStatusLabel(OrderWorkflowStatus.CLOSED)
+                } else {
+                    staffOrderStatusLabel(batch.status)
+                },
+            )
+            batch.comment?.takeIf { it.isNotBlank() }?.let { comment ->
+                append("\nКомментарий: ").append(comment)
+            }
+            append("\nАктивные позиции:\n")
+            append(formatStaffBillActiveItems(activeItems, bill.currency))
+            val excludedItems = nonPayableItems.filter { item -> item.status == "excluded" }
+            if (excludedItems.isNotEmpty()) {
+                append("\nИсключено из счёта:\n")
+                append(formatStaffBillExcludedItems(excludedItems))
+            }
+            val canceledItems =
+                nonPayableItems.filter { item ->
+                    item.status == "canceled" || item.status == "rejected_batch"
+                }
+            if (canceledItems.isNotEmpty()) {
+                append("\nНе оплачивается:\n")
+                append(formatStaffBillExcludedItems(canceledItems))
+            }
         }
     }
 
@@ -725,6 +851,18 @@ private fun staffOrderStatusLabel(status: OrderWorkflowStatus): String =
         OrderWorkflowStatus.DELIVERED -> "доставлен"
         OrderWorkflowStatus.CLOSED -> "счёт закрыт"
     }
+
+private fun staffOrderBatchLabel(index: Int): String =
+    if (index == 0) {
+        "Основной заказ"
+    } else {
+        "Дозаказ №$index"
+    }
+
+private fun staffOrderBatchLabelFor(
+    batchId: Long,
+    batches: List<StaffOrderBatchLiveBlock>,
+): String? = batches.firstOrNull { batch -> batch.batchId == batchId }?.label
 
 private fun formatStaffBillActiveItems(
     items: List<OrderBillActiveItemSnapshot>,
