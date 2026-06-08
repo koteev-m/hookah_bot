@@ -50,7 +50,7 @@ Confirmed:
 Remaining:
 
 - repeat this smoke after any additional release batch;
-- P1 follow-up: paid venue/shift extension needs a scoped product/API design before implementation;
+- P1 follow-up: paid venue/shift extension product/API design is documented; implementation is pending and must keep the extension outside the ordinary order menu;
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
@@ -361,7 +361,7 @@ Expected:
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
 - Guest table session restore and Telegram BackButton navigation passed staging smoke; keep restore, QR priority, account-switch isolation and no-loop BackButton behavior in regression smoke.
-- Paid venue/shift extension is not yet implemented; treat it as a product/API design block, not as a normal menu item.
+- Paid venue/shift extension is not yet implemented; design is documented in `docs/PRODUCT_SPEC.md`, and the implementation must treat it as a confirmed service charge/session extension, not as a normal menu item.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
@@ -377,13 +377,17 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block: `P1 Paid venue/shift extension` product/API design.
+Recommended next implementation block: `P1 Paid venue/shift extension` data/API slice.
 
 Manual smoke after future implementation:
 
-1. Guest requests paid venue/shift extension from active table context without using the ordinary order menu.
-2. Staff/manager sees a clear extension request with venue/table/session context.
-3. Manager/staff can approve one-hour extension repeatedly where allowed.
-4. Approved extension adds the agreed charge to the current bill and updates Guest/Venue/Telegram bill views.
-5. Operational venue/session closing time extends consistently.
-6. Rejection/no-response path is clear and does not mutate the bill.
+1. Configure extension for a venue: enabled, fixed one-hour duration and price.
+2. Guest in active table context sees `Продлить на 1 час` outside the structured `🍽 Меню`.
+3. Guest creates one extension request; repeated taps do not duplicate pending requests.
+4. STAFF/MANAGER sees venue/table/session/order context and fixed price.
+5. STAFF/MANAGER approves; bill gains service charge `Продление работы на 1 час`, Guest/Venue/Telegram bill totals match, and table session orderable-until time extends.
+6. Create and approve a second extension; charge and session extension are applied once per request.
+7. Reject a request and confirm no bill/session mutation.
+8. As STAFF, confirm price/duration/settings are not editable.
+9. As MANAGER/OWNER, confirm settings are editable if that slice is implemented.
+10. Close bill/session and confirm extension request/approve endpoints are denied.

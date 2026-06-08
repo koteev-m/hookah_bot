@@ -32,6 +32,9 @@ Guest:
 - call: staff call (waiter/hookah/other), statuses new/accepted/done
 - booking: id, venue_id, user_id, date/time, party_size(optional), status pending/confirmed/changed/cancelled/expired
 - tab: personal/shared bill context inside table_session; membership list; permissions
+- shift_extension_settings: per-venue paid extension policy, fixed duration/price, enabled flag
+- shift_extension_request: guest request to extend active table/venue service window; statuses pending/approved/rejected/cancelled
+- order_service_charge: non-menu bill charge such as approved paid extension; included in bill totals but not shown as a normal order-menu item
 - subscription: venue_id, status trialing/active/past_due/suspended/canceled, price override, trial_end, paid_until, grace_end, methods enabled(card/stars)
 - support_ticket: guest/venue/platform tickets with context (venue/table/order)
 
@@ -132,6 +135,57 @@ MUST:
 SHOULD:
 - SLA timers and alerts.
 - Paid extension of the current venue/table service window can be requested by guest and confirmed by staff/manager; confirmed extension adds the agreed charge to the bill and extends the current operational/session window.
+
+### Paid venue/shift extension — P1 design
+
+Product intent:
+- Paid extension is not an ordinary menu item and must not appear in guest structured `🍽 Меню`.
+- Guest requests extension from active table context, near/after configured closing time or whenever the venue exposes the action.
+- Venue staff/manager confirms operationally; the guest cannot self-add the charge without confirmation.
+- Confirmation adds a fixed, preconfigured charge to the current bill and extends the active table/session ordering window by the configured duration, default 60 minutes.
+- Extension can be repeated while the bill/session remains active.
+
+Guest flow:
+1. In table context, show `Продлить на 1 час` only when venue extension settings are enabled, price is configured, and the table session/order is active.
+2. Copy: `Продление на 1 час — 3 000 ₽. Персонал подтвердит возможность продления.`
+3. Guest sends request with optional comment; UI state becomes `Ожидает подтверждения`.
+4. If approved, guest sees `Продление подтверждено до HH:mm. Сумма добавлена в счёт.`
+5. If rejected or timed out, guest sees a clear non-mutating status and the bill is unchanged.
+
+Venue flow:
+1. Staff/manager sees a pending extension request with venue/table/session/order, guest display name, price, current allowed-until time and proposed new allowed-until time.
+2. Buttons: `✅ Продлить на 1 час` and `❌ Отказать`.
+3. Approval is idempotent: one request can create one charge and one session extension only once.
+4. Rejection requires either a short reason or safe default `Причина не указана`.
+
+Role policy:
+- STAFF may approve/reject fixed-price extension requests because this is an operational shift action, not arbitrary billing editing.
+- STAFF must not configure extension price/duration, waive the charge, apply manual discounts or change session rules.
+- MANAGER/OWNER may approve/reject requests and configure extension settings.
+- OWNER/MANAGER configure: enabled, duration minutes, price, currency, optional max repeats per table session.
+
+API/data target:
+- `GET /api/guest/table/extension-options` returns enabled state, duration, price, current allowed-until and whether a pending request exists.
+- `POST /api/guest/table/extension-requests` creates a pending request for authenticated tab member.
+- `GET /api/venue/{venueId}/shift-extension-requests?status=pending` lists operational requests.
+- `POST /api/venue/{venueId}/shift-extension-requests/{requestId}/approve` approves and atomically:
+  - validates role/venue/session/order;
+  - creates an `order_service_charge` with source `SHIFT_EXTENSION`;
+  - extends `table_sessions.expires_at` to at least the approved `extended_until`;
+  - refreshes Guest/Venue bill DTOs and staff-chat live order message through the canonical bill snapshot path.
+- `POST /api/venue/{venueId}/shift-extension-requests/{requestId}/reject` rejects without bill/session mutation.
+
+Bill/session rules:
+- Extension charge is a dedicated service charge line, not a `menu_item`.
+- Order bill snapshot must include service charges in gross/final payable totals and expose a readable line `Продление работы на 1 час`.
+- Approved extension uses venue timezone for all user-facing times.
+- `table_sessions.expires_at` is the current orderable-until/session window. Extension logic must not be shortened by normal session touch/restore operations.
+- Closed bills, closed tabs, ended sessions and unavailable/deleted/suspended venues cannot be extended.
+
+Implementation slices:
+1. Data/API slice: settings, request, service charge and session extension persistence with PostgreSQL/H2 migrations and backend tests.
+2. Guest/Venue UI slice: Mini App request/approve/reject screens plus staff-chat notification/update.
+3. Regression slice: bill snapshot parity, repeated extension, role denial, timezone and closed-session tests.
 
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
 MUST:
