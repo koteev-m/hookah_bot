@@ -36,8 +36,16 @@ type TestTelegramWindow = Window & {
       }
       ready?: () => void
       expand?: () => void
+      close?: () => void
+      BackButton?: {
+        show?: () => void
+        hide?: () => void
+        onClick?: (cb: () => void) => void
+        offClick?: (cb: () => void) => void
+      }
     }
   }
+  __e2eTelegramBackButtonVisible?: boolean
 }
 
 function jsonResponse(data: unknown) {
@@ -68,23 +76,67 @@ function buildRestoreContext(overrides: Partial<RestoreContext> = {}): RestoreCo
 }
 
 async function installTelegramWebApp(page: Page, userId: number) {
-  await page.addInitScript(
-    ({ initData, telegramUserId }) => {
-      const telegramWindow = window as TestTelegramWindow
-      const storedUserId = Number(window.localStorage.getItem('__e2e_telegram_user_id'))
-      const nextUserId = Number.isFinite(storedUserId) && storedUserId > 0 ? storedUserId : telegramUserId
-      const nextInitData = window.localStorage.getItem('__e2e_telegram_init_data') || initData
-      telegramWindow.Telegram = {
-        WebApp: {
-          initData: nextInitData,
-          initDataUnsafe: { user: { id: nextUserId } },
-          ready: () => undefined,
-          expand: () => undefined
+  await page.addInitScript({
+    content: `
+      (() => {
+        const defaultInitData = ${JSON.stringify(mockInitData)};
+        const defaultUserId = ${JSON.stringify(userId)};
+        const storedUserId = Number(window.localStorage.getItem('__e2e_telegram_user_id'));
+        const nextUserId = Number.isFinite(storedUserId) && storedUserId > 0 ? storedUserId : defaultUserId;
+        const nextInitData = window.localStorage.getItem('__e2e_telegram_init_data') || defaultInitData;
+        const backCallbacks = [];
+        window.__e2eTelegramBackButtonVisible = false;
+        const telegramApi = {
+          WebApp: {
+            initData: nextInitData,
+            initDataUnsafe: { user: { id: nextUserId } },
+            ready: () => undefined,
+            expand: () => undefined,
+            close: () => undefined,
+            BackButton: {
+              show: () => {
+                window.__e2eTelegramBackButtonVisible = true;
+              },
+              hide: () => {
+                window.__e2eTelegramBackButtonVisible = false;
+              },
+              onClick: (callback) => {
+                backCallbacks.push(callback);
+              },
+              offClick: (callback) => {
+                const index = backCallbacks.indexOf(callback);
+                if (index >= 0) {
+                  backCallbacks.splice(index, 1);
+                }
+              }
+            }
+          }
+        };
+        window.Telegram = telegramApi;
+        try {
+          Object.defineProperty(window, 'Telegram', {
+            value: telegramApi,
+            configurable: true,
+            writable: true
+          });
+        } catch {
+          window.Telegram = telegramApi;
         }
-      }
-    },
-    { initData: mockInitData, telegramUserId: userId }
-  )
+      })();
+    `
+  })
+}
+
+async function clickTelegramBackButton(page: Page) {
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('hookah:e2e-telegram-back'))
+  })
+}
+
+async function expectTelegramBackButtonHidden(page: Page) {
+  await expect
+    .poll(async () => page.evaluate(() => Boolean((window as TestTelegramWindow).__e2eTelegramBackButtonVisible)))
+    .toBe(false)
 }
 
 async function mockGuestApi(page: Page, options: { restoreContext?: RestoreContext | null } = {}) {
@@ -334,6 +386,17 @@ test('my order after restored table context keeps table scope', async ({ page })
   await expect(page.getByText('Double Apple')).toBeVisible()
   await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
   await expect(page.getByText('Корзина и заказ доступны после сканирования QR-кода стола.')).toHaveCount(0)
+
+  await clickTelegramBackButton(page)
+
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
+  await expectTelegramBackButtonHidden(page)
+
+  await clickTelegramBackButton(page)
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toHaveCount(0)
+  await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
 })
 
 test('explicit QR table token wins over restore context', async ({ page }) => {

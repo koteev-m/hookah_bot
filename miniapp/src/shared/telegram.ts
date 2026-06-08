@@ -31,6 +31,7 @@ export type TelegramWebAppLike = {
   sendData?: (data: string) => void
   openTelegramLink?: (url: string) => void
   showAlert?: (message: string) => void
+  close?: () => void
   BackButton?: {
     isVisible?: boolean
     show?: () => void

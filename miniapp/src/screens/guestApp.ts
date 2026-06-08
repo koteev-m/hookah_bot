@@ -407,6 +407,7 @@ export function mountGuestApp(options: GuestAppOptions) {
 
   const historyStack: string[] = []
   let replaceNextHistoryEntry = false
+  let suppressNextHistoryUpdate = false
 
   const navigate = (hash: string, options?: { replace?: boolean }) => {
     if (window.location.hash === hash) {
@@ -430,6 +431,30 @@ export function mountGuestApp(options: GuestAppOptions) {
     }
     navigate('#/catalog', { replace: true })
   }
+  const navigateSecondaryGuestScreen = (hash: string) => {
+    const route = resolveRoute()
+    const shouldPushFromTableRoot = resolveTableMode(tableSnapshot) === 'active-table' && route.name === 'venue'
+    navigate(hash, shouldPushFromTableRoot ? undefined : { replace: true })
+  }
+  const resolveGuestRootHash = () =>
+    resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId ? `#/venue/${tableSnapshot.venueId}` : '#/catalog'
+  const isCurrentGuestRoot = () => {
+    const route = resolveRoute()
+    if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+      return route.name === 'venue' && route.venueId === tableSnapshot.venueId && !route.openStaffCall
+    }
+    return route.name === 'catalog'
+  }
+  const replaceHashWithoutHistoryUpdate = (targetHash: string) => {
+    if (window.location.hash === targetHash) {
+      return
+    }
+    suppressNextHistoryUpdate = true
+    const nextUrl = new URL(window.location.href)
+    nextUrl.hash = targetHash
+    window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+    window.dispatchEvent(new Event('hashchange'))
+  }
 
   const routeListeners = new Set<() => void>()
   const notifyRouteChange = () => {
@@ -438,6 +463,10 @@ export function mountGuestApp(options: GuestAppOptions) {
 
   const updateHistory = (hash: string) => {
     if (!hash || hash === '#') {
+      return
+    }
+    if (suppressNextHistoryUpdate) {
+      suppressNextHistoryUpdate = false
       return
     }
     if (replaceNextHistoryEntry) {
@@ -537,23 +566,23 @@ export function mountGuestApp(options: GuestAppOptions) {
         openQrScanner()
         return
       case 'cart':
-        navigate('#/cart', { replace: true })
+        navigateSecondaryGuestScreen('#/cart')
         return
       case 'order':
-        navigate('#/order', { replace: true })
+        navigateSecondaryGuestScreen('#/order')
         return
       case 'staff':
         if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
-          navigate(`#/venue/${tableSnapshot.venueId}?staff=1`, { replace: true })
+          navigateSecondaryGuestScreen(`#/venue/${tableSnapshot.venueId}?staff=1`)
           return
         }
         navigate('#/catalog', { replace: true })
         return
       case 'account':
-        navigate('#/account', { replace: true })
+        navigateSecondaryGuestScreen('#/account')
         return
       case 'support':
-        navigate('#/support', { replace: true })
+        navigateSecondaryGuestScreen('#/support')
         return
       case 'refresh':
         void refreshTableContext()
@@ -587,12 +616,19 @@ export function mountGuestApp(options: GuestAppOptions) {
     back: () => {
       if (historyStack.length > 1) {
         historyStack.pop()
-        navigate(historyStack[historyStack.length - 1])
+        const targetHash = historyStack[historyStack.length - 1]
+        replaceHashWithoutHistoryUpdate(targetHash)
         return
       }
-      navigate('#/catalog')
+      if (!isCurrentGuestRoot()) {
+        const rootHash = resolveGuestRootHash()
+        historyStack.splice(0, historyStack.length, rootHash)
+        replaceHashWithoutHistoryUpdate(rootHash)
+        return
+      }
+      getTelegramContext().webApp?.close?.()
     },
-    canGoBack: () => historyStack.length > 1,
+    canGoBack: () => historyStack.length > 1 || !isCurrentGuestRoot(),
     subscribe: (handler: () => void) => {
       routeListeners.add(handler)
       return () => routeListeners.delete(handler)
@@ -688,12 +724,20 @@ export function mountGuestApp(options: GuestAppOptions) {
   const onHashChange = () => {
     updateHistory(window.location.hash || '#/catalog')
     render()
+    if (isCurrentGuestRoot()) {
+      const rootHash = resolveGuestRootHash()
+      historyStack.splice(0, historyStack.length, rootHash)
+    }
     notifyRouteChange()
   }
 
   window.addEventListener('hashchange', onHashChange)
   updateHistory(window.location.hash || '#/catalog')
   render()
+  if (isCurrentGuestRoot()) {
+    const rootHash = resolveGuestRootHash()
+    historyStack.splice(0, historyStack.length, rootHash)
+  }
   notifyRouteChange()
 
   return () => {

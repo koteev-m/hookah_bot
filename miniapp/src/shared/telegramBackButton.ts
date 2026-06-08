@@ -1,5 +1,7 @@
 import { getTelegramContext } from './telegram'
 
+const E2E_BACK_EVENT = 'hookah:e2e-telegram-back'
+
 type TelegramRouter = {
   getRouteName: () => string
   back: () => void
@@ -9,16 +11,20 @@ type TelegramRouter = {
 }
 
 export function bindTelegramBackButton(router: TelegramRouter) {
-  const ctx = getTelegramContext()
-  const backButton = ctx.webApp?.BackButton
-  if (!backButton) {
-    return () => undefined
-  }
+  let backButton = getTelegramContext().webApp?.BackButton ?? null
+  let isBound = false
+  let retryTimer: number | null = null
+  const hasDevBackEvent = import.meta.env.DEV && typeof window !== 'undefined'
 
   const handleClick = () => {
     try {
       if (router.canGoBack?.()) {
         router.back()
+        return
+      }
+      const webApp = getTelegramContext().webApp
+      if (webApp?.close) {
+        webApp.close()
         return
       }
       router.navigate('#/catalog')
@@ -28,8 +34,10 @@ export function bindTelegramBackButton(router: TelegramRouter) {
   }
 
   const updateVisibility = () => {
-    const routeName = router.getRouteName()
-    if (routeName === 'catalog') {
+    if (!backButton) {
+      return
+    }
+    if (!router.canGoBack?.()) {
       try {
         backButton.hide?.()
       } catch {
@@ -44,29 +52,59 @@ export function bindTelegramBackButton(router: TelegramRouter) {
     }
   }
 
-  try {
-    backButton.onClick?.(handleClick)
-  } catch {
-    // ignore
+  const tryBind = () => {
+    if (isBound) {
+      return
+    }
+    backButton = getTelegramContext().webApp?.BackButton ?? null
+    if (!backButton) {
+      return
+    }
+    try {
+      backButton.onClick?.(handleClick)
+      isBound = true
+    } catch {
+      return
+    }
+    updateVisibility()
   }
 
-  updateVisibility()
+  tryBind()
+  if (!isBound && typeof window !== 'undefined') {
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null
+      tryBind()
+      updateVisibility()
+    }, 0)
+  }
 
   const unsubscribe = router.subscribe?.(() => {
+    tryBind()
     updateVisibility()
   })
+  if (hasDevBackEvent) {
+    window.addEventListener(E2E_BACK_EVENT, handleClick)
+  }
 
   return () => {
+    if (retryTimer !== null) {
+      window.clearTimeout(retryTimer)
+    }
     if (unsubscribe) {
       unsubscribe()
     }
+    if (hasDevBackEvent) {
+      window.removeEventListener(E2E_BACK_EVENT, handleClick)
+    }
     try {
-      backButton.offClick?.(handleClick)
+      if (isBound) {
+        backButton?.offClick?.(handleClick)
+      }
     } catch {
       // ignore
     }
     try {
-      backButton.hide?.()
+      backButton?.hide?.()
     } catch {
       // ignore
     }
