@@ -72,6 +72,8 @@ docker compose logs --tail=120 backend
 - сначала сохранить симптом, время, последнюю команду deploy и последние backend logs;
 - при необходимости выполнить controlled restart или rollback из `docs/STAGING_DEPLOYMENT.md`.
 
+Если deploy упал до запуска контейнера на шаге Docker build из-за `SocketTimeoutException` при скачивании Gradle Wrapper distribution или Maven dependencies, это не runtime incident. Повторить тот же deploy можно после проверки, что в логе нет Kotlin compile/test failure: backend Dockerfile прогревает Gradle wrapper/cache через BuildKit, а повтор обычно использует уже скачанные слои.
+
 ### 3.1 Telegram API отвечает `429`
 
 Симптомы:

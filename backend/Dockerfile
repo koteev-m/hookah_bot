@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Mini App build stage
 FROM node:20-bookworm-slim AS miniapp-build
 WORKDIR /workspace/miniapp
@@ -19,11 +21,22 @@ ENV GRADLE_OPTS="-Dorg.gradle.jvmargs=${GRADLE_JVM_ARGS} -Dkotlin.daemon.jvm.opt
 
 COPY gradlew gradlew.bat ./
 COPY gradle gradle
-COPY settings.gradle.kts build.gradle.kts ./
-COPY backend backend
+COPY gradle.properties settings.gradle.kts build.gradle.kts ./
+COPY backend/build.gradle.kts backend/build.gradle.kts
+COPY backend/app/build.gradle.kts backend/app/build.gradle.kts
 
 RUN chmod +x ./gradlew
-RUN ./gradlew :backend:app:installDist --no-daemon -Pkotlin.daemon.jvmargs="${GRADLE_JVM_ARGS}"
+RUN --mount=type=cache,target=/root/.gradle/wrapper \
+    ./gradlew --version --no-daemon
+RUN --mount=type=cache,target=/root/.gradle/wrapper \
+    --mount=type=cache,target=/root/.gradle/caches \
+    ./gradlew :backend:app:dependencies --configuration runtimeClasspath --no-daemon -Pkotlin.daemon.jvmargs="${GRADLE_JVM_ARGS}"
+
+COPY backend backend
+
+RUN --mount=type=cache,target=/root/.gradle/wrapper \
+    --mount=type=cache,target=/root/.gradle/caches \
+    ./gradlew :backend:app:installDist --no-daemon -Pkotlin.daemon.jvmargs="${GRADLE_JVM_ARGS}"
 
 # Runtime stage
 FROM eclipse-temurin:21-jre

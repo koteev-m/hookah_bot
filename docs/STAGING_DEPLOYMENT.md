@@ -125,6 +125,8 @@ The health wait handles short backend startup windows and transient reverse-prox
 
 On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64 --load` so the uploaded image matches a typical x86_64/amd64 VPS.
 
+The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and dependency caches. If Docker build fails while downloading the Gradle distribution or Maven dependencies with a transient `SocketTimeoutException`, rerun the same deploy command after confirming it is a network timeout, not a Kotlin compile/test failure. The wrapper network timeout is intentionally higher than the default, and a successful retry should reuse the warmed Docker/Gradle cache.
+
 Optional overrides:
 
 ```bash
