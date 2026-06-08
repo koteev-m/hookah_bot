@@ -1,11 +1,12 @@
 import { getBackendBaseUrl } from '../api/backend'
 import { REQUEST_ABORTED_CODE } from '../api/abort'
 import { clearSession, getAccessToken } from '../api/auth'
-import { guestResolveTable } from '../api/guestApi'
+import { guestResolveTable, guestRestoreTable } from '../api/guestApi'
 import type { TableResolveResponse } from '../api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../api/types'
 import { isDebugEnabled } from '../debug'
 import { getTelegramContext, rememberTableToken } from '../telegram'
+import { setSelectedGuestTabId } from './guestTabSelection'
 
 export type TableContextStatus =
   | 'missing'
@@ -41,7 +42,7 @@ export type TableStatusPresentation = {
 }
 
 const isDebug = isDebugEnabled()
-const tableSessionStorageKey = 'hookah_guest_table_session_context'
+const tableSessionStorageKeyPrefix = 'hookah_guest_table_session_context'
 const listeners = new Set<(snapshot: TableContextSnapshot) => void>()
 let currentSnapshot = buildEmptySnapshot('missing')
 let activeController: AbortController | null = null
@@ -88,12 +89,18 @@ type StoredTableSessionContext = {
   tableSessionId: number
 }
 
+function resolveTableSessionStorageKey(): string {
+  const userId = getTelegramContext().telegramUserId
+  const userPart = userId ? `user:${userId}` : 'user:unknown'
+  return `${tableSessionStorageKeyPrefix}:${userPart}`
+}
+
 function loadStoredTableSessionContext(tableToken: string): number | null {
   if (typeof window === 'undefined') {
     return null
   }
   try {
-    const raw = window.sessionStorage.getItem(tableSessionStorageKey)
+    const raw = window.sessionStorage.getItem(resolveTableSessionStorageKey())
     if (!raw) {
       return null
     }
@@ -117,7 +124,7 @@ function rememberTableSessionContext(tableToken: string, tableSessionId: number)
     return
   }
   try {
-    window.sessionStorage.setItem(tableSessionStorageKey, JSON.stringify({ tableToken, tableSessionId }))
+    window.sessionStorage.setItem(resolveTableSessionStorageKey(), JSON.stringify({ tableToken, tableSessionId }))
   } catch {
     // ignore session storage errors
   }
@@ -257,6 +264,46 @@ export async function refresh(options?: { forceResolveSession?: boolean }): Prom
   await inFlight
 }
 
+async function restoreActiveContext(): Promise<void> {
+  if (activeController) {
+    activeController.abort()
+  }
+  const controller = new AbortController()
+  activeController = controller
+  updateSnapshot(buildEmptySnapshot('resolving'))
+  const requestId = (requestCounter += 1)
+
+  const backendUrl = getBackendBaseUrl()
+  const deps = buildApiDeps()
+  const request = guestRestoreTable(backendUrl, deps, controller.signal)
+  inFlight = request.then((result) => {
+    if (controller.signal.aborted || requestId !== requestCounter) {
+      return
+    }
+
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) {
+        return
+      }
+      updateSnapshot(buildEmptySnapshot('missing'))
+      return
+    }
+
+    const restored = result.data.context
+    if (!restored) {
+      updateSnapshot(buildEmptySnapshot('missing'))
+      return
+    }
+
+    rememberTableToken(restored.tableToken)
+    rememberTableSessionContext(restored.tableToken, restored.tableSessionId)
+    setSelectedGuestTabId(restored.tableSessionId, restored.tabId)
+    updateSnapshot(buildResolvedSnapshot(restored, restored.tableToken))
+  })
+
+  await inFlight
+}
+
 export async function ensureResolved(): Promise<TableContextSnapshot> {
   if (currentSnapshot.status === 'resolved') {
     return currentSnapshot
@@ -325,6 +372,11 @@ export function initTableContext(): void {
   if (tableTokenStatus === 'valid' && tableToken && tableTokenAutoResolve) {
     updateSnapshot(buildEmptySnapshot('resolving', tableToken))
     void refresh()
+    return
+  }
+  if (tableTokenStatus === 'missing') {
+    updateSnapshot(buildEmptySnapshot('resolving'))
+    void restoreActiveContext()
     return
   }
   updateSnapshot(buildEmptySnapshot(resolveTokenStatus(tableTokenStatus)))

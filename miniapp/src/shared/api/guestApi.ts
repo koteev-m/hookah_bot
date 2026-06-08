@@ -25,6 +25,7 @@ import type {
   StaffCallRequest,
   StaffCallResponse,
   TableResolveResponse,
+  TableRestoreResponse,
   VenueInfoSectionsResponse,
   VenueResponse
 } from './guestDtos'
@@ -208,6 +209,19 @@ export async function guestResolveTable(
   return requestApi<TableResolveResponse>(
     backendUrl,
     `/api/guest/table/resolve?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function guestRestoreTable(
+  backendUrl: string,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<TableRestoreResponse>> {
+  return requestApi<TableRestoreResponse>(
+    backendUrl,
+    '/api/guest/table/restore',
     { signal },
     deps
   )

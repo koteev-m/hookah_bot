@@ -82,6 +82,15 @@ export type TableResolveResponse = {
   unavailableReason: string | null
 }
 
+export type TableRestoreContextResponse = TableResolveResponse & {
+  tableToken: string
+  tabId: number
+}
+
+export type TableRestoreResponse = {
+  context: TableRestoreContextResponse | null
+}
+
 export type ActiveOrderResponse = {
   order: ActiveOrderDto | null
 }

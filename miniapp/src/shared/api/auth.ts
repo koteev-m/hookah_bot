@@ -25,9 +25,9 @@ type TelegramAuthResponse = {
 
 const baseStorageKey = 'hookah_session_token'
 const isDebug = isDebugEnabled()
-const storageKey = resolveStorageKey()
 const sessionSafetySkewSeconds = 20
 let inMemorySession: SessionToken | null = null
+let inMemorySessionUserId: number | null = null
 let pendingAuth: Promise<ApiResult<{ token: string }>> | null = null
 
 function nowEpochSeconds() {
@@ -36,6 +36,14 @@ function nowEpochSeconds() {
 
 function isSessionValid(session: SessionToken) {
   return nowEpochSeconds() < session.expiresAtEpochSeconds - sessionSafetySkewSeconds
+}
+
+function getCurrentTelegramUserId(): number | null {
+  return getTelegramContext().telegramUserId
+}
+
+function isInMemorySessionForCurrentUser(): boolean {
+  return inMemorySessionUserId === getCurrentTelegramUserId()
 }
 
 function safeGetItem(key: string): string | null {
@@ -75,6 +83,7 @@ function parseStoredSession(raw: string): SessionToken | null {
 }
 
 function loadStoredSession(): SessionToken | null {
+  const storageKey = resolveStorageKey()
   const raw = safeGetItem(storageKey)
   if (!raw) {
     return null
@@ -93,16 +102,18 @@ function loadStoredSession(): SessionToken | null {
 
 function persistSession(session: SessionToken) {
   inMemorySession = session
-  safeSetItem(storageKey, JSON.stringify(session))
+  inMemorySessionUserId = getCurrentTelegramUserId()
+  safeSetItem(resolveStorageKey(), JSON.stringify(session))
 }
 
 export function getStoredSession(): SessionToken | null {
-  if (inMemorySession && isSessionValid(inMemorySession)) {
+  if (inMemorySession && isInMemorySessionForCurrentUser() && isSessionValid(inMemorySession)) {
     return inMemorySession
   }
   const storedSession = loadStoredSession()
   if (storedSession && isSessionValid(storedSession)) {
     inMemorySession = storedSession
+    inMemorySessionUserId = getCurrentTelegramUserId()
     return storedSession
   }
   return null
@@ -114,7 +125,8 @@ export function storeSession(session: SessionToken): void {
 
 export function clearSession(): void {
   inMemorySession = null
-  safeRemoveItem(storageKey)
+  inMemorySessionUserId = null
+  safeRemoveItem(resolveStorageKey())
 }
 
 export async function authenticate(initData: string): Promise<SessionToken> {
@@ -173,13 +185,14 @@ class AuthError extends Error {
 }
 
 export async function getAccessToken(): Promise<ApiResult<{ token: string }>> {
-  if (inMemorySession && isSessionValid(inMemorySession)) {
+  if (inMemorySession && isInMemorySessionForCurrentUser() && isSessionValid(inMemorySession)) {
     return { ok: true, data: { token: inMemorySession.token } }
   }
 
   const storedSession = loadStoredSession()
   if (storedSession && isSessionValid(storedSession)) {
     inMemorySession = storedSession
+    inMemorySessionUserId = getCurrentTelegramUserId()
     return { ok: true, data: { token: storedSession.token } }
   }
 
@@ -232,14 +245,16 @@ export async function getAccessToken(): Promise<ApiResult<{ token: string }>> {
   }
 }
 function resolveStorageKey(): string {
+  const userId = getCurrentTelegramUserId()
+  const userPart = userId ? `user:${userId}` : 'user:unknown'
   try {
     const backendUrl = getBackendBaseUrl()
     const parsed = new URL(backendUrl)
     if (!parsed.host) {
-      return baseStorageKey
+      return `${baseStorageKey}:${userPart}`
     }
-    return `${baseStorageKey}:${parsed.host}`
+    return `${baseStorageKey}:${parsed.host}:${userPart}`
   } catch (error) {
-    return baseStorageKey
+    return `${baseStorageKey}:${userPart}`
   }
 }

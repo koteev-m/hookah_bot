@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.guest
 import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
+import com.hookah.platform.backend.miniapp.guest.api.TableRestoreResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -254,6 +255,208 @@ class GuestTableResolveRoutesTest {
             assertEquals(true, payload.available)
             assertEquals(1, countTableSessions(jdbcUrl))
             assertNull(payload.unavailableReason)
+        }
+
+    @Test
+    fun `restore returns latest active table context for authenticated tab member`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-restore-active")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 9)
+            seedTableToken(jdbcUrl, tableId, "restore-active-token")
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                    lastActivityAt = Instant.now().minus(1, ChronoUnit.MINUTES),
+                )
+            val tabId = seedTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedOrder(jdbcUrl, venueId, tableId, tableSessionId, tabId, "ACTIVE")
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/table/restore") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableRestoreResponse.serializer(), response.bodyAsText())
+            val context = payload.context ?: error("Expected restored table context")
+            assertEquals("restore-active-token", context.tableToken)
+            assertEquals(tabId, context.tabId)
+            assertEquals(venueId, context.venueId)
+            assertEquals(tableId, context.tableId)
+            assertEquals(tableSessionId, context.tableSessionId)
+            assertEquals("9", context.tableNumber)
+            assertEquals("ACTIVE", context.tableSessionStatus)
+            assertEquals(true, context.tableSessionActive)
+            assertEquals(true, context.available)
+        }
+
+    @Test
+    fun `restore does not return another user's table context`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-restore-other-user")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerUserId = TELEGRAM_USER_ID
+            val anotherUserId = 789L
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 10)
+            seedTableToken(jdbcUrl, tableId, "restore-other-user-token")
+            seedUser(jdbcUrl, ownerUserId)
+            seedUser(jdbcUrl, anotherUserId)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            val tabId = seedTab(jdbcUrl, venueId, tableSessionId, ownerUserId)
+            seedOrder(jdbcUrl, venueId, tableId, tableSessionId, tabId, "ACTIVE")
+            val token = issueToken(config, anotherUserId)
+
+            val response =
+                client.get("/api/guest/table/restore") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableRestoreResponse.serializer(), response.bodyAsText())
+            assertNull(payload.context)
+        }
+
+    @Test
+    fun `restore skips session with only closed bill`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-restore-closed")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 11)
+            seedTableToken(jdbcUrl, tableId, "restore-closed-token")
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            val tabId = seedTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedOrder(jdbcUrl, venueId, tableId, tableSessionId, tabId, "CLOSED")
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/table/restore") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableRestoreResponse.serializer(), response.bodyAsText())
+            assertNull(payload.context)
+        }
+
+    @Test
+    fun `restore picks latest active context deterministically`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-restore-latest")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            val firstVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val firstTableId = seedTable(jdbcUrl, firstVenueId, 21)
+            seedTableToken(jdbcUrl, firstTableId, "restore-first-token")
+            val firstSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = firstVenueId,
+                    tableId = firstTableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                    lastActivityAt = Instant.now().minus(30, ChronoUnit.MINUTES),
+                )
+            val firstTabId = seedTab(jdbcUrl, firstVenueId, firstSessionId, TELEGRAM_USER_ID)
+            seedOrder(
+                jdbcUrl = jdbcUrl,
+                venueId = firstVenueId,
+                tableId = firstTableId,
+                tableSessionId = firstSessionId,
+                tabId = firstTabId,
+                status = "ACTIVE",
+                updatedAt = Instant.now().minus(30, ChronoUnit.MINUTES),
+            )
+
+            val secondVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val secondTableId = seedTable(jdbcUrl, secondVenueId, 22)
+            seedTableToken(jdbcUrl, secondTableId, "restore-second-token")
+            val secondSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = secondVenueId,
+                    tableId = secondTableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                    lastActivityAt = Instant.now().minus(1, ChronoUnit.MINUTES),
+                )
+            val secondTabId = seedTab(jdbcUrl, secondVenueId, secondSessionId, TELEGRAM_USER_ID)
+            seedOrder(
+                jdbcUrl = jdbcUrl,
+                venueId = secondVenueId,
+                tableId = secondTableId,
+                tableSessionId = secondSessionId,
+                tabId = secondTabId,
+                status = "ACTIVE",
+                updatedAt = Instant.now().minus(1, ChronoUnit.MINUTES),
+            )
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/table/restore") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(TableRestoreResponse.serializer(), response.bodyAsText())
+            val context = payload.context ?: error("Expected restored table context")
+            assertEquals("restore-second-token", context.tableToken)
+            assertEquals(secondTabId, context.tabId)
+            assertEquals(secondSessionId, context.tableSessionId)
+            assertEquals("22", context.tableNumber)
         }
 
     @Test
@@ -523,9 +726,30 @@ class GuestTableResolveRoutesTest {
         )
     }
 
-    private fun issueToken(config: MapApplicationConfig): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long = TELEGRAM_USER_ID,
+    ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
-        return service.issueToken(TELEGRAM_USER_ID).token
+        return service.issueToken(userId).token
+    }
+
+    private fun seedUser(
+        jdbcUrl: String,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO users (telegram_user_id, first_name)
+                VALUES (?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.setString(2, "Guest $userId")
+                statement.executeUpdate()
+            }
+        }
     }
 
     private fun seedVenue(
@@ -607,6 +831,7 @@ class GuestTableResolveRoutesTest {
         status: String,
         expiresAt: Instant,
         endedAt: Instant?,
+        lastActivityAt: Instant = Instant.now().minus(1, ChronoUnit.HOURS),
     ): Long {
         val now = Instant.now()
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
@@ -628,7 +853,7 @@ class GuestTableResolveRoutesTest {
                 statement.setLong(1, venueId)
                 statement.setLong(2, tableId)
                 statement.setTimestamp(3, Timestamp.from(now.minus(2, ChronoUnit.HOURS)))
-                statement.setTimestamp(4, Timestamp.from(now.minus(1, ChronoUnit.HOURS)))
+                statement.setTimestamp(4, Timestamp.from(lastActivityAt))
                 statement.setTimestamp(5, Timestamp.from(expiresAt))
                 statement.setTimestamp(6, endedAt?.let { Timestamp.from(it) })
                 statement.setString(7, status)
@@ -641,6 +866,97 @@ class GuestTableResolveRoutesTest {
             }
         }
         error("Failed to insert table session")
+    }
+
+    private fun seedTab(
+        jdbcUrl: String,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val tabId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
+                    VALUES (?, ?, 'PERSONAL', ?, 'ACTIVE')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableSessionId)
+                    statement.setLong(3, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) {
+                            rs.getLong(1)
+                        } else {
+                            error("Failed to insert tab")
+                        }
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO tab_member (tab_id, user_id, role)
+                VALUES (?, ?, 'OWNER')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tabId)
+                statement.setLong(2, userId)
+                statement.executeUpdate()
+            }
+            return tabId
+        }
+    }
+
+    private fun seedOrder(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+        status: String,
+        updatedAt: Instant = Instant.now(),
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val orderId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO orders (venue_id, table_id, table_session_id, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    val timestamp = Timestamp.from(updatedAt)
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableId)
+                    statement.setLong(3, tableSessionId)
+                    statement.setString(4, status)
+                    statement.setTimestamp(5, timestamp)
+                    statement.setTimestamp(6, timestamp)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) {
+                            rs.getLong(1)
+                        } else {
+                            error("Failed to insert order")
+                        }
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, items_snapshot)
+                VALUES (?, ?, ?, 'MINIAPP', 'NEW', ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.setLong(2, tabId)
+                statement.setLong(3, TELEGRAM_USER_ID)
+                statement.setString(4, "[]")
+                statement.executeUpdate()
+            }
+            return orderId
+        }
     }
 
     private fun countTableSessions(jdbcUrl: String): Int {

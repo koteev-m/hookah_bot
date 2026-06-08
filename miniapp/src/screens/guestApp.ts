@@ -606,6 +606,10 @@ export function mountGuestApp(options: GuestAppOptions) {
     currentRoute = route
     renderShellActions()
     currentDispose?.()
+    if (route.name === 'catalog' && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+      navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
+      return
+    }
     const endedTableSession =
       tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && !tableSnapshot.tableSessionActive
     if ((route.name === 'venue' || route.name === 'cart' || route.name === 'order') && endedTableSession) {

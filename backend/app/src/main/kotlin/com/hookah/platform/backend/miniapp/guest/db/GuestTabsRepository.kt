@@ -24,6 +24,17 @@ data class GuestTabModel(
     val status: String,
 )
 
+data class RestorableTableContext(
+    val tableToken: String,
+    val tabId: Long,
+    val venueId: Long,
+    val venueName: String,
+    val tableId: Long,
+    val tableSessionId: Long,
+    val tableSessionStatus: String,
+    val tableNumber: Int,
+)
+
 enum class CreateInviteResult {
     CREATED,
     FORBIDDEN,
@@ -50,6 +61,100 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                         statement.executeQuery().use { rs ->
                             if (rs.next()) {
                                 TableSessionContext(id = rs.getLong("id"), venueId = rs.getLong("venue_id"))
+                            } else {
+                                null
+                            }
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun findLatestRestorableTableContext(userId: Long): RestorableTableContext? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT
+                            tt.token,
+                            t.id AS tab_id,
+                            ts.venue_id,
+                            v.name AS venue_name,
+                            ts.table_id,
+                            ts.id AS table_session_id,
+                            ts.status AS table_session_status,
+                            vt.table_number
+                        FROM tab t
+                        JOIN tab_member tm ON tm.tab_id = t.id
+                        JOIN table_sessions ts ON ts.id = t.table_session_id
+                        JOIN venue_tables vt ON vt.id = ts.table_id
+                        JOIN venues v ON v.id = ts.venue_id
+                        JOIN table_tokens tt ON tt.table_id = vt.id
+                        WHERE tm.user_id = ?
+                          AND t.status = 'ACTIVE'
+                          AND ts.status = 'ACTIVE'
+                          AND ts.ended_at IS NULL
+                          AND ts.expires_at > now()
+                          AND vt.is_active = TRUE
+                          AND tt.is_active = TRUE
+                          AND (
+                              NOT EXISTS (
+                                  SELECT 1
+                                  FROM orders o_any
+                                  WHERE o_any.table_session_id = ts.id
+                              )
+                              OR EXISTS (
+                                  SELECT 1
+                                  FROM orders o_active
+                                  WHERE o_active.table_session_id = ts.id
+                                    AND o_active.status = 'ACTIVE'
+                              )
+                          )
+                        ORDER BY
+                            COALESCE(
+                                (
+                                    SELECT MAX(o_recent.updated_at)
+                                    FROM orders o_recent
+                                    WHERE o_recent.table_session_id = ts.id
+                                      AND o_recent.status = 'ACTIVE'
+                                ),
+                                ts.last_activity_at
+                            ) DESC,
+                            CASE
+                                WHEN EXISTS (
+                                    SELECT 1
+                                    FROM orders o_tab
+                                    JOIN order_batches ob_tab ON ob_tab.order_id = o_tab.id
+                                    WHERE o_tab.table_session_id = ts.id
+                                      AND o_tab.status = 'ACTIVE'
+                                      AND ob_tab.tab_id = t.id
+                                )
+                                THEN 0
+                                ELSE 1
+                            END,
+                            CASE WHEN t.type = 'PERSONAL' THEN 0 ELSE 1 END,
+                            t.id DESC
+                        LIMIT 1
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, userId)
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                RestorableTableContext(
+                                    tableToken = rs.getString("token"),
+                                    tabId = rs.getLong("tab_id"),
+                                    venueId = rs.getLong("venue_id"),
+                                    venueName = rs.getString("venue_name"),
+                                    tableId = rs.getLong("table_id"),
+                                    tableSessionId = rs.getLong("table_session_id"),
+                                    tableSessionStatus = rs.getString("table_session_status"),
+                                    tableNumber = rs.getInt("table_number"),
+                                )
                             } else {
                                 null
                             }

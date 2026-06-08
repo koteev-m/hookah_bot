@@ -1,4 +1,5 @@
 import { getItemMeta, type ItemMeta, updateItemCache } from './itemCache'
+import { getTelegramContext } from '../telegram'
 
 export type CartSnapshot = {
   items: Map<number, number>
@@ -46,7 +47,9 @@ function isValidItemId(itemId: number): boolean {
 }
 
 function getDraftStorageKey(tableToken: string): string {
-  return `${cartDraftLocalStoragePrefix}${tableToken}`
+  const userId = getTelegramContext().telegramUserId
+  const userPart = userId ? `user:${userId}` : 'user:unknown'
+  return `${cartDraftLocalStoragePrefix}${userPart}:${tableToken}`
 }
 
 function setLocalStorageItem(key: string, value: string): void {

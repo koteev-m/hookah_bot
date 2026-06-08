@@ -1,3 +1,5 @@
+import { getTelegramContext } from '../telegram'
+
 const STORAGE_KEY = 'hookahMiniAppGuestTabSelection'
 
 let memorySelection: Record<string, number> = {}
@@ -7,6 +9,15 @@ function normalizeId(value: number | null | undefined): number | null {
     return null
   }
   return value
+}
+
+function resolveUserStoragePart(): string {
+  const userId = getTelegramContext().telegramUserId
+  return userId ? `user:${userId}` : 'user:unknown'
+}
+
+function resolveSelectionKey(tableSessionId: number): string {
+  return `${resolveUserStoragePart()}:session:${tableSessionId}`
 }
 
 function readStorage(): Record<string, number> {
@@ -24,10 +35,13 @@ function readStorage(): Record<string, number> {
     }
     const next: Record<string, number> = {}
     Object.entries(parsed).forEach(([key, value]) => {
-      const sessionId = Number(key)
       const tabId = typeof value === 'number' ? value : Number(value)
-      if (normalizeId(sessionId) && normalizeId(tabId)) {
-        next[String(sessionId)] = tabId
+      const normalizedTabId = normalizeId(tabId)
+      if (!normalizedTabId) {
+        return
+      }
+      if (normalizeId(Number(key)) || /^user:(?:\d+|unknown):session:\d+$/.test(key)) {
+        next[key] = normalizedTabId
       }
     })
     memorySelection = next
@@ -54,7 +68,7 @@ export function getSelectedGuestTabId(tableSessionId: number | null | undefined)
   if (!sessionId) {
     return null
   }
-  const value = readStorage()[String(sessionId)]
+  const value = readStorage()[resolveSelectionKey(sessionId)]
   return normalizeId(value)
 }
 
@@ -68,10 +82,11 @@ export function setSelectedGuestTabId(
   }
   const selection = { ...readStorage() }
   const normalizedTabId = normalizeId(tabId)
+  const selectionKey = resolveSelectionKey(sessionId)
   if (!normalizedTabId) {
-    delete selection[String(sessionId)]
+    delete selection[selectionKey]
   } else {
-    selection[String(sessionId)] = normalizedTabId
+    selection[selectionKey] = normalizedTabId
   }
   writeStorage(selection)
 }

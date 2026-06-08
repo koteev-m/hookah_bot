@@ -48,7 +48,7 @@ Confirmed:
 Remaining:
 
 - repeat this smoke after any additional release batch;
-- P1 follow-up: Guest table session restore should let a returning guest re-enter an active table context safely without rescanning QR;
+- P1 implemented locally / staging smoke pending: Guest table session restore should let a returning guest re-enter an active table context safely without rescanning QR;
 - P1 follow-up: paid venue/shift extension needs a scoped product/API design before implementation;
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -359,7 +359,7 @@ Expected:
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
-- Guest table session restore is not yet implemented as a no-QR return path; active table context currently remains safest through Telegram QR/start/table token flows.
+- Guest table session restore is implemented locally but still needs staging smoke in real Telegram WebApp runtime before it is marked closed.
 - Paid venue/shift extension is not yet implemented; treat it as a product/API design block, not as a normal menu item.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
@@ -376,7 +376,7 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block: `P1 Guest table session persistence/restore`.
+Recommended next smoke target: `P1 Guest table session persistence/restore`.
 
 Manual smoke after implementation:
 

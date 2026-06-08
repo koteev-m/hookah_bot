@@ -2,13 +2,16 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.guest.api.RestoredTableContextResponse
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
+import com.hookah.platform.backend.miniapp.guest.api.TableRestoreResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.VenueAvailabilityResolver
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.TableContext
 import io.ktor.server.application.call
@@ -25,6 +28,62 @@ fun Route.guestTableResolveRoutes(
     tableSessionConfig: TableSessionConfig,
     guestTabsRepository: GuestTabsRepository,
 ) {
+    get("/table/restore") {
+        val userId = call.requireUserId()
+        val restored = guestTabsRepository.findLatestRestorableTableContext(userId)
+        if (restored == null) {
+            call.respondNoRestoredTableContext()
+            return@get
+        }
+
+        val venue = guestVenueRepository.findVenueByIdForGuest(restored.venueId)
+        if (venue == null || venue.status != VenueStatus.PUBLISHED) {
+            call.respondNoRestoredTableContext()
+            return@get
+        }
+
+        val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(restored.venueId)
+        val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
+        if (!availability.available) {
+            call.respondNoRestoredTableContext()
+            return@get
+        }
+
+        val activeSession =
+            tableSessionRepository.touchActiveSession(
+                tableSessionId = restored.tableSessionId,
+                venueId = restored.venueId,
+                tableId = restored.tableId,
+                ttl = tableSessionConfig.ttl,
+            )
+        if (activeSession == null) {
+            call.respondNoRestoredTableContext()
+            return@get
+        }
+
+        call.respond(
+            TableRestoreResponse(
+                context =
+                    RestoredTableContextResponse(
+                        tableToken = restored.tableToken,
+                        tabId = restored.tabId,
+                        venueId = restored.venueId,
+                        venueName = venue.name,
+                        tableId = restored.tableId,
+                        tableSessionId = activeSession.id,
+                        tableSessionStatus = activeSession.status.name,
+                        tableSessionActive = true,
+                        tableSessionInactiveReason = null,
+                        tableNumber = restored.tableNumber.toString(),
+                        venueStatus = availability.venueStatus.dbValue,
+                        subscriptionStatus = availability.subscriptionStatus,
+                        available = true,
+                        unavailableReason = null,
+                    ),
+            ),
+        )
+    }
+
     get("/table/resolve") {
         val rawToken = call.request.queryParameters["tableToken"]
         val token = validateTableToken(rawToken)
@@ -130,3 +189,7 @@ private data class ResolvedTableSession(
 
 private fun TableSessionRecord.inactiveReason(now: Instant): String =
     if (expiresAt <= now) "TABLE_SESSION_EXPIRED" else "TABLE_SESSION_ENDED"
+
+private suspend fun io.ktor.server.application.ApplicationCall.respondNoRestoredTableContext() {
+    respond(TableRestoreResponse(context = null))
+}

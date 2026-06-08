@@ -139,6 +139,24 @@ function parsePositiveNumber(value: string | null | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
+function parseTelegramUserIdFromInitData(initData: string | null): number | null {
+  if (!initData) {
+    return null
+  }
+  try {
+    const rawUser = new URLSearchParams(initData).get('user')
+    if (!rawUser) {
+      return null
+    }
+    const parsed = JSON.parse(rawUser) as { id?: unknown }
+    const rawId = parsed.id
+    const userId = typeof rawId === 'number' ? rawId : typeof rawId === 'string' ? Number(rawId) : null
+    return userId !== null && Number.isSafeInteger(userId) && userId > 0 ? userId : null
+  } catch {
+    return null
+  }
+}
+
 export function getTelegramContext(): TelegramContext {
   const webApp = getWebApp()
   const params = getSearchParams()
@@ -200,7 +218,8 @@ export function getTelegramContext(): TelegramContext {
     parsePositiveNumber(getQueryParam(params, 'table_session_id'))
   const botUsername = normalizeNonEmpty(getQueryParam(params, 'tgWebAppBotUsername'))
   const rawUserId = webApp?.initDataUnsafe?.user?.id
-  const telegramUserId = typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : null
+  const telegramUserId =
+    typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : parseTelegramUserIdFromInitData(initData)
   return {
     isTelegram: Boolean(webApp),
     initData,
