@@ -76,6 +76,7 @@ MUST:
 - Booking status notifications (within Telegram constraints).
 SHOULD:
 - Favorites and history (Block 15) integrate with catalog.
+- Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR, and the context resets after bill close.
 
 ## Block 5 — Orders (one active order per table + batches)
 MUST:
@@ -85,6 +86,7 @@ MUST:
 - Staff assignment optional; prevent double-accept conflicts.
 SHOULD:
 - Out-of-stock handling via stop-list, not via last-minute rejects.
+- Staff-facing live order messages keep the main order and every add-batch/doporder visually separated, with batch status/action context clear to operators. Order/bill totals still come from the canonical backend bill snapshot.
 
 ## Block 6 — Split bill (personal/shared) with anti-abuse
 MUST:
@@ -101,6 +103,7 @@ MUST:
 - Connect staff group chat (optional) by providing chat_id / invite flow.
 SHOULD:
 - Onboarding checklist + readiness score.
+- Weekly working hours and concrete-date exceptions are displayed as distinct concepts: base weekday schedule, enabled/closed day state, and override state must not look like duplicate/conflicting controls.
 
 ## Block 8 — Menu builder + photos + stop-list + top list
 MUST:
@@ -110,6 +113,7 @@ MUST:
 - “Top list” / featured items pinning.
 SHOULD:
 - Bulk edit / import; optional PDF attachment as secondary (not primary).
+- Informational `Фото-меню` can stay as one media list in simple mode, but may support optional owner-defined subsections in advanced mode. This is separate from the structured order menu.
 
 ## Block 9 — Tables & QR
 MUST:
@@ -127,6 +131,7 @@ MUST:
 - Duplicate order/call notifications to venue staff group chat if configured.
 SHOULD:
 - SLA timers and alerts.
+- Paid extension of the current venue/table service window can be requested by guest and confirmed by staff/manager; confirmed extension adds the agreed charge to the bill and extends the current operational/session window.
 
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
 MUST:

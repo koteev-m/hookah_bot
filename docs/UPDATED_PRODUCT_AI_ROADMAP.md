@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-06-05.
+Дата обновления: 2026-06-08.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -46,7 +46,8 @@ Recently verified:
 - CI release validation is green on the latest release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and aggregate job all passed.
 - Deploy/runbook hardening is in place: health-check wait/retry, restart/rollback/log commands and staging/pilot first-response path are documented.
 - Minimal Playwright browser smoke covers Guest Mini App pre-QR info/photo-menu vs table-context structured menu separation.
-- Current P1 fix-pack in progress: staff Telegram chat bill refresh after manual discount, item exclusion and restore. Backend implementation and local validation are done; staging re-smoke is pending.
+- Cross-channel bill snapshot automation protects Mini App full bill vs Telegram/staff bill totals.
+- Live staff-chat order messages, bill-affecting refresh and button lifecycle passed staging smoke. Current follow-up is batch-level clarity, not stale totals.
 
 ## 2. Sources Merged
 
@@ -150,7 +151,7 @@ Done:
 Remaining P1:
 
 - final staging smoke after each release batch;
-- staging re-smoke for staff Telegram chat bill refresh after manual discount, item exclusion and restore;
+- staff-chat live message batch clarity: split main order and add-batches/doporders into separate blocks with their own batch status/action context;
 - real venue settings screen, or keep bot as canonical;
 - venue stats screen;
 - deeper operational frontend smoke/e2e coverage beyond the minimal Guest Mini App browser smoke.
@@ -261,6 +262,23 @@ Done:
 Remaining P1:
 
 - final staging smoke after each additional release batch;
+
+## 3.1 Newly Recorded Product Follow-ups
+
+Status: `FOLLOW-UP BACKLOG / NO CURRENT P0`.
+
+These items were recorded after the pilot release snapshot, CI hardening, deploy runbook hardening, browser smoke, cross-channel bill snapshot regression and live staff-chat staging smoke. They are not implemented in this step.
+
+| Priority | Block | Current evidence | Product target | Recommended action |
+| --- | --- | --- | --- | --- |
+| P1 | Staff-chat main order vs doporders clarity | Product spec already models `order_batches` with statuses; Venue Mini App can show batches, while live staff-chat currently risks presenting a flat bill/order item list. | One live staff-chat message still stays canonical, but it visually separates the main order and each doporder/add-batch, shows batch status, and applies action buttons to the correct operational context. | Next implementation block. Preserve `OrderBillSnapshot` as money source; inspect whether existing batch status data is enough before considering schema changes. |
+| P1 | Guest table session persistence/restore | Mini App table context is currently tied to QR/start/table token browser state; backend active order access is scoped by `tableSessionId`/`tabId`. Manual smoke showed rescanning QR restores the correct state. | While an active table session/tab/order exists, returning guest should re-enter table context safely without rescanning QR; after bill close, table context can reset. | Design and implement after staff-chat batch clarity. Validate authorization so users cannot restore чужой tab/session. |
+| P1 | Paid venue/shift extension | Real venue case: closing time can be extended by one paid hour. No current dedicated extension domain was confirmed in code. | Guest requests extension as a staff/manager-mediated action, not as a confusing normal menu item; staff/manager can extend the current shift/session repeatedly and add the agreed charge to bill. | Product/API design pack first. Do not mix with ordinary order menu or billing automation without explicit scope. |
+| P2 | Owner working days/hours/exceptions UX | Current owner bot has weekday base schedule controls and date-specific override controls (`open`/`closed`, time fields), which can be unclear when base day and override disagree. | UI should clearly separate weekly schedule from concrete-date exceptions, show whether a day is working/closed/overridden, and make each button's effect explicit. | UX audit/fix-pack after P1 operational blocks. |
+| P2 | `📖 Фото-меню` optional subsections | Current info/photo-menu model is a flat visible info section with media attachments; structured `🍽 Заказное меню` is separate. | Simple mode keeps one image list; advanced mode lets owner/manager enable subsections such as кальянное меню, напитки, чай, пробой посуды and custom sections. Guest sees subsections first when enabled. | Product model/read-model design; avoid confusing this with structured order menu. |
+| P2 | Owner multi-image upload UX | Owner media upload keeps the upload state and confirms each media item, which can create repeated messages with `Готово`/`Назад`. | Multiple images should be collected without N noisy confirmation screens; after upload, return to an image list with change/delete/back actions. | Telegram UX debt fix-pack. Keep album-end logic explicit and avoid guessing Telegram media group completion. |
+
+Recommended next block: `P1 Staff-chat main order vs doporders clarity`, because it directly affects shift operations and can make staff act on the wrong batch/status even though totals are already correct.
 
 ### Internal AI Assistant Core
 

@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-06-05.
+Дата: 2026-06-08.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -22,7 +22,7 @@
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
 - CI release validation is green for the current release snapshot: backend ktlint, backend compile, split backend route/RBAC/Telegram/migration jobs, compose, Mini App build, backend Docker build and backend aggregate passed.
 - Cross-channel bill snapshot automation covers Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, exclusions and restore.
-- P1 pending for the current release batch: staff Telegram chat must refresh after manual discount, item exclusion and restore so operators do not act on stale bill totals. Backend implementation and local validation are done; staging re-smoke is pending.
+- Live staff-chat order messages, bill-affecting refresh and button lifecycle passed staging smoke. Remaining staff-chat follow-up is batch-level clarity: main order and doporders should be visually separated.
 - Platform owner lifecycle and commercial terms flows are in smoke scope.
 
 ## Current Staging Smoke Status
@@ -47,10 +47,11 @@ Confirmed:
 
 Remaining:
 
-- P1 pending: re-smoke staff Telegram chat bill refresh after manual discount, item exclusion and restore;
 - repeat this smoke after any additional release batch;
-- operational readiness remains the next launch-supporting block: monitoring, deploy health-check wait/retry, restart/rollback and incident runbook ownership;
-- P2 follow-ups remain: expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
+- P1 follow-up: staff-chat live message should separate main order and doporders/add-batches by block and status;
+- P1 follow-up: Guest table session restore should let a returning guest re-enter an active table context safely without rescanning QR;
+- P1 follow-up: paid venue/shift extension needs a scoped product/API design before implementation;
+- P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
 
@@ -358,7 +359,11 @@ Expected:
 - Minimal Playwright browser smoke exists for Guest Mini App pre-QR/table menu separation; wider Venue/Platform/browser coverage is still pending.
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
-- Staff Telegram chat bill refresh after manual discount/exclude/restore is a current P1 re-smoke item for the next release batch.
+- Staff Telegram chat totals refresh passed staging smoke; current P1 staff-chat gap is visual/operational clarity for main order vs doporders/add-batches and their statuses.
+- Guest table session restore is not yet implemented as a no-QR return path; active table context currently remains safest through Telegram QR/start/table token flows.
+- Paid venue/shift extension is not yet implemented; treat it as a product/API design block, not as a normal menu item.
+- `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
+- Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
@@ -369,3 +374,17 @@ Expected:
    - venue order detail/full bill;
    - platform safe sections.
 2. Extend cross-channel bill snapshots only if new money-affecting adjustments are added.
+
+## 11. Next Implementation Smoke Target
+
+Recommended next implementation block: `P1 Staff-chat main order vs doporders clarity`.
+
+Manual smoke after implementation:
+
+1. Create a first order from Guest Mini App and confirm the staff Telegram chat has one live message.
+2. Confirm the message shows the main order as its own block with status and bill totals from `OrderBillSnapshot`.
+3. Add a doporder/add-batch from Guest Mini App.
+4. Confirm the same live message is edited, not spammed, and now shows a separate doporder block with its own status.
+5. Accept/deliver the main order and doporder in different order.
+6. Confirm each block's status remains understandable and action buttons do not imply the wrong batch.
+7. Apply discount/exclude/restore and confirm totals still match Venue Mini App full bill and Telegram/staff full bill.
