@@ -146,12 +146,12 @@ Done:
 - Venue Mini App entry for OWNER/MANAGER/STAFF through inline `web_app`;
 - venue booking queue/actions baseline;
 - booking RBAC split implemented: STAFF view + arrival/no-show, MANAGER/OWNER management actions;
+- staff-chat live message clarity for main order vs doporders passed staging smoke: one live message, venue-local time without `UTC`, separate blocks and clear batch statuses/actions;
 - venue settings hidden safely instead of dead-end placeholder;
 
 Remaining P1:
 
 - final staging smoke after each release batch;
-- staff-chat live message batch clarity: split main order and add-batches/doporders into separate blocks with their own batch status/action context;
 - real venue settings screen, or keep bot as canonical;
 - venue stats screen;
 - deeper operational frontend smoke/e2e coverage beyond the minimal Guest Mini App browser smoke.
@@ -271,15 +271,15 @@ These items were recorded after the pilot release snapshot, CI hardening, deploy
 
 | Priority | Block | Current evidence | Product target | Recommended action |
 | --- | --- | --- | --- | --- |
-| P1 | Staff-chat main order vs doporders clarity | Product spec already models `order_batches` with statuses; Venue Mini App can show batches, and live staff-chat now separates the main order and doporders/add-batches in one message. | One live staff-chat message stays canonical, visually separates the main order and each doporder/add-batch, shows batch status, and applies action buttons to the correct operational context. | Implemented in backend staff-chat live message rendering; requires staging smoke after release. Preserve `OrderBillSnapshot` as money source. |
-| P1 | Guest table session persistence/restore | Mini App table context is currently tied to QR/start/table token browser state; backend active order access is scoped by `tableSessionId`/`tabId`. Manual smoke showed rescanning QR restores the correct state. | While an active table session/tab/order exists, returning guest should re-enter table context safely without rescanning QR; after bill close, table context can reset. | Design and implement after staff-chat batch clarity. Validate authorization so users cannot restore чужой tab/session. |
+| P1 CLOSED | Staff-chat main order vs doporders clarity | Product spec already models `order_batches` with statuses; Venue Mini App can show batches, and live staff-chat now separates the main order and doporders/add-batches in one message. Staging smoke passed: one live message, venue-local time without `UTC`, separate blocks and clear batch statuses/actions. | One live staff-chat message stays canonical, visually separates the main order and each doporder/add-batch, shows batch status, and applies action buttons to the correct operational context. | Keep in regression smoke. Preserve `OrderBillSnapshot` as money source. |
+| P1 | Guest table session persistence/restore | Mini App table context is currently tied to QR/start/table token browser state; backend active order access is scoped by `tableSessionId`/`tabId`. Manual smoke showed rescanning QR restores the correct state. | While an active table session/tab/order exists, returning guest should re-enter table context safely without rescanning QR; after bill close, table context can reset. | Next implementation block. Validate authorization so users cannot restore чужой tab/session. |
 | P1 | Paid venue/shift extension | Real venue case: closing time can be extended by one paid hour. No current dedicated extension domain was confirmed in code. | Guest requests extension as a staff/manager-mediated action, not as a confusing normal menu item; staff/manager can extend the current shift/session repeatedly and add the agreed charge to bill. | Product/API design pack first. Do not mix with ordinary order menu or billing automation without explicit scope. |
 | P2 | Owner working days/hours/exceptions UX | Current owner bot has weekday base schedule controls and date-specific override controls (`open`/`closed`, time fields), which can be unclear when base day and override disagree. | UI should clearly separate weekly schedule from concrete-date exceptions, show whether a day is working/closed/overridden, and make each button's effect explicit. | UX audit/fix-pack after P1 operational blocks. |
 | P2 | Owner timezone setup hint | `venue_settings.timezone` is the source of truth for venue-local time formatting. Current code has basic city/address inference rules, but no external geocoding or rich owner-facing timezone suggestion flow. | Owner setup should suggest a timezone from city/address and clearly allow manual override; all venue-context guest/staff/manager/owner times should render in venue local time. | Later owner setup improvement. Do not add geocoding dependency in the staff-chat timestamp fix. |
 | P2 | `📖 Фото-меню` optional subsections | Current info/photo-menu model is a flat visible info section with media attachments; structured `🍽 Заказное меню` is separate. | Simple mode keeps one image list; advanced mode lets owner/manager enable subsections such as кальянное меню, напитки, чай, пробой посуды and custom sections. Guest sees subsections first when enabled. | Product model/read-model design; avoid confusing this with structured order menu. |
 | P2 | Owner multi-image upload UX | Owner media upload keeps the upload state and confirms each media item, which can create repeated messages with `Готово`/`Назад`. | Multiple images should be collected without N noisy confirmation screens; after upload, return to an image list with change/delete/back actions. | Telegram UX debt fix-pack. Keep album-end logic explicit and avoid guessing Telegram media group completion. |
 
-Recommended next block after staff-chat batch clarity release smoke: `P1 Guest table session persistence/restore`, because it protects the core Guest table-order context when a user leaves and returns before the bill is closed.
+Recommended next block: `P1 Guest table session persistence/restore`, because it protects the core Guest table-order context when a user leaves and returns before the bill is closed.
 
 ### Internal AI Assistant Core
 
