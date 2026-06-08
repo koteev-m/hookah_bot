@@ -17,7 +17,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.time.Instant
-import java.time.ZoneOffset
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -327,6 +327,7 @@ class StaffChatNotifier(
             logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_DISABLED)
             return StaffChatNotificationResult.SKIPPED_DISABLED
         }
+        val venueZoneId = resolveVenueZoneId(event.venueId)
         val text =
             buildStaffOrderLiveMessageText(
                 venueName = venue.name,
@@ -336,6 +337,7 @@ class StaffChatNotifier(
                 bill = event.bill,
                 batches = event.batches,
                 updatedAt = event.updatedAt,
+                venueZoneId = venueZoneId,
                 change = event.change,
             )
         val actionTarget = staffOrderLiveActionTarget(event)
@@ -524,6 +526,25 @@ class StaffChatNotifier(
         }
     }
 
+    private suspend fun resolveVenueZoneId(venueId: Long): ZoneId {
+        val timezone =
+            runCatching { venueSettingsRepository?.find(venueId)?.timezone }
+                .onFailure { e ->
+                    logger.warn(
+                        "Failed to load venue timezone for staff chat live message venue_id={}: {}",
+                        venueId,
+                        sanitizeTelegramForLog(e.message),
+                    )
+                    logger.debugTelegramException(e) { "load staff chat venue timezone" }
+                }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE
+        return runCatching { ZoneId.of(timezone) }
+            .onFailure { logger.warn("Invalid venue timezone venue_id={} timezone={}", venueId, timezone) }
+            .getOrDefault(defaultStaffChatVenueZoneId)
+    }
+
     private fun logResult(
         venueId: Long,
         notificationKey: Long,
@@ -646,7 +667,10 @@ private fun formatStaffChatPromotionDiscounts(discounts: List<NewBatchPromotionD
 }
 
 private val staffChatLiveMessageUpdatedAtFormatter: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm 'UTC'").withZone(ZoneOffset.UTC)
+    DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
+
+private val defaultStaffChatVenueZoneId: ZoneId =
+    ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE)
 
 internal fun OrderDetail.toStaffOrderBatchLiveBlocks(): List<StaffOrderBatchLiveBlock> =
     batches.mapIndexed { index, batch ->
@@ -666,6 +690,7 @@ internal fun buildStaffOrderLiveMessageText(
     bill: OrderBillSnapshot,
     batches: List<StaffOrderBatchLiveBlock> = emptyList(),
     updatedAt: Instant,
+    venueZoneId: ZoneId = defaultStaffChatVenueZoneId,
     change: StaffBillUpdateChange? = null,
 ): String =
     buildString {
@@ -700,11 +725,16 @@ internal fun buildStaffOrderLiveMessageText(
             append("\nИсключено: −").append(formatStaffChatMoney(bill.excludedTotalMinor, bill.currency))
         }
         append("\nК оплате: ").append(formatStaffChatMoney(bill.finalPayableTotalMinor, bill.currency))
-        append("\nОбновлено: ").append(staffChatLiveMessageUpdatedAtFormatter.format(updatedAt))
+        append("\nОбновлено: ").append(formatStaffChatLiveMessageUpdatedAt(updatedAt, venueZoneId))
         if (status == OrderWorkflowStatus.CLOSED) {
             append("\n\nСчёт закрыт.")
         }
     }
+
+private fun formatStaffChatLiveMessageUpdatedAt(
+    updatedAt: Instant,
+    venueZoneId: ZoneId,
+): String = staffChatLiveMessageUpdatedAtFormatter.format(updatedAt.atZone(venueZoneId))
 
 private data class StaffOrderActionTarget(
     val batchId: Long,

@@ -40,7 +40,14 @@ class StaffChatNotifierTest {
     @Test
     fun `notifyNewBatch sends only once for same batch`() =
         runBlocking {
-            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueSettingsRepository.find(1L) } returns
+                VenueSettings(
+                    venueId = 1L,
+                    notifyOrdersEnabled = true,
+                    notifyStaffCallsEnabled = true,
+                    notifyCancellationsEnabled = true,
+                    timezone = "Europe/Moscow",
+                )
             coEvery { venueRepository.findVenueById(1L) } returns
                 VenueShort(
                     id = 1L,
@@ -801,7 +808,8 @@ class StaffChatNotifierTest {
             assertTrue(payload.contains("Сумма до скидок: 200 ₽"), payload)
             assertTrue(payload.contains("Ручные скидки: −20 ₽"), payload)
             assertTrue(payload.contains("К оплате: 180 ₽"), payload)
-            assertTrue(payload.contains("Обновлено: 05.06.2026 12:34 UTC"), payload)
+            assertTrue(payload.contains("Обновлено: 05.06.2026 15:34"), payload)
+            assertFalse(payload.contains("UTC"), payload)
             coVerify { notificationRepository.enqueueOrderMessage(2L, 1L, 777L, "editMessageText", any()) }
             coVerify(exactly = 0) { notificationRepository.enqueue(777L, "sendMessage", any()) }
             coVerify(exactly = 0) { notificationRepository.tryClaimAndEnqueue(any(), any(), any(), any()) }
