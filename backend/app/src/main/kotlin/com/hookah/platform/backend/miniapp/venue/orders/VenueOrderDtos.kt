@@ -93,6 +93,7 @@ data class OrderBillDto(
     val promoDiscounts: List<OrderBillDiscountDto>,
     val loyaltyDiscounts: List<OrderBillDiscountDto>,
     val excludedItems: List<OrderBillExcludedItemDto>,
+    val serviceCharges: List<OrderBillServiceChargeDto> = emptyList(),
 )
 
 @Serializable
@@ -101,6 +102,18 @@ data class OrderBillDiscountDto(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String? = null,
+)
+
+@Serializable
+data class OrderBillServiceChargeDto(
+    val id: Long,
+    val source: String,
+    val sourceRequestId: Long? = null,
+    val label: String,
+    val qty: Int,
+    val unitPriceMinor: Long,
+    val totalMinor: Long,
+    val currency: String,
 )
 
 @Serializable

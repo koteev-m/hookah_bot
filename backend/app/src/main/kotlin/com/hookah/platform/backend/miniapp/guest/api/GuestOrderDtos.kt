@@ -25,6 +25,7 @@ data class ActiveOrderDto(
     val finalPayableTotalMinor: Long,
     val currency: String,
     val discounts: List<ActiveOrderDiscountDto>,
+    val serviceCharges: List<ActiveOrderServiceChargeDto> = emptyList(),
     val batches: List<OrderBatchDto>,
 )
 
@@ -34,6 +35,18 @@ data class ActiveOrderDiscountDto(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String? = null,
+)
+
+@Serializable
+data class ActiveOrderServiceChargeDto(
+    val id: Long,
+    val source: String,
+    val sourceRequestId: Long? = null,
+    val label: String,
+    val qty: Int,
+    val unitPriceMinor: Long,
+    val totalMinor: Long,
+    val currency: String,
 )
 
 @Serializable

@@ -65,6 +65,9 @@ import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVisitRoutes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
+import com.hookah.platform.backend.miniapp.shift.guestShiftExtensionRoutes
+import com.hookah.platform.backend.miniapp.shift.venueShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
@@ -361,6 +364,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val venueTableRepository = VenueTableRepository(dataSource)
     val staffCallRepository = StaffCallRepository(dataSource)
     val tableSessionRepository = TableSessionRepository(dataSource, analyticsEventRepository)
+    val shiftExtensionRepository = ShiftExtensionRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
     val auditLogRepository = AuditLogRepository(dataSource, json)
     val aiAssistantService =
@@ -1104,6 +1108,17 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         staffChatNotifier = guestStaffChatNotifier,
                         userRepository = userRepository,
                     )
+                    guestShiftExtensionRoutes(
+                        tableTokenResolver = tableTokenResolver,
+                        guestVenueRepository = guestVenueRepository,
+                        subscriptionRepository = subscriptionRepository,
+                        tableSessionRepository = tableSessionRepository,
+                        tableSessionConfig = tableSessionConfig,
+                        guestTabsRepository = guestTabsRepository,
+                        ordersRepository = ordersRepository,
+                        shiftExtensionRepository = shiftExtensionRepository,
+                        venueSettingsRepository = venueSettingsRepository,
+                    )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))
                     }
@@ -1144,6 +1159,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     guestBookingRepository = guestBookingRepository,
                     outboxEnqueuer = telegramOutboxEnqueuer,
+                    venueSettingsRepository = venueSettingsRepository,
+                )
+                venueShiftExtensionRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    shiftExtensionRepository = shiftExtensionRepository,
+                    venueOrdersRepository = venueOrdersRepository,
+                    staffBillUpdateNotifier = overrides.staffBillUpdateNotifier ?: staffChatNotifier,
                     venueSettingsRepository = venueSettingsRepository,
                 )
                 platformRoutes(

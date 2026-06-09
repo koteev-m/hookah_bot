@@ -49,6 +49,18 @@ data class ActiveOrderDetails(
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
     val promotionDiscounts: List<CreatedOrderPromotionDiscount> = emptyList(),
+    val serviceCharges: List<OrderServiceChargeDetails> = emptyList(),
+)
+
+data class OrderServiceChargeDetails(
+    val id: Long,
+    val source: String,
+    val sourceRequestId: Long?,
+    val label: String,
+    val qty: Int,
+    val unitPriceMinor: Long,
+    val totalMinor: Long,
+    val currency: String,
 )
 
 data class CreatedOrderBatch(
@@ -298,6 +310,7 @@ class OrdersRepository(
                                 order.orderId,
                                 batches.map { it.first },
                             ),
+                        serviceCharges = loadOrderServiceCharges(connection, order.orderId),
                         batches =
                             batches.map { (batchId, comment) ->
                                 OrderBatchDetails(
@@ -400,6 +413,7 @@ class OrdersRepository(
                                 order.orderId,
                                 batches.map { it.first },
                             ),
+                        serviceCharges = loadOrderServiceCharges(connection, order.orderId),
                         batches =
                             batches.map { (batchId, comment) ->
                                 OrderBatchDetails(
@@ -1638,6 +1652,49 @@ class OrdersRepository(
             }
         }
     }
+
+    private fun loadOrderServiceCharges(
+        connection: Connection,
+        orderId: Long,
+    ): List<OrderServiceChargeDetails> =
+        connection.prepareStatement(
+            """
+            SELECT id,
+                   source,
+                   source_request_id,
+                   label,
+                   qty,
+                   unit_price_minor,
+                   total_minor,
+                   currency
+            FROM order_service_charges
+            WHERE order_id = ?
+            ORDER BY created_at, id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, orderId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            OrderServiceChargeDetails(
+                                id = rs.getLong("id"),
+                                source = rs.getString("source"),
+                                sourceRequestId =
+                                    rs.getLong("source_request_id").let { value ->
+                                        if (rs.wasNull()) null else value
+                                    },
+                                label = rs.getString("label"),
+                                qty = rs.getInt("qty"),
+                                unitPriceMinor = rs.getLong("unit_price_minor"),
+                                totalMinor = rs.getLong("total_minor"),
+                                currency = rs.getString("currency"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
 
     private fun buildCreatedOrderBatchItems(
         insertedItems: List<InsertedOrderBatchItem>,

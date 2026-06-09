@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillServiceChargeSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
@@ -110,6 +111,8 @@ enum class StaffBillUpdateChange {
     ITEM_EXCLUDED,
     ITEM_RESTORED,
     STATUS_UPDATED,
+    SHIFT_EXTENSION_APPROVED,
+    SHIFT_EXTENSION_REJECTED,
 }
 
 enum class StaffChatNotificationResult {
@@ -707,6 +710,10 @@ internal fun buildStaffOrderLiveMessageText(
         if (batches.isEmpty()) {
             append("\nАктивные позиции:\n")
             append(formatStaffBillActiveItems(bill.activeItems, bill.currency))
+            if (bill.serviceCharges.isNotEmpty()) {
+                append("\n\nДополнительно:\n")
+                append(formatStaffBillServiceCharges(bill.serviceCharges, bill.currency))
+            }
             if (excludedItems.isNotEmpty()) {
                 append("\n\nИсключено из счёта:\n")
                 append(formatStaffBillExcludedItems(excludedItems))
@@ -714,6 +721,10 @@ internal fun buildStaffOrderLiveMessageText(
         } else {
             append("\n")
             append(formatStaffOrderBatchBlocks(batches, bill, status))
+            if (bill.serviceCharges.isNotEmpty()) {
+                append("\n\nДополнительно:\n")
+                append(formatStaffBillServiceCharges(bill.serviceCharges, bill.currency))
+            }
         }
         append("\n\nСумма до скидок: ").append(formatStaffChatMoney(bill.grossTotalMinor, bill.currency))
         if (bill.manualDiscountTotalMinor > 0L) {
@@ -846,6 +857,10 @@ internal fun buildStaffBillUpdatedNotificationText(
         append("Изменение: ").append(staffBillUpdateChangeLabel(change)).append('\n')
         append("\nАктивные позиции:\n")
         append(formatStaffBillActiveItems(bill.activeItems, bill.currency))
+        if (bill.serviceCharges.isNotEmpty()) {
+            append("\n\nДополнительно:\n")
+            append(formatStaffBillServiceCharges(bill.serviceCharges, bill.currency))
+        }
         val excludedItems = bill.excludedItems.filter { item -> item.status == "excluded" }
         if (excludedItems.isNotEmpty()) {
             append("\n\nИсключено из счёта:\n")
@@ -870,6 +885,8 @@ private fun staffBillUpdateChangeLabel(change: StaffBillUpdateChange): String =
         StaffBillUpdateChange.ITEM_EXCLUDED -> "позиция исключена"
         StaffBillUpdateChange.ITEM_RESTORED -> "позиция восстановлена"
         StaffBillUpdateChange.STATUS_UPDATED -> "статус заказа"
+        StaffBillUpdateChange.SHIFT_EXTENSION_APPROVED -> "продление работы подтверждено"
+        StaffBillUpdateChange.SHIFT_EXTENSION_REJECTED -> "продление работы отклонено"
     }
 
 private fun staffOrderStatusLabel(status: OrderWorkflowStatus): String =
@@ -922,6 +939,26 @@ private fun formatStaffBillExcludedItems(items: List<OrderBillExcludedItemSnapsh
             }
         }
     }
+
+private fun formatStaffBillServiceCharges(
+    charges: List<OrderBillServiceChargeSnapshot>,
+    fallbackCurrency: String,
+): String =
+    charges
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString("\n") { charge ->
+            buildString {
+                append("• ").append(charge.label).append(" ×").append(charge.qty)
+                append(" — ")
+                append(
+                    formatStaffChatMoney(
+                        charge.totalMinor,
+                        charge.currency.takeIf { it.isNotBlank() } ?: fallbackCurrency,
+                    ),
+                )
+            }
+        }
+        ?: "• нет дополнительных начислений"
 
 private fun StringBuilder.appendStaffBillDiscountLines(
     title: String,

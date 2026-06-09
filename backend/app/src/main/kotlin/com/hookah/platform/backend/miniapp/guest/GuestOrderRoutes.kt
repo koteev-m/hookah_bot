@@ -5,6 +5,7 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderDto
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
+import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderServiceChargeDto
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
@@ -354,10 +355,12 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
     val currency =
         allItems.firstOrNull { !it.currency.isNullOrBlank() }?.currency
             ?: promotionDiscounts.firstOrNull { it.currency.isNotBlank() }?.currency
+            ?: serviceCharges.firstOrNull { it.currency.isNotBlank() }?.currency
             ?: DEFAULT_CURRENCY
     val manualDiscountTotal = allItems.sumOf { item -> item.manualDiscountMinor() }
     val promoDiscounts = promotionDiscounts.filterNot { it.isLoyaltyDiscount() }
     val loyaltyDiscounts = promotionDiscounts.filter { it.isLoyaltyDiscount() }
+    val serviceChargeTotal = serviceCharges.sumOf { charge -> charge.totalMinor }
     return ActiveOrderDto(
         orderId = orderId,
         displayNumber = displayNumber,
@@ -368,11 +371,11 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
         tabId = tabId,
         tableNumber = table.tableNumber.toString(),
         status = status,
-        grossTotalMinor = allItems.sumOf { item -> item.lineGrossMinor() },
+        grossTotalMinor = allItems.sumOf { item -> item.lineGrossMinor() } + serviceChargeTotal,
         manualDiscountTotalMinor = manualDiscountTotal,
         promoDiscountTotalMinor = promoDiscounts.sumOf { it.discountMinor },
         loyaltyDiscountTotalMinor = loyaltyDiscounts.sumOf { it.discountMinor },
-        finalPayableTotalMinor = allItems.sumOf { item -> item.linePayableMinor() },
+        finalPayableTotalMinor = allItems.sumOf { item -> item.linePayableMinor() } + serviceChargeTotal,
         currency = currency,
         discounts =
             promotionDiscounts.map { discount ->
@@ -381,6 +384,19 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
                     discountMinor = discount.discountMinor,
                     currency = discount.currency,
                     ruleType = discount.ruleType,
+                )
+            },
+        serviceCharges =
+            serviceCharges.map { charge ->
+                ActiveOrderServiceChargeDto(
+                    id = charge.id,
+                    source = charge.source,
+                    sourceRequestId = charge.sourceRequestId,
+                    label = charge.label,
+                    qty = charge.qty,
+                    unitPriceMinor = charge.unitPriceMinor,
+                    totalMinor = charge.totalMinor,
+                    currency = charge.currency,
                 )
             },
         batches =

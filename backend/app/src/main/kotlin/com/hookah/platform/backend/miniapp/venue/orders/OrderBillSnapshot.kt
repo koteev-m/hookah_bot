@@ -16,6 +16,7 @@ data class OrderBillSnapshot(
     val promoDiscounts: List<OrderBillDiscountSnapshot>,
     val loyaltyDiscounts: List<OrderBillDiscountSnapshot>,
     val excludedItems: List<OrderBillExcludedItemSnapshot>,
+    val serviceCharges: List<OrderBillServiceChargeSnapshot> = emptyList(),
 )
 
 data class OrderBillActiveItemSnapshot(
@@ -38,6 +39,17 @@ data class OrderBillDiscountSnapshot(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String?,
+)
+
+data class OrderBillServiceChargeSnapshot(
+    val id: Long,
+    val source: String,
+    val sourceRequestId: Long?,
+    val label: String,
+    val qty: Int,
+    val unitPriceMinor: Long,
+    val totalMinor: Long,
+    val currency: String,
 )
 
 data class OrderBillExcludedItemSnapshot(
@@ -71,9 +83,10 @@ fun OrderDetail.toOrderBillSnapshot(defaultCurrency: String = DEFAULT_BILL_CURRE
         promotionDiscounts
             .filter { discount -> discount.isLoyaltyDiscount() }
             .map { discount -> discount.toBillDiscountSnapshot() }
+    val serviceCharges = serviceCharges.map { charge -> charge.toBillServiceChargeSnapshot() }
     val excludedItems = buildExcludedItemSnapshots(labeledBatches, defaultCurrency)
     return OrderBillSnapshot(
-        grossTotalMinor = activeItems.sumOf { item -> item.lineGrossMinor },
+        grossTotalMinor = activeItems.sumOf { item -> item.lineGrossMinor } + serviceCharges.sumOf { it.totalMinor },
         manualDiscountTotalMinor = activeItems.sumOf { item -> item.manualDiscountMinor },
         promoDiscountTotalMinor = promoDiscounts.sumOf { discount -> discount.discountMinor },
         loyaltyDiscountTotalMinor = loyaltyDiscounts.sumOf { discount -> discount.discountMinor },
@@ -89,12 +102,14 @@ fun OrderDetail.toOrderBillSnapshot(defaultCurrency: String = DEFAULT_BILL_CURRE
             excludedItems
                 .filter { item -> item.status == "rejected_batch" }
                 .sumOf { item -> item.lineGrossMinor },
-        finalPayableTotalMinor = activeItems.sumOf { item -> item.linePayableMinor },
+        finalPayableTotalMinor =
+            activeItems.sumOf { item -> item.linePayableMinor } + serviceCharges.sumOf { it.totalMinor },
         currency = resolveBillCurrency(defaultCurrency),
         activeItems = activeItems,
         promoDiscounts = promoDiscounts,
         loyaltyDiscounts = loyaltyDiscounts,
         excludedItems = excludedItems,
+        serviceCharges = serviceCharges,
     )
 }
 
@@ -158,12 +173,25 @@ private fun OrderPromotionDiscount.toBillDiscountSnapshot(): OrderBillDiscountSn
         ruleType = ruleType,
     )
 
+private fun OrderServiceChargeDetail.toBillServiceChargeSnapshot(): OrderBillServiceChargeSnapshot =
+    OrderBillServiceChargeSnapshot(
+        id = id,
+        source = source,
+        sourceRequestId = sourceRequestId,
+        label = label,
+        qty = qty,
+        unitPriceMinor = unitPriceMinor,
+        totalMinor = totalMinor,
+        currency = currency,
+    )
+
 private fun OrderDetail.resolveBillCurrency(defaultCurrency: String): String =
     batches
         .flatMap { batch -> batch.items }
         .firstOrNull { item -> !item.currency.isNullOrBlank() }
         ?.currency
         ?: promotionDiscounts.firstOrNull { discount -> discount.currency.isNotBlank() }?.currency
+        ?: serviceCharges.firstOrNull { charge -> charge.currency.isNotBlank() }?.currency
         ?: defaultCurrency
 
 private fun OrderBatchItemDetail.lineGrossMinor(): Long = priceMinor?.let { price -> price * qty } ?: 0L

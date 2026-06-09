@@ -88,6 +88,7 @@ data class OrderDetail(
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
     val promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
+    val serviceCharges: List<OrderServiceChargeDetail> = emptyList(),
 )
 
 data class OrderBatchDetail(
@@ -110,6 +111,18 @@ data class OrderPromotionDiscount(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String? = null,
+)
+
+data class OrderServiceChargeDetail(
+    val id: Long,
+    val source: String,
+    val sourceRequestId: Long?,
+    val label: String,
+    val qty: Int,
+    val unitPriceMinor: Long,
+    val totalMinor: Long,
+    val currency: String,
+    val createdAt: Instant,
 )
 
 data class OrderBatchItemDetail(
@@ -717,6 +730,7 @@ class VenueOrdersRepository(
                     val batchIds = batches.map { it.batchId }
                     val itemsByBatch = loadBatchItems(connection, batchIds)
                     val promotionDiscountsByBatch = loadPromotionDiscountsByBatch(connection, batchIds)
+                    val serviceCharges = loadServiceCharges(connection, orderId)
                     val mappedBatches =
                         batches.map { batch ->
                             batch.copy(
@@ -739,6 +753,7 @@ class VenueOrdersRepository(
                         updatedAt = orderHeader.updatedAt,
                         batches = mappedBatches,
                         promotionDiscounts = mappedBatches.flatMap { it.promotionDiscounts }.mergePromotionDiscounts(),
+                        serviceCharges = serviceCharges,
                     )
                 }
             } catch (e: SQLException) {
@@ -2224,6 +2239,51 @@ class VenueOrdersRepository(
             }
         }
     }
+
+    private fun loadServiceCharges(
+        connection: Connection,
+        orderId: Long,
+    ): List<OrderServiceChargeDetail> =
+        connection.prepareStatement(
+            """
+            SELECT id,
+                   source,
+                   source_request_id,
+                   label,
+                   qty,
+                   unit_price_minor,
+                   total_minor,
+                   currency,
+                   created_at
+            FROM order_service_charges
+            WHERE order_id = ?
+            ORDER BY created_at, id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, orderId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            OrderServiceChargeDetail(
+                                id = rs.getLong("id"),
+                                source = rs.getString("source"),
+                                sourceRequestId =
+                                    rs.getLong("source_request_id").let { value ->
+                                        if (rs.wasNull()) null else value
+                                    },
+                                label = rs.getString("label"),
+                                qty = rs.getInt("qty"),
+                                unitPriceMinor = rs.getLong("unit_price_minor"),
+                                totalMinor = rs.getLong("total_minor"),
+                                currency = rs.getString("currency"),
+                                createdAt = rs.getTimestamp("created_at").toInstant(),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
 
     private fun List<OrderPromotionDiscount>.mergePromotionDiscounts(): List<OrderPromotionDiscount> =
         groupBy { discount ->

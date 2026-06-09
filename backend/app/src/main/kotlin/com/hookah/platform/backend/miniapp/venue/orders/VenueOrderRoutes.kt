@@ -681,6 +681,19 @@ private fun OrderDetail.buildBillDto(): OrderBillDto {
         promoDiscounts = snapshot.promoDiscounts.map { it.toDto() },
         loyaltyDiscounts = snapshot.loyaltyDiscounts.map { it.toDto() },
         excludedItems = snapshot.excludedItems.map { it.toDto() },
+        serviceCharges =
+            snapshot.serviceCharges.map { charge ->
+                OrderBillServiceChargeDto(
+                    id = charge.id,
+                    source = charge.source,
+                    sourceRequestId = charge.sourceRequestId,
+                    label = charge.label,
+                    qty = charge.qty,
+                    unitPriceMinor = charge.unitPriceMinor,
+                    totalMinor = charge.totalMinor,
+                    currency = charge.currency,
+                )
+            },
     )
 }
 

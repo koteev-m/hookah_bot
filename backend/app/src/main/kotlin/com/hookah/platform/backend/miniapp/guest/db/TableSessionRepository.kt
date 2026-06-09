@@ -59,13 +59,14 @@ class TableSessionRepository(
                                     """
                                     UPDATE table_sessions
                                     SET last_activity_at = ?,
-                                        expires_at = ?
+                                        expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
                                     WHERE id = ?
                                     """.trimIndent(),
                                 ).use { statement ->
                                     statement.setTimestamp(1, Timestamp.from(now))
                                     statement.setTimestamp(2, Timestamp.from(nextExpiry))
-                                    statement.setLong(3, existingId)
+                                    statement.setTimestamp(3, Timestamp.from(nextExpiry))
+                                    statement.setLong(4, existingId)
                                     statement.executeUpdate()
                                 }
                                 existingId
@@ -130,7 +131,7 @@ class TableSessionRepository(
                             """
                             UPDATE table_sessions
                             SET last_activity_at = ?,
-                                expires_at = ?
+                                expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
                             WHERE id = ?
                               AND venue_id = ?
                               AND table_id = ?
@@ -141,9 +142,52 @@ class TableSessionRepository(
                         ).use { statement ->
                             statement.setTimestamp(1, Timestamp.from(now))
                             statement.setTimestamp(2, Timestamp.from(nextExpiry))
-                            statement.setLong(3, tableSessionId)
-                            statement.setLong(4, venueId)
-                            statement.setLong(5, tableId)
+                            statement.setTimestamp(3, Timestamp.from(nextExpiry))
+                            statement.setLong(4, tableSessionId)
+                            statement.setLong(5, venueId)
+                            statement.setLong(6, tableId)
+                            statement.setTimestamp(7, Timestamp.from(now))
+                            statement.executeUpdate()
+                        }
+                    if (updated <= 0) {
+                        return@use null
+                    }
+                    loadById(connection, tableSessionId)
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun extendActiveSessionUntil(
+        tableSessionId: Long,
+        venueId: Long,
+        extendUntil: Instant,
+        now: Instant = Instant.now(),
+    ): TableSessionRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val updated =
+                        connection.prepareStatement(
+                            """
+                            UPDATE table_sessions
+                            SET last_activity_at = ?,
+                                expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
+                            WHERE id = ?
+                              AND venue_id = ?
+                              AND status = 'ACTIVE'
+                              AND ended_at IS NULL
+                              AND expires_at > ?
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setTimestamp(1, Timestamp.from(now))
+                            statement.setTimestamp(2, Timestamp.from(extendUntil))
+                            statement.setTimestamp(3, Timestamp.from(extendUntil))
+                            statement.setLong(4, tableSessionId)
+                            statement.setLong(5, venueId)
                             statement.setTimestamp(6, Timestamp.from(now))
                             statement.executeUpdate()
                         }

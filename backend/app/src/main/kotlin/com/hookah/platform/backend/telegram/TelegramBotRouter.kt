@@ -23609,9 +23609,18 @@ class TelegramBotRouter(
                     }
                 }
             }
+            if (billSnapshot.serviceCharges.isNotEmpty()) {
+                append("\n\n➕ Дополнительно")
+                billSnapshot.serviceCharges.forEach { charge ->
+                    append("\n• ${charge.label} ×${charge.qty} — ")
+                    append(formatCompactMoney(charge.totalMinor, charge.currency))
+                }
+            }
             append("\n\n🧾 Итого:")
             append("\n")
-            val hasPricedActiveItems = billSnapshot.activeItems.any { item -> !item.currency.isNullOrBlank() }
+            val hasPricedActiveItems =
+                billSnapshot.activeItems.any { item -> !item.currency.isNullOrBlank() } ||
+                    billSnapshot.serviceCharges.isNotEmpty()
             if (hasPricedActiveItems) {
                 append("\nСумма до скидок: ")
                     .append(
