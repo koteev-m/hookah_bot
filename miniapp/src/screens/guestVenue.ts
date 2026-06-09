@@ -19,6 +19,7 @@ import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPrese
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
+import { renderGuestShiftExtensionCard } from './guestShiftExtension'
 
 const MAX_ITEM_QTY = 50
 const MAX_STAFF_COMMENT_LENGTH = 500
@@ -51,6 +52,7 @@ type VenueRefs = {
   venueTitle: HTMLHeadingElement
   venueLocation: HTMLParagraphElement
   bookingButton: HTMLButtonElement
+  extensionSlot: HTMLDivElement
   menuBody: HTMLDivElement
   message: HTMLParagraphElement
   retryButton: HTMLButtonElement
@@ -179,8 +181,9 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   )
 
   const menuBody = el('div', { className: 'menu-body' })
+  const extensionSlot = el('div', { className: 'shift-extension-slot' }) as HTMLDivElement
 
-  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody)
+  append(wrapper, header, extensionSlot, staffSlot, status, message, retryButton, error, menuBody)
   root.replaceChildren(wrapper)
 
   return {
@@ -193,6 +196,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     venueTitle,
     venueLocation,
     bookingButton,
+    extensionSlot,
     menuBody,
     message,
     retryButton,
@@ -400,6 +404,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let renderedOrderMenuMode: boolean | null = null
   let selectedCategoryId: number | null = null
   const disposables: Array<() => void> = []
+  const extensionDispose = renderGuestShiftExtensionCard({
+    root: refs.extensionSlot,
+    backendUrl,
+    isDebug,
+    venueId
+  })
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -865,7 +875,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         onBookVenue?.(venueId)
       }
     }),
-    on(refs.retryButton, 'click', () => void loadVenue()),
+    on(refs.retryButton, 'click', () => {
+      refs.extensionSlot.dispatchEvent(new Event('hookah:guest-venue-refresh'))
+      void loadVenue()
+    }),
     on(refs.staffButton, 'click', () => void handleStaffCall()),
     on(refs.staffCloseButton, 'click', () => {
       staffFormOpen = false
@@ -893,6 +906,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     disposed = true
     menuAbort?.abort()
     staffAbort?.abort()
+    extensionDispose()
     if (messageTimer) {
       window.clearTimeout(messageTimer)
     }

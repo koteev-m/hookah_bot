@@ -16,12 +16,15 @@ import type {
   GuestBookingResponse,
   GuestFavoriteItemsResponse,
   GuestFavoriteVenuesResponse,
+  GuestShiftExtensionOptionsResponse,
+  GuestShiftExtensionRequest,
   GuestTabResponse,
   GuestTabsResponse,
   GuestVisitDetailResponse,
   GuestVisitListResponse,
   JoinTabRequest,
   MenuResponse,
+  ShiftExtensionRequestResponse,
   StaffCallRequest,
   StaffCallResponse,
   TableResolveResponse,
@@ -326,6 +329,65 @@ export async function guestStaffCall(
   return requestApi<StaffCallResponse>(
     backendUrl,
     '/api/guest/staff-call',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestPayload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestGetShiftExtensionOptions(
+  backendUrl: string,
+  params: { tableToken: string; tableSessionId: number; tabId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestShiftExtensionOptionsResponse>> {
+  const normalizedToken = normalizeTableToken(params.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  if (!Number.isFinite(params.tableSessionId) || !Number.isInteger(params.tableSessionId) || params.tableSessionId <= 0) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  if (!Number.isFinite(params.tabId) || !Number.isInteger(params.tabId) || params.tabId <= 0) {
+    return invalidPositiveIdResult('tabId')
+  }
+  const search = new URLSearchParams({
+    tableToken: normalizedToken,
+    tableSessionId: String(params.tableSessionId),
+    tabId: String(params.tabId)
+  })
+  return requestApi<GuestShiftExtensionOptionsResponse>(
+    backendUrl,
+    `/api/guest/table/extension-options?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function guestCreateShiftExtensionRequest(
+  backendUrl: string,
+  payload: GuestShiftExtensionRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<ShiftExtensionRequestResponse>> {
+  const normalizedToken = normalizeTableToken(payload.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  if (!Number.isFinite(payload.tableSessionId) || !Number.isInteger(payload.tableSessionId) || payload.tableSessionId <= 0) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  if (!Number.isFinite(payload.tabId) || !Number.isInteger(payload.tabId) || payload.tabId <= 0) {
+    return invalidPositiveIdResult('tabId')
+  }
+  const requestPayload: GuestShiftExtensionRequest = { ...payload, tableToken: normalizedToken }
+  return requestApi<ShiftExtensionRequestResponse>(
+    backendUrl,
+    '/api/guest/table/extension-requests',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

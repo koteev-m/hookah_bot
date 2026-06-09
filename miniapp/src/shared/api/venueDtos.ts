@@ -290,6 +290,17 @@ export type OrderBillDiscountDto = {
   ruleType?: string | null
 }
 
+export type OrderBillServiceChargeDto = {
+  id: number
+  source: string
+  sourceRequestId?: number | null
+  label: string
+  qty: number
+  unitPriceMinor: number
+  totalMinor: number
+  currency: string
+}
+
 export type OrderBillExcludedItemDto = {
   batchId: number
   batchLabel: string
@@ -316,6 +327,7 @@ export type OrderBillDto = {
   promoDiscounts: OrderBillDiscountDto[]
   loyaltyDiscounts: OrderBillDiscountDto[]
   excludedItems: OrderBillExcludedItemDto[]
+  serviceCharges?: OrderBillServiceChargeDto[]
 }
 
 export type OrderBatchDto = {
@@ -391,4 +403,40 @@ export type OrderAuditEntryDto = {
 
 export type OrderAuditResponse = {
   items: OrderAuditEntryDto[]
+}
+
+export type ShiftExtensionRequestDto = {
+  id: number
+  venueId: number
+  tableSessionId: number
+  tableId: number
+  tableNumber?: string | null
+  tabId: number
+  orderId: number
+  requestedByUserId: number
+  status: string
+  durationMinutes: number
+  priceMinor: number
+  currency: string
+  currentOrderableUntil: string
+  requestedUntil: string
+  comment?: string | null
+  decidedByUserId?: number | null
+  decidedAt?: string | null
+  rejectReason?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type ShiftExtensionRequestsResponse = {
+  items: ShiftExtensionRequestDto[]
+}
+
+export type ShiftExtensionDecisionRequest = {
+  reasonText?: string | null
+}
+
+export type ShiftExtensionDecisionResponse = {
+  request: ShiftExtensionRequestDto
+  applied: boolean
 }

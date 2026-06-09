@@ -20,6 +20,7 @@ import { renderVenueMenuScreen } from './venueMenu'
 import { renderVenueOrderDetailScreen } from './venueOrderDetail'
 import { renderVenueOrdersScreen } from './venueOrders'
 import { renderVenueSettingsScreen } from './venueSettings'
+import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
 import { renderVenueStaffScreen } from './venueStaff'
 import { renderVenueSupportScreen } from './supportScreens'
 import { renderVenueTablesScreen } from './venueTables'
@@ -34,6 +35,7 @@ type RouteName =
   | 'orders'
   | 'order'
   | 'calls'
+  | 'extensions'
   | 'menu'
   | 'tables'
   | 'staff'
@@ -84,9 +86,20 @@ function resolveRoute(): Route {
   const route = segments[0] as RouteName | undefined
   if (
     !route ||
-    !['dashboard', 'orders', 'order', 'calls', 'menu', 'tables', 'staff', 'settings', 'bookings', 'chat', 'support'].includes(
-      route
-    )
+    ![
+      'dashboard',
+      'orders',
+      'order',
+      'calls',
+      'extensions',
+      'menu',
+      'tables',
+      'staff',
+      'settings',
+      'bookings',
+      'chat',
+      'support'
+    ].includes(route)
   ) {
     return { name: 'dashboard', orderId: null }
   }
@@ -131,6 +144,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     orders: el('button', { className: 'nav-button', text: 'Заказы' }) as HTMLButtonElement,
     bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
+    extensions: el('button', { className: 'nav-button', text: 'Продления' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
@@ -145,6 +159,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     navButtons.orders,
     navButtons.bookings,
     navButtons.calls,
+    navButtons.extensions,
     navButtons.menu,
     navButtons.tables,
     navButtons.staff,
@@ -346,6 +361,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
     refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
+    refs.navButtons.extensions.hidden = !hasPermission('SHIFT_EXTENSION_VIEW')
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
@@ -359,6 +375,8 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'order':
       case 'calls':
         return hasPermission('ORDER_QUEUE_VIEW')
+      case 'extensions':
+        return hasPermission('SHIFT_EXTENSION_VIEW')
       case 'bookings':
         return hasPermission('BOOKING_VIEW')
       case 'menu':
@@ -421,6 +439,15 @@ export function mountVenueApp(options: VenueAppOptions) {
         })
       case 'calls':
         return renderVenueCallsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+      case 'extensions':
+        return renderVenueShiftExtensionsScreen({
+          root: screenRoot,
+          backendUrl,
+          isDebug,
+          venueId,
+          access,
+          onOpenOrder: (orderId) => navigate(`#/order/${orderId}`)
+        })
       case 'bookings':
         return renderVenueBookingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'menu':
@@ -474,6 +501,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.orders, 'click', () => navigate('#/orders')))
   disposables.push(on(refs.navButtons.bookings, 'click', () => navigate('#/bookings')))
   disposables.push(on(refs.navButtons.calls, 'click', () => navigate('#/calls')))
+  disposables.push(on(refs.navButtons.extensions, 'click', () => navigate('#/extensions')))
   disposables.push(on(refs.navButtons.menu, 'click', () => navigate('#/menu')))
   disposables.push(on(refs.navButtons.tables, 'click', () => navigate('#/tables')))
   disposables.push(on(refs.navButtons.staff, 'click', () => navigate('#/staff')))

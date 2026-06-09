@@ -25,6 +25,54 @@ type RestoreContext = {
   unavailableReason: string | null
 }
 
+type ShiftExtensionRequest = {
+  id: number
+  venueId: number
+  tableSessionId: number
+  tableId: number
+  tableNumber: string | null
+  tabId: number
+  orderId: number
+  requestedByUserId: number
+  status: string
+  durationMinutes: number
+  priceMinor: number
+  currency: string
+  currentOrderableUntil: string
+  requestedUntil: string
+  comment: string | null
+  decidedByUserId: number | null
+  decidedAt: string | null
+  rejectReason: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+type ShiftExtensionOptions = {
+  available: boolean
+  unavailableReason?: string | null
+  durationMinutes?: number | null
+  priceMinor?: number | null
+  currency?: string | null
+  tableSessionId?: number | null
+  tabId?: number | null
+  orderId?: number | null
+  currentOrderableUntil?: string | null
+  proposedOrderableUntil?: string | null
+  pendingRequest?: ShiftExtensionRequest | null
+}
+
+type ServiceCharge = {
+  id: number
+  source: string
+  sourceRequestId: number | null
+  label: string
+  qty: number
+  unitPriceMinor: number
+  totalMinor: number
+  currency: string
+}
+
 type TestTelegramWindow = Window & {
   Telegram?: {
     WebApp?: {
@@ -71,6 +119,44 @@ function buildRestoreContext(overrides: Partial<RestoreContext> = {}): RestoreCo
     subscriptionStatus: 'ACTIVE',
     available: true,
     unavailableReason: null,
+    ...overrides
+  }
+}
+
+function buildShiftExtensionRequest(overrides: Partial<ShiftExtensionRequest> = {}): ShiftExtensionRequest {
+  return {
+    id: 501,
+    venueId: 1,
+    tableSessionId: 77,
+    tableId: 7,
+    tableNumber: '4',
+    tabId: 88,
+    orderId: 900,
+    requestedByUserId: 123456789,
+    status: 'pending',
+    durationMinutes: 60,
+    priceMinor: 300000,
+    currency: 'RUB',
+    currentOrderableUntil: '2026-06-09T22:00:00+03:00',
+    requestedUntil: '2026-06-09T23:00:00+03:00',
+    comment: null,
+    decidedByUserId: null,
+    decidedAt: null,
+    rejectReason: null,
+    createdAt: '2026-06-09T21:45:00+03:00',
+    updatedAt: '2026-06-09T21:45:00+03:00',
+    ...overrides
+  }
+}
+
+function buildShiftExtensionOptions(overrides: Partial<ShiftExtensionOptions> = {}): ShiftExtensionOptions {
+  return {
+    available: false,
+    unavailableReason: 'EXTENSION_NOT_CONFIGURED',
+    tableSessionId: 77,
+    tabId: 88,
+    orderId: 900,
+    pendingRequest: null,
     ...overrides
   }
 }
@@ -139,9 +225,15 @@ async function expectTelegramBackButtonHidden(page: Page) {
     .toBe(false)
 }
 
-async function mockGuestApi(page: Page, options: { restoreContext?: RestoreContext | null } = {}) {
+async function mockGuestApi(
+  page: Page,
+  options: { restoreContext?: RestoreContext | null; extensionOptions?: ShiftExtensionOptions | null } = {}
+) {
   let structuredMenuCalls = 0
   let restoreContext = options.restoreContext ?? null
+  let extensionOptions = options.extensionOptions ?? buildShiftExtensionOptions()
+  let createExtensionRequestCalls = 0
+  let activeOrderServiceCharges: ServiceCharge[] = []
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -276,6 +368,7 @@ async function mockGuestApi(page: Page, options: { restoreContext?: RestoreConte
   })
 
   await page.route('**/api/guest/order/active?**', async (route) => {
+    const serviceChargeTotal = activeOrderServiceCharges.reduce((sum, charge) => sum + charge.totalMinor, 0)
     await route.fulfill(
       jsonResponse({
         order: {
@@ -287,13 +380,14 @@ async function mockGuestApi(page: Page, options: { restoreContext?: RestoreConte
           tabId: 88,
           tableNumber: '4',
           status: 'ACTIVE',
-          grossTotalMinor: 150000,
+          grossTotalMinor: 150000 + serviceChargeTotal,
           manualDiscountTotalMinor: 0,
           promoDiscountTotalMinor: 0,
           loyaltyDiscountTotalMinor: 0,
-          finalPayableTotalMinor: 150000,
+          finalPayableTotalMinor: 150000 + serviceChargeTotal,
           currency: 'RUB',
           discounts: [],
+          serviceCharges: activeOrderServiceCharges,
           batches: [
             {
               batchId: 333,
@@ -319,10 +413,117 @@ async function mockGuestApi(page: Page, options: { restoreContext?: RestoreConte
     )
   })
 
+  await page.route('**/api/guest/table/extension-options?**', async (route) => {
+    await route.fulfill(jsonResponse(extensionOptions))
+  })
+
+  await page.route('**/api/guest/table/extension-requests', async (route) => {
+    createExtensionRequestCalls += 1
+    const request = buildShiftExtensionRequest()
+    extensionOptions = {
+      ...buildShiftExtensionOptions({ available: true }),
+      durationMinutes: request.durationMinutes,
+      priceMinor: request.priceMinor,
+      currency: request.currency,
+      currentOrderableUntil: request.currentOrderableUntil,
+      proposedOrderableUntil: request.requestedUntil,
+      pendingRequest: request
+    }
+    await route.fulfill(jsonResponse({ request }))
+  })
+
   return {
     getStructuredMenuCalls: () => structuredMenuCalls,
+    getCreateExtensionRequestCalls: () => createExtensionRequestCalls,
     setRestoreContext: (context: RestoreContext | null) => {
       restoreContext = context
+    },
+    setExtensionOptions: (options: ShiftExtensionOptions) => {
+      extensionOptions = options
+    },
+    setActiveOrderServiceCharges: (charges: ServiceCharge[]) => {
+      activeOrderServiceCharges = charges
+    }
+  }
+}
+
+async function mockVenueShiftExtensionApi(page: Page) {
+  let requests = [buildShiftExtensionRequest()]
+  let approveCalls = 0
+  let rejectCalls = 0
+  const rejectedReasons: string[] = []
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role: 'STAFF',
+            permissions: ['ORDER_QUEUE_VIEW', 'SHIFT_EXTENSION_VIEW', 'SHIFT_EXTENSION_CONFIRM']
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/guest/venue/1', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 1,
+          name: 'Микс',
+          city: 'Москва',
+          address: 'Пилотная, 1',
+          status: 'PUBLISHED'
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/shift-extension-requests**', async (route) => {
+    const url = route.request().url()
+    const approveMatch = url.match(/shift-extension-requests\/(\d+)\/approve/)
+    if (approveMatch) {
+      approveCalls += 1
+      const requestId = Number(approveMatch[1])
+      const request = requests.find((item) => item.id === requestId) ?? buildShiftExtensionRequest({ id: requestId })
+      requests = requests.filter((item) => item.id !== requestId)
+      await route.fulfill(jsonResponse({ request: { ...request, status: 'approved' }, applied: true }))
+      return
+    }
+    const rejectMatch = url.match(/shift-extension-requests\/(\d+)\/reject/)
+    if (rejectMatch) {
+      rejectCalls += 1
+      const requestId = Number(rejectMatch[1])
+      const body = (await route.request().postDataJSON()) as { reasonText?: string | null }
+      rejectedReasons.push(body.reasonText ?? '')
+      const request = requests.find((item) => item.id === requestId) ?? buildShiftExtensionRequest({ id: requestId })
+      requests = requests.filter((item) => item.id !== requestId)
+      await route.fulfill(jsonResponse({ request: { ...request, status: 'rejected', rejectReason: body.reasonText }, applied: true }))
+      return
+    }
+    await route.fulfill(jsonResponse({ items: requests }))
+  })
+
+  return {
+    getApproveCalls: () => approveCalls,
+    getRejectCalls: () => rejectCalls,
+    getRejectedReasons: () => rejectedReasons,
+    setRequests: (nextRequests: ShiftExtensionRequest[]) => {
+      requests = nextRequests
     }
   }
 }
@@ -359,6 +560,102 @@ test('table context opens category-first order menu and cart action', async ({ p
   await page.getByRole('button', { name: 'Добавить' }).click()
 
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+})
+
+test('guest creates shift extension request and sees pending then confirmed state', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const extensionRequest = buildShiftExtensionRequest()
+  const api = await mockGuestApi(page, {
+    restoreContext: buildRestoreContext(),
+    extensionOptions: buildShiftExtensionOptions({
+      available: true,
+      durationMinutes: 60,
+      priceMinor: 300000,
+      currency: 'RUB',
+      currentOrderableUntil: extensionRequest.currentOrderableUntil,
+      proposedOrderableUntil: extensionRequest.requestedUntil,
+      pendingRequest: null
+    })
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByText('Продление на 1 час')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Продлить на 1 час' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Продлить на 1 час' }).click()
+
+  await expect(page.getByRole('button', { name: 'Ожидает подтверждения' })).toBeVisible()
+  expect(api.getCreateExtensionRequestCalls()).toBe(1)
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find((node) => node.textContent === 'Ожидает подтверждения')
+    const action = button as HTMLButtonElement | undefined
+    action?.click()
+  })
+  expect(api.getCreateExtensionRequestCalls()).toBe(1)
+
+  api.setExtensionOptions(
+    buildShiftExtensionOptions({
+      available: true,
+      durationMinutes: 60,
+      priceMinor: 300000,
+      currency: 'RUB',
+      currentOrderableUntil: extensionRequest.currentOrderableUntil,
+      proposedOrderableUntil: extensionRequest.requestedUntil,
+      pendingRequest: null
+    })
+  )
+  api.setActiveOrderServiceCharges([
+    {
+      id: 700,
+      source: 'SHIFT_EXTENSION',
+      sourceRequestId: extensionRequest.id,
+      label: 'Продление работы на 1 час',
+      qty: 1,
+      unitPriceMinor: 300000,
+      totalMinor: 300000,
+      currency: 'RUB'
+    }
+  ])
+
+  await page.getByRole('button', { name: 'Обновить' }).click()
+
+  await expect(page.getByText('Продление подтверждено до 23:00. Сумма добавлена в счёт.')).toBeVisible()
+  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await expect(page.getByText('Продление работы на 1 час')).toBeVisible()
+  await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
+})
+
+test('venue staff sees pending shift extension requests and can approve or reject', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Продления' })).toBeVisible()
+  await page.getByRole('button', { name: 'Продления' }).click()
+  await expect(page.getByRole('heading', { name: 'Запрос на продление' })).toBeVisible()
+  await expect(page.getByText('Стол №4')).toBeVisible()
+  await expect(page.getByRole('button', { name: '✅ Продлить на 1 час' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '❌ Отказать' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Настройки' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: '✅ Продлить на 1 час' }).click()
+
+  await expect(page.getByText('Запросов на продление нет.')).toBeVisible()
+  expect(api.getApproveCalls()).toBe(1)
+
+  api.setRequests([buildShiftExtensionRequest({ id: 502, requestedUntil: '2026-06-10T00:00:00+03:00' })])
+  await page.getByRole('button', { name: '🔄 Обновить' }).click()
+  await expect(page.getByRole('heading', { name: 'Запрос на продление' })).toBeVisible()
+
+  page.once('dialog', async (dialog) => {
+    await dialog.accept('Нет свободного времени')
+  })
+  await page.getByRole('button', { name: '❌ Отказать' }).click()
+
+  await expect(page.getByText('Запросов на продление нет.')).toBeVisible()
+  expect(api.getRejectCalls()).toBe(1)
+  expect(api.getRejectedReasons()).toEqual(['Нет свободного времени'])
 })
 
 test('startup without URL table token restores active table context', async ({ page }) => {

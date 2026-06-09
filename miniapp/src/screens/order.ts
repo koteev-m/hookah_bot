@@ -217,6 +217,10 @@ function renderOrderBill(container: HTMLElement, order: ActiveOrderDto) {
     appendBillRow(bill, 'Лояльность', formatDiscount(order.loyaltyDiscountTotalMinor, order.currency))
   }
   renderDiscountBreakdown(bill, order)
+  const serviceCharges = order.serviceCharges ?? []
+  serviceCharges.forEach((charge) => {
+    appendBillRow(bill, charge.label, formatMoney(charge.totalMinor, charge.currency))
+  })
   appendBillRow(bill, 'К оплате', formatMoney(order.finalPayableTotalMinor, order.currency), true)
   container.appendChild(bill)
 }

@@ -32,6 +32,9 @@ import type {
   OrderRejectRequest,
   OrderStatusRequest,
   OrderStatusResponse,
+  ShiftExtensionDecisionRequest,
+  ShiftExtensionDecisionResponse,
+  ShiftExtensionRequestsResponse,
   StaffChatLinkCodeResponse,
   VenueStaffCallActionResponse,
   VenueStaffCallsResponse,
@@ -856,6 +859,58 @@ export async function venueSetOrderItemDiscount(
   return requestApi<OrderBillItemAdjustmentResponse>(
     backendUrl,
     `/api/venue/orders/${params.orderId}/items/${params.batchItemId}/discount?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueGetShiftExtensionRequests(
+  backendUrl: string,
+  params: { venueId: number; status?: string },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams()
+  if (params.status) {
+    search.set('status', params.status)
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return requestApi<ShiftExtensionRequestsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/shift-extension-requests${suffix}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueApproveShiftExtensionRequest(
+  backendUrl: string,
+  params: { venueId: number; requestId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<ShiftExtensionDecisionResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/shift-extension-requests/${params.requestId}/approve`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueRejectShiftExtensionRequest(
+  backendUrl: string,
+  params: { venueId: number; requestId: number; body: ShiftExtensionDecisionRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<ShiftExtensionDecisionResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/shift-extension-requests/${params.requestId}/reject`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -222,6 +222,10 @@ function renderBill(container: HTMLElement, order: OrderDetailDto) {
   if (bill.rejectedTotalMinor > 0) {
     appendBillRow(container, 'Отклонённые заявки', formatMoney(bill.rejectedTotalMinor, bill.currency))
   }
+  const serviceCharges = bill.serviceCharges ?? []
+  serviceCharges.forEach((charge) => {
+    appendBillRow(container, charge.label, formatMoney(charge.totalMinor, charge.currency))
+  })
   appendBillRow(container, 'К оплате', formatMoney(bill.finalPayableTotalMinor, bill.currency), true)
 
   if (bill.excludedItems.length) {

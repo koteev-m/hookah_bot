@@ -112,6 +112,7 @@ export type ActiveOrderDto = {
   finalPayableTotalMinor: number
   currency: string
   discounts: ActiveOrderDiscountDto[]
+  serviceCharges?: ActiveOrderServiceChargeDto[]
   batches: OrderBatchDto[]
 }
 
@@ -120,6 +121,17 @@ export type ActiveOrderDiscountDto = {
   discountMinor: number
   currency: string
   ruleType?: string | null
+}
+
+export type ActiveOrderServiceChargeDto = {
+  id: number
+  source: string
+  sourceRequestId?: number | null
+  label: string
+  qty: number
+  unitPriceMinor: number
+  totalMinor: number
+  currency: string
 }
 
 export type OrderBatchDto = {
@@ -247,6 +259,55 @@ export type StaffCallRequest = {
 export type StaffCallResponse = {
   staffCallId: number
   createdAtEpochSeconds: number
+}
+
+export type GuestShiftExtensionOptionsResponse = {
+  available: boolean
+  unavailableReason?: string | null
+  durationMinutes?: number | null
+  priceMinor?: number | null
+  currency?: string | null
+  tableSessionId?: number | null
+  tabId?: number | null
+  orderId?: number | null
+  currentOrderableUntil?: string | null
+  proposedOrderableUntil?: string | null
+  pendingRequest?: ShiftExtensionRequestDto | null
+}
+
+export type GuestShiftExtensionRequest = {
+  tableToken: string
+  tableSessionId: number
+  tabId: number
+  idempotencyKey?: string | null
+  comment?: string | null
+}
+
+export type ShiftExtensionRequestResponse = {
+  request: ShiftExtensionRequestDto
+}
+
+export type ShiftExtensionRequestDto = {
+  id: number
+  venueId: number
+  tableSessionId: number
+  tableId: number
+  tableNumber?: string | null
+  tabId: number
+  orderId: number
+  requestedByUserId: number
+  status: string
+  durationMinutes: number
+  priceMinor: number
+  currency: string
+  currentOrderableUntil: string
+  requestedUntil: string
+  comment?: string | null
+  decidedByUserId?: number | null
+  decidedAt?: string | null
+  rejectReason?: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export type GuestVisitListResponse = {
