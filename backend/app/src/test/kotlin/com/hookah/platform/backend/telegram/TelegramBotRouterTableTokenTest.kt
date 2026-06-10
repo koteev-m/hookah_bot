@@ -44,6 +44,7 @@ import com.hookah.platform.backend.miniapp.shift.ShiftExtensionDecisionResult
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestStatus
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionSettings
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -186,6 +187,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import com.hookah.platform.backend.telegram.db.OrderServiceChargeDetails as TelegramOrderServiceChargeDetails
 
 class TelegramBotRouterTableTokenTest {
     private val apiClient: TelegramApiClient = mockk(relaxed = true)
@@ -672,6 +674,10 @@ class TelegramBotRouterTableTokenTest {
         coEvery { ordersRepository.findActiveOrderSummary(any()) } returns null
         coEvery { ordersRepository.findActiveOrderSummaryForTab(any(), any()) } returns null
         coEvery { ordersRepository.findActiveOrderDetailsForTab(any(), any()) } returns null
+        coEvery { shiftExtensionRepository.getSettings(any()) } answers {
+            disabledShiftExtensionSettings(invocation.args[0] as Long)
+        }
+        coEvery { shiftExtensionRepository.findPendingRequest(any(), any()) } returns null
     }
 
     @Test
@@ -18631,6 +18637,309 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `guest bot active table keyboard includes shift extension when enabled`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_600,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-enabled-extension-keyboard",
+                            from = User(id = 200),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "continue_in_bot",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "\u2060",
+                    match { markup ->
+                        markup is ReplyKeyboardMarkup &&
+                            markup.keyboard.flatten().any { button ->
+                                button.text == "Продление работы заведения"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `guest bot active table keyboard hides shift extension when disabled`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns disabledShiftExtensionSettings()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_601,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-disabled-extension-keyboard",
+                            from = User(id = 200),
+                            message = Message(messageId = 21, chat = Chat(id = 100, type = "private")),
+                            data = "continue_in_bot",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "\u2060",
+                    match { markup ->
+                        markup is ReplyKeyboardMarkup &&
+                            markup.keyboard.flatten().none { button ->
+                                button.text == "Продление работы заведения"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `guest bot shift extension screen shows configured request action`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
+                ActiveOrderSummary(id = 19L, status = "ACTIVE")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_602,
+                    message =
+                        Message(
+                            messageId = 22,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "Продление работы заведения",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Продление работы заведения") &&
+                            text.contains("Продление на 1 час — 3 000 ₽") &&
+                            text.contains("Персонал подтвердит возможность продления.")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Продлить на 1 час", "guest_shift_extension_request")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `guest bot shift extension request creates pending request and refreshes staff chat`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
+                ActiveOrderSummary(id = 19L, status = "ACTIVE")
+            coEvery { shiftExtensionRepository.createPendingRequest(any()) } returns
+                shiftExtensionRequestRecord(ShiftExtensionRequestStatus.PENDING)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.NEW,
+                    pendingShiftExtension = pendingShiftExtension(),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_603,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-create-extension",
+                            from = User(id = 200),
+                            message = Message(messageId = 23, chat = Chat(id = 100, type = "private")),
+                            data = "guest_shift_extension_request",
+                        ),
+                ),
+            )
+
+            coVerify {
+                shiftExtensionRepository.createPendingRequest(
+                    match { command ->
+                        command.venueId == 10L &&
+                            command.tableSessionId == 55L &&
+                            command.tableId == 11L &&
+                            command.tabId == 1L &&
+                            command.orderId == 19L &&
+                            command.requestedByUserId == 200L &&
+                            command.idempotencyKey == "guest-bot-shift-extension:100:23"
+                    },
+                )
+            }
+            coVerify {
+                staffChatNotifier.notifyBillUpdatedNow(
+                    match { event ->
+                        event.venueId == 10L &&
+                            event.orderId == 19L &&
+                            event.change == StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED &&
+                            event.pendingShiftExtension?.requestId == 501L
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    23,
+                    match { it.contains("Ожидает подтверждения") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `guest bot duplicate shift extension request does not create another pending request`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { shiftExtensionRepository.findPendingRequest(55L, 1L) } returns
+                shiftExtensionRequestRecord(ShiftExtensionRequestStatus.PENDING)
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
+                ActiveOrderSummary(id = 19L, status = "ACTIVE")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_604,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-duplicate-extension",
+                            from = User(id = 200),
+                            message = Message(messageId = 24, chat = Chat(id = 100, type = "private")),
+                            data = "guest_shift_extension_request",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { shiftExtensionRepository.createPendingRequest(any()) }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    24,
+                    match { it.contains("Ожидает подтверждения") },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `guest bot active order shows shift extension service charge`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns
+                ActiveOrderDetails(
+                    orderId = 19L,
+                    status = "ACCEPTED",
+                    batches = emptyList(),
+                    serviceCharges = listOf(telegramShiftExtensionServiceCharge()),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_605,
+                    message =
+                        Message(
+                            messageId = 25,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "📄 Мой заказ",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Дополнительно:") &&
+                            text.contains("Продление работы на 1 час ×1 — 3 000 ₽") &&
+                            text.contains("Итого к оплате: 3 000 ₽")
+                    },
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
     fun `table bot fallback text sends entry text and restores table keyboard`() =
         runBlocking {
             val context =
@@ -25363,6 +25672,29 @@ class TelegramBotRouterTableTokenTest {
                 ),
         )
 
+    private fun enabledShiftExtensionSettings(
+        venueId: Long = 10L,
+        priceMinor: Long? = 300_000L,
+    ): ShiftExtensionSettings =
+        ShiftExtensionSettings(
+            venueId = venueId,
+            enabled = true,
+            durationMinutes = 60,
+            priceMinor = priceMinor,
+            currency = "RUB",
+            maxExtensionsPerSession = null,
+        )
+
+    private fun disabledShiftExtensionSettings(venueId: Long = 10L): ShiftExtensionSettings =
+        ShiftExtensionSettings(
+            venueId = venueId,
+            enabled = false,
+            durationMinutes = 60,
+            priceMinor = 300_000L,
+            currency = "RUB",
+            maxExtensionsPerSession = null,
+        )
+
     private fun shiftExtensionRequestRecord(
         status: ShiftExtensionRequestStatus,
         decidedByUserId: Long? = null,
@@ -25417,6 +25749,18 @@ class TelegramBotRouterTableTokenTest {
             totalMinor = 300_000,
             currency = "RUB",
             createdAt = Instant.parse("2026-03-30T10:06:00Z"),
+        )
+
+    private fun telegramShiftExtensionServiceCharge(): TelegramOrderServiceChargeDetails =
+        TelegramOrderServiceChargeDetails(
+            id = 700L,
+            source = "shift_extension",
+            sourceRequestId = 501L,
+            label = "Продление работы на 1 час",
+            qty = 1,
+            unitPriceMinor = 300_000,
+            totalMinor = 300_000,
+            currency = "RUB",
         )
 
     private fun ReplyMarkup?.hasSingleWebAppButton(expectedUrl: String): Boolean {

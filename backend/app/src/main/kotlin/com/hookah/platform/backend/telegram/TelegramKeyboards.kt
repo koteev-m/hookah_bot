@@ -1815,36 +1815,79 @@ object TelegramKeyboards {
         webAppUrl: String?,
     ): ReplyKeyboardMarkup = tableContextBotFlow(context)
 
-    fun tableContextBotFlow(context: TableContext): ReplyKeyboardMarkup {
+    fun tableContextBotFlow(
+        context: TableContext,
+        includeShiftExtension: Boolean = false,
+    ): ReplyKeyboardMarkup {
         val keyboard =
-            listOf(
-                listOf(
-                    KeyboardButton(text = "📱 Заказывать в Mini App"),
-                    KeyboardButton(text = "💬 Заказывать в боте"),
-                ),
-                listOf(
-                    KeyboardButton(text = "🍽️ Меню"),
-                    KeyboardButton(text = "🧺 Корзина"),
-                ),
-                listOf(
-                    KeyboardButton(text = "📄 Мой заказ"),
-                    KeyboardButton(text = "✍️ Быстрый заказ"),
-                ),
-                listOf(
-                    KeyboardButton(text = "👥 Общий счёт"),
-                    KeyboardButton(text = "🛎 Вызвать персонал"),
-                ),
-                listOf(
-                    KeyboardButton(text = "🎁 Акции заведения"),
-                    KeyboardButton(text = "⭐ Любимое"),
-                ),
-                listOf(
-                    KeyboardButton(text = "📜 История"),
-                    KeyboardButton(text = "👤 Профиль"),
-                ),
-                listOf(KeyboardButton(text = "🚪 Сменить стол")),
-            )
+            buildList {
+                add(
+                    listOf(
+                        KeyboardButton(text = "📱 Заказывать в Mini App"),
+                        KeyboardButton(text = "💬 Заказывать в боте"),
+                    ),
+                )
+                add(
+                    listOf(
+                        KeyboardButton(text = "🍽️ Меню"),
+                        KeyboardButton(text = "🧺 Корзина"),
+                    ),
+                )
+                if (includeShiftExtension) {
+                    add(listOf(KeyboardButton(text = "Продление работы заведения")))
+                }
+                add(
+                    listOf(
+                        KeyboardButton(text = "📄 Мой заказ"),
+                        KeyboardButton(text = "✍️ Быстрый заказ"),
+                    ),
+                )
+                add(
+                    listOf(
+                        KeyboardButton(text = "👥 Общий счёт"),
+                        KeyboardButton(text = "🛎 Вызвать персонал"),
+                    ),
+                )
+                add(
+                    listOf(
+                        KeyboardButton(text = "🎁 Акции заведения"),
+                        KeyboardButton(text = "⭐ Любимое"),
+                    ),
+                )
+                add(
+                    listOf(
+                        KeyboardButton(text = "📜 История"),
+                        KeyboardButton(text = "👤 Профиль"),
+                    ),
+                )
+                add(listOf(KeyboardButton(text = "🚪 Сменить стол")))
+            }
         return ReplyKeyboardMarkup(keyboard = keyboard)
+    }
+
+    fun inlineGuestShiftExtensionActions(canRequest: Boolean): InlineKeyboardMarkup {
+        val keyboard =
+            buildList {
+                if (canRequest) {
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "Продлить на 1 час",
+                                callbackData = "guest_shift_extension_request",
+                            ),
+                        ),
+                    )
+                }
+                add(
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "↩️ Назад к действиям стола",
+                            callbackData = "table_actions_back",
+                        ),
+                    ),
+                )
+            }
+        return InlineKeyboardMarkup(inlineKeyboard = keyboard)
     }
 
     fun inlineTableActionsBack(): InlineKeyboardMarkup =

@@ -13,12 +13,14 @@ import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabModel
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitDetail
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitHistoryItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageSender
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRecord
@@ -28,7 +30,10 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
+import com.hookah.platform.backend.miniapp.shift.CreateShiftExtensionRequestCommand
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionSettings
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
@@ -108,6 +113,7 @@ import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
+import com.hookah.platform.backend.telegram.db.OrderServiceChargeDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.PromotionPlacement
 import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
@@ -788,6 +794,7 @@ class TelegramBotRouter(
             text == "🍽 Меню" -> showVenueManagerOrderMenuRoot(chatId, from)
             text == "🍽️ Меню" || text == "🍽️ Открыть меню" -> showBotMenu(chatId)
             text == "🧺 Корзина" -> showBotMenuCart(chatId)
+            text == "Продление работы заведения" -> showGuestShiftExtension(chatId)
             text == "👥 Общий счёт" -> showBotSplitBillEntry(chatId)
             text == "📄 Мой заказ" || text == "📄 Заказ" || text == "🧾 Активный заказ" -> showActiveOrder(chatId)
             text == "✍️ Быстрый заказ" -> startQuickOrder(chatId)
@@ -1931,7 +1938,7 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "Быстрый заказ отменён.")
             }
             data == null -> Unit
-            else -> handleStaffCallCallback(chatId, data)
+            else -> handleStaffCallCallback(chatId, data, sourceMessageId)
         }
         if (!callbackAnswered) {
             enqueueCallbackAnswer(chatId, callbackQuery.id)
@@ -1941,7 +1948,12 @@ class TelegramBotRouter(
     private suspend fun handleStaffCallCallback(
         chatId: Long,
         data: String,
+        sourceMessageId: Long? = null,
     ) {
+        if (data == "guest_shift_extension_request") {
+            createGuestShiftExtensionRequest(chatId = chatId, sourceMessageId = sourceMessageId)
+            return
+        }
         if (!data.startsWith("staff_call_reason:")) return
         val reason = parseStaffCallReason(data.removePrefix("staff_call_reason:"))
         if (reason == StaffCallReason.BILL) {
@@ -6108,8 +6120,15 @@ class TelegramBotRouter(
             promoSummary?.forEach { promoText ->
                 append("\n").append(promoText)
             }
+            if (order.serviceCharges.isNotEmpty()) {
+                append("\n\nДополнительно:")
+                order.serviceCharges.forEach { charge ->
+                    append("\n• ${charge.label} ×${charge.qty} — ")
+                    append(formatCompactMoney(charge.totalMinor, charge.currency))
+                }
+            }
             append("\n\nИтого к оплате: ")
-            append(formatGuestActiveOrderTotal(items))
+            append(formatGuestActiveOrderTotal(items, order.serviceCharges))
         }
 
     private fun buildGuestOrderItemPriceText(
@@ -6133,7 +6152,10 @@ class TelegramBotRouter(
         }
     }
 
-    private fun formatGuestActiveOrderTotal(items: List<OrderBatchItemDetails>): String {
+    private fun formatGuestActiveOrderTotal(
+        items: List<OrderBatchItemDetails>,
+        serviceCharges: List<OrderServiceChargeDetails>,
+    ): String {
         var totalMinor = 0L
         var totalCurrency: String? = null
         items.forEach { item ->
@@ -6149,6 +6171,12 @@ class TelegramBotRouter(
                 if (totalCurrency == null) {
                     totalCurrency = item.currency
                 }
+            }
+        }
+        serviceCharges.forEach { charge ->
+            totalMinor += charge.totalMinor
+            if (totalCurrency == null && charge.currency.isNotBlank()) {
+                totalCurrency = charge.currency
             }
         }
         val currency = totalCurrency ?: return "—"
@@ -25707,7 +25735,7 @@ class TelegramBotRouter(
             enqueueMessage(
                 chatId,
                 "Вы за столом №${context.tableNumber} в ${context.venueName}. Выберите удобный способ заказа.",
-                TelegramKeyboards.tableContextBotFlow(context),
+                tableContextBotKeyboard(context),
             )
         }
         return ApplyTableTokenResult.Applied
@@ -25732,8 +25760,233 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             keyboardRemoveMarker,
-            TelegramKeyboards.tableContextBotFlow(context.table),
+            tableContextBotKeyboard(context.table),
         )
+    }
+
+    private suspend fun tableContextBotKeyboard(context: TableContext): ReplyKeyboardMarkup =
+        TelegramKeyboards.tableContextBotFlow(
+            context = context,
+            includeShiftExtension = shouldShowGuestBotShiftExtensionEntry(context.venueId),
+        )
+
+    private suspend fun shouldShowGuestBotShiftExtensionEntry(venueId: Long): Boolean =
+        try {
+            shiftExtensionRepository.getSettings(venueId).enabled
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            false
+        }
+
+    private suspend fun showGuestShiftExtension(
+        chatId: Long,
+        sourceMessageId: Long? = null,
+    ) {
+        val context = resolveGuestBotShiftExtensionContext(chatId) ?: return
+        val text = buildGuestShiftExtensionText(context)
+        val canRequest = context.canSubmitRequest
+        val replyMarkup = TelegramKeyboards.inlineGuestShiftExtensionActions(canRequest)
+        if (sourceMessageId != null) {
+            enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
+        } else {
+            enqueueMessage(chatId, text, replyMarkup)
+        }
+    }
+
+    private suspend fun createGuestShiftExtensionRequest(
+        chatId: Long,
+        sourceMessageId: Long?,
+    ) {
+        val context = resolveGuestBotShiftExtensionContext(chatId)
+        if (context == null) {
+            return
+        }
+        if (!context.canSubmitRequest) {
+            val text = buildGuestShiftExtensionText(context)
+            if (sourceMessageId != null) {
+                enqueueEditMessage(
+                    chatId = chatId,
+                    messageId = sourceMessageId,
+                    text = text,
+                    replyMarkup = TelegramKeyboards.inlineGuestShiftExtensionActions(false),
+                )
+            } else {
+                enqueueMessage(chatId, text, TelegramKeyboards.inlineGuestShiftExtensionActions(false))
+            }
+            return
+        }
+        val activeOrder = context.order ?: return
+        val record =
+            try {
+                shiftExtensionRepository.createPendingRequest(
+                    CreateShiftExtensionRequestCommand(
+                        venueId = context.resolved.table.venueId,
+                        tableSessionId = context.tableSession.id,
+                        tableId = context.resolved.table.tableId,
+                        tabId = context.tab.id,
+                        orderId = activeOrder.id,
+                        requestedByUserId = context.resolved.userId,
+                        currentOrderableUntil = context.tableSession.expiresAt,
+                        idempotencyKey =
+                            sourceMessageId?.let { messageId ->
+                                "guest-bot-shift-extension:$chatId:$messageId"
+                            },
+                        comment = null,
+                    ),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: InvalidInputException) {
+                showGuestShiftExtension(chatId, sourceMessageId)
+                return
+            } catch (e: NotFoundException) {
+                enqueueMessage(chatId, "Активный заказ не найден.")
+                return
+            }
+        notifyStaffChatAboutShiftExtensionRequest(
+            venueId = context.resolved.table.venueId,
+            orderId = record.orderId,
+        )
+        val pendingText = guestShiftExtensionPendingText()
+        if (sourceMessageId != null) {
+            enqueueEditMessage(
+                chatId = chatId,
+                messageId = sourceMessageId,
+                text = pendingText,
+                replyMarkup = TelegramKeyboards.inlineGuestShiftExtensionActions(false),
+            )
+        } else {
+            enqueueMessage(chatId, pendingText, TelegramKeyboards.inlineGuestShiftExtensionActions(false))
+        }
+    }
+
+    private suspend fun resolveGuestBotShiftExtensionContext(chatId: Long): GuestBotShiftExtensionContext? {
+        val resolved = resolveGuestContext(chatId) ?: return null
+        val tableSession =
+            resolveCurrentTableSession(chatId, resolved) ?: run {
+                enqueueMessage(chatId, "Сессия стола истекла. Отсканируйте QR ещё раз.")
+                return null
+            }
+        val tab = resolveCurrentBotTab(chatId, resolved) ?: return null
+        val settings =
+            try {
+                shiftExtensionRepository.getSettings(resolved.table.venueId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return null
+            }
+        val pending =
+            try {
+                shiftExtensionRepository.findPendingRequest(
+                    tableSessionId = tab.tableSessionId,
+                    tabId = tab.id,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return null
+            }
+        val order =
+            try {
+                ordersRepository.findActiveOrderSummaryForTab(
+                    tableSessionId = tab.tableSessionId,
+                    tabId = tab.id,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return null
+            }
+        return GuestBotShiftExtensionContext(
+            resolved = resolved,
+            tableSession = tableSession,
+            tab = tab,
+            order = order,
+            settings = settings,
+            pending = pending,
+        )
+    }
+
+    private fun buildGuestShiftExtensionText(context: GuestBotShiftExtensionContext): String =
+        when {
+            context.pending != null -> guestShiftExtensionPendingText()
+            !context.settings.enabled ->
+                "Продление работы заведения\n\nПродление сейчас недоступно."
+            context.settings.priceMinor == null ->
+                "Продление работы заведения\n\n" +
+                    "Продление сейчас недоступно, цена или длительность не настроены."
+            context.order == null ->
+                "Продление работы заведения\n\n" +
+                    "Продление доступно после оформления заказа за столом."
+            else ->
+                "Продление работы заведения\n\n" +
+                    "Продление на ${formatShiftExtensionDuration(context.settings.durationMinutes)} — " +
+                    "${formatCompactMoney(context.settings.priceMinor, context.settings.currency)}. " +
+                    "Персонал подтвердит возможность продления."
+        }
+
+    private fun guestShiftExtensionPendingText(): String = "Продление работы заведения\n\nОжидает подтверждения"
+
+    private suspend fun notifyStaffChatAboutShiftExtensionRequest(
+        venueId: Long,
+        orderId: Long,
+    ) {
+        val notifier = staffChatNotifier ?: return
+        val detail =
+            try {
+                venueOrdersRepository.loadOrderDetail(venueId = venueId, orderId = orderId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                return
+            } ?: return
+        notifier.notifyBillUpdatedNow(
+            StaffBillUpdatedNotification(
+                venueId = venueId,
+                orderId = orderId,
+                displayNumber = detail.displayNumber,
+                tableLabel = detail.tableNumber.toString(),
+                change = StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED,
+                bill = detail.toOrderBillSnapshot(),
+                batches = detail.toStaffOrderBatchLiveBlocks(),
+                status = detail.status,
+                actionBatchId = staffChatActionBatchId(detail),
+                pendingShiftExtension = detail.pendingShiftExtension,
+                updatedAt = detail.updatedAt,
+            ),
+        )
+    }
+
+    private fun formatShiftExtensionDuration(durationMinutes: Int): String =
+        when (durationMinutes) {
+            60 -> "1 час"
+            120 -> "2 часа"
+            180 -> "3 часа"
+            240 -> "4 часа"
+            else -> "$durationMinutes мин"
+        }
+
+    private data class GuestBotShiftExtensionContext(
+        val resolved: ResolvedChatContext,
+        val tableSession: TableSessionRecord,
+        val tab: GuestTabModel,
+        val order: ActiveOrderSummary?,
+        val settings: ShiftExtensionSettings,
+        val pending: ShiftExtensionRequestRecord?,
+    ) {
+        val canSubmitRequest: Boolean =
+            pending == null &&
+                settings.enabled &&
+                settings.priceMinor != null &&
+                order != null
     }
 
     private suspend fun showBotMenu(
@@ -31095,7 +31348,7 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             "Персонал уведомлён, ожидайте.",
-            TelegramKeyboards.tableContextBotFlow(context.table),
+            tableContextBotKeyboard(context.table),
         )
         notifyStaffChatAboutStaffCall(
             context = context,
@@ -31112,7 +31365,7 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             "Выберите действие.",
-            TelegramKeyboards.tableContextBotFlow(context.table),
+            tableContextBotKeyboard(context.table),
         )
     }
 
@@ -31144,7 +31397,7 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             "Персонал уведомлён, ожидайте.",
-            TelegramKeyboards.tableContextBotFlow(context.table),
+            tableContextBotKeyboard(context.table),
         )
         notifyStaffChatAboutStaffCall(
             context = context,

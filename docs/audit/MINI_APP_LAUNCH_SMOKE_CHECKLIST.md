@@ -377,14 +377,14 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block: paid venue/shift extension order-scoped operations parity.
+Recommended next implementation block: paid venue/shift extension Owner/Manager Bot settings parity and cross-channel regression closure.
 
 Manual paid extension smoke after full parity:
 
 1. Configure extension for a venue in Venue Mini App: enabled, fixed one-hour duration and price.
-2. Configure the same extension in Owner/Manager Bot once bot settings parity is implemented; confirm copy `Показывать гостям возможность продления`.
+2. Configure the same extension in Owner/Manager Bot once the remaining bot settings parity slice is implemented; confirm copy `Показывать гостям возможность продления`.
 3. Guest Mini App active table context shows service entry `Продление работы заведения` in the ordering section list, then `Продлить на 1 час` inside that service screen.
-4. Guest Bot active table context shows `Продление работы заведения` alongside table menu actions and creates the same fixed-price request.
+4. Guest Bot active table context shows `Продление работы заведения` alongside table actions and creates the same fixed-price request.
 5. Guest creates one extension request; repeated taps/callbacks do not duplicate pending requests.
 6. Venue Mini App order queue shows a pending extension badge/count on the affected order/table.
 7. Venue Mini App order detail shows `Запрос на продление работы заведения`, `На 1 час — 3 000 ₽`, `✅ Подтвердить продление`, `❌ Отказать`.
@@ -393,5 +393,5 @@ Manual paid extension smoke after full parity:
 10. Create and approve a second extension; charge and session extension are applied once per request.
 11. Reject a request and confirm guest sees rejection copy while bill/session do not mutate.
 12. As STAFF, confirm price/duration/settings are not editable in Mini App or bot.
-13. As MANAGER/OWNER, confirm settings are editable in Mini App and bot.
+13. As MANAGER/OWNER, confirm settings are editable in Mini App; repeat in bot after the remaining bot settings parity slice lands.
 14. Close bill/session and confirm extension request/approve endpoints are denied and extension UI disappears or disables safely.

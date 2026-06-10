@@ -2043,6 +2043,40 @@ class TelegramKeyboardsTest {
     }
 
     @Test
+    fun `table context bot flow can include shift extension service entry`() {
+        val context =
+            TableContext(
+                venueId = 1L,
+                venueName = "Venue",
+                tableId = 2L,
+                tableNumber = 3,
+                tableToken = "token",
+                staffChatId = null,
+            )
+        val markup = TelegramKeyboards.tableContextBotFlow(context, includeShiftExtension = true)
+        val texts = markup.keyboard.flatten().map { it.text }
+
+        assertEquals(true, texts.contains("Продление работы заведения"))
+    }
+
+    @Test
+    fun `table context bot flow hides shift extension service entry by default`() {
+        val context =
+            TableContext(
+                venueId = 1L,
+                venueName = "Venue",
+                tableId = 2L,
+                tableNumber = 3,
+                tableToken = "token",
+                staffChatId = null,
+            )
+        val markup = TelegramKeyboards.tableContextBotFlow(context)
+        val texts = markup.keyboard.flatten().map { it.text }
+
+        assertEquals(false, texts.contains("Продление работы заведения"))
+    }
+
+    @Test
     fun `table context bot flow includes visit history entry`() {
         val context =
             TableContext(

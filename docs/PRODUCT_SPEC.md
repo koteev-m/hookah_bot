@@ -149,9 +149,9 @@ Product intent:
 Current implementation map:
 - Backend/data/API: settings, pending requests, approve/reject, service charge creation, session extension and bill snapshot totals are implemented.
 - Guest Mini App: active table menu exposes service action `Продление работы заведения`; request/pending/confirmed states are implemented outside cart logic.
-- Venue Mini App: owner/manager settings are implemented; staff/manager/owner approve/reject currently exists in a standalone `Продления` screen.
-- Staff chat: approved/rejected extension refreshes the existing bill/live order message, and the service charge appears under bill service charges after approval; pending request actions are not yet embedded in the live message.
-- Guest Bot: table-flow request entry is not implemented.
+- Venue Mini App: owner/manager settings are implemented; order queue/detail exposes pending extension state and staff/manager/owner approve/reject from the order context.
+- Staff chat: pending extension appears inside the existing live order/bill message with approve/reject actions; approved/rejected state refreshes the same live message and approval shows the service charge under bill service charges.
+- Guest Bot: active table reply keyboard exposes `Продление работы заведения`; the request screen creates the same fixed-price pending request, shows duplicate pending state and keeps extension outside cart/menu/order-batch logic.
 - Owner/Manager Bot: extension settings flow is not implemented.
 
 Guest Mini App target:
@@ -232,7 +232,7 @@ Implementation slices:
 1. Backend order-scoped read model: pending extension summary/count on order queue/detail, with no DB migration unless the existing request table cannot support the read shape.
 2. Venue Mini App order integration: pending badge in queue, approve/reject block inside order detail, standalone `Продления` nav removed or demoted after parity is complete.
 3. Staff chat live message integration: pending request block and inline approve/reject callbacks on the live order/bill message, with no noisy lifecycle messages.
-4. Guest Bot table-flow request: service entry `Продление работы заведения`, request/pending/approved/rejected states, same duplicate-pending behavior.
+4. Guest Bot table-flow request: service entry `Продление работы заведения`, request/pending state, same duplicate-pending behavior and service-charge visibility in `Мой заказ`.
 5. Owner/Manager Bot settings parity: enabled/duration/price flow under venue settings; STAFF hidden/forbidden.
 6. Regression closure: cross-channel bill snapshot, QR/table restore, role denial, pending/approve/reject, staff-chat one-message behavior and bot/Mini App parity smoke.
 
