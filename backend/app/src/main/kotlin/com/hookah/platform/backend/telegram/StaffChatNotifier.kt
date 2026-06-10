@@ -6,6 +6,7 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSna
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillServiceChargeSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
+import com.hookah.platform.backend.miniapp.venue.orders.OrderPendingShiftExtension
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
@@ -96,6 +97,7 @@ data class StaffBillUpdatedNotification(
     val batches: List<StaffOrderBatchLiveBlock> = emptyList(),
     val status: OrderWorkflowStatus,
     val actionBatchId: Long,
+    val pendingShiftExtension: OrderPendingShiftExtension? = null,
     val updatedAt: Instant,
 )
 
@@ -111,6 +113,7 @@ enum class StaffBillUpdateChange {
     ITEM_EXCLUDED,
     ITEM_RESTORED,
     STATUS_UPDATED,
+    SHIFT_EXTENSION_REQUESTED,
     SHIFT_EXTENSION_APPROVED,
     SHIFT_EXTENSION_REJECTED,
 }
@@ -143,6 +146,7 @@ private data class StaffOrderLiveMessage(
     val status: OrderWorkflowStatus,
     val bill: OrderBillSnapshot,
     val batches: List<StaffOrderBatchLiveBlock>,
+    val pendingShiftExtension: OrderPendingShiftExtension? = null,
     val updatedAt: Instant,
     val change: StaffBillUpdateChange? = null,
 )
@@ -293,6 +297,7 @@ class StaffChatNotifier(
                     bill = event.bill,
                     batches = event.batches,
                     updatedAt = event.updatedAt,
+                    pendingShiftExtension = event.pendingShiftExtension,
                     change = event.change,
                 ),
             notificationKey = null,
@@ -339,6 +344,7 @@ class StaffChatNotifier(
                 status = event.status,
                 bill = event.bill,
                 batches = event.batches,
+                pendingShiftExtension = event.pendingShiftExtension,
                 updatedAt = event.updatedAt,
                 venueZoneId = venueZoneId,
                 change = event.change,
@@ -352,6 +358,7 @@ class StaffChatNotifier(
                 status = actionTarget.status,
                 webAppUrl = venueMiniAppUrl(event.venueId),
                 batchLabel = actionTarget.label,
+                pendingShiftExtensionRequestId = event.pendingShiftExtension?.requestId,
             )
         val existingMessage = notificationRepository.findOrderMessage(event.orderId)
         val (method, payloadJson) =
@@ -692,6 +699,7 @@ internal fun buildStaffOrderLiveMessageText(
     status: OrderWorkflowStatus,
     bill: OrderBillSnapshot,
     batches: List<StaffOrderBatchLiveBlock> = emptyList(),
+    pendingShiftExtension: OrderPendingShiftExtension? = null,
     updatedAt: Instant,
     venueZoneId: ZoneId = defaultStaffChatVenueZoneId,
     change: StaffBillUpdateChange? = null,
@@ -710,6 +718,10 @@ internal fun buildStaffOrderLiveMessageText(
         if (batches.isEmpty()) {
             append("\nАктивные позиции:\n")
             append(formatStaffBillActiveItems(bill.activeItems, bill.currency))
+            pendingShiftExtension?.let { extension ->
+                append("\n\n")
+                append(formatStaffPendingShiftExtension(extension))
+            }
             if (bill.serviceCharges.isNotEmpty()) {
                 append("\n\nДополнительно:\n")
                 append(formatStaffBillServiceCharges(bill.serviceCharges, bill.currency))
@@ -721,6 +733,10 @@ internal fun buildStaffOrderLiveMessageText(
         } else {
             append("\n")
             append(formatStaffOrderBatchBlocks(batches, bill, status))
+            pendingShiftExtension?.let { extension ->
+                append("\n\n")
+                append(formatStaffPendingShiftExtension(extension))
+            }
             if (bill.serviceCharges.isNotEmpty()) {
                 append("\n\nДополнительно:\n")
                 append(formatStaffBillServiceCharges(bill.serviceCharges, bill.currency))
@@ -885,6 +901,7 @@ private fun staffBillUpdateChangeLabel(change: StaffBillUpdateChange): String =
         StaffBillUpdateChange.ITEM_EXCLUDED -> "позиция исключена"
         StaffBillUpdateChange.ITEM_RESTORED -> "позиция восстановлена"
         StaffBillUpdateChange.STATUS_UPDATED -> "статус заказа"
+        StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED -> "запрос на продление работы"
         StaffBillUpdateChange.SHIFT_EXTENSION_APPROVED -> "продление работы подтверждено"
         StaffBillUpdateChange.SHIFT_EXTENSION_REJECTED -> "продление работы отклонено"
     }
@@ -959,6 +976,30 @@ private fun formatStaffBillServiceCharges(
             }
         }
         ?: "• нет дополнительных начислений"
+
+private fun formatStaffPendingShiftExtension(extension: OrderPendingShiftExtension): String =
+    buildString {
+        append("⏳ Запрос на продление работы заведения")
+        append('\n')
+        append("На ")
+            .append(formatStaffShiftExtensionDuration(extension.durationMinutes))
+            .append(" — ")
+            .append(formatStaffChatMoney(extension.priceMinor, extension.currency))
+        append('\n')
+        append("Гость ожидает подтверждения")
+    }
+
+private fun formatStaffShiftExtensionDuration(durationMinutes: Int): String =
+    if (durationMinutes % 60 == 0) {
+        val hours = durationMinutes / 60
+        when {
+            hours == 1 -> "1 час"
+            hours in 2..4 -> "$hours часа"
+            else -> "$hours часов"
+        }
+    } else {
+        "$durationMinutes мин"
+    }
 
 private fun StringBuilder.appendStaffBillDiscountLines(
     title: String,

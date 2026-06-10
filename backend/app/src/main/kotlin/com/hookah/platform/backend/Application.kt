@@ -643,6 +643,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 aiAssistantService = aiAssistantService,
                 staffChatNotifier = staffChatNotifier,
                 auditLogRepository = auditLogRepository,
+                shiftExtensionRepository = shiftExtensionRepository,
             )
 
         if (dataSource != null) {
@@ -1118,6 +1119,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         ordersRepository = ordersRepository,
                         shiftExtensionRepository = shiftExtensionRepository,
                         venueSettingsRepository = venueSettingsRepository,
+                        staffBillUpdateNotifier = overrides.staffBillUpdateNotifier ?: staffChatNotifier,
+                        venueOrdersRepository = venueOrdersRepository,
                     )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))

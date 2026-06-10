@@ -442,6 +442,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondBillMutati
             batches = detail.toStaffOrderBatchLiveBlocks(),
             status = detail.status,
             actionBatchId = staffChatActionBatchId(detail),
+            pendingShiftExtension = detail.pendingShiftExtension,
             updatedAt = detail.updatedAt,
         ),
     )
@@ -468,6 +469,7 @@ private suspend fun notifyStaffChatOrderLiveMessage(
             batches = detail.toStaffOrderBatchLiveBlocks(),
             status = detail.status,
             actionBatchId = staffChatActionBatchId(detail),
+            pendingShiftExtension = detail.pendingShiftExtension,
             updatedAt = detail.updatedAt,
         ),
     )

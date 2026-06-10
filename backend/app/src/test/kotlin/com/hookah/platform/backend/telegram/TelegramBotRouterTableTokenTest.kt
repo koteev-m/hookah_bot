@@ -40,6 +40,10 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitSource
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionDecisionResult
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestStatus
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -55,8 +59,10 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
+import com.hookah.platform.backend.miniapp.venue.orders.OrderPendingShiftExtension
 import com.hookah.platform.backend.miniapp.venue.orders.OrderPromotionDiscount
 import com.hookah.platform.backend.miniapp.venue.orders.OrderQueueItem
+import com.hookah.platform.backend.miniapp.venue.orders.OrderServiceChargeDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderStatusUpdateResult
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
@@ -221,6 +227,7 @@ class TelegramBotRouterTableTokenTest {
     private val promotionPlacementRepository: PromotionPlacementRepository = mockk(relaxed = true)
     private val promotionVenuePlacementRepository: PromotionVenuePlacementRepository = mockk(relaxed = true)
     private val loyaltyRepository: LoyaltyRepository = mockk(relaxed = true)
+    private val shiftExtensionRepository: ShiftExtensionRepository = mockk(relaxed = true)
     private val aiAssistantService: AiAssistantService = mockk(relaxed = true)
     private val staffChatNotifier: StaffChatNotifier = mockk(relaxed = true)
     private val venueTableRepository: VenueTableRepository = mockk(relaxed = true)
@@ -291,6 +298,7 @@ class TelegramBotRouterTableTokenTest {
             staffChatNotifier = staffChatNotifier,
             venueStaffRepository = venueStaffRepository,
             staffInviteRepository = staffInviteRepositoryForRouter,
+            shiftExtensionRepository = shiftExtensionRepository,
         )
 
     @BeforeEach
@@ -23757,6 +23765,263 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `staff chat shift extension approve confirms request and refreshes bill message`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                shiftExtensionRepository.approveRequest(
+                    venueId = 10L,
+                    requestId = 501L,
+                    actorUserId = 501L,
+                )
+            } returns
+                ShiftExtensionDecisionResult(
+                    request =
+                        shiftExtensionRequestRecord(
+                            status = ShiftExtensionRequestStatus.APPROVED,
+                            decidedByUserId = 501L,
+                            decidedAt = Instant.parse("2026-03-30T10:06:00Z"),
+                        ),
+                    orderId = 19L,
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                    serviceCharges = listOf(shiftExtensionServiceCharge()),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-extension-approve",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_se_a:10:501",
+                        ),
+                ),
+            )
+
+            coVerify {
+                shiftExtensionRepository.approveRequest(
+                    venueId = 10L,
+                    requestId = 501L,
+                    actorUserId = 501L,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("🧾 Заказ №12") &&
+                            text.contains("Дополнительно:") &&
+                            text.contains("Продление работы на 1 час ×1 — 3 000 ₽") &&
+                            !text.contains("Запрос на продление работы заведения")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            !markup.hasInlineButton("✅ Подтвердить продление", "sc_se_a:10:501") &&
+                            !markup.hasInlineButton("❌ Отказать", "sc_se_r:10:501")
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777L,
+                    "cb-extension-approve",
+                    "Продление подтверждено",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat shift extension reject refreshes bill message without service charge`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery {
+                shiftExtensionRepository.rejectRequest(
+                    venueId = 10L,
+                    requestId = 501L,
+                    actorUserId = 501L,
+                    reasonText = null,
+                )
+            } returns
+                ShiftExtensionDecisionResult(
+                    request =
+                        shiftExtensionRequestRecord(
+                            status = ShiftExtensionRequestStatus.REJECTED,
+                            decidedByUserId = 501L,
+                            decidedAt = Instant.parse("2026-03-30T10:06:00Z"),
+                        ),
+                    orderId = 19L,
+                    applied = true,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_4,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-extension-reject",
+                            from = User(id = 501L, username = "manager"),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_se_r:10:501",
+                        ),
+                ),
+            )
+
+            coVerify {
+                shiftExtensionRepository.rejectRequest(
+                    venueId = 10L,
+                    requestId = 501L,
+                    actorUserId = 501L,
+                    reasonText = null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("🧾 Заказ №12") &&
+                            !text.contains("Запрос на продление работы заведения") &&
+                            !text.contains("Продление работы на 1 час")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            !markup.hasInlineButton("✅ Подтвердить продление", "sc_se_a:10:501") &&
+                            !markup.hasInlineButton("❌ Отказать", "sc_se_r:10:501")
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777L,
+                    "cb-extension-reject",
+                    "Продление отклонено",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat shift extension duplicate approve does not duplicate service charge`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                shiftExtensionRepository.approveRequest(
+                    venueId = 10L,
+                    requestId = 501L,
+                    actorUserId = 501L,
+                )
+            } returns
+                ShiftExtensionDecisionResult(
+                    request =
+                        shiftExtensionRequestRecord(
+                            status = ShiftExtensionRequestStatus.APPROVED,
+                            decidedByUserId = 501L,
+                            decidedAt = Instant.parse("2026-03-30T10:06:00Z"),
+                        ),
+                    orderId = 19L,
+                    applied = false,
+                )
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.DELIVERED,
+                    orderStatus = OrderWorkflowStatus.DELIVERED,
+                    serviceCharges = listOf(shiftExtensionServiceCharge()),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_5,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-extension-approve-duplicate",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_se_a:10:501",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                shiftExtensionRepository.approveRequest(
+                    venueId = 10L,
+                    requestId = 501L,
+                    actorUserId = 501L,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    77L,
+                    match { text ->
+                        text.contains("Продление работы на 1 час ×1 — 3 000 ₽") &&
+                            !text.contains("Запрос на продление работы заведения")
+                    },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777L,
+                    "cb-extension-approve-duplicate",
+                    "Уже обработано",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `staff chat shift extension action by unauthorized user answers no access without decision`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(999L, 10L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_6,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-extension-no-role",
+                            from = User(id = 999L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_se_a:10:501",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                shiftExtensionRepository.approveRequest(any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                shiftExtensionRepository.rejectRequest(any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-extension-no-role", "Нет доступа", true)
+            }
+        }
+
+    @Test
     fun `staff call active list contains guest name`() =
         runBlocking {
             coEvery { venueAccessRepository.listVenueMemberships(501L) } returns
@@ -24999,6 +25264,8 @@ class TelegramBotRouterTableTokenTest {
                 ),
             ),
         promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
+        serviceCharges: List<OrderServiceChargeDetail> = emptyList(),
+        pendingShiftExtension: OrderPendingShiftExtension? = null,
     ): OrderDetail =
         OrderDetail(
             orderId = 19L,
@@ -25028,6 +25295,8 @@ class TelegramBotRouterTableTokenTest {
                     ),
                 ),
             promotionDiscounts = promotionDiscounts,
+            serviceCharges = serviceCharges,
+            pendingShiftExtension = pendingShiftExtension,
         )
 
     private fun staffChatOrderDetailWithAddOnBatch(
@@ -25092,6 +25361,62 @@ class TelegramBotRouterTableTokenTest {
                             ),
                     ),
                 ),
+        )
+
+    private fun shiftExtensionRequestRecord(
+        status: ShiftExtensionRequestStatus,
+        decidedByUserId: Long? = null,
+        decidedAt: Instant? = null,
+    ): ShiftExtensionRequestRecord =
+        ShiftExtensionRequestRecord(
+            id = 501L,
+            venueId = 10L,
+            tableSessionId = 55L,
+            tableId = 11L,
+            tableNumber = 105,
+            tabId = 1L,
+            orderId = 19L,
+            requestedByUserId = 200L,
+            status = status,
+            durationMinutes = 60,
+            priceMinor = 300_000,
+            currency = "RUB",
+            currentOrderableUntil = Instant.parse("2026-03-30T12:00:00Z"),
+            requestedUntil = Instant.parse("2026-03-30T13:00:00Z"),
+            comment = null,
+            decidedByUserId = decidedByUserId,
+            decidedAt = decidedAt,
+            rejectReason = null,
+            createdAt = Instant.parse("2026-03-30T10:05:00Z"),
+            updatedAt = decidedAt ?: Instant.parse("2026-03-30T10:05:00Z"),
+        )
+
+    private fun pendingShiftExtension(): OrderPendingShiftExtension =
+        OrderPendingShiftExtension(
+            requestId = 501L,
+            orderId = 19L,
+            tableSessionId = 55L,
+            tabId = 1L,
+            tableId = 11L,
+            tableNumber = 105,
+            durationMinutes = 60,
+            priceMinor = 300_000,
+            currency = "RUB",
+            requestedAt = Instant.parse("2026-03-30T10:05:00Z"),
+            status = "pending",
+        )
+
+    private fun shiftExtensionServiceCharge(): OrderServiceChargeDetail =
+        OrderServiceChargeDetail(
+            id = 700L,
+            source = "shift_extension",
+            sourceRequestId = 501L,
+            label = "Продление работы на 1 час",
+            qty = 1,
+            unitPriceMinor = 300_000,
+            totalMinor = 300_000,
+            currency = "RUB",
+            createdAt = Instant.parse("2026-03-30T10:06:00Z"),
         )
 
     private fun ReplyMarkup?.hasSingleWebAppButton(expectedUrl: String): Boolean {

@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderPendingShiftExtension
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
@@ -816,6 +817,80 @@ class StaffChatNotifierTest {
         }
 
     @Test
+    fun `bill update notification renders pending shift extension block and staff chat actions`() =
+        runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(
+                    id = 1L,
+                    name = "Venue",
+                    staffChatId = 777L,
+                )
+            val payloadSlot = slot<String>()
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(
+                    orderId = 2L,
+                    venueId = 1L,
+                    chatId = 777L,
+                    messageId = 55L,
+                )
+            coEvery {
+                notificationRepository.enqueueOrderMessage(
+                    orderId = 2L,
+                    venueId = 1L,
+                    chatId = 777L,
+                    method = "editMessageText",
+                    payloadJson = capture(payloadSlot),
+                )
+            } returns true
+
+            val result =
+                notifier.notifyBillUpdatedNow(
+                    StaffBillUpdatedNotification(
+                        venueId = 1L,
+                        orderId = 2L,
+                        displayNumber = 12,
+                        tableLabel = "7",
+                        change = StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED,
+                        status = OrderWorkflowStatus.ACCEPTED,
+                        actionBatchId = 10L,
+                        pendingShiftExtension =
+                            pendingShiftExtension(
+                                requestId = 501L,
+                                orderId = 2L,
+                                tableSessionId = 90L,
+                                tabId = 91L,
+                            ),
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+                        bill =
+                            billSnapshot(
+                                grossTotalMinor = 20_000,
+                                finalPayableTotalMinor = 20_000,
+                                activeItems =
+                                    listOf(
+                                        activeItemSnapshot(
+                                            name = "Авторский кальян",
+                                            lineGrossMinor = 20_000,
+                                            linePayableMinor = 20_000,
+                                        ),
+                                    ),
+                            ),
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("⏳ Запрос на продление работы заведения"), payload)
+            assertTrue(payload.contains("На 1 час — 3 000 ₽"), payload)
+            assertTrue(payload.contains("Гость ожидает подтверждения"), payload)
+            assertTrue(payload.contains("✅ Подтвердить продление"), payload)
+            assertTrue(payload.contains("❌ Отказать"), payload)
+            assertTrue(payload.contains("sc_se_a:1:501"), payload)
+            assertTrue(payload.contains("sc_se_r:1:501"), payload)
+            assertTrue(payload.contains("Изменение: запрос на продление работы"), payload)
+        }
+
+    @Test
     fun `live order message separates main order and doporder blocks`() {
         val text =
             buildStaffOrderLiveMessageText(
@@ -1124,6 +1199,26 @@ class StaffChatNotifierTest {
             linePayableMinor = linePayableMinor,
             currency = "RUB",
             discountPercent = discountPercent,
+        )
+
+    private fun pendingShiftExtension(
+        requestId: Long,
+        orderId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+    ): OrderPendingShiftExtension =
+        OrderPendingShiftExtension(
+            requestId = requestId,
+            orderId = orderId,
+            tableSessionId = tableSessionId,
+            tabId = tabId,
+            tableId = 11L,
+            tableNumber = 7,
+            durationMinutes = 60,
+            priceMinor = 300_000,
+            currency = "RUB",
+            requestedAt = Instant.parse("2026-06-05T12:30:00Z"),
+            status = "pending",
         )
 
     private fun excludedItemSnapshot(

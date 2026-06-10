@@ -5201,6 +5201,7 @@ object TelegramKeyboards {
         status: OrderWorkflowStatus,
         webAppUrl: String?,
         batchLabel: String? = null,
+        pendingShiftExtensionRequestId: Long? = null,
     ): InlineKeyboardMarkup {
         val rows =
             buildList {
@@ -5245,6 +5246,24 @@ object TelegramKeyboards {
                         }
                     }
                     OrderWorkflowStatus.CLOSED -> Unit
+                }
+                if (status != OrderWorkflowStatus.CLOSED && pendingShiftExtensionRequestId != null) {
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "✅ Подтвердить продление",
+                                callbackData = "sc_se_a:$venueId:$pendingShiftExtensionRequestId",
+                            ),
+                        ),
+                    )
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "❌ Отказать",
+                                callbackData = "sc_se_r:$venueId:$pendingShiftExtensionRequestId",
+                            ),
+                        ),
+                    )
                 }
                 if (status != OrderWorkflowStatus.CLOSED && orderId != null) {
                     add(

@@ -5,6 +5,8 @@ import com.google.zxing.client.j2se.MatrixToImageWriter
 import com.google.zxing.qrcode.QRCodeWriter
 import com.hookah.platform.backend.ai.AiAssistantService
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
@@ -26,6 +28,7 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
@@ -243,6 +246,7 @@ class TelegramBotRouter(
     private val aiAssistantService: AiAssistantService? = null,
     private val staffChatNotifier: StaffChatNotifier? = null,
     private val auditLogRepository: AuditLogRepository = AuditLogRepository(null),
+    private val shiftExtensionRepository: ShiftExtensionRepository = ShiftExtensionRepository(null),
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val aiTelegramHandler =
@@ -1620,6 +1624,28 @@ class TelegramBotRouter(
                     data = data,
                     expectedStatus = OrderBatchStatus.ACCEPTED,
                     nextStatus = OrderBatchStatus.DELIVERED,
+                )
+            }
+            data?.startsWith("sc_se_a:") == true -> {
+                callbackAnswered = true
+                handleStaffChatShiftExtensionDecision(
+                    chatId = chatId,
+                    messageId = sourceMessageId,
+                    callbackQueryId = callbackQuery.id,
+                    user = callbackQuery.from,
+                    data = data,
+                    approve = true,
+                )
+            }
+            data?.startsWith("sc_se_r:") == true -> {
+                callbackAnswered = true
+                handleStaffChatShiftExtensionDecision(
+                    chatId = chatId,
+                    messageId = sourceMessageId,
+                    callbackQueryId = callbackQuery.id,
+                    user = callbackQuery.from,
+                    data = data,
+                    approve = false,
                 )
             }
             data?.startsWith("sc_oc_ask:") == true -> {
@@ -20481,6 +20507,116 @@ class TelegramBotRouter(
         enqueueCallbackAnswer(chatId, callbackQueryId, text = "Готово")
     }
 
+    private suspend fun handleStaffChatShiftExtensionDecision(
+        chatId: Long,
+        messageId: Long?,
+        callbackQueryId: String,
+        user: User,
+        data: String,
+        approve: Boolean,
+    ) {
+        try {
+            handleStaffChatShiftExtensionDecisionUnsafe(
+                chatId = chatId,
+                messageId = messageId,
+                callbackQueryId = callbackQueryId,
+                user = user,
+                data = data,
+                approve = approve,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("staff chat shift extension action failed: {}", sanitizeTelegramForLog(e.message))
+            logger.debugTelegramException(e) { "staff chat shift extension action exception" }
+            enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
+        }
+    }
+
+    private suspend fun handleStaffChatShiftExtensionDecisionUnsafe(
+        chatId: Long,
+        messageId: Long?,
+        callbackQueryId: String,
+        user: User,
+        data: String,
+        approve: Boolean,
+    ) {
+        val parsed = parseStaffChatActionData(data, if (approve) "sc_se_a:" else "sc_se_r:")
+        if (parsed == null) {
+            enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
+            return
+        }
+        val (venueId, requestId) = parsed
+        val role = resolveVenueRoleForStaffChatAction(user.id, venueId)
+        if (role == null || !role.hasPermission(VenuePermission.SHIFT_EXTENSION_CONFIRM)) {
+            enqueueCallbackAnswer(chatId, callbackQueryId, text = "Нет доступа", showAlert = true)
+            return
+        }
+        val result =
+            try {
+                if (approve) {
+                    shiftExtensionRepository.approveRequest(
+                        venueId = venueId,
+                        requestId = requestId,
+                        actorUserId = user.id,
+                    )
+                } else {
+                    shiftExtensionRepository.rejectRequest(
+                        venueId = venueId,
+                        requestId = requestId,
+                        actorUserId = user.id,
+                        reasonText = null,
+                    )
+                }
+            } catch (e: DatabaseUnavailableException) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "База недоступна", showAlert = true)
+                return
+            } catch (e: NotFoundException) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Запрос не найден", showAlert = true)
+                return
+            } catch (e: InvalidInputException) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Уже обработано")
+                return
+            }
+        refreshStaffChatShiftExtensionMessage(
+            chatId = chatId,
+            messageId = messageId,
+            venueId = venueId,
+            orderId = result.orderId,
+        )
+        val answer =
+            when {
+                !result.applied -> "Уже обработано"
+                approve -> "Продление подтверждено"
+                else -> "Продление отклонено"
+            }
+        enqueueCallbackAnswer(chatId, callbackQueryId, text = answer)
+    }
+
+    private suspend fun refreshStaffChatShiftExtensionMessage(
+        chatId: Long,
+        messageId: Long?,
+        venueId: Long,
+        orderId: Long,
+    ) {
+        val detail =
+            try {
+                venueOrdersRepository.loadOrderDetail(venueId = venueId, orderId = orderId)
+            } catch (e: DatabaseUnavailableException) {
+                return
+            } ?: return
+        val batchId = staffChatActionBatchId(detail)
+        editStaffChatOrderBatchMessage(
+            chatId = chatId,
+            messageId = messageId,
+            venueId = venueId,
+            orderId = orderId,
+            batchId = batchId,
+            statusLine = staffChatOrderCurrentStatusLine(detail.status),
+            replyMarkup = staffChatLiveOrderActions(venueId = venueId, detail = detail),
+        )
+    }
+
     private suspend fun handleStaffChatOrderCloseAsk(
         chatId: Long,
         messageId: Long?,
@@ -20955,6 +21091,7 @@ class TelegramBotRouter(
             status = detail.status,
             bill = detail.toOrderBillSnapshot(),
             batches = detail.toStaffOrderBatchLiveBlocks(),
+            pendingShiftExtension = detail.pendingShiftExtension,
             updatedAt = detail.updatedAt,
         )
     }
@@ -21057,6 +21194,7 @@ class TelegramBotRouter(
             status = target.status,
             webAppUrl = venueMiniAppUrl(venueId),
             batchLabel = staffChatBatchLabel(detail, target.batchId),
+            pendingShiftExtensionRequestId = detail.pendingShiftExtension?.requestId,
         )
     }
 

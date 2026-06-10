@@ -8,6 +8,7 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
+import com.hookah.platform.backend.telegram.StaffBillUpdateChange
 import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffBillUpdatedNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
@@ -45,9 +46,16 @@ class ShiftExtensionRoutesTest {
         testApplication {
             val jdbcUrl = buildJdbcUrl("shift-extension-options")
             val config = buildConfig(jdbcUrl)
+            val notifier = CapturingStaffBillUpdateNotifier()
 
             environment { this.config = config }
-            application { module() }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(
+                        staffBillUpdateNotifier = notifier,
+                    ),
+                )
+            }
 
             client.get("/health")
 
@@ -105,6 +113,14 @@ class ShiftExtensionRoutesTest {
             assertEquals(first.request.id, second.request.id)
             assertEquals("pending", first.request.status)
             assertTrue(first.request.requestedUntil.contains("+03:00"))
+            assertTrue(notifier.events.isNotEmpty())
+            val pendingNotification = notifier.events.first()
+            assertEquals(StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED, pendingNotification.change)
+            val pendingExtension = assertNotNull(pendingNotification.pendingShiftExtension)
+            assertEquals(first.request.id, pendingExtension.requestId)
+            assertEquals(fixture.orderId, pendingExtension.orderId)
+            assertEquals(60, pendingExtension.durationMinutes)
+            assertEquals(5000, pendingExtension.priceMinor)
             assertEquals(1, countRows(jdbcUrl, "shift_extension_requests"))
             assertEquals(0, countRows(jdbcUrl, "order_service_charges"))
         }
@@ -175,7 +191,8 @@ class ShiftExtensionRoutesTest {
             assertEquals("Продление работы на 1 час", activeOrder.serviceCharges.single().label)
             assertTrue(!tableSessionExpiresAt(jdbcUrl, fixture.tableSessionId).isBefore(approvedExpiresAt))
 
-            val notification = notifier.events.single()
+            assertEquals(2, notifier.events.size)
+            val notification = notifier.events.last()
             assertEquals(fixture.orderId, notification.orderId)
             assertEquals(15000, notification.bill.finalPayableTotalMinor)
             assertEquals("Продление работы на 1 час", notification.bill.serviceCharges.single().label)
@@ -238,8 +255,8 @@ class ShiftExtensionRoutesTest {
             assertEquals("Гости уходят", rejection.request.rejectReason)
             assertEquals(0, countRows(jdbcUrl, "order_service_charges"))
             assertEquals(expiresAtBeforeReject, tableSessionExpiresAt(jdbcUrl, fixture.tableSessionId))
-            assertEquals(1, notifier.events.size)
-            assertEquals(10000, notifier.events.single().bill.finalPayableTotalMinor)
+            assertEquals(2, notifier.events.size)
+            assertEquals(10000, notifier.events.last().bill.finalPayableTotalMinor)
         }
 
     @Test

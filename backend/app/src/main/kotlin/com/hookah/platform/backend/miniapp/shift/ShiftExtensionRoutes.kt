@@ -54,6 +54,8 @@ fun Route.guestShiftExtensionRoutes(
     ordersRepository: OrdersRepository,
     shiftExtensionRepository: ShiftExtensionRepository,
     venueSettingsRepository: VenueSettingsRepository,
+    staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
+    venueOrdersRepository: VenueOrdersRepository? = null,
 ) {
     get("/table/extension-options") {
         val userId = call.requireUserId()
@@ -158,6 +160,13 @@ fun Route.guestShiftExtensionRoutes(
                     comment = request.comment,
                 ),
             )
+        refreshStaffChatBill(
+            notifier = staffBillUpdateNotifier,
+            venueOrdersRepository = venueOrdersRepository,
+            venueId = context.table.venueId,
+            orderId = context.orderId,
+            change = StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED,
+        )
         call.respond(ShiftExtensionRequestResponse(request = record.toDto(zoneId)))
     }
 }
@@ -331,13 +340,14 @@ private suspend fun requireVenuePermission(
 
 private suspend fun refreshStaffChatBill(
     notifier: StaffBillUpdateNotifier?,
-    venueOrdersRepository: VenueOrdersRepository,
+    venueOrdersRepository: VenueOrdersRepository?,
     venueId: Long,
     orderId: Long,
     change: StaffBillUpdateChange,
 ) {
     val staffNotifier = notifier ?: return
-    val detail = venueOrdersRepository.loadOrderDetail(venueId, orderId) ?: return
+    val ordersRepository = venueOrdersRepository ?: return
+    val detail = ordersRepository.loadOrderDetail(venueId, orderId) ?: return
     staffNotifier.notifyBillUpdatedNow(
         StaffBillUpdatedNotification(
             venueId = venueId,
@@ -349,6 +359,7 @@ private suspend fun refreshStaffChatBill(
             batches = detail.toStaffOrderBatchLiveBlocks(),
             status = detail.status,
             actionBatchId = staffChatActionBatchId(detail),
+            pendingShiftExtension = detail.pendingShiftExtension,
             updatedAt = detail.updatedAt,
         ),
     )

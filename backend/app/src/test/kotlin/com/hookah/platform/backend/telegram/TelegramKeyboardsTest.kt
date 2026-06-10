@@ -3069,6 +3069,29 @@ class TelegramKeyboardsTest {
     }
 
     @Test
+    fun `staff chat live order actions include short shift extension callbacks`() {
+        val buttons =
+            TelegramKeyboards.inlineStaffChatOrderActions(
+                venueId = 17L,
+                orderId = 19L,
+                batchId = 57L,
+                status = OrderWorkflowStatus.ACCEPTED,
+                webAppUrl = null,
+                pendingShiftExtensionRequestId = 501L,
+            ).inlineKeyboard.flatten()
+
+        assertEquals("🚚 Доставлено", buttons[0].text)
+        assertEquals("sc_ob_d:17:57", buttons[0].callbackData)
+        assertEquals("✅ Подтвердить продление", buttons[1].text)
+        assertEquals("sc_se_a:17:501", buttons[1].callbackData)
+        assertTrue(buttons[1].callbackData!!.length <= 64)
+        assertEquals("❌ Отказать", buttons[2].text)
+        assertEquals("sc_se_r:17:501", buttons[2].callbackData)
+        assertTrue(buttons[2].callbackData!!.length <= 64)
+        assertEquals("🔄 Обновить", buttons[3].text)
+    }
+
+    @Test
     fun `guest item unavailable actions contain replacement keep and staff call`() {
         val buttons =
             TelegramKeyboards.inlineGuestItemUnavailableActions(
