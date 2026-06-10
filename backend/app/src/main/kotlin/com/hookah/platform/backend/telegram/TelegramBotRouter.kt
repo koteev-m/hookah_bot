@@ -26009,7 +26009,7 @@ class TelegramBotRouter(
             menu.categories
                 .filter { category -> category.items.isNotEmpty() }
                 .map { category -> category.id to category.name }
-        val includeShiftExtension = !reorderMode && shouldShowGuestBotShiftExtensionMenuEntry(context.table.venueId)
+        val includeShiftExtension = shouldShowGuestBotShiftExtensionMenuEntry(context.table.venueId)
         if (categories.isEmpty() && !includeShiftExtension) {
             enqueueMessage(chatId, "В ${context.table.venueName} пока нет категорий меню.")
             return
