@@ -139,22 +139,65 @@ SHOULD:
 ### Paid venue/shift extension — P1 design
 
 Product intent:
-- Paid extension is not an ordinary menu item/cart item/order batch item. In the Mini App it may appear as a service action in the guest ordering section list, separate from catalog categories and cart logic.
-- Guest requests extension from active table context, near/after configured closing time or whenever the venue exposes the action.
-- Venue staff/manager confirms operationally; the guest cannot self-add the charge without confirmation.
+- Paid extension is a table service request, not an ordinary menu item/cart item/order batch item.
+- Guest sees it in the same table service/order flow as menu and bill, but the charge is created only after staff confirmation.
+- Staff/manager sees it in the active table/order/bill context, not as a separate operational island.
 - Confirmation adds a fixed, preconfigured charge to the current bill and extends the active table/session ordering window by the configured duration, default 60 minutes.
 - Extension can be repeated while the bill/session remains active.
+- Staff chat must stay one live order/bill message where possible; extension state should update that message instead of creating noisy side messages.
 
-Guest flow:
-1. In table context, show service action `Продление работы заведения` in the ordering section list only when venue extension settings are enabled, price is configured, and the table session/order is active.
+Current implementation map:
+- Backend/data/API: settings, pending requests, approve/reject, service charge creation, session extension and bill snapshot totals are implemented.
+- Guest Mini App: active table menu exposes service action `Продление работы заведения`; request/pending/confirmed states are implemented outside cart logic.
+- Venue Mini App: owner/manager settings are implemented; staff/manager/owner approve/reject currently exists in a standalone `Продления` screen.
+- Staff chat: approved/rejected extension refreshes the existing bill/live order message, and the service charge appears under bill service charges after approval; pending request actions are not yet embedded in the live message.
+- Guest Bot: table-flow request entry is not implemented.
+- Owner/Manager Bot: extension settings flow is not implemented.
+
+Guest Mini App target:
+1. In active table context, show service action `Продление работы заведения` in the ordering section list only when venue extension settings are enabled, price is configured, and the table session/order is active.
 2. Inside the service action, show button `Продлить на 1 час` and copy: `Продление на 1 час — 3 000 ₽. Персонал подтвердит возможность продления.`
 3. Guest sends request with optional comment; UI state becomes `Ожидает подтверждения`.
 4. If approved, guest sees `Продление подтверждено до HH:mm. Сумма добавлена в счёт.`
-5. If rejected or timed out, guest sees a clear non-mutating status and the bill is unchanged.
+5. If rejected or timed out, guest sees `Продление отклонено. Обратитесь к персоналу.` or another clear non-mutating status, and the bill is unchanged.
+6. The service action must never add anything to cart, menu items, order batches or batch item snapshots.
 
-Venue flow:
+Guest Bot target:
+1. In table context reply keyboard and bot menu category screen, show `Продление работы заведения` when the venue exposes extension settings.
+2. Opening it shows `Продление на 1 час — 3 000 ₽` and `Персонал подтвердит возможность продления.`
+3. Primary action: `Продлить на 1 час`; after submit, replace action with `Ожидает подтверждения`.
+4. Duplicate pending requests should show the existing pending state instead of creating another request.
+5. Approval/rejection should be reflected on the next table/order refresh with human copy: `Продление подтверждено. Сумма добавлена в счёт.` or `Продление отклонено. Обратитесь к персоналу.`
+6. Guest bot implementation must use the same fixed-price backend semantics as Mini App and must not create menu/cart/order-batch records.
+
+Venue Mini App target:
+1. Remove or demote the standalone primary `Продления` navigation entry after order-scoped handling is available.
+2. Order/table queue rows show a compact pending badge/count, for example `Продление ожидает`, when an active order has pending extension requests.
+3. Order detail shows an operational block inside the bill/order context:
+   - title `Запрос на продление работы заведения`;
+   - amount line `На 1 час — 3 000 ₽`;
+   - current/proposed allowed-until time;
+   - buttons `✅ Подтвердить продление` and `❌ Отказать` for roles with confirmation permission.
+4. Approve/reject refreshes the same order detail and bill snapshot. Approval adds service charge `Продление работы на 1 час`; rejection must not mutate bill/session.
+5. STAFF can see and approve/reject fixed-price requests, but must not see settings/price/duration edit controls.
+
+Staff chat target:
+1. Pending extension appears inside the existing live order/bill message under a section `Запрос на продление работы заведения`.
+2. The section shows `На 1 час — 3 000 ₽`, current/proposed time and guest/comment if available.
+3. Inline buttons on the live message: `✅ Подтвердить продление` and `❌ Отказать`.
+4. Actions update the same live order/bill message and remove/disable stale pending buttons. Approval then shows the service charge under `Дополнительно`; rejection shows non-bill status or removes the pending block.
+5. Do not send a new staff-chat message for every extension lifecycle step unless the live message is missing/unrecoverable; use existing fallback logic sparingly.
+
+Owner/Manager settings target:
+1. Venue Mini App and bot eventually both expose `Продление времени` settings for OWNER/MANAGER only.
+2. Fields: enabled, duration minutes, price in ₽, currency `RUB`, optional max repeats later.
+3. Toggle copy: `Показывать гостям возможность продления`.
+4. Helper copy: `Если выключено, гости не увидят продление, но цена и длительность сохранятся.`
+5. STAFF must not see configuration controls in any channel.
+
+Venue/Staff copy:
 1. Staff/manager sees a pending extension request with venue/table/session/order, guest display name, price, current allowed-until time and proposed new allowed-until time.
-2. Buttons: `✅ Продлить на 1 час` and `❌ Отказать`.
+2. Buttons: `✅ Подтвердить продление` and `❌ Отказать`.
 3. Approval is idempotent: one request can create one charge and one session extension only once.
 4. Rejection requires either a short reason or safe default `Причина не указана`.
 
@@ -168,6 +211,9 @@ API/data target:
 - `GET /api/guest/table/extension-options` returns enabled state, duration, price, current allowed-until and whether a pending request exists.
 - `POST /api/guest/table/extension-requests` creates a pending request for authenticated tab member.
 - `GET /api/venue/{venueId}/shift-extension-requests?status=pending` lists operational requests.
+- Order queue/detail read models should expose pending extension request state by order/table so Venue Mini App and staff chat do not need a separate polling island.
+- Staff chat needs request id and order id in inline callback payloads, guarded by the same `SHIFT_EXTENSION_CONFIRM` permission policy.
+- Guest Bot and Owner/Manager Bot may call repository/service code directly instead of going through HTTP, but must share validation/copy/state semantics with Mini App APIs.
 - `POST /api/venue/{venueId}/shift-extension-requests/{requestId}/approve` approves and atomically:
   - validates role/venue/session/order;
   - creates an `order_service_charge` with source `SHIFT_EXTENSION`;
@@ -183,10 +229,12 @@ Bill/session rules:
 - Closed bills, closed tabs, ended sessions and unavailable/deleted/suspended venues cannot be extended.
 
 Implementation slices:
-1. Data/API slice: settings, request, service charge and session extension persistence with PostgreSQL/H2 migrations and backend tests.
-2. Guest/Venue UI slice: Mini App request/approve/reject screens plus staff-chat notification/update.
-3. Regression slice: bill snapshot parity, repeated extension, role denial, timezone and closed-session tests.
-4. Bot parity follow-up: owner/manager bot settings for extension enabled/duration/price and guest bot table menu service entry `Продление работы заведения` when enabled.
+1. Backend order-scoped read model: pending extension summary/count on order queue/detail, with no DB migration unless the existing request table cannot support the read shape.
+2. Venue Mini App order integration: pending badge in queue, approve/reject block inside order detail, standalone `Продления` nav removed or demoted after parity is complete.
+3. Staff chat live message integration: pending request block and inline approve/reject callbacks on the live order/bill message, with no noisy lifecycle messages.
+4. Guest Bot table-flow request: service entry `Продление работы заведения`, request/pending/approved/rejected states, same duplicate-pending behavior.
+5. Owner/Manager Bot settings parity: enabled/duration/price flow under venue settings; STAFF hidden/forbidden.
+6. Regression closure: cross-channel bill snapshot, QR/table restore, role denial, pending/approve/reject, staff-chat one-message behavior and bot/Mini App parity smoke.
 
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
 MUST:
