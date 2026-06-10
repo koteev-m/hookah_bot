@@ -26,12 +26,19 @@ data class OrderBillActiveItemSnapshot(
     val itemId: Long,
     val name: String,
     val qty: Int,
+    val selectedOption: OrderBillSelectedOptionSnapshot? = null,
     val lineGrossMinor: Long,
     val manualDiscountMinor: Long,
     val promoDiscountMinor: Long,
     val linePayableMinor: Long,
     val currency: String?,
     val discountPercent: Int?,
+)
+
+data class OrderBillSelectedOptionSnapshot(
+    val optionId: Long? = null,
+    val name: String,
+    val priceDeltaMinor: Long,
 )
 
 data class OrderBillDiscountSnapshot(
@@ -59,6 +66,7 @@ data class OrderBillExcludedItemSnapshot(
     val itemId: Long,
     val name: String,
     val qty: Int,
+    val selectedOption: OrderBillSelectedOptionSnapshot? = null,
     val lineGrossMinor: Long,
     val currency: String,
     val status: String,
@@ -133,6 +141,7 @@ private fun buildExcludedItemSnapshots(
                 itemId = item.itemId,
                 name = item.name,
                 qty = item.qty,
+                selectedOption = item.selectedOption?.toBillSelectedOptionSnapshot(),
                 lineGrossMinor = item.lineGrossMinor(),
                 currency = item.currency?.takeIf { it.isNotBlank() } ?: defaultCurrency,
                 status = status,
@@ -157,6 +166,7 @@ private fun OrderBatchItemDetail.toActiveItemSnapshot(
         itemId = itemId,
         name = name,
         qty = qty,
+        selectedOption = selectedOption?.toBillSelectedOptionSnapshot(),
         lineGrossMinor = lineGrossMinor(),
         manualDiscountMinor = manualDiscountMinor(),
         promoDiscountMinor = promoDiscountMinor.coerceAtLeast(0L),
@@ -171,6 +181,13 @@ private fun OrderPromotionDiscount.toBillDiscountSnapshot(): OrderBillDiscountSn
         discountMinor = discountMinor,
         currency = currency,
         ruleType = ruleType,
+    )
+
+private fun OrderBatchItemSelectedOption.toBillSelectedOptionSnapshot(): OrderBillSelectedOptionSnapshot =
+    OrderBillSelectedOptionSnapshot(
+        optionId = optionId,
+        name = name,
+        priceDeltaMinor = priceDeltaMinor,
     )
 
 private fun OrderServiceChargeDetail.toBillServiceChargeSnapshot(): OrderBillServiceChargeSnapshot =

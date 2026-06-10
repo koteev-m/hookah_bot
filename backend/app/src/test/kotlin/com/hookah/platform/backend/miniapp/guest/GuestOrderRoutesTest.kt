@@ -12,6 +12,7 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
+import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
@@ -471,6 +472,261 @@ class GuestOrderRoutesTest {
             assertEquals("Дозаказ №1", secondNotification.batches[1].label)
             assertEquals(secondPayload.batchId, secondNotification.batches[1].batchId)
             assertEquals(OrderWorkflowStatus.NEW, secondNotification.batches[1].status)
+        }
+
+    @Test
+    fun `add-batch with selected option persists snapshot and read models include option`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-selected-option")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val notifications = mutableListOf<NewBatchNotification>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } answers {
+                notifications += invocation.args[0] as NewBatchNotification
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            }
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 31)
+            seedTableToken(jdbcUrl, tableId, "selected-option-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Авторский кальян", priceMinor = 100_000)
+            val optionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = itemId,
+                    name = "Ягодный микс",
+                    priceDeltaMinor = 30_000,
+                )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "selected-option-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "selected-option-1",
+                                items =
+                                    listOf(
+                                        AddBatchItemDto(
+                                            itemId = itemId,
+                                            qty = 2,
+                                            selectedOptionId = optionId,
+                                        ),
+                                    ),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText())
+            val snapshot = fetchSelectedOptionSnapshot(jdbcUrl, payload.batchId)
+            assertNotNull(snapshot)
+            assertEquals(optionId, snapshot.optionId)
+            assertEquals("Ягодный микс", snapshot.name)
+            assertEquals(30_000L, snapshot.priceDeltaMinor)
+
+            val activeResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=selected-option-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, activeResponse.status)
+            val activePayload = json.decodeFromString(ActiveOrderResponse.serializer(), activeResponse.bodyAsText())
+            val activeItem = assertNotNull(activePayload.order).batches.single().items.single()
+            assertEquals(itemId, activeItem.itemId)
+            assertEquals(2, activeItem.qty)
+            assertEquals(130_000L, activeItem.priceMinor)
+            assertEquals(260_000L, activeItem.lineGrossMinor)
+            assertEquals(optionId, activeItem.selectedOption?.optionId)
+            assertEquals("Ягодный микс", activeItem.selectedOption?.name)
+            assertEquals(30_000L, activeItem.selectedOption?.priceDeltaMinor)
+            assertEquals(260_000L, activePayload.order?.grossTotalMinor)
+            assertEquals(260_000L, activePayload.order?.finalPayableTotalMinor)
+
+            val venueDetail =
+                VenueOrdersRepository(h2DataSource(jdbcUrl))
+                    .loadOrderDetail(venueId = venueId, orderId = payload.orderId)
+            val venueItem = assertNotNull(venueDetail).batches.single().items.single()
+            assertEquals(130_000L, venueItem.priceMinor)
+            assertEquals(optionId, venueItem.selectedOption?.optionId)
+            assertEquals("Ягодный микс", venueItem.selectedOption?.name)
+            assertEquals(30_000L, venueItem.selectedOption?.priceDeltaMinor)
+
+            val notification = notifications.single()
+            val notificationSummary = assertNotNull(notification.itemsSummary)
+            assertTrue(notificationSummary.contains("Авторский кальян · Ягодный микс"), notificationSummary)
+            assertEquals(260_000L, notification.bill?.grossTotalMinor)
+            assertEquals("Ягодный микс", notification.bill?.activeItems?.single()?.selectedOption?.name)
+        }
+
+    @Test
+    fun `add-batch rejects unavailable and foreign selected options`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-option-reject")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 32)
+            seedTableToken(jdbcUrl, tableId, "option-reject-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян", priceMinor = 100_000)
+            val otherItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Другой кальян", priceMinor = 100_000)
+            val unavailableOptionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = itemId,
+                    name = "Недоступный вкус",
+                    isAvailable = false,
+                )
+            val foreignOptionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = otherItemId,
+                    name = "Чужой вкус",
+                )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            suspend fun postAddBatchRequest(request: AddBatchRequest) =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            val unavailableResponse =
+                postAddBatchRequest(
+                    request =
+                        AddBatchRequest(
+                            tableToken = "option-reject-token",
+                            tableSessionId = tableSessionId,
+                            tabId = personalTabId,
+                            idempotencyKey = "option-reject-unavailable",
+                            items =
+                                listOf(
+                                    AddBatchItemDto(
+                                        itemId = itemId,
+                                        qty = 1,
+                                        selectedOptionId = unavailableOptionId,
+                                    ),
+                                ),
+                            comment = null,
+                        ),
+                )
+            val foreignResponse =
+                postAddBatchRequest(
+                    request =
+                        AddBatchRequest(
+                            tableToken = "option-reject-token",
+                            tableSessionId = tableSessionId,
+                            tabId = personalTabId,
+                            idempotencyKey = "option-reject-foreign",
+                            items =
+                                listOf(
+                                    AddBatchItemDto(
+                                        itemId = itemId,
+                                        qty = 1,
+                                        selectedOptionId = foreignOptionId,
+                                    ),
+                                ),
+                            comment = null,
+                        ),
+                )
+
+            assertEquals(HttpStatusCode.BadRequest, unavailableResponse.status)
+            assertApiErrorEnvelope(unavailableResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(HttpStatusCode.BadRequest, foreignResponse.status)
+            assertApiErrorEnvelope(foreignResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(0, countRows(jdbcUrl, "order_batch_item_options"))
+        }
+
+    @Test
+    fun `cart preview keeps same item with different selected options as separate lines`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-option-preview")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 33)
+            seedTableToken(jdbcUrl, tableId, "option-preview-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян", priceMinor = 100_000)
+            val mintOptionId = seedMenuOption(jdbcUrl, venueId, itemId, "Мята", priceDeltaMinor = 0)
+            val berryOptionId = seedMenuOption(jdbcUrl, venueId, itemId, "Ягоды", priceDeltaMinor = 30_000)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            val response =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "option-preview-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items =
+                                    listOf(
+                                        AddBatchItemDto(itemId = itemId, qty = 1, selectedOptionId = mintOptionId),
+                                        AddBatchItemDto(itemId = itemId, qty = 1, selectedOptionId = berryOptionId),
+                                    ),
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val preview = json.decodeFromString(CartPreviewResponse.serializer(), response.bodyAsText()).preview
+            assertEquals(2, preview.items.size)
+            assertEquals(listOf("Мята", "Ягоды"), preview.items.map { it.selectedOption?.name })
+            assertEquals(listOf(100_000L, 130_000L), preview.items.map { it.priceMinor })
+            assertEquals(listOf(100_000L, 130_000L), preview.items.map { it.lineGrossMinor })
+            assertEquals(230_000L, preview.grossTotalMinor)
+            assertEquals(230_000L, preview.finalPayableTotalMinor)
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_item_options"))
         }
 
     @Test
@@ -2497,6 +2753,79 @@ class GuestOrderRoutesTest {
         error("Failed to insert item")
     }
 
+    private fun seedMenuOption(
+        jdbcUrl: String,
+        venueId: Long,
+        itemId: Long,
+        name: String,
+        priceDeltaMinor: Long = 0,
+        isAvailable: Boolean = true,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO menu_item_options (
+                    venue_id,
+                    item_id,
+                    name,
+                    price_delta_minor,
+                    is_available,
+                    sort_order
+                )
+                VALUES (?, ?, ?, ?, ?, 0)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, itemId)
+                statement.setString(3, name)
+                statement.setLong(4, priceDeltaMinor)
+                statement.setBoolean(5, isAvailable)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong(1)
+                    }
+                }
+            }
+        }
+        error("Failed to insert menu option")
+    }
+
+    private fun fetchSelectedOptionSnapshot(
+        jdbcUrl: String,
+        batchId: Long,
+    ): SelectedOptionSnapshot? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT obio.menu_item_option_id,
+                       obio.option_name_snapshot,
+                       obio.price_delta_minor_snapshot
+                FROM order_batch_item_options obio
+                JOIN order_batch_items obi ON obi.id = obio.order_batch_item_id
+                WHERE obi.order_batch_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchId)
+                statement.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        return null
+                    }
+                    val optionId =
+                        rs.getLong("menu_item_option_id").let { value ->
+                            if (rs.wasNull()) null else value
+                        }
+                    return SelectedOptionSnapshot(
+                        optionId = optionId,
+                        name = rs.getString("option_name_snapshot"),
+                        priceDeltaMinor = rs.getLong("price_delta_minor_snapshot"),
+                    )
+                }
+            }
+        }
+    }
+
     private fun setMenuCategoryType(
         jdbcUrl: String,
         categoryId: Long,
@@ -2911,5 +3240,11 @@ class GuestOrderRoutesTest {
         val method: String,
         val payloadJson: String,
         val orderId: Long,
+    )
+
+    private data class SelectedOptionSnapshot(
+        val optionId: Long?,
+        val name: String,
+        val priceDeltaMinor: Long,
     )
 }

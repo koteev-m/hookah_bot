@@ -678,6 +678,7 @@ private fun OrderBatchItemDetail.toDto(batch: OrderBatchDetail): OrderBatchItemD
         itemId = itemId,
         name = name,
         qty = qty,
+        selectedOption = selectedOption?.toDto(),
         priceMinor = priceMinor,
         currency = currency,
         lineGrossMinor = lineGrossMinor,
@@ -765,10 +766,25 @@ private fun OrderBillExcludedItemSnapshot.toDto(): OrderBillExcludedItemDto =
         itemId = itemId,
         name = name,
         qty = qty,
+        selectedOption = selectedOption?.toDto(),
         lineGrossMinor = lineGrossMinor,
         currency = currency,
         status = status,
         reason = reason,
+    )
+
+private fun OrderBatchItemSelectedOption.toDto(): OrderItemSelectedOptionDto =
+    OrderItemSelectedOptionDto(
+        optionId = optionId,
+        name = name,
+        priceDeltaMinor = priceDeltaMinor,
+    )
+
+private fun OrderBillSelectedOptionSnapshot.toDto(): OrderItemSelectedOptionDto =
+    OrderItemSelectedOptionDto(
+        optionId = optionId,
+        name = name,
+        priceDeltaMinor = priceDeltaMinor,
     )
 
 private fun formatInstant(value: java.time.Instant): String {

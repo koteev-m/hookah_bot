@@ -16,6 +16,7 @@ import com.hookah.platform.backend.miniapp.guest.api.CartPreviewRequest
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchDto
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
+import com.hookah.platform.backend.miniapp.guest.api.SelectedOrderItemOptionDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
@@ -33,6 +34,7 @@ import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.GuestOrderCartPreview
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
+import com.hookah.platform.backend.telegram.db.OrderItemSelectedOptionDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
@@ -307,6 +309,11 @@ private fun normalizeIdempotencyKey(idempotencyKey: String): String {
     return normalized
 }
 
+private data class NormalizedItemKey(
+    val itemId: Long,
+    val selectedOptionId: Long?,
+)
+
 private fun normalizeItems(items: List<AddBatchItemDto>): List<OrderBatchItemInput> {
     if (items.isEmpty()) {
         throw InvalidInputException("items must not be empty")
@@ -314,24 +321,30 @@ private fun normalizeItems(items: List<AddBatchItemDto>): List<OrderBatchItemInp
     if (items.size > ITEMS_MAX_SIZE) {
         throw InvalidInputException("items size must be <= $ITEMS_MAX_SIZE")
     }
-    val grouped = linkedMapOf<Long, Int>()
+    val grouped = linkedMapOf<NormalizedItemKey, Int>()
     items.forEach { item ->
         if (item.itemId <= 0) {
             throw InvalidInputException("itemId must be positive")
         }
+        item.selectedOptionId?.let { selectedOptionId ->
+            if (selectedOptionId <= 0) {
+                throw InvalidInputException("selectedOptionId must be positive")
+            }
+        }
         if (item.qty !in QTY_MIN..QTY_MAX) {
             throw InvalidInputException("qty must be between $QTY_MIN and $QTY_MAX")
         }
-        grouped[item.itemId] = (grouped[item.itemId] ?: 0) + item.qty
+        val key = NormalizedItemKey(item.itemId, item.selectedOptionId)
+        grouped[key] = (grouped[key] ?: 0) + item.qty
     }
     if (grouped.size < ITEMS_MIN_SIZE || grouped.size > ITEMS_MAX_SIZE) {
         throw InvalidInputException("items size must be between $ITEMS_MIN_SIZE and $ITEMS_MAX_SIZE")
     }
-    return grouped.map { (itemId, qty) ->
+    return grouped.map { (key, qty) ->
         if (qty !in QTY_MIN..QTY_MAX) {
             throw InvalidInputException("qty must be between $QTY_MIN and $QTY_MAX")
         }
-        OrderBatchItemInput(itemId = itemId, qty = qty)
+        OrderBatchItemInput(itemId = key.itemId, qty = qty, selectedOptionId = key.selectedOptionId)
     }
 }
 
@@ -410,6 +423,7 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
                                 itemId = item.itemId,
                                 qty = item.qty,
                                 name = item.itemName,
+                                selectedOption = item.selectedOption?.toDto(),
                                 priceMinor = item.priceMinor,
                                 currency = item.currency,
                                 lineGrossMinor = item.lineGrossMinor(),
@@ -442,6 +456,7 @@ private fun GuestOrderCartPreview.toDto(): CartPreviewDto =
                     itemId = item.itemId,
                     name = item.itemName,
                     qty = item.qty,
+                    selectedOption = item.selectedOption?.toDto(),
                     priceMinor = item.priceMinor,
                     currency = item.currency,
                     lineGrossMinor = item.lineGrossMinor,
@@ -468,6 +483,13 @@ private fun com.hookah.platform.backend.telegram.db.OrderBatchItemDetails.manual
 
 private fun com.hookah.platform.backend.telegram.db.OrderBatchItemDetails.linePayableMinor(): Long =
     (lineGrossMinor() - manualDiscountMinor() - promoDiscountMinor.coerceAtLeast(0L)).coerceAtLeast(0L)
+
+private fun OrderItemSelectedOptionDetails.toDto(): SelectedOrderItemOptionDto =
+    SelectedOrderItemOptionDto(
+        optionId = optionId,
+        name = name,
+        priceDeltaMinor = priceDeltaMinor,
+    )
 
 private suspend fun notifyStaffChat(
     notifier: StaffChatNotifier?,
@@ -532,7 +554,8 @@ private suspend fun staffChatCreatedBatchItemsSummary(
 ): String {
     if (batch.items.isNotEmpty()) {
         return batch.items.joinToString(separator = ", ") { item ->
-            "${item.itemName} x${item.qty} — ${formatStaffSummaryMoney(item.priceMinor * item.qty, item.currency)}"
+            val itemName = item.selectedOption?.let { option -> "${item.itemName} · ${option.name}" } ?: item.itemName
+            "$itemName x${item.qty} — ${formatStaffSummaryMoney(item.priceMinor * item.qty, item.currency)}"
         }
     }
     val itemIds = fallbackItems.map { it.itemId }.toSet()

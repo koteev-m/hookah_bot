@@ -116,6 +116,7 @@ import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrderBatchDetails
 import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
+import com.hookah.platform.backend.telegram.db.OrderItemSelectedOptionDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.PromotionPlacement
 import com.hookah.platform.backend.telegram.db.PromotionPlacementRepository
@@ -22894,6 +22895,74 @@ class TelegramBotRouterTableTokenTest {
                             it.inlineKeyboard.flatten().single().text == "➕ Дозаказать" &&
                             it.inlineKeyboard.flatten().single().callbackData == "bot_menu_reorder_entry"
                     },
+                )
+            }
+        }
+
+    @Test
+    fun `active order screen shows selected item option`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, any()) } returns
+                ActiveOrderDetails(
+                    orderId = 900L,
+                    status = "ACTIVE",
+                    batches =
+                        listOf(
+                            OrderBatchDetails(
+                                batchId = 901L,
+                                comment = null,
+                                items =
+                                    listOf(
+                                        OrderBatchItemDetails(
+                                            itemId = 1000L,
+                                            itemName = "Авторский кальян",
+                                            qty = 1,
+                                            selectedOption =
+                                                OrderItemSelectedOptionDetails(
+                                                    optionId = 301L,
+                                                    name = "Ягодный микс",
+                                                    priceDeltaMinor = 30_000,
+                                                ),
+                                            priceMinor = 130_000,
+                                            currency = "RUB",
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 202,
+                    message =
+                        Message(
+                            messageId = 302,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "📄 Мой заказ",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("• Авторский кальян · Ягодный микс ×1 — 1 300 ₽")
+                    },
+                    any(),
                 )
             }
         }

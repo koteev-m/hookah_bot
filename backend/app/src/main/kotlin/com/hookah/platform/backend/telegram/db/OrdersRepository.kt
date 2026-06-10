@@ -4,6 +4,7 @@ import com.hookah.platform.backend.analytics.AnalyticsEventRecord
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.promotions.PromotionRuleCartItem
 import com.hookah.platform.backend.promotions.PromotionRuleEngine
@@ -12,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.Date
+import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Types
@@ -23,12 +25,20 @@ import javax.sql.DataSource
 data class OrderBatchItemInput(
     val itemId: Long,
     val qty: Int,
+    val selectedOptionId: Long? = null,
+)
+
+data class OrderItemSelectedOptionDetails(
+    val optionId: Long? = null,
+    val name: String,
+    val priceDeltaMinor: Long,
 )
 
 data class OrderBatchItemDetails(
     val itemId: Long,
     val qty: Int,
     val itemName: String? = null,
+    val selectedOption: OrderItemSelectedOptionDetails? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,
@@ -85,6 +95,7 @@ data class CreatedOrderBatchItem(
     val itemId: Long,
     val itemName: String,
     val qty: Int,
+    val selectedOption: OrderItemSelectedOptionDetails? = null,
     val priceMinor: Long,
     val currency: String,
     val promoDiscountMinor: Long = 0L,
@@ -105,6 +116,7 @@ data class GuestOrderCartPreviewItem(
     val itemId: Long,
     val itemName: String,
     val qty: Int,
+    val selectedOption: OrderItemSelectedOptionDetails? = null,
     val priceMinor: Long,
     val currency: String,
     val lineGrossMinor: Long,
@@ -129,6 +141,7 @@ data class UserActiveOrderItemSummary(
     val itemId: Long,
     val itemName: String,
     val qty: Int,
+    val selectedOption: OrderItemSelectedOptionDetails? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,
@@ -553,8 +566,14 @@ class OrdersRepository(
             SELECT
                 obi.menu_item_id,
                 mi.name AS item_name,
+                obiop.menu_item_option_id,
+                obiop.option_name_snapshot,
+                obiop.price_delta_minor_snapshot,
                 SUM(obi.qty) AS qty,
-                mi.price_minor,
+                CASE
+                    WHEN mi.price_minor IS NULL THEN NULL
+                    ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                END AS price_minor,
                 mi.currency,
                 obi.discount_percent,
                 COALESCE(SUM(promo.discount_minor), 0) AS promo_discount_minor,
@@ -562,6 +581,7 @@ class OrdersRepository(
             FROM order_batches ob
             JOIN order_batch_items obi ON obi.order_batch_id = ob.id
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
                 SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
                 FROM order_batch_item_promotion_adjustments
@@ -588,7 +608,16 @@ class OrdersRepository(
                         AND tm.user_id = ?
                   )
               )
-            GROUP BY obi.menu_item_id, mi.name, mi.price_minor, mi.currency, obi.discount_percent, opri.reward_order_batch_item_id
+            GROUP BY
+                obi.menu_item_id,
+                mi.name,
+                obiop.menu_item_option_id,
+                obiop.option_name_snapshot,
+                obiop.price_delta_minor_snapshot,
+                mi.price_minor,
+                mi.currency,
+                obi.discount_percent,
+                opri.reward_order_batch_item_id
             ORDER BY MIN(obi.id) ASC
             """.trimIndent(),
         ).use { statement ->
@@ -607,6 +636,7 @@ class OrdersRepository(
                                 itemId = itemId,
                                 itemName = itemName,
                                 qty = qty,
+                                selectedOption = rs.toSelectedOptionDetails(),
                                 priceMinor =
                                     rs.getLong("price_minor").let {
                                             value ->
@@ -730,6 +760,7 @@ class OrdersRepository(
                             connection.rollback()
                             return@use null
                         }
+                        val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
                         val existing =
                             findBatchIdempotency(
                                 connection = connection,
@@ -758,7 +789,7 @@ class OrdersRepository(
                                 ?: insertActiveOrder(connection, venueId, tableId, tableSessionId, venueZoneId)
                         val orderDisplay = loadOrderDisplay(connection, orderId)
                         val batchId = insertOrderBatch(connection, orderId, tabId, comment)
-                        val insertedItems = insertBatchItems(connection, batchId, items)
+                        val insertedItems = insertBatchItems(connection, batchId, items, selectedOptionsByKey)
                         val loyaltyRedemption =
                             applyLoyaltyRedemptionForBatch(
                                 connection = connection,
@@ -847,6 +878,9 @@ class OrdersRepository(
                                 )
                             }
                         }
+                        throw e
+                    } catch (e: Exception) {
+                        connection.rollback()
                         throw e
                     } finally {
                         connection.autoCommit = true
@@ -993,6 +1027,7 @@ class OrdersRepository(
         connection: Connection,
         batchId: Long,
         items: List<OrderBatchItemInput>,
+        selectedOptionsByKey: Map<OrderBatchItemInputKey, CheckoutSelectedOption> = emptyMap(),
     ): List<InsertedOrderBatchItem> {
         val insertedItems = mutableListOf<InsertedOrderBatchItem>()
         connection.prepareStatement(
@@ -1014,9 +1049,15 @@ class OrdersRepository(
                             batchItemId = keys.getLong(1),
                             menuItemId = item.itemId,
                             qty = item.qty,
+                            selectedOption = selectedOptionsByKey[item.toKey()],
                         ),
                     )
                 }
+            }
+        }
+        insertedItems.forEach { inserted ->
+            inserted.selectedOption?.let { option ->
+                insertBatchItemSelectedOption(connection, inserted.batchItemId, option)
             }
         }
         return insertedItems
@@ -1026,6 +1067,7 @@ class OrdersRepository(
         connection: Connection,
         batchId: Long,
         item: OrderBatchItemInput,
+        selectedOption: CheckoutSelectedOption? = null,
     ): InsertedOrderBatchItem =
         connection.prepareStatement(
             """
@@ -1044,9 +1086,96 @@ class OrdersRepository(
                     batchItemId = keys.getLong(1),
                     menuItemId = item.itemId,
                     qty = item.qty,
+                    selectedOption = selectedOption,
                 )
+                    .also { inserted ->
+                        selectedOption?.let { option ->
+                            insertBatchItemSelectedOption(connection, inserted.batchItemId, option)
+                        }
+                    }
             }
         }
+
+    private fun insertBatchItemSelectedOption(
+        connection: Connection,
+        batchItemId: Long,
+        option: CheckoutSelectedOption,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO order_batch_item_options (
+                order_batch_item_id,
+                menu_item_option_id,
+                option_name_snapshot,
+                price_delta_minor_snapshot
+            )
+            VALUES (?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchItemId)
+            statement.setLong(2, option.optionId)
+            statement.setString(3, option.name)
+            statement.setLong(4, option.priceDeltaMinor)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun resolveSelectedOptions(
+        connection: Connection,
+        venueId: Long,
+        items: List<OrderBatchItemInput>,
+    ): Map<OrderBatchItemInputKey, CheckoutSelectedOption> {
+        val selectedOptionIds = items.mapNotNull { it.selectedOptionId }.toSet()
+        if (selectedOptionIds.isEmpty()) {
+            return emptyMap()
+        }
+        val placeholders = selectedOptionIds.joinToString(",") { "?" }
+        val optionsById =
+            connection.prepareStatement(
+                """
+                SELECT id, item_id, name, price_delta_minor
+                FROM menu_item_options
+                WHERE venue_id = ?
+                  AND is_available = TRUE
+                  AND id IN ($placeholders)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                selectedOptionIds.forEachIndexed { index, optionId ->
+                    statement.setLong(index + 2, optionId)
+                }
+                statement.executeQuery().use { rs ->
+                    buildMap {
+                        while (rs.next()) {
+                            val optionId = rs.getLong("id")
+                            put(
+                                optionId,
+                                CheckoutSelectedOption(
+                                    optionId = optionId,
+                                    itemId = rs.getLong("item_id"),
+                                    name =
+                                        rs.getString("name")?.takeIf { it.isNotBlank() }
+                                            ?: "Опция #$optionId",
+                                    priceDeltaMinor = rs.getLong("price_delta_minor"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        return items
+            .mapNotNull { item ->
+                val optionId = item.selectedOptionId ?: return@mapNotNull null
+                val option =
+                    optionsById[optionId]
+                        ?: throw InvalidInputException("Selected option is unavailable")
+                if (option.itemId != item.itemId) {
+                    throw InvalidInputException("Selected option does not belong to item")
+                }
+                item.toKey() to option
+            }
+            .toMap()
+    }
 
     private fun loadCheckoutMenuItems(
         connection: Connection,
@@ -1112,11 +1241,16 @@ class OrdersRepository(
                         if (checkoutMenuItems.size != itemIds.size) {
                             return@use null
                         }
+                        val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
                         val rules =
                             venuePromotionRuleRepository
                                 ?.listActiveRulesForVenueAt(connection, venueId, Instant.now())
                                 .orEmpty()
-                        CartPreviewInputs(checkoutMenuItems = checkoutMenuItems, activeRules = rules)
+                        CartPreviewInputs(
+                            checkoutMenuItems = checkoutMenuItems,
+                            selectedOptionsByKey = selectedOptionsByKey,
+                            activeRules = rules,
+                        )
                     }
                 } catch (e: SQLException) {
                     throw DatabaseUnavailableException()
@@ -1124,14 +1258,16 @@ class OrdersRepository(
             } ?: return null
 
         val baseItems =
-            items.mapNotNull { input ->
-                val menuItem = inputs.checkoutMenuItems[input.itemId] ?: return@mapNotNull null
+            items.mapIndexedNotNull { index, input ->
+                val menuItem = inputs.checkoutMenuItems[input.itemId] ?: return@mapIndexedNotNull null
+                val selectedOption = inputs.selectedOptionsByKey[input.toKey()]
                 CartPreviewBaseItem(
-                    lineId = input.itemId,
+                    lineId = index.toLong() + 1L,
                     itemId = input.itemId,
                     itemName = menuItem.name,
                     qty = input.qty,
-                    priceMinor = menuItem.priceMinor,
+                    selectedOption = selectedOption?.toDetails(),
+                    priceMinor = menuItem.effectivePriceMinor(selectedOption),
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
                 )
@@ -1231,6 +1367,7 @@ class OrdersRepository(
                     itemId = item.itemId,
                     itemName = item.itemName,
                     qty = item.qty,
+                    selectedOption = item.selectedOption,
                     priceMinor = item.priceMinor,
                     currency = item.currency,
                     lineGrossMinor = gross,
@@ -1296,7 +1433,7 @@ class OrdersRepository(
                     menuItemId = inserted.menuItemId,
                     itemName = menuItem.name,
                     qty = inserted.qty,
-                    priceMinor = menuItem.priceMinor,
+                    priceMinor = menuItem.effectivePriceMinor(inserted.selectedOption),
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
                 )
@@ -1340,7 +1477,7 @@ class OrdersRepository(
                                 menuItemId = inserted.menuItemId,
                                 discountMinor = adjustment.discountMinor,
                                 discountPercent = adjustment.percent,
-                                originalPriceMinor = menuItem.priceMinor,
+                                originalPriceMinor = menuItem.effectivePriceMinor(inserted.selectedOption),
                                 quantity = inserted.qty,
                                 currency = currency,
                             )
@@ -1453,7 +1590,7 @@ class OrdersRepository(
                     menuItemId = inserted.menuItemId,
                     itemName = menuItem.name,
                     qty = inserted.qty,
-                    priceMinor = menuItem.priceMinor,
+                    priceMinor = menuItem.effectivePriceMinor(inserted.selectedOption),
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
                 )
@@ -1720,12 +1857,16 @@ class OrdersRepository(
             SELECT obi.menu_item_id,
                    COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
                    obi.qty,
-                   COALESCE(mi.price_minor, 0) AS price_minor,
+                   obiop.menu_item_option_id,
+                   obiop.option_name_snapshot,
+                   obiop.price_delta_minor_snapshot,
+                   COALESCE(mi.price_minor, 0) + COALESCE(obiop.price_delta_minor_snapshot, 0) AS price_minor,
                    COALESCE(mi.currency, 'RUB') AS currency,
                    COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
                    CASE WHEN opri.id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
                 SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
                 FROM order_batch_item_promotion_adjustments
@@ -1747,6 +1888,7 @@ class OrdersRepository(
                                 itemId = rs.getLong("menu_item_id"),
                                 itemName = rs.getString("item_name"),
                                 qty = rs.getInt("qty"),
+                                selectedOption = rs.toSelectedOptionDetails(),
                                 priceMinor = rs.getLong("price_minor"),
                                 currency = rs.getString("currency"),
                                 promoDiscountMinor = rs.getLong("promo_discount_minor"),
@@ -1769,6 +1911,7 @@ class OrdersRepository(
         val batchItemId: Long,
         val menuItemId: Long,
         val qty: Int,
+        val selectedOption: CheckoutSelectedOption? = null,
     )
 
     private data class PromotionRulesApplicationResult(
@@ -1777,6 +1920,7 @@ class OrdersRepository(
 
     private data class CartPreviewInputs(
         val checkoutMenuItems: Map<Long, CheckoutMenuItem>,
+        val selectedOptionsByKey: Map<OrderBatchItemInputKey, CheckoutSelectedOption>,
         val activeRules: List<VenuePromotionRule>,
     )
 
@@ -1785,6 +1929,7 @@ class OrdersRepository(
         val itemId: Long,
         val itemName: String,
         val qty: Int,
+        val selectedOption: OrderItemSelectedOptionDetails? = null,
         val priceMinor: Long,
         val currency: String,
         val effectiveType: MenuSemanticType,
@@ -1805,6 +1950,25 @@ class OrdersRepository(
         val currency: String,
         val effectiveType: MenuSemanticType,
     )
+
+    private data class OrderBatchItemInputKey(
+        val itemId: Long,
+        val selectedOptionId: Long?,
+    )
+
+    private data class CheckoutSelectedOption(
+        val optionId: Long,
+        val itemId: Long,
+        val name: String,
+        val priceDeltaMinor: Long,
+    ) {
+        fun toDetails(): OrderItemSelectedOptionDetails =
+            OrderItemSelectedOptionDetails(
+                optionId = optionId,
+                name = name,
+                priceDeltaMinor = priceDeltaMinor,
+            )
+    }
 
     private fun findBatchIdempotency(
         connection: Connection,
@@ -1909,10 +2073,17 @@ class OrdersRepository(
                    COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
                    CASE WHEN opri.id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward,
                    mi.name AS item_name,
-                   mi.price_minor,
+                   obiop.menu_item_option_id,
+                   obiop.option_name_snapshot,
+                   obiop.price_delta_minor_snapshot,
+                   CASE
+                       WHEN mi.price_minor IS NULL THEN NULL
+                       ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                   END AS price_minor,
                    mi.currency
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
                 SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
                 FROM order_batch_item_promotion_adjustments
@@ -1939,6 +2110,7 @@ class OrdersRepository(
                             itemId = itemId,
                             qty = rs.getInt("qty"),
                             itemName = rs.getString("item_name")?.takeIf { it.isNotBlank() },
+                            selectedOption = rs.toSelectedOptionDetails(),
                             priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
                             currency = rs.getString("currency"),
                             discountPercent =
@@ -1954,5 +2126,25 @@ class OrdersRepository(
                 result
             }
         }
+    }
+
+    private fun OrderBatchItemInput.toKey(): OrderBatchItemInputKey =
+        OrderBatchItemInputKey(itemId = itemId, selectedOptionId = selectedOptionId)
+
+    private fun CheckoutMenuItem.effectivePriceMinor(selectedOption: CheckoutSelectedOption?): Long =
+        priceMinor + (selectedOption?.priceDeltaMinor ?: 0L)
+
+    private fun ResultSet.toSelectedOptionDetails(): OrderItemSelectedOptionDetails? {
+        val optionId =
+            getLong("menu_item_option_id").let { value ->
+                if (wasNull()) null else value
+            }
+        val optionName = getString("option_name_snapshot")?.takeIf { it.isNotBlank() } ?: return null
+        val priceDeltaMinor = getLong("price_delta_minor_snapshot")
+        return OrderItemSelectedOptionDetails(
+            optionId = optionId,
+            name = optionName,
+            priceDeltaMinor = priceDeltaMinor,
+        )
     }
 }

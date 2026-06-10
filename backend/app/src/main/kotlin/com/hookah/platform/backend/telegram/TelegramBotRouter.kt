@@ -113,6 +113,7 @@ import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
+import com.hookah.platform.backend.telegram.db.OrderItemSelectedOptionDetails
 import com.hookah.platform.backend.telegram.db.OrderServiceChargeDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.PromotionPlacement
@@ -6053,7 +6054,7 @@ class TelegramBotRouter(
                 append("\n• —")
             } else {
                 order.items.forEach { item ->
-                    append("\n• ${item.itemName} ×${item.qty}")
+                    append("\n• ${formatOrderItemName(item.itemName, item.selectedOption)} ×${item.qty}")
                     buildGuestOrderItemPriceText(
                         priceMinor = item.priceMinor,
                         currency = item.currency,
@@ -6106,7 +6107,7 @@ class TelegramBotRouter(
                     items.joinToString(separator = "\n") { item ->
                         val itemName = item.itemName ?: fallbackItemNames[item.itemId] ?: "item#${item.itemId}"
                         buildString {
-                            append("• $itemName ×${item.qty}")
+                            append("• ${formatOrderItemName(itemName, item.selectedOption)} ×${item.qty}")
                             buildGuestOrderItemPriceText(
                                 priceMinor = item.priceMinor,
                                 currency = item.currency,
@@ -6155,6 +6156,11 @@ class TelegramBotRouter(
             }
         }
     }
+
+    private fun formatOrderItemName(
+        itemName: String,
+        selectedOption: OrderItemSelectedOptionDetails?,
+    ): String = selectedOption?.let { option -> "$itemName · ${option.name}" } ?: itemName
 
     private fun formatGuestActiveOrderTotal(
         items: List<OrderBatchItemDetails>,
@@ -21162,7 +21168,7 @@ class TelegramBotRouter(
             .takeIf { it.isNotEmpty() }
             ?.joinToString(separator = ", ") { item ->
                 buildString {
-                    append("${item.name} x${item.qty}")
+                    append("${formatVenueOrderItemName(item)} x${item.qty}")
                     if (item.priceMinor != null && !item.currency.isNullOrBlank()) {
                         append(" — ").append(formatCompactMoney(item.priceMinor * item.qty, item.currency))
                     }
@@ -23517,7 +23523,7 @@ class TelegramBotRouter(
                 append("\n• —")
             } else {
                 currentBatchItems.forEach { item ->
-                    append("\n• ${item.name} ×${item.qty}")
+                    append("\n• ${formatVenueOrderItemName(item)} ×${item.qty}")
                     if (item.priceMinor != null && !item.currency.isNullOrBlank()) {
                         append(" — ${formatPrice(item.priceMinor, item.currency)}")
                     }
@@ -23560,7 +23566,7 @@ class TelegramBotRouter(
                     append("\n• —")
                 } else {
                     activeItems.forEach { item ->
-                        append("\n• ${item.name} ×${item.qty}")
+                        append("\n• ${formatVenueOrderItemName(item)} ×${item.qty}")
                         if (item.priceMinor != null && !item.currency.isNullOrBlank()) {
                             append(" — ${formatPrice(item.priceMinor * item.qty, item.currency)}")
                         }
@@ -23613,22 +23619,25 @@ class TelegramBotRouter(
             append("Выберите позицию для изменения")
             append("\n\n")
             items.forEach { (_, item) ->
-                append("• ${item.name} ×${item.qty}")
+                append("• ${formatVenueOrderItemName(item)} ×${item.qty}")
                 buildVenueOrderBillItemPriceText(item)?.let { priceText -> append(" — $priceText") }
                 append("\n")
             }
         }.trimEnd()
 
     private fun buildVenueStaffOrderBillItemButtonLabel(item: OrderBatchItemDetail): String =
-        "${item.name} ×${item.qty}"
+        "${formatVenueOrderItemName(item)} ×${item.qty}"
 
     private fun buildVenueStaffOrderBillItemActionText(item: OrderBatchItemDetail): String =
         buildString {
             append("Что сделать с позицией?")
             append("\n\n")
-            append("${item.name} ×${item.qty}")
+            append("${formatVenueOrderItemName(item)} ×${item.qty}")
             buildVenueOrderBillItemPriceText(item)?.let { priceText -> append(" — $priceText") }
         }
+
+    private fun formatVenueOrderItemName(item: OrderBatchItemDetail): String =
+        item.selectedOption?.let { option -> "${item.name} · ${option.name}" } ?: item.name
 
     private fun buildVenueOrderBillItemPriceText(item: OrderBatchItemDetail): String? {
         val priceMinor = item.priceMinor ?: return null
@@ -23764,7 +23773,7 @@ class TelegramBotRouter(
                         append("\n• —")
                     } else {
                         activeItems.forEach { item ->
-                            append("\n• ${item.name} ×${item.qty}")
+                            append("\n• ${formatVenueOrderItemName(item)} ×${item.qty}")
                             val priceText =
                                 if (item.priceMinor != null && !item.currency.isNullOrBlank()) {
                                     formatCompactMoney(item.priceMinor * item.qty, item.currency)
@@ -23840,7 +23849,7 @@ class TelegramBotRouter(
                         append("\n• —")
                     } else {
                         batch.items.forEach { item ->
-                            append("\n• ${item.name} ×${item.qty}")
+                            append("\n• ${formatVenueOrderItemName(item)} ×${item.qty}")
                         }
                     }
                     append("\nПричина: $cancelReason")
@@ -23848,13 +23857,13 @@ class TelegramBotRouter(
                 excludedItems.forEach { (label, item) ->
                     append("\n\n")
                     append(label)
-                    append("\n• ${item.name} ×${item.qty}")
+                    append("\n• ${formatVenueOrderItemName(item)} ×${item.qty}")
                     append("\nПричина: ${item.excludedReasonText?.takeIf { it.isNotBlank() } ?: "Не указана"}")
                 }
                 canceledItems.forEach { (label, item) ->
                     append("\n\n")
                     append(label)
-                    append("\n• ${item.name} ×${item.qty}")
+                    append("\n• ${formatVenueOrderItemName(item)} ×${item.qty}")
                     append("\nПричина: ${item.canceledReasonText?.takeIf { it.isNotBlank() } ?: "Позиция закончилась"}")
                 }
             }
@@ -27128,6 +27137,7 @@ class TelegramBotRouter(
                         OrderBatchItemInput(
                             itemId = item.itemId,
                             qty = item.qty,
+                            selectedOptionId = item.optionId,
                         )
                     },
                 selectedGiftChoices = botGiftChoices[key].orEmpty(),
@@ -27454,6 +27464,12 @@ class TelegramBotRouter(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: InvalidInputException) {
+            enqueueMessage(
+                chatId,
+                "Позиция или выбранный вкус сейчас недоступны. Обновите меню и соберите корзину заново.",
+            )
+            null
         } catch (e: DatabaseUnavailableException) {
             enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             null
@@ -27518,7 +27534,8 @@ class TelegramBotRouter(
     ): String {
         if (createdBatch.items.isNotEmpty()) {
             return createdBatch.items.joinToString(separator = ", ") { item ->
-                "${item.itemName} x${item.qty} — ${formatCompactMoney(item.priceMinor * item.qty, item.currency)}"
+                "${formatOrderItemName(item.itemName, item.selectedOption)} x${item.qty} — " +
+                    formatCompactMoney(item.priceMinor * item.qty, item.currency)
             }
         }
         val itemIds = fallbackItems.map { it.itemId }.toSet()

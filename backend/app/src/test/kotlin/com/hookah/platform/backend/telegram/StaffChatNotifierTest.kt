@@ -2,6 +2,7 @@ package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSelectedOptionSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderPendingShiftExtension
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
@@ -947,6 +948,40 @@ class StaffChatNotifierTest {
     }
 
     @Test
+    fun `live order message renders selected item option`() {
+        val text =
+            buildStaffOrderLiveMessageText(
+                venueName = "Venue",
+                tableLabel = "7",
+                displayNumber = 12,
+                status = OrderWorkflowStatus.NEW,
+                bill =
+                    billSnapshot(
+                        grossTotalMinor = 130_000,
+                        finalPayableTotalMinor = 130_000,
+                        activeItems =
+                            listOf(
+                                activeItemSnapshot(
+                                    name = "Авторский кальян",
+                                    selectedOption =
+                                        OrderBillSelectedOptionSnapshot(
+                                            optionId = 301L,
+                                            name = "Ягодный микс",
+                                            priceDeltaMinor = 30_000,
+                                        ),
+                                    lineGrossMinor = 130_000,
+                                    linePayableMinor = 130_000,
+                                ),
+                            ),
+                    ),
+                batches = emptyList(),
+                updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+            )
+
+        assertTrue(text.contains("Авторский кальян · Ягодный микс ×1 — 1 300 ₽"), text)
+    }
+
+    @Test
     fun `live order notification targets new doporder action when main order is delivered`() =
         runBlocking {
             coEvery { venueSettingsRepository.find(1L) } returns null
@@ -1181,6 +1216,7 @@ class StaffChatNotifierTest {
         batchId: Long = 1L,
         batchLabel: String = "Основной заказ",
         name: String,
+        selectedOption: OrderBillSelectedOptionSnapshot? = null,
         lineGrossMinor: Long,
         manualDiscountMinor: Long = 0,
         linePayableMinor: Long,
@@ -1193,6 +1229,7 @@ class StaffChatNotifierTest {
             itemId = 20L,
             name = name,
             qty = 1,
+            selectedOption = selectedOption,
             lineGrossMinor = lineGrossMinor,
             manualDiscountMinor = manualDiscountMinor,
             promoDiscountMinor = 0,

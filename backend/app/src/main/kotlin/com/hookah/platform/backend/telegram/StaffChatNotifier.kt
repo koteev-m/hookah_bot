@@ -936,7 +936,7 @@ private fun formatStaffBillActiveItems(
         .takeIf { it.isNotEmpty() }
         ?.joinToString("\n") { item ->
             buildString {
-                append("• ").append(item.name).append(" ×").append(item.qty)
+                append("• ").append(item.displayName()).append(" ×").append(item.qty)
                 append(" — ")
                 append(formatStaffChatMoney(item.linePayableMinor, item.currency ?: fallbackCurrency))
                 item.discountPercent?.let { discountPercent ->
@@ -949,13 +949,19 @@ private fun formatStaffBillActiveItems(
 private fun formatStaffBillExcludedItems(items: List<OrderBillExcludedItemSnapshot>): String =
     items.joinToString("\n") { item ->
         buildString {
-            append("• ").append(item.name).append(" ×").append(item.qty)
+            append("• ").append(item.displayName()).append(" ×").append(item.qty)
             append(" — ").append(formatStaffChatMoney(item.lineGrossMinor, item.currency))
             item.reason?.takeIf { it.isNotBlank() }?.let { reason ->
                 append("; причина: ").append(reason)
             }
         }
     }
+
+private fun OrderBillActiveItemSnapshot.displayName(): String =
+    selectedOption?.let { option -> "$name · ${option.name}" } ?: name
+
+private fun OrderBillExcludedItemSnapshot.displayName(): String =
+    selectedOption?.let { option -> "$name · ${option.name}" } ?: name
 
 private fun formatStaffBillServiceCharges(
     charges: List<OrderBillServiceChargeSnapshot>,

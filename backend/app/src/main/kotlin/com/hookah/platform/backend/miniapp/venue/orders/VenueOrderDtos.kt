@@ -81,6 +81,7 @@ data class OrderBatchItemDto(
     val itemId: Long,
     val name: String,
     val qty: Int,
+    val selectedOption: OrderItemSelectedOptionDto? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val lineGrossMinor: Long,
@@ -95,6 +96,13 @@ data class OrderBatchItemDto(
     val canceledReasonText: String? = null,
     val canceledAt: String? = null,
     val canceledByUserId: Long? = null,
+)
+
+@Serializable
+data class OrderItemSelectedOptionDto(
+    val optionId: Long? = null,
+    val name: String,
+    val priceDeltaMinor: Long,
 )
 
 @Serializable
@@ -142,6 +150,7 @@ data class OrderBillExcludedItemDto(
     val itemId: Long,
     val name: String,
     val qty: Int,
+    val selectedOption: OrderItemSelectedOptionDto? = null,
     val lineGrossMinor: Long,
     val currency: String,
     val status: String,

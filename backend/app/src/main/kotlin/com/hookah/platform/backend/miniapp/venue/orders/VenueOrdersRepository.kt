@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.sql.Connection
+import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Timestamp
 import java.time.Instant
@@ -147,6 +148,7 @@ data class OrderBatchItemDetail(
     val itemId: Long,
     val name: String,
     val qty: Int,
+    val selectedOption: OrderBatchItemSelectedOption? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val isExcluded: Boolean = false,
@@ -158,6 +160,12 @@ data class OrderBatchItemDetail(
     val canceledReasonText: String? = null,
     val canceledAt: Instant? = null,
     val canceledByUserId: Long? = null,
+)
+
+data class OrderBatchItemSelectedOption(
+    val optionId: Long? = null,
+    val name: String,
+    val priceDeltaMinor: Long,
 )
 
 enum class OrderBatchItemStatus(
@@ -375,8 +383,18 @@ class VenueOrdersRepository(
                                SELECT GREATEST(
                                    COALESCE(
                                        SUM(
-                                           (COALESCE(mi_total.price_minor, 0) * obi_total.qty)
-                                           - ((COALESCE(mi_total.price_minor, 0) * obi_total.qty) * COALESCE(obi_total.discount_percent, 0) / 100)
+                                           (
+                                               (
+                                                   COALESCE(mi_total.price_minor, 0)
+                                                   + COALESCE(obiop_total.price_delta_minor_snapshot, 0)
+                                               ) * obi_total.qty
+                                           )
+                                           - (
+                                               (
+                                                   COALESCE(mi_total.price_minor, 0)
+                                                   + COALESCE(obiop_total.price_delta_minor_snapshot, 0)
+                                               ) * obi_total.qty * COALESCE(obi_total.discount_percent, 0) / 100
+                                           )
                                            - COALESCE(promo.discount_minor, 0)
                                        ),
                                        0
@@ -386,6 +404,8 @@ class VenueOrdersRepository(
                                FROM order_batches ob_total
                                JOIN order_batch_items obi_total ON obi_total.order_batch_id = ob_total.id
                                LEFT JOIN menu_items mi_total ON mi_total.id = obi_total.menu_item_id
+                               LEFT JOIN order_batch_item_options obiop_total
+                                 ON obiop_total.order_batch_item_id = obi_total.id
                                LEFT JOIN (
                                    SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
                                    FROM order_batch_item_promotion_adjustments
@@ -2071,10 +2091,17 @@ class VenueOrdersRepository(
                    obi.canceled_at,
                    obi.canceled_by_user_id,
                    mi.name,
-                   mi.price_minor,
+                   obiop.menu_item_option_id,
+                   obiop.option_name_snapshot,
+                   obiop.price_delta_minor_snapshot,
+                   CASE
+                       WHEN mi.price_minor IS NULL THEN NULL
+                       ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                   END AS price_minor,
                    mi.currency
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
                 SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
                 FROM order_batch_item_promotion_adjustments
@@ -2101,6 +2128,7 @@ class VenueOrdersRepository(
                                     ?.takeIf { it.isNotBlank() }
                                     ?: "Позиция #${rs.getLong("menu_item_id")}",
                             qty = rs.getInt("qty"),
+                            selectedOption = rs.toSelectedOption(),
                             priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
                             currency = rs.getString("currency"),
                             isExcluded = rs.getBoolean("is_excluded"),
@@ -2194,6 +2222,19 @@ class VenueOrdersRepository(
                 result
             }
         }
+    }
+
+    private fun ResultSet.toSelectedOption(): OrderBatchItemSelectedOption? {
+        val optionId =
+            getLong("menu_item_option_id").let { value ->
+                if (wasNull()) null else value
+            }
+        val name = getString("option_name_snapshot")?.takeIf { it.isNotBlank() } ?: return null
+        return OrderBatchItemSelectedOption(
+            optionId = optionId,
+            name = name,
+            priceDeltaMinor = getLong("price_delta_minor_snapshot"),
+        )
     }
 
     private fun loadPromotionDiscountsByOrder(
