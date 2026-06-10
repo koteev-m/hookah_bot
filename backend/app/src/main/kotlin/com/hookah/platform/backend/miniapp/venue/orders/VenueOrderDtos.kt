@@ -20,6 +20,7 @@ data class OrderQueueItemDto(
     val comment: String?,
     val itemsCount: Int,
     val status: String,
+    val pendingShiftExtension: OrderPendingShiftExtensionDto? = null,
 )
 
 @Serializable
@@ -41,6 +42,23 @@ data class OrderDetailDto(
     val updatedAt: String,
     val bill: OrderBillDto,
     val batches: List<OrderBatchDto>,
+    val pendingShiftExtension: OrderPendingShiftExtensionDto? = null,
+)
+
+@Serializable
+data class OrderPendingShiftExtensionDto(
+    val requestId: Long,
+    val orderId: Long,
+    val tableSessionId: Long,
+    val tabId: Long,
+    val tableId: Long,
+    val tableNumber: String,
+    val tableLabel: String,
+    val durationMinutes: Int,
+    val priceMinor: Long,
+    val currency: String,
+    val requestedAt: String,
+    val status: String,
 )
 
 @Serializable

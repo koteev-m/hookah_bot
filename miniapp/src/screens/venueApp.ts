@@ -153,13 +153,13 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
   }
   navButtons.settings.hidden = true
+  navButtons.extensions.hidden = true
   append(
     nav,
     navButtons.dashboard,
     navButtons.orders,
     navButtons.bookings,
     navButtons.calls,
-    navButtons.extensions,
     navButtons.menu,
     navButtons.tables,
     navButtons.staff,
@@ -361,7 +361,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
     refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
-    refs.navButtons.extensions.hidden = !hasPermission('SHIFT_EXTENSION_VIEW')
+    refs.navButtons.extensions.hidden = true
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'

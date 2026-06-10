@@ -18,6 +18,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.util.Locale
 import javax.sql.DataSource
 
 data class OrderQueueCursor(
@@ -69,6 +70,7 @@ data class OrderQueueItem(
     val payableMinor: Long? = null,
     val currency: String? = null,
     val promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
+    val pendingShiftExtension: OrderPendingShiftExtension? = null,
 )
 
 data class OrderQueueResult(
@@ -89,6 +91,21 @@ data class OrderDetail(
     val displayDate: LocalDate? = null,
     val promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
     val serviceCharges: List<OrderServiceChargeDetail> = emptyList(),
+    val pendingShiftExtension: OrderPendingShiftExtension? = null,
+)
+
+data class OrderPendingShiftExtension(
+    val requestId: Long,
+    val orderId: Long,
+    val tableSessionId: Long,
+    val tabId: Long,
+    val tableId: Long,
+    val tableNumber: Int,
+    val durationMinutes: Int,
+    val priceMinor: Long,
+    val currency: String,
+    val requestedAt: Instant,
+    val status: String,
 )
 
 data class OrderBatchDetail(
@@ -280,9 +297,14 @@ class VenueOrdersRepository(
                     val hasMore = items.size > limit
                     val trimmed = if (hasMore) items.dropLast(1) else items
                     val discountsByOrder = loadPromotionDiscountsByOrder(connection, trimmed.map { it.orderId })
+                    val pendingExtensionsByOrder =
+                        loadPendingShiftExtensionsByOrderIds(connection, venueId, trimmed.map { it.orderId })
                     val withDiscounts =
                         trimmed.map { item ->
-                            item.copy(promotionDiscounts = discountsByOrder[item.orderId].orEmpty())
+                            item.copy(
+                                promotionDiscounts = discountsByOrder[item.orderId].orEmpty(),
+                                pendingShiftExtension = pendingExtensionsByOrder[item.orderId],
+                            )
                         }
                     val nextCursor =
                         if (hasMore) {
@@ -731,6 +753,8 @@ class VenueOrdersRepository(
                     val itemsByBatch = loadBatchItems(connection, batchIds)
                     val promotionDiscountsByBatch = loadPromotionDiscountsByBatch(connection, batchIds)
                     val serviceCharges = loadServiceCharges(connection, orderId)
+                    val pendingShiftExtension =
+                        loadPendingShiftExtensionsByOrderIds(connection, venueId, listOf(orderId))[orderId]
                     val mappedBatches =
                         batches.map { batch ->
                             batch.copy(
@@ -754,6 +778,7 @@ class VenueOrdersRepository(
                         batches = mappedBatches,
                         promotionDiscounts = mappedBatches.flatMap { it.promotionDiscounts }.mergePromotionDiscounts(),
                         serviceCharges = serviceCharges,
+                        pendingShiftExtension = pendingShiftExtension,
                     )
                 }
             } catch (e: SQLException) {
@@ -2232,6 +2257,67 @@ class VenueOrdersRepository(
                                 discountMinor = discountMinor,
                                 currency = rs.getString("currency"),
                                 ruleType = rs.getString("rule_type"),
+                            )
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    private fun loadPendingShiftExtensionsByOrderIds(
+        connection: Connection,
+        venueId: Long,
+        orderIds: List<Long>,
+    ): Map<Long, OrderPendingShiftExtension> {
+        if (orderIds.isEmpty()) {
+            return emptyMap()
+        }
+        val distinctOrderIds = orderIds.distinct()
+        val placeholders = distinctOrderIds.joinToString(",") { "?" }
+        val sql =
+            """
+            SELECT ser.id,
+                   ser.order_id,
+                   ser.table_session_id,
+                   ser.tab_id,
+                   ser.table_id,
+                   vt.table_number,
+                   ser.duration_minutes,
+                   ser.price_minor,
+                   ser.currency,
+                   ser.created_at,
+                   ser.status
+            FROM shift_extension_requests ser
+            JOIN venue_tables vt ON vt.id = ser.table_id
+            WHERE ser.venue_id = ?
+              AND ser.order_id IN ($placeholders)
+              AND ser.status = 'PENDING'
+            ORDER BY ser.order_id, ser.created_at DESC, ser.id DESC
+            """.trimIndent()
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, venueId)
+            distinctOrderIds.forEachIndexed { index, orderId ->
+                statement.setLong(index + 2, orderId)
+            }
+            statement.executeQuery().use { rs ->
+                val result = linkedMapOf<Long, OrderPendingShiftExtension>()
+                while (rs.next()) {
+                    val orderId = rs.getLong("order_id")
+                    if (!result.containsKey(orderId)) {
+                        result[orderId] =
+                            OrderPendingShiftExtension(
+                                requestId = rs.getLong("id"),
+                                orderId = orderId,
+                                tableSessionId = rs.getLong("table_session_id"),
+                                tabId = rs.getLong("tab_id"),
+                                tableId = rs.getLong("table_id"),
+                                tableNumber = rs.getInt("table_number"),
+                                durationMinutes = rs.getInt("duration_minutes"),
+                                priceMinor = rs.getLong("price_minor"),
+                                currency = rs.getString("currency"),
+                                requestedAt = rs.getTimestamp("created_at").toInstant(),
+                                status = rs.getString("status").lowercase(Locale.ROOT),
                             )
                     }
                 }

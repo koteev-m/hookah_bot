@@ -83,7 +83,12 @@ fun Route.venueOrderRoutes(
             call.respond(
                 OrdersQueueResponse(
                     items =
-                        result.items.map { item -> item.toQueueDto() },
+                        result.items.map { item ->
+                            item.toQueueDto(
+                                includePendingShiftExtension =
+                                    permissions.contains(VenuePermission.SHIFT_EXTENSION_VIEW),
+                            )
+                        },
                     nextCursor = result.nextCursor?.encode(),
                 ),
             )
@@ -105,7 +110,11 @@ fun Route.venueOrderRoutes(
                     ?: throw NotFoundException()
             call.respond(
                 OrderDetailResponse(
-                    order = detail.toDto(),
+                    order =
+                        detail.toDto(
+                            includePendingShiftExtension =
+                                permissions.contains(VenuePermission.SHIFT_EXTENSION_VIEW),
+                        ),
                 ),
             )
         }
@@ -387,7 +396,7 @@ fun Route.venueOrderRoutes(
     }
 }
 
-private fun OrderQueueItem.toQueueDto(): OrderQueueItemDto =
+private fun OrderQueueItem.toQueueDto(includePendingShiftExtension: Boolean = true): OrderQueueItemDto =
     OrderQueueItemDto(
         orderId = orderId,
         batchId = batchId,
@@ -399,6 +408,7 @@ private fun OrderQueueItem.toQueueDto(): OrderQueueItemDto =
         comment = comment,
         itemsCount = itemsCount,
         status = status.toApi(),
+        pendingShiftExtension = pendingShiftExtension.takeIf { includePendingShiftExtension }?.toDto(),
     )
 
 private fun requireBillEditRole(role: VenueRole) {
@@ -607,7 +617,7 @@ private fun isCurrentBatchFirstInOrder(
     return firstBatch.batchId == currentBatch.batchId
 }
 
-private fun OrderDetail.toDto(): OrderDetailDto {
+private fun OrderDetail.toDto(includePendingShiftExtension: Boolean = true): OrderDetailDto {
     return OrderDetailDto(
         orderId = orderId,
         displayNumber = displayNumber,
@@ -638,8 +648,25 @@ private fun OrderDetail.toDto(): OrderDetailDto {
                         },
                 )
             },
+        pendingShiftExtension = pendingShiftExtension.takeIf { includePendingShiftExtension }?.toDto(),
     )
 }
+
+private fun OrderPendingShiftExtension.toDto(): OrderPendingShiftExtensionDto =
+    OrderPendingShiftExtensionDto(
+        requestId = requestId,
+        orderId = orderId,
+        tableSessionId = tableSessionId,
+        tabId = tabId,
+        tableId = tableId,
+        tableNumber = tableNumber.toString(),
+        tableLabel = tableNumber.toString(),
+        durationMinutes = durationMinutes,
+        priceMinor = priceMinor,
+        currency = currency,
+        requestedAt = formatInstant(requestedAt),
+        status = status,
+    )
 
 private fun OrderBatchItemDetail.toDto(batch: OrderBatchDetail): OrderBatchItemDto {
     val lineGrossMinor = lineGrossMinor()

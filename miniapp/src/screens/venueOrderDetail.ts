@@ -2,15 +2,23 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  venueApproveShiftExtensionRequest,
   venueCloseOrder,
   venueExcludeOrderItem,
   venueGetOrderDetail,
   venueRejectOrder,
+  venueRejectShiftExtensionRequest,
   venueRestoreOrderItem,
   venueSetOrderItemDiscount,
   venueUpdateOrderStatus
 } from '../shared/api/venueApi'
-import type { OrderBatchItemDto, OrderBillDiscountDto, OrderDetailDto, VenueAccessDto } from '../shared/api/venueDtos'
+import type {
+  OrderBatchItemDto,
+  OrderBillDiscountDto,
+  OrderDetailDto,
+  OrderPendingShiftExtensionDto,
+  VenueAccessDto
+} from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -55,6 +63,7 @@ type OrderDetailRefs = {
   status: HTMLParagraphElement
   refreshButton: HTMLButtonElement
   updatedAt: HTMLParagraphElement
+  shiftExtensionCard: HTMLDivElement
   bill: HTMLDivElement
   batches: HTMLDivElement
   managementNotice: HTMLDivElement
@@ -102,6 +111,9 @@ function buildOrderDetailDom(root: HTMLDivElement): OrderDetailRefs {
   append(refreshPanel, refreshButton, updatedAt)
   append(header, title, meta, status, refreshPanel)
 
+  const shiftExtensionCard = el('div', { className: 'card venue-order-extension-card' }) as HTMLDivElement
+  shiftExtensionCard.hidden = true
+
   const bill = el('div', { className: 'card venue-order-bill' })
 
   const managementNotice = el('div', { className: 'card' })
@@ -144,7 +156,7 @@ function buildOrderDetailDom(root: HTMLDivElement): OrderDetailRefs {
   const errorDetails = el('div')
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
-  append(wrapper, header, batches, bill, managementNotice, actions, rejectCard, backButton, error)
+  append(wrapper, header, shiftExtensionCard, batches, bill, managementNotice, actions, rejectCard, backButton, error)
   root.replaceChildren(wrapper)
 
   return {
@@ -153,6 +165,7 @@ function buildOrderDetailDom(root: HTMLDivElement): OrderDetailRefs {
     status,
     refreshButton,
     updatedAt,
+    shiftExtensionCard,
     bill,
     batches,
     managementNotice,
@@ -173,6 +186,50 @@ function buildOrderDetailDom(root: HTMLDivElement): OrderDetailRefs {
 
 function formatMoney(amountMinor: number, currency: string) {
   return formatPrice(amountMinor, currency || 'RUB')
+}
+
+function formatDuration(minutes: number): string {
+  if (minutes === 60) return '1 час'
+  if (minutes % 60 === 0) return `${minutes / 60} ч`
+  return `${minutes} мин`
+}
+
+type ShiftExtensionActionHandlers = {
+  onApprove: (request: OrderPendingShiftExtensionDto) => void
+  onReject: (request: OrderPendingShiftExtensionDto) => void
+}
+
+function renderShiftExtensionCard(
+  container: HTMLElement,
+  request: OrderPendingShiftExtensionDto | null | undefined,
+  canConfirm: boolean,
+  isUpdating: boolean,
+  handlers: ShiftExtensionActionHandlers
+) {
+  container.replaceChildren()
+  if (!request) {
+    container.hidden = true
+    return
+  }
+  container.hidden = false
+  const title = el('h3', { text: 'Запрос на продление работы заведения' })
+  const price = el('p', {
+    className: 'venue-order-sub',
+    text: `На ${formatDuration(request.durationMinutes)} — ${formatMoney(request.priceMinor, request.currency)}`
+  })
+  const state = el('p', { className: 'venue-order-sub', text: 'Гость ожидает подтверждения' })
+  append(container, title, price, state)
+  const actions = el('div', { className: 'order-actions venue-order-extension-actions' })
+  const approve = el('button', { className: 'button-small', text: '✅ Подтвердить продление' }) as HTMLButtonElement
+  const reject = el('button', { className: 'button-small button-secondary', text: '❌ Отказать' }) as HTMLButtonElement
+  approve.disabled = !canConfirm || isUpdating
+  reject.disabled = !canConfirm || isUpdating
+  approve.title = canConfirm ? '' : 'Недостаточно прав'
+  reject.title = canConfirm ? '' : 'Недостаточно прав'
+  approve.addEventListener('click', () => handlers.onApprove(request))
+  reject.addEventListener('click', () => handlers.onReject(request))
+  append(actions, approve, reject)
+  container.appendChild(actions)
 }
 
 function formatDiscount(amountMinor: number, currency: string) {
@@ -417,6 +474,7 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
   const canUpdate = access.permissions.includes('ORDER_STATUS_UPDATE')
   const canReject = access.role !== 'STAFF'
   const canEditBill = access.role !== 'STAFF'
+  const canConfirmShiftExtension = access.permissions.includes('SHIFT_EXTENSION_CONFIRM')
 
   const updateRefreshState = () => {
     refs.refreshButton.disabled = isLoading || !orderId
@@ -550,6 +608,40 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
     applyBillMutationResult(discountPercent === 0 ? 'Скидка убрана' : 'Скидка сохранена')
   }
 
+  const approveShiftExtension = async (request: OrderPendingShiftExtensionDto) => {
+    if (isUpdating || !canConfirmShiftExtension) return
+    isUpdating = true
+    const result = await venueApproveShiftExtensionRequest(backendUrl, { venueId, requestId: request.requestId }, deps)
+    if (disposed) return
+    isUpdating = false
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+    showToast('Продление подтверждено')
+    void load()
+  }
+
+  const rejectShiftExtension = async (request: OrderPendingShiftExtensionDto) => {
+    if (isUpdating || !canConfirmShiftExtension) return
+    const reasonText = window.prompt('Причина отказа (необязательно)', '')?.trim()
+    if (reasonText === undefined) return
+    isUpdating = true
+    const result = await venueRejectShiftExtensionRequest(
+      backendUrl,
+      { venueId, requestId: request.requestId, body: { reasonText: reasonText || undefined } },
+      deps
+    )
+    if (disposed) return
+    isUpdating = false
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+    showToast('Продление отклонено')
+    void load()
+  }
+
   const updateStatus = async (nextStatus: OrderDetailDto['status']) => {
     if (!orderId || isUpdating) return
     if (!canUpdate) return
@@ -621,6 +713,7 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
       refs.meta.textContent = ''
       refs.status.textContent = ''
       refs.actions.replaceChildren()
+      refs.shiftExtensionCard.hidden = true
       refs.batches.replaceChildren()
       updateRefreshState()
       return
@@ -651,6 +744,16 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
     refs.meta.textContent = `${order.tableLabel || order.tableNumber} · Создан: ${new Date(order.createdAt).toLocaleString()}`
     refs.status.textContent = `Статус: ${orderStatusLabel(order.status)}`
     renderActions(order)
+    renderShiftExtensionCard(
+      refs.shiftExtensionCard,
+      order.pendingShiftExtension,
+      canConfirmShiftExtension,
+      isUpdating,
+      {
+        onApprove: approveShiftExtension,
+        onReject: rejectShiftExtension
+      }
+    )
     renderBill(refs.bill, order)
     renderManagementNotice()
     renderBatches(

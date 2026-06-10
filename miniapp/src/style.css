@@ -892,6 +892,26 @@ input[type="number"] {
   font-size: 0.9rem;
 }
 
+.venue-order-extension-badge {
+  width: fit-content;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  padding: 0.2rem 0.45rem;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.venue-order-extension-card:not([hidden]) {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.venue-order-extension-actions {
+  justify-content: start;
+}
+
 .venue-order-actions,
 .venue-table-actions,
 .venue-staff-actions {

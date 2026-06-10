@@ -255,6 +255,7 @@ export type OrderQueueItemDto = {
   comment?: string | null
   itemsCount: number
   status: 'new' | 'accepted' | 'cooking' | 'delivering' | 'delivered' | 'closed'
+  pendingShiftExtension?: OrderPendingShiftExtensionDto | null
 }
 
 export type OrdersQueueResponse = {
@@ -356,6 +357,22 @@ export type OrderDetailDto = {
   updatedAt: string
   bill: OrderBillDto
   batches: OrderBatchDto[]
+  pendingShiftExtension?: OrderPendingShiftExtensionDto | null
+}
+
+export type OrderPendingShiftExtensionDto = {
+  requestId: number
+  orderId: number
+  tableSessionId: number
+  tabId: number
+  tableId: number
+  tableNumber: string
+  tableLabel: string
+  durationMinutes: number
+  priceMinor: number
+  currency: string
+  requestedAt: string
+  status: string
 }
 
 export type OrderDetailResponse = {

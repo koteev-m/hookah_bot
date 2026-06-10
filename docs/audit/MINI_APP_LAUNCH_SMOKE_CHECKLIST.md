@@ -50,7 +50,7 @@ Confirmed:
 Remaining:
 
 - repeat this smoke after any additional release batch;
-- P1 follow-up: paid venue/shift extension is implemented in backend and Mini App; bot-side owner/manager settings and guest table menu parity remain pending;
+- P1 follow-up: paid venue/shift extension is implemented in backend and Guest/Venue Mini App, but Venue approve/reject is still a standalone `Продления` island; next target is order/table detail integration, staff-chat live message actions, Guest Bot entry and Owner/Manager Bot settings parity;
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
@@ -361,7 +361,7 @@ Expected:
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
 - Guest table session restore and Telegram BackButton navigation passed staging smoke; keep restore, QR priority, account-switch isolation and no-loop BackButton behavior in regression smoke.
-- Paid venue/shift extension is implemented for backend and Mini App as a confirmed service charge/session extension, not as a normal menu/cart/order-batch item; bot-side owner/manager settings and guest table menu entry remain pending.
+- Paid venue/shift extension is implemented for backend and Mini App as a confirmed service charge/session extension, not as a normal menu/cart/order-batch item. Remaining parity gaps: order-scoped Venue Mini App approve/reject, staff-chat live message pending actions, Guest Bot table menu entry and Owner/Manager Bot settings.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
@@ -377,17 +377,21 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block: paid venue/shift extension bot parity.
+Recommended next implementation block: paid venue/shift extension order-scoped operations parity.
 
-Manual paid extension smoke:
+Manual paid extension smoke after full parity:
 
-1. Configure extension for a venue: enabled, fixed one-hour duration and price.
-2. Guest in active table context sees service entry `Продление работы заведения` in the ordering section list, then `Продлить на 1 час` inside that service screen.
-3. Guest creates one extension request; repeated taps do not duplicate pending requests.
-4. STAFF/MANAGER sees venue/table/session/order context and fixed price.
-5. STAFF/MANAGER approves; bill gains service charge `Продление работы на 1 час`, Guest/Venue/Telegram bill totals match, and table session orderable-until time extends.
-6. Create and approve a second extension; charge and session extension are applied once per request.
-7. Reject a request and confirm no bill/session mutation.
-8. As STAFF, confirm price/duration/settings are not editable.
-9. As MANAGER/OWNER, confirm settings are editable.
-10. Close bill/session and confirm extension request/approve endpoints are denied.
+1. Configure extension for a venue in Venue Mini App: enabled, fixed one-hour duration and price.
+2. Configure the same extension in Owner/Manager Bot once bot settings parity is implemented; confirm copy `Показывать гостям возможность продления`.
+3. Guest Mini App active table context shows service entry `Продление работы заведения` in the ordering section list, then `Продлить на 1 час` inside that service screen.
+4. Guest Bot active table context shows `Продление работы заведения` alongside table menu actions and creates the same fixed-price request.
+5. Guest creates one extension request; repeated taps/callbacks do not duplicate pending requests.
+6. Venue Mini App order queue shows a pending extension badge/count on the affected order/table.
+7. Venue Mini App order detail shows `Запрос на продление работы заведения`, `На 1 час — 3 000 ₽`, `✅ Подтвердить продление`, `❌ Отказать`.
+8. Staff chat live order/bill message updates in place with the pending extension block and inline approve/reject buttons; no separate noisy lifecycle message is sent.
+9. STAFF/MANAGER approves from Venue Mini App or staff chat; bill gains service charge `Продление работы на 1 час`, Guest/Venue/Telegram bill totals match, and table session orderable-until time extends.
+10. Create and approve a second extension; charge and session extension are applied once per request.
+11. Reject a request and confirm guest sees rejection copy while bill/session do not mutate.
+12. As STAFF, confirm price/duration/settings are not editable in Mini App or bot.
+13. As MANAGER/OWNER, confirm settings are editable in Mini App and bot.
+14. Close bill/session and confirm extension request/approve endpoints are denied and extension UI disappears or disables safely.

@@ -487,6 +487,7 @@ async function mockVenueShiftExtensionApi(
   let approveCalls = 0
   let rejectCalls = 0
   let updateSettingsCalls = 0
+  let orderServiceCharges: ServiceCharge[] = []
   const rejectedReasons: string[] = []
 
   await page.route('**/api/auth/telegram', async (route) => {
@@ -529,6 +530,115 @@ async function mockVenueShiftExtensionApi(
     await route.fulfill(jsonResponse({ items: [] }))
   })
 
+  const orderPendingShiftExtension = () => {
+    const request = requests[0]
+    if (!request) return null
+    return {
+      requestId: request.id,
+      orderId: request.orderId,
+      tableSessionId: request.tableSessionId,
+      tabId: request.tabId,
+      tableId: request.tableId,
+      tableNumber: request.tableNumber ?? '4',
+      tableLabel: request.tableNumber ?? '4',
+      durationMinutes: request.durationMinutes,
+      priceMinor: request.priceMinor,
+      currency: request.currency,
+      requestedAt: request.createdAt,
+      status: request.status
+    }
+  }
+
+  const orderBill = () => {
+    const serviceChargeTotal = orderServiceCharges.reduce((sum, charge) => sum + charge.totalMinor, 0)
+    return {
+      grossTotalMinor: 120000,
+      manualDiscountTotalMinor: 0,
+      promoDiscountTotalMinor: 0,
+      loyaltyDiscountTotalMinor: 0,
+      excludedTotalMinor: 0,
+      canceledTotalMinor: 0,
+      rejectedTotalMinor: 0,
+      finalPayableTotalMinor: 120000 + serviceChargeTotal,
+      currency: 'RUB',
+      promoDiscounts: [],
+      loyaltyDiscounts: [],
+      excludedItems: [],
+      serviceCharges: orderServiceCharges
+    }
+  }
+
+  await page.route('**/api/venue/orders/queue?**', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        items: [
+          {
+            orderId: 900,
+            batchId: 300,
+            displayNumber: 42,
+            activeBatchesCount: 1,
+            tableNumber: '4',
+            tableLabel: '4',
+            createdAt: '2026-06-09T21:30:00+03:00',
+            comment: null,
+            itemsCount: 1,
+            status: 'accepted',
+            pendingShiftExtension: orderPendingShiftExtension()
+          }
+        ],
+        nextCursor: null
+      })
+    )
+  })
+
+  await page.route('**/api/venue/orders/900?**', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        order: {
+          orderId: 900,
+          displayNumber: 42,
+          displayDate: '2026-06-09',
+          venueId: 1,
+          tableId: 7,
+          tableNumber: '4',
+          tableLabel: '4',
+          status: 'accepted',
+          createdAt: '2026-06-09T21:30:00+03:00',
+          updatedAt: '2026-06-09T21:45:00+03:00',
+          bill: orderBill(),
+          batches: [
+            {
+              batchId: 300,
+              status: 'accepted',
+              source: 'MINIAPP',
+              comment: null,
+              createdAt: '2026-06-09T21:30:00+03:00',
+              updatedAt: '2026-06-09T21:30:00+03:00',
+              promotionDiscounts: [],
+              items: [
+                {
+                  batchItemId: 700,
+                  itemId: 100,
+                  name: 'Double Apple',
+                  qty: 1,
+                  priceMinor: 120000,
+                  currency: 'RUB',
+                  lineGrossMinor: 120000,
+                  manualDiscountMinor: 0,
+                  promoDiscountMinor: 0,
+                  linePayableMinor: 120000,
+                  isExcluded: false,
+                  itemStatus: 'active'
+                }
+              ]
+            }
+          ],
+          pendingShiftExtension: orderPendingShiftExtension()
+        }
+      })
+    )
+  })
+
   await page.route('**/api/venue/1/shift-extension-settings', async (route) => {
     if (route.request().method() === 'PUT') {
       updateSettingsCalls += 1
@@ -561,6 +671,19 @@ async function mockVenueShiftExtensionApi(
       const requestId = Number(approveMatch[1])
       const request = requests.find((item) => item.id === requestId) ?? buildShiftExtensionRequest({ id: requestId })
       requests = requests.filter((item) => item.id !== requestId)
+      orderServiceCharges = [
+        ...orderServiceCharges,
+        {
+          id: 9000 + requestId,
+          source: 'SHIFT_EXTENSION',
+          sourceRequestId: request.id,
+          label: 'Продление работы на 1 час',
+          qty: 1,
+          unitPriceMinor: request.priceMinor,
+          totalMinor: request.priceMinor,
+          currency: request.currency
+        }
+      ]
       await route.fulfill(jsonResponse({ request: { ...request, status: 'approved' }, applied: true }))
       return
     }
@@ -699,29 +822,33 @@ test('venue staff sees pending shift extension requests and can approve or rejec
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: 'Продления' })).toBeVisible()
-  await page.getByRole('button', { name: 'Продления' }).click()
-  await expect(page.getByRole('heading', { name: 'Запрос на продление' })).toBeVisible()
-  await expect(page.getByText('Стол №4')).toBeVisible()
-  await expect(page.getByRole('button', { name: '✅ Продлить на 1 час' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Продления' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Заказы' }).click()
+  await expect(page.getByText('Запрос на продление')).toBeVisible()
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByRole('heading', { name: 'Запрос на продление работы заведения' })).toBeVisible()
+  await expect(page.getByText(/На 1 час/)).toBeVisible()
+  await expect(page.getByText('Гость ожидает подтверждения')).toBeVisible()
+  await expect(page.getByRole('button', { name: '✅ Подтвердить продление' })).toBeVisible()
   await expect(page.getByRole('button', { name: '❌ Отказать' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Настройки' })).toHaveCount(0)
 
-  await page.getByRole('button', { name: '✅ Продлить на 1 час' }).click()
+  await page.getByRole('button', { name: '✅ Подтвердить продление' }).click()
 
-  await expect(page.getByText('Запросов на продление нет.')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Запрос на продление работы заведения' })).toHaveCount(0)
+  await expect(page.getByText('Продление работы на 1 час')).toBeVisible()
   expect(api.getApproveCalls()).toBe(1)
 
   api.setRequests([buildShiftExtensionRequest({ id: 502, requestedUntil: '2026-06-10T00:00:00+03:00' })])
   await page.getByRole('button', { name: '🔄 Обновить' }).click()
-  await expect(page.getByRole('heading', { name: 'Запрос на продление' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Запрос на продление работы заведения' })).toBeVisible()
 
   page.once('dialog', async (dialog) => {
     await dialog.accept('Нет свободного времени')
   })
   await page.getByRole('button', { name: '❌ Отказать' }).click()
 
-  await expect(page.getByText('Запросов на продление нет.')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Запрос на продление работы заведения' })).toHaveCount(0)
   expect(api.getRejectCalls()).toBe(1)
   expect(api.getRejectedReasons()).toEqual(['Нет свободного времени'])
 })

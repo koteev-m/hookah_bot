@@ -144,7 +144,11 @@ function renderOrderRow(item: OrderQueueItemDto, onOpenOrder: (orderId: number) 
   })
   const created = el('p', { className: 'venue-order-sub', text: `Создан: ${new Date(item.createdAt).toLocaleString()}` })
   const comment = el('p', { className: 'venue-order-sub', text: item.comment ? `Комментарий: ${item.comment}` : 'Комментарий: —' })
-  append(meta, title, table, details, created, comment)
+  append(meta, title)
+  if (item.pendingShiftExtension) {
+    meta.appendChild(el('span', { className: 'venue-order-extension-badge', text: 'Запрос на продление' }))
+  }
+  append(meta, table, details, created, comment)
 
   const actions = el('div', { className: 'venue-order-actions' })
   const openButton = el('button', { className: 'button-small', text: 'Открыть' }) as HTMLButtonElement

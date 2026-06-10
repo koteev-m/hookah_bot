@@ -419,6 +419,65 @@ class VenueOrderRoutesTest {
         }
 
     @Test
+    fun `order queue and detail expose pending shift extension summary`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("orders-pending-shift-extension")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
+            val tableId = seedTable(jdbcUrl, venueId, 33)
+            seedMenu(jdbcUrl, venueId)
+            val orderId = seedOrder(jdbcUrl, venueId, tableId, "ACTIVE", displayNumber = 330)
+            val batchId = seedBatch(jdbcUrl, orderId, "NEW", Instant.now().minusSeconds(60))
+            seedBatchItem(jdbcUrl, batchId)
+            val requestId =
+                seedPendingShiftExtensionRequest(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    orderId = orderId,
+                    durationMinutes = 60,
+                    priceMinor = 300000,
+                )
+            val token = issueToken(config)
+
+            val queueResponse =
+                client.get("/api/venue/orders/queue?venueId=$venueId&status=all&limit=10") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, queueResponse.status)
+            val queue = json.decodeFromString(OrdersQueueResponse.serializer(), queueResponse.bodyAsText())
+            val queueExtension = assertNotNull(queue.items.single().pendingShiftExtension)
+            assertEquals(requestId, queueExtension.requestId)
+            assertEquals(orderId, queueExtension.orderId)
+            assertEquals("33", queueExtension.tableLabel)
+            assertEquals(60, queueExtension.durationMinutes)
+            assertEquals(300000, queueExtension.priceMinor)
+            assertEquals("RUB", queueExtension.currency)
+            assertEquals("pending", queueExtension.status)
+
+            val detailResponse =
+                client.get("/api/venue/orders/$orderId?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, detailResponse.status)
+            val detail = json.decodeFromString(OrderDetailResponse.serializer(), detailResponse.bodyAsText())
+            val detailExtension = assertNotNull(detail.order.pendingShiftExtension)
+            assertEquals(requestId, detailExtension.requestId)
+            assertEquals(orderId, detailExtension.orderId)
+            assertEquals("33", detailExtension.tableNumber)
+            assertEquals(60, detailExtension.durationMinutes)
+            assertEquals(300000, detailExtension.priceMinor)
+        }
+
+    @Test
     fun `queue all returns one card per order with multiple active batches`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("orders-queue-all-one-card")
@@ -1374,6 +1433,98 @@ class VenueOrderRoutesTest {
         }
     }
 
+    private fun seedPendingShiftExtensionRequest(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        orderId: Long,
+        durationMinutes: Int,
+        priceMinor: Long,
+    ): Long {
+        seedUser(jdbcUrl, GUEST_USER_ID)
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val tableSessionId =
+                connection.prepareStatement(
+                    "SELECT table_session_id FROM orders WHERE id = ? AND venue_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, orderId)
+                    statement.setLong(2, venueId)
+                    statement.executeQuery().use { rs ->
+                        if (rs.next()) rs.getLong("table_session_id") else error("Missing order session")
+                    }
+                }
+            val tabId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
+                    VALUES (?, ?, 'PERSONAL', ?, 'ACTIVE')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableSessionId)
+                    statement.setLong(3, GUEST_USER_ID)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert tab")
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO tab_member (tab_id, user_id, role)
+                VALUES (?, ?, 'OWNER')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tabId)
+                statement.setLong(2, GUEST_USER_ID)
+                statement.executeUpdate()
+            }
+            val now = Instant.now()
+            return connection.prepareStatement(
+                """
+                INSERT INTO shift_extension_requests (
+                    venue_id,
+                    table_session_id,
+                    table_id,
+                    tab_id,
+                    order_id,
+                    requested_by_user_id,
+                    status,
+                    duration_minutes,
+                    price_minor,
+                    currency,
+                    current_orderable_until,
+                    requested_until,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, 'RUB', ?, ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, tableId)
+                statement.setLong(4, tabId)
+                statement.setLong(5, orderId)
+                statement.setLong(6, GUEST_USER_ID)
+                statement.setInt(7, durationMinutes)
+                statement.setLong(8, priceMinor)
+                statement.setTimestamp(9, Timestamp.from(now.plusSeconds(3600)))
+                statement.setTimestamp(
+                    10,
+                    Timestamp.from(now.plusSeconds(durationMinutes.toLong() * 60L + 3600L)),
+                )
+                statement.setTimestamp(11, Timestamp.from(now))
+                statement.setTimestamp(12, Timestamp.from(now))
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert shift extension request")
+                }
+            }
+        }
+    }
+
     private fun seedBatch(
         jdbcUrl: String,
         orderId: Long,
@@ -1783,6 +1934,7 @@ class VenueOrderRoutesTest {
         val batchId: Long,
         val displayNumber: Int? = null,
         val activeBatchesCount: Int = 1,
+        val pendingShiftExtension: OrderPendingShiftExtensionDto? = null,
     )
 
     @Serializable
@@ -1796,6 +1948,23 @@ class VenueOrderRoutesTest {
         val status: String,
         val bill: OrderBillDto,
         val batches: List<OrderBatchDto>,
+        val pendingShiftExtension: OrderPendingShiftExtensionDto? = null,
+    )
+
+    @Serializable
+    private data class OrderPendingShiftExtensionDto(
+        val requestId: Long,
+        val orderId: Long,
+        val tableSessionId: Long,
+        val tabId: Long,
+        val tableId: Long,
+        val tableNumber: String,
+        val tableLabel: String,
+        val durationMinutes: Int,
+        val priceMinor: Long,
+        val currency: String,
+        val requestedAt: String,
+        val status: String,
     )
 
     @Serializable
