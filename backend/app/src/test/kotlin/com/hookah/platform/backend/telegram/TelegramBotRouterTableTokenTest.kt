@@ -18637,7 +18637,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `guest bot active table keyboard includes shift extension when enabled`() =
+    fun `guest bot active table keyboard does not include shift extension when enabled`() =
         runBlocking {
             val context =
                 TableContext(
@@ -18672,7 +18672,7 @@ class TelegramBotRouterTableTokenTest {
                     "\u2060",
                     match { markup ->
                         markup is ReplyKeyboardMarkup &&
-                            markup.keyboard.flatten().any { button ->
+                            markup.keyboard.flatten().none { button ->
                                 button.text == "Продление работы заведения"
                             }
                     },
@@ -18681,7 +18681,73 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `guest bot active table keyboard hides shift extension when disabled`() =
+    fun `guest bot menu section list includes shift extension when enabled and configured`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальяны",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_601,
+                    message =
+                        Message(
+                            messageId = 21,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🍽️ Меню",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Venue\nВыберите категорию.",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Кальяны", "bot_menu_category:500") &&
+                            markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `guest bot menu section list hides shift extension when disabled`() =
         runBlocking {
             val context =
                 TableContext(
@@ -18696,16 +18762,39 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns disabledShiftExtensionSettings()
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальяны",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
 
             router.process(
                 TelegramUpdate(
-                    updateId = 18_601,
-                    callbackQuery =
-                        CallbackQuery(
-                            id = "cb-disabled-extension-keyboard",
-                            from = User(id = 200),
-                            message = Message(messageId = 21, chat = Chat(id = 100, type = "private")),
-                            data = "continue_in_bot",
+                    updateId = 18_606,
+                    message =
+                        Message(
+                            messageId = 26,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🍽️ Меню",
                         ),
                 ),
             )
@@ -18713,12 +18802,11 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "\u2060",
+                    "Venue\nВыберите категорию.",
                     match { markup ->
-                        markup is ReplyKeyboardMarkup &&
-                            markup.keyboard.flatten().none { button ->
-                                button.text == "Продление работы заведения"
-                            }
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Кальяны", "bot_menu_category:500") &&
+                            !markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open")
                     },
                 )
             }
@@ -18746,19 +18834,25 @@ class TelegramBotRouterTableTokenTest {
             router.process(
                 TelegramUpdate(
                     updateId = 18_602,
-                    message =
-                        Message(
-                            messageId = 22,
-                            chat = Chat(id = 100, type = "private"),
-                            fromUser = User(id = 200),
-                            text = "Продление работы заведения",
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-open-extension",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 22,
+                                    chat = Chat(id = 100, type = "private"),
+                                    text = null,
+                                ),
+                            data = "guest_shift_extension_open",
                         ),
                 ),
             )
 
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueEditMessageText(
                     100,
+                    22,
                     match { text ->
                         text.contains("Продление работы заведения") &&
                             text.contains("Продление на 1 час — 3 000 ₽") &&

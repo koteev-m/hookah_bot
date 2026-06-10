@@ -151,7 +151,7 @@ Current implementation map:
 - Guest Mini App: active table menu exposes service action `Продление работы заведения`; request/pending/confirmed states are implemented outside cart logic.
 - Venue Mini App: owner/manager settings are implemented; order queue/detail exposes pending extension state and staff/manager/owner approve/reject from the order context.
 - Staff chat: pending extension appears inside the existing live order/bill message with approve/reject actions; approved/rejected state refreshes the same live message and approval shows the service charge under bill service charges.
-- Guest Bot: active table reply keyboard exposes `Продление работы заведения`; the request screen creates the same fixed-price pending request, shows duplicate pending state and keeps extension outside cart/menu/order-batch logic.
+- Guest Bot: bot ordering menu section list exposes `Продление работы заведения`; the request screen creates the same fixed-price pending request, shows duplicate pending state and keeps extension outside cart/menu-item/cart/order-batch logic.
 - Owner/Manager Bot: extension settings flow is not implemented.
 
 Guest Mini App target:
@@ -163,7 +163,7 @@ Guest Mini App target:
 6. The service action must never add anything to cart, menu items, order batches or batch item snapshots.
 
 Guest Bot target:
-1. In table context reply keyboard and bot menu category screen, show `Продление работы заведения` when the venue exposes extension settings.
+1. In the bot ordering menu section list, show `Продление работы заведения` when the venue exposes enabled, configured extension settings.
 2. Opening it shows `Продление на 1 час — 3 000 ₽` and `Персонал подтвердит возможность продления.`
 3. Primary action: `Продлить на 1 час`; after submit, replace action with `Ожидает подтверждения`.
 4. Duplicate pending requests should show the existing pending state instead of creating another request.

@@ -1950,6 +1950,10 @@ class TelegramBotRouter(
         data: String,
         sourceMessageId: Long? = null,
     ) {
+        if (data == "guest_shift_extension_open") {
+            showGuestShiftExtension(chatId = chatId, sourceMessageId = sourceMessageId)
+            return
+        }
         if (data == "guest_shift_extension_request") {
             createGuestShiftExtensionRequest(chatId = chatId, sourceMessageId = sourceMessageId)
             return
@@ -25765,14 +25769,12 @@ class TelegramBotRouter(
     }
 
     private suspend fun tableContextBotKeyboard(context: TableContext): ReplyKeyboardMarkup =
-        TelegramKeyboards.tableContextBotFlow(
-            context = context,
-            includeShiftExtension = shouldShowGuestBotShiftExtensionEntry(context.venueId),
-        )
+        TelegramKeyboards.tableContextBotFlow(context)
 
-    private suspend fun shouldShowGuestBotShiftExtensionEntry(venueId: Long): Boolean =
+    private suspend fun shouldShowGuestBotShiftExtensionMenuEntry(venueId: Long): Boolean =
         try {
-            shiftExtensionRepository.getSettings(venueId).enabled
+            val settings = shiftExtensionRepository.getSettings(venueId)
+            settings.enabled && settings.priceMinor != null
         } catch (e: CancellationException) {
             throw e
         } catch (e: DatabaseUnavailableException) {
@@ -26007,7 +26009,8 @@ class TelegramBotRouter(
             menu.categories
                 .filter { category -> category.items.isNotEmpty() }
                 .map { category -> category.id to category.name }
-        if (categories.isEmpty()) {
+        val includeShiftExtension = !reorderMode && shouldShowGuestBotShiftExtensionMenuEntry(context.table.venueId)
+        if (categories.isEmpty() && !includeShiftExtension) {
             enqueueMessage(chatId, "В ${context.table.venueName} пока нет категорий меню.")
             return
         }
@@ -26019,7 +26022,11 @@ class TelegramBotRouter(
             } else {
                 "${context.table.venueName}\nВыберите категорию."
             },
-            TelegramKeyboards.inlineBotMenuCategories(categories, includeTableActionsBack = reorderMode),
+            TelegramKeyboards.inlineBotMenuCategories(
+                categories = categories,
+                includeTableActionsBack = reorderMode,
+                includeShiftExtension = includeShiftExtension,
+            ),
             sourceMessageId = sourceMessageId,
         )
     }

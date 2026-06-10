@@ -1815,10 +1815,7 @@ object TelegramKeyboards {
         webAppUrl: String?,
     ): ReplyKeyboardMarkup = tableContextBotFlow(context)
 
-    fun tableContextBotFlow(
-        context: TableContext,
-        includeShiftExtension: Boolean = false,
-    ): ReplyKeyboardMarkup {
+    fun tableContextBotFlow(context: TableContext): ReplyKeyboardMarkup {
         val keyboard =
             buildList {
                 add(
@@ -1833,9 +1830,6 @@ object TelegramKeyboards {
                         KeyboardButton(text = "🧺 Корзина"),
                     ),
                 )
-                if (includeShiftExtension) {
-                    add(listOf(KeyboardButton(text = "Продление работы заведения")))
-                }
                 add(
                     listOf(
                         KeyboardButton(text = "📄 Мой заказ"),
@@ -6427,6 +6421,7 @@ object TelegramKeyboards {
     fun inlineBotMenuCategories(
         categories: List<Pair<Long, String>>,
         includeTableActionsBack: Boolean = false,
+        includeShiftExtension: Boolean = false,
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
@@ -6437,6 +6432,16 @@ object TelegramKeyboards {
                                 InlineKeyboardButton(
                                     text = name,
                                     callbackData = "bot_menu_category:$id",
+                                ),
+                            ),
+                        )
+                    }
+                    if (includeShiftExtension) {
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "Продление работы заведения",
+                                    callbackData = "guest_shift_extension_open",
                                 ),
                             ),
                         )
