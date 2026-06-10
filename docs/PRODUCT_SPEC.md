@@ -118,6 +118,39 @@ SHOULD:
 - Bulk edit / import; optional PDF attachment as secondary (not primary).
 - Informational `Фото-меню` can stay as one media list in simple mode, but may support optional owner-defined subsections in advanced mode. This is separate from the structured order menu.
 
+### Guest/Menu Options & Flavors Parity — active P1 design
+
+Product intent:
+- Menu item options/flavors are structured order modifiers, not free-text comments.
+- Guest Bot and Guest Mini App must both show and require the same option/flavor choice for menu items that have available options.
+- Same menu item with different selected option/flavor is a separate cart/order line.
+- Selected options can affect price through `priceDeltaMinor`; cart preview, checkout, order detail, bill and staff chat must all use the structured selected-option price.
+- Staff/venue order detail and staff-chat live order messages must show selected options next to the ordered item.
+- Stop-listed or unavailable options must be hidden from guest choice and rejected safely at preview/checkout if submitted stale.
+- Guest Bot must stop relying only on comment-only flavor persistence such as `Выбранные вкусы`; comment can remain guest-visible context, but money/read-model truth must be structured.
+
+Current gap:
+- Venue menu configuration supports item options/flavors and option availability.
+- Guest Bot has a flavor-selection UX, but selected flavors are kept in draft cart/comment rather than first-class order option data.
+- Guest Mini App menu/cart/checkout are item-only and do not show or submit selected options/flavors.
+- Venue Mini App currently exposes option rows and availability/stop-list controls, but does not yet have full owner/manager option CRUD/flavor-profile parity.
+
+Target behavior:
+1. Guest menu DTOs expose available options for each item that needs a guest choice.
+2. Guest Bot and Guest Mini App render an item option picker before adding that item to cart.
+3. Cart identity includes item id plus selected option id(s), so `Classic · Ягодный` and `Classic · Мята` remain distinct lines.
+4. Preview and checkout include option price deltas and validate the option belongs to the item/venue and is available.
+5. Order/batch/read-model snapshots preserve selected option id, name and price delta at checkout time so later option edits do not rewrite historical bills.
+6. Venue order detail, staff chat and guest active order/bill show selected options in human copy under the ordered item.
+7. If an option is disabled between selection and submit, preview/checkout rejects it with clear guest copy and does not silently downgrade to the base item.
+
+Implementation slices:
+A. Backend structured selected-option persistence and bill/read-model support, including stale/unavailable option rejection and price-delta calculation.
+B. Guest Bot submits structured selected option data instead of comment-only flavor persistence, while preserving current flavor choice UX.
+C. Guest Mini App item option picker, cart line identity by selected option and structured preview/checkout payload.
+D. Venue Mini App option CRUD/flavor-profile parity for OWNER/MANAGER, with STAFF limited by existing menu/availability permissions.
+E. Smoke/docs closure: bot vs Mini App option parity, staff chat/order detail display, unavailable option rejection and money snapshot tests.
+
 ## Block 9 — Tables & QR
 MUST:
 - Table CRUD; unique QR per table.
@@ -151,7 +184,7 @@ Current implementation map:
 - Guest Mini App: active table menu exposes service action `Продление работы заведения`; request/pending/confirmed states are implemented outside cart logic.
 - Venue Mini App: owner/manager settings are implemented; order queue/detail exposes pending extension state and staff/manager/owner approve/reject from the order context.
 - Staff chat: pending extension appears inside the existing live order/bill message with approve/reject actions; approved/rejected state refreshes the same live message and approval shows the service charge under bill service charges.
-- Guest Bot: bot ordering menu section list exposes `Продление работы заведения`; the request screen creates the same fixed-price pending request, shows duplicate pending state and keeps extension outside cart/menu-item/cart/order-batch logic.
+- Guest Bot: bot ordering menu section lists expose `Продление работы заведения` from `🍽️ Меню` and `Мой заказ → Дозаказать`; the request screen creates the same fixed-price pending request, shows duplicate pending state and keeps extension outside cart/menu-item/cart/order-batch logic.
 - Owner/Manager Bot: extension settings flow is not implemented.
 
 Guest Mini App target:
@@ -163,7 +196,7 @@ Guest Mini App target:
 6. The service action must never add anything to cart, menu items, order batches or batch item snapshots.
 
 Guest Bot target:
-1. In the bot ordering menu section list, show `Продление работы заведения` when the venue exposes enabled, configured extension settings.
+1. In every bot ordering menu section list entry point, including `🍽️ Меню` and `Мой заказ → Дозаказать`, show `Продление работы заведения` when the venue exposes enabled, configured extension settings.
 2. Opening it shows `Продление на 1 час — 3 000 ₽` and `Персонал подтвердит возможность продления.`
 3. Primary action: `Продлить на 1 час`; after submit, replace action with `Ожидает подтверждения`.
 4. Duplicate pending requests should show the existing pending state instead of creating another request.
