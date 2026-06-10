@@ -18830,6 +18830,31 @@ class TelegramBotRouterTableTokenTest {
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
             coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
                 ActiveOrderSummary(id = 19L, status = "ACTIVE")
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                500L,
+                                "Кальянное меню",
+                                0,
+                                listOf(MenuItemModel(1000L, "Кальян классический", 25000L, "RUB", true, 0)),
+                            ),
+                            MenuCategoryModel(
+                                501L,
+                                "Напитки",
+                                1,
+                                listOf(MenuItemModel(1001L, "Чай", 5000L, "RUB", true, 0)),
+                            ),
+                            MenuCategoryModel(
+                                502L,
+                                "Кухня",
+                                2,
+                                listOf(MenuItemModel(1002L, "Снэк", 7000L, "RUB", true, 0)),
+                            ),
+                        ),
+                )
 
             router.process(
                 TelegramUpdate(
@@ -18860,7 +18885,40 @@ class TelegramBotRouterTableTokenTest {
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.hasInlineButton("Продлить на 1 час", "guest_shift_extension_request")
+                            markup.hasInlineButton("Продлить на 1 час", "guest_shift_extension_request") &&
+                            markup.hasInlineButton("⬅️ К категориям", "bot_menu_back_categories")
+                    },
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_603,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-extension-back-categories",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 22,
+                                    chat = Chat(id = 100, type = "private"),
+                                    text = null,
+                                ),
+                            data = "bot_menu_back_categories",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Venue\nВыберите категорию.",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Кальянное меню", "bot_menu_category:500") &&
+                            markup.hasInlineButton("Напитки", "bot_menu_category:501") &&
+                            markup.hasInlineButton("Кухня", "bot_menu_category:502") &&
+                            markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open")
                     },
                 )
             }
@@ -19806,7 +19864,174 @@ class TelegramBotRouterTableTokenTest {
                             markup.inlineKeyboard.flatten().any { button ->
                                 button.text == "↩️ Назад к действиям стола" &&
                                     button.callbackData == "table_actions_back"
-                            }
+                            } &&
+                            !markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `active order reorder menu includes shift extension when enabled and configured`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
+                ActiveOrderSummary(id = 19L, status = "ACTIVE")
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Основное меню",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_607,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-reorder-extension-menu",
+                            from = User(id = 200),
+                            message = Message(messageId = 27, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_reorder_entry",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите позицию в меню, затем откройте корзину и нажмите «Оформить заказ».",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Основное меню", "bot_menu_category:500") &&
+                            markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open") &&
+                            markup.hasInlineButton("↩️ Назад к действиям стола", "table_actions_back")
+                    },
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_608,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-reorder-open-extension",
+                            from = User(id = 200),
+                            message = Message(messageId = 27, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "guest_shift_extension_open",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100,
+                    27,
+                    match { text ->
+                        text.contains("Продление работы заведения") &&
+                            text.contains("Продление на 1 час — 3 000 ₽") &&
+                            text.contains("Персонал подтвердит возможность продления.")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Продлить на 1 час", "guest_shift_extension_request") &&
+                            markup.hasInlineButton("⬅️ К категориям", "bot_menu_back_categories")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `active order reorder menu hides shift extension when disabled`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns disabledShiftExtensionSettings()
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Основное меню",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_609,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-reorder-disabled-extension",
+                            from = User(id = 200),
+                            message = Message(messageId = 28, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_reorder_entry",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите позицию в меню, затем откройте корзину и нажмите «Оформить заказ».",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Основное меню", "bot_menu_category:500") &&
+                            !markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open") &&
+                            markup.hasInlineButton("↩️ Назад к действиям стола", "table_actions_back")
                     },
                 )
             }
@@ -24231,7 +24456,7 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
                             !markup.hasInlineButton("✅ Подтвердить продление", "sc_se_a:10:501") &&
-                            !markup.hasInlineButton("❌ Отказать", "sc_se_r:10:501")
+                            !markup.hasInlineButton("❌ Отказать в продлении", "sc_se_r:10:501")
                     },
                 )
             }
@@ -24309,7 +24534,7 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
                             !markup.hasInlineButton("✅ Подтвердить продление", "sc_se_a:10:501") &&
-                            !markup.hasInlineButton("❌ Отказать", "sc_se_r:10:501")
+                            !markup.hasInlineButton("❌ Отказать в продлении", "sc_se_r:10:501")
                     },
                 )
             }

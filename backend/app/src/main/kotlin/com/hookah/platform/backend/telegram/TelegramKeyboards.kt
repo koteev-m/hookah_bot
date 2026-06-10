@@ -1875,8 +1875,8 @@ object TelegramKeyboards {
                 add(
                     listOf(
                         InlineKeyboardButton(
-                            text = "↩️ Назад к действиям стола",
-                            callbackData = "table_actions_back",
+                            text = "⬅️ К категориям",
+                            callbackData = "bot_menu_back_categories",
                         ),
                     ),
                 )
@@ -5296,7 +5296,7 @@ object TelegramKeyboards {
                     add(
                         listOf(
                             InlineKeyboardButton(
-                                text = "❌ Отказать",
+                                text = "❌ Отказать в продлении",
                                 callbackData = "sc_se_r:$venueId:$pendingShiftExtensionRequestId",
                             ),
                         ),

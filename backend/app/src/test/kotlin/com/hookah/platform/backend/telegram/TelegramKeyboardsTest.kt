@@ -2193,6 +2193,16 @@ class TelegramKeyboardsTest {
     }
 
     @Test
+    fun `guest shift extension actions return to bot menu categories`() {
+        val buttons = TelegramKeyboards.inlineGuestShiftExtensionActions(canRequest = true).inlineKeyboard.flatten()
+
+        assertEquals("Продлить на 1 час", buttons[0].text)
+        assertEquals("guest_shift_extension_request", buttons[0].callbackData)
+        assertEquals("⬅️ К категориям", buttons[1].text)
+        assertEquals("bot_menu_back_categories", buttons[1].callbackData)
+    }
+
+    @Test
     fun `table relocation inline actions contain staff call and back buttons`() {
         val markup = TelegramKeyboards.inlineTableRelocationActions()
         val buttons = markup.inlineKeyboard.flatten()
@@ -3115,7 +3125,7 @@ class TelegramKeyboardsTest {
         assertEquals("✅ Подтвердить продление", buttons[1].text)
         assertEquals("sc_se_a:17:501", buttons[1].callbackData)
         assertTrue(buttons[1].callbackData!!.length <= 64)
-        assertEquals("❌ Отказать", buttons[2].text)
+        assertEquals("❌ Отказать в продлении", buttons[2].text)
         assertEquals("sc_se_r:17:501", buttons[2].callbackData)
         assertTrue(buttons[2].callbackData!!.length <= 64)
         assertEquals("🔄 Обновить", buttons[3].text)

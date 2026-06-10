@@ -884,7 +884,7 @@ class StaffChatNotifierTest {
             assertTrue(payload.contains("На 1 час — 3 000 ₽"), payload)
             assertTrue(payload.contains("Гость ожидает подтверждения"), payload)
             assertTrue(payload.contains("✅ Подтвердить продление"), payload)
-            assertTrue(payload.contains("❌ Отказать"), payload)
+            assertTrue(payload.contains("❌ Отказать в продлении"), payload)
             assertTrue(payload.contains("sc_se_a:1:501"), payload)
             assertTrue(payload.contains("sc_se_r:1:501"), payload)
             assertTrue(payload.contains("Изменение: запрос на продление работы"), payload)
