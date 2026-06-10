@@ -7,10 +7,11 @@ import {
   addToCart,
   clearCart,
   getCartSnapshot,
-  removeFromCart,
+  removeCartLine,
   setCartCommentDraft,
-  setCartQty,
-  subscribeCart
+  setCartLineQty,
+  subscribeCart,
+  type CartLine
 } from '../shared/state/cartStore'
 import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { getItemMeta } from '../shared/state/itemCache'
@@ -249,12 +250,43 @@ function formatItemPrice(itemId: number): string | null {
   return formatPrice(meta.priceMinor, meta.currency)
 }
 
+function formatCartLinePrice(line: CartLine): string | null {
+  const meta = getItemMeta(line.itemId)
+  if (!meta) {
+    return null
+  }
+  const optionDelta =
+    line.priceDeltaMinor ??
+    (line.selectedOptionId != null
+      ? meta.options?.find((option) => option.id === line.selectedOptionId)?.priceDeltaMinor
+      : null) ??
+    0
+  return formatPrice(meta.priceMinor + optionDelta, meta.currency)
+}
+
+function formatCartLineOptionName(line: CartLine): string | null {
+  if (line.selectedOptionName) {
+    return line.selectedOptionName
+  }
+  if (line.selectedOptionId == null) {
+    return null
+  }
+  return getItemMeta(line.itemId)?.options?.find((option) => option.id === line.selectedOptionId)?.name ?? null
+}
+
 function formatMoney(amountMinor: number, currency: string) {
   return formatPrice(amountMinor, currency || 'RUB')
 }
 
 function formatDiscount(amountMinor: number, currency: string) {
   return `−${formatMoney(amountMinor, currency)}`
+}
+
+function compareCartRequestItems(
+  left: { itemId: number; selectedOptionId?: number | null },
+  right: { itemId: number; selectedOptionId?: number | null }
+): number {
+  return left.itemId - right.itemId || (left.selectedOptionId ?? 0) - (right.selectedOptionId ?? 0)
 }
 
 function isLoyaltyDiscount(ruleType: string | null | undefined, label: string) {
@@ -627,16 +659,20 @@ export function renderCartScreen(options: CartScreenOptions) {
   }
 
   const buildPreviewItems = () =>
-    Array.from(cartSnapshot.items.entries())
-      .map(([itemId, qty]) => ({ itemId, qty }))
-      .sort((left, right) => left.itemId - right.itemId)
+    Array.from(cartSnapshot.items.values())
+      .map((line) => ({
+        itemId: line.itemId,
+        qty: line.qty,
+        ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {})
+      }))
+      .sort(compareCartRequestItems)
 
   const buildPreviewFingerprint = (tableToken: string, tableSessionId: number, tabId: number) =>
     JSON.stringify({
       tableToken,
       tableSessionId,
       tabId,
-      items: buildPreviewItems().map((item) => [item.itemId, item.qty])
+      items: buildPreviewItems().map((item) => [item.itemId, item.selectedOptionId ?? null, item.qty])
     })
 
   const resetCartPreview = (message = '') => {
@@ -800,12 +836,16 @@ export function renderCartScreen(options: CartScreenOptions) {
       refs.items.appendChild(refs.emptyState)
       return
     }
-    for (const [itemId, qty] of cartSnapshot.items.entries()) {
+    for (const line of cartSnapshot.items.values()) {
       const row = el('div', { className: 'cart-item' })
       const info = el('div', { className: 'cart-item-info' })
-      const name = el('strong', { text: formatItemTitle(itemId) })
-      const priceText = formatItemPrice(itemId)
+      const name = el('strong', { text: formatItemTitle(line.itemId) })
+      const optionName = formatCartLineOptionName(line)
+      const priceText = formatCartLinePrice(line) ?? formatItemPrice(line.itemId)
       append(info, name)
+      if (optionName) {
+        info.appendChild(el('span', { className: 'cart-item-option', text: `Вкус: ${optionName}` }))
+      }
       if (priceText) {
         const price = el('span', { className: 'cart-item-price', text: priceText })
         info.appendChild(price)
@@ -819,9 +859,9 @@ export function renderCartScreen(options: CartScreenOptions) {
       qtyInput.type = 'number'
       qtyInput.min = '1'
       qtyInput.max = String(MAX_ITEM_QTY)
-      qtyInput.value = String(qty)
+      qtyInput.value = String(line.qty)
       const plusButton = el('button', { className: 'button-small', text: '+' }) as HTMLButtonElement
-      plusButton.disabled = qty >= MAX_ITEM_QTY
+      plusButton.disabled = line.qty >= MAX_ITEM_QTY
       append(qtyControls, minusButton, qtyInput, plusButton)
 
       const removeButton = el('button', { className: 'button-small cart-remove', text: 'Удалить' }) as HTMLButtonElement
@@ -832,18 +872,22 @@ export function renderCartScreen(options: CartScreenOptions) {
       itemDisposables.push(
         on(minusButton, 'click', () => {
           setMessage('')
-          removeFromCart(itemId)
+          removeCartLine(line.key)
         }),
         on(plusButton, 'click', () => {
           setMessage('')
-          const result = addToCart(itemId)
+          const result = addToCart(line.itemId, {
+            selectedOptionId: line.selectedOptionId,
+            selectedOptionName: line.selectedOptionName,
+            priceDeltaMinor: line.priceDeltaMinor
+          })
           if (!result.ok) {
             setMessage(result.reason === 'limit' ? 'Можно выбрать не более 50 разных позиций.' : 'Некорректное значение.')
           }
         }),
         on(removeButton, 'click', () => {
           setMessage('')
-          setCartQty(itemId, 0)
+          setCartLineQty(line.key, 0)
         }),
         on(qtyInput, 'change', () => {
           setMessage('')
@@ -854,10 +898,10 @@ export function renderCartScreen(options: CartScreenOptions) {
             nextValue < 1 ||
             nextValue > MAX_ITEM_QTY
           ) {
-            qtyInput.value = String(cartSnapshot.items.get(itemId) ?? qty)
+            qtyInput.value = String(cartSnapshot.items.get(line.key)?.qty ?? line.qty)
             return
           }
-          const result = setCartQty(itemId, nextValue)
+          const result = setCartLineQty(line.key, nextValue)
           if (!result.ok) {
             setMessage(result.reason === 'limit' ? 'Можно выбрать не более 50 разных позиций.' : 'Некорректное значение.')
           }
@@ -872,8 +916,8 @@ export function renderCartScreen(options: CartScreenOptions) {
     if (cartSnapshot.items.size === 0 || cartSnapshot.items.size > MAX_ITEMS) {
       return { ok: false, reason: 'Выберите от 1 до 50 позиций.' }
     }
-    for (const [, qty] of cartSnapshot.items.entries()) {
-      if (qty < 1 || qty > MAX_ITEM_QTY) {
+    for (const line of cartSnapshot.items.values()) {
+      if (line.qty < 1 || line.qty > MAX_ITEM_QTY) {
         return { ok: false, reason: 'Количество каждой позиции должно быть от 1 до 50.' }
       }
     }
@@ -899,23 +943,27 @@ export function renderCartScreen(options: CartScreenOptions) {
   }
 
   const buildSubmitItems = () =>
-    Array.from(cartSnapshot.items.entries())
-      .map(([itemId, qty]) => ({ itemId, qty }))
-      .sort((left, right) => left.itemId - right.itemId)
+    Array.from(cartSnapshot.items.values())
+      .map((line) => ({
+        itemId: line.itemId,
+        qty: line.qty,
+        ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {})
+      }))
+      .sort(compareCartRequestItems)
 
   const buildSubmitFingerprint = (
     tableToken: string,
     tableSessionId: number,
     tabId: number,
     comment: string | null,
-    items: Array<{ itemId: number; qty: number }>
+    items: Array<{ itemId: number; qty: number; selectedOptionId?: number | null }>
   ) =>
     JSON.stringify({
       tableToken,
       tableSessionId,
       tabId,
       comment,
-      items: items.map((item) => [item.itemId, item.qty])
+      items: items.map((item) => [item.itemId, item.selectedOptionId ?? null, item.qty])
     })
 
   const generateIdempotencyKey = () =>

@@ -5,6 +5,7 @@ import { guestGetVenue, guestGetVenueInfoSections, guestGetVenueMenu, guestStaff
 import type {
   MenuCategoryDto,
   MenuItemDto,
+  MenuItemOptionDto,
   MenuResponse,
   VenueDto,
   VenueInfoSectionDto,
@@ -34,12 +35,14 @@ type VenueScreenOptions = {
 }
 
 type MenuItemRefs = {
+  item: MenuItemDto
   qtyLabel: HTMLSpanElement
   addButton: HTMLButtonElement
   minusButton: HTMLButtonElement
   plusButton: HTMLButtonElement
   qtyControls: HTMLDivElement
   isAvailable: boolean
+  hasOptions: boolean
 }
 
 type VenueRefs = {
@@ -223,14 +226,21 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
   const list = el('div', { className: 'menu-items' })
 
   category.items.forEach((item) => {
+    const itemOptions = getAvailableItemOptions(item)
     const row = el('div', { className: 'menu-item' })
     const info = el('div', { className: 'menu-item-info' })
     const name = el('strong', { text: item.name })
     const price = el('span', { className: 'menu-item-price', text: formatPrice(item.priceMinor, item.currency) })
     append(info, name, price)
+    if (itemOptions.length > 0) {
+      info.appendChild(el('span', { className: 'menu-item-option-hint', text: 'Выберите вкус' }))
+    }
 
     const controls = el('div', { className: 'menu-item-controls' })
-    const addButton = el('button', { className: 'button-small', text: 'Добавить' }) as HTMLButtonElement
+    const addButton = el('button', {
+      className: 'button-small',
+      text: itemOptions.length > 0 ? 'Выбрать' : 'Добавить'
+    }) as HTMLButtonElement
     const qtyControls = el('div', { className: 'qty-controls' }) as HTMLDivElement
     const minusButton = el('button', { className: 'button-small', text: '−' }) as HTMLButtonElement
     const qtyLabel = el('span', { className: 'qty-label', text: '0' }) as HTMLSpanElement
@@ -246,12 +256,14 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
     }
 
     itemRefs.set(item.id, {
+      item,
       qtyLabel,
       addButton,
       minusButton,
       plusButton,
       qtyControls,
-      isAvailable: item.isAvailable
+      isAvailable: item.isAvailable,
+      hasOptions: itemOptions.length > 0
     })
 
     row.appendChild(info)
@@ -261,6 +273,20 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
 
   append(categorySection, title, list)
   return categorySection
+}
+
+function getAvailableItemOptions(item: MenuItemDto): MenuItemOptionDto[] {
+  return (item.options ?? []).filter((option) => option.isAvailable !== false)
+}
+
+function formatOptionButtonText(option: MenuItemOptionDto, currency: string): string {
+  if (option.priceDeltaMinor > 0) {
+    return `${option.name} +${formatPrice(option.priceDeltaMinor, currency)}`
+  }
+  if (option.priceDeltaMinor < 0) {
+    return `${option.name} ${formatPrice(option.priceDeltaMinor, currency)}`
+  }
+  return `${option.name} · Без доплаты`
 }
 
 function resolveInfoMediaUrl(backendUrl: string, mediaUrl: string) {
@@ -378,6 +404,15 @@ function updateItemControls(refs: MenuItemRefs, qty: number, canOrder: boolean) 
     refs.plusButton.disabled = true
     return
   }
+  if (refs.hasOptions) {
+    refs.addButton.hidden = false
+    refs.addButton.textContent = 'Выбрать'
+    refs.qtyControls.style.display = 'none'
+    refs.addButton.disabled = !refs.isAvailable
+    refs.minusButton.disabled = true
+    refs.plusButton.disabled = true
+    return
+  }
   refs.addButton.hidden = qty > 0
   refs.qtyControls.style.display = qty === 0 ? 'none' : 'inline-flex'
   refs.minusButton.disabled = qty <= 0
@@ -404,6 +439,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let renderedOrderMenuMode: boolean | null = null
   let selectedCategoryId: number | null = null
   let selectedService: 'shift-extension' | null = null
+  let selectedOptionItemId: number | null = null
   let latestCategories: MenuCategoryDto[] = []
   let shiftExtensionAvailability: GuestShiftExtensionAvailability = {
     visible: false,
@@ -536,7 +572,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const updateMenuOrderState = (snapshot: ReturnType<typeof getCartSnapshot> = getCartSnapshot()) => {
     const canOrder = canPlaceOrders()
     itemRefs.forEach((itemRefs, itemId) => {
-      updateItemControls(itemRefs, snapshot.items.get(itemId) ?? 0, canOrder)
+      const qty = Array.from(snapshot.items.values()).reduce(
+        (sum, line) => (line.itemId === itemId ? sum + line.qty : sum),
+        0
+      )
+      updateItemControls(itemRefs, qty, canOrder)
     })
   }
 
@@ -617,6 +657,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       const handler = () => {
         selectedCategoryId = category.id
         selectedService = null
+        selectedOptionItemId = null
         renderMenu(categories)
         bindItemActions()
       }
@@ -641,6 +682,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         const handler = () => {
           selectedCategoryId = null
           selectedService = 'shift-extension'
+          selectedOptionItemId = null
           renderMenu(categories)
           refs.extensionSlot.dispatchEvent(new Event('hookah:guest-venue-refresh'))
         }
@@ -650,6 +692,51 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       list.appendChild(button)
     }
     return list
+  }
+
+  const findMenuItem = (itemId: number) =>
+    latestCategories.flatMap((category) => category.items).find((item) => item.id === itemId) ?? null
+
+  const renderOptionPicker = (item: MenuItemDto, categories: MenuCategoryDto[]) => {
+    const section = el('section', { className: 'card menu-option-picker' })
+    section.appendChild(el('h4', { text: 'Выберите вкус' }))
+    section.appendChild(el('p', { className: 'menu-option-item-name', text: item.name }))
+    const optionList = el('div', { className: 'menu-option-list' })
+    const options = getAvailableItemOptions(item)
+    options.forEach((option) => {
+      const button = el('button', {
+        className: 'menu-option-button',
+        text: formatOptionButtonText(option, item.currency)
+      }) as HTMLButtonElement
+      const handler = () => {
+        if (!canPlaceOrders()) {
+          setMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
+          return
+        }
+        const result = addToCart(item.id, {
+          selectedOptionId: option.id,
+          selectedOptionName: option.name,
+          priceDeltaMinor: option.priceDeltaMinor
+        })
+        if (!result.ok) {
+          setMessage(result.reason === 'limit' ? 'Лимит: не более 50 позиций в корзине.' : 'Не удалось добавить позицию.')
+          return
+        }
+        selectedOptionItemId = null
+        setMessage('')
+        renderMenu(categories)
+        bindItemActions()
+      }
+      button.addEventListener('click', handler)
+      itemDisposables.push(() => button.removeEventListener('click', handler))
+      optionList.appendChild(button)
+    })
+    if (!options.length) {
+      section.appendChild(el('p', { className: 'status', text: 'Для этой позиции сейчас нет доступных вариантов.' }))
+    } else {
+      section.appendChild(optionList)
+    }
+    return section
   }
 
   const renderMenu = (categories: MenuCategoryDto[]) => {
@@ -670,12 +757,32 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       const backButton = el('button', { className: 'button-small button-secondary', text: '← К разделам меню' }) as HTMLButtonElement
       const backHandler = () => {
         selectedService = null
+        selectedOptionItemId = null
         renderMenu(categories)
       }
       backButton.addEventListener('click', backHandler)
       itemDisposables.push(() => backButton.removeEventListener('click', backHandler))
       refs.menuBody.appendChild(backButton)
       refs.menuBody.appendChild(refs.extensionSlot)
+      return
+    }
+    if (selectedOptionItemId != null) {
+      const item = findMenuItem(selectedOptionItemId)
+      if (!item) {
+        selectedOptionItemId = null
+        renderMenu(categories)
+        return
+      }
+      const backButton = el('button', { className: 'button-small button-secondary', text: '← Назад' }) as HTMLButtonElement
+      const backHandler = () => {
+        selectedOptionItemId = null
+        renderMenu(categories)
+        bindItemActions()
+      }
+      backButton.addEventListener('click', backHandler)
+      itemDisposables.push(() => backButton.removeEventListener('click', backHandler))
+      refs.menuBody.appendChild(backButton)
+      refs.menuBody.appendChild(renderOptionPicker(item, categories))
       return
     }
     const selectedCategory = selectedCategoryId
@@ -691,6 +798,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const backHandler = () => {
       selectedCategoryId = null
       selectedService = null
+      selectedOptionItemId = null
       renderMenu(categories)
     }
     backButton.addEventListener('click', backHandler)
@@ -708,6 +816,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       const addHandler = () => {
         if (!canPlaceOrders()) {
           setMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
+          return
+        }
+        if (refs.hasOptions) {
+          selectedOptionItemId = itemId
+          selectedService = null
+          renderMenu(latestCategories)
           return
         }
         const result = addToCart(itemId)
@@ -893,6 +1007,13 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         latestCategories = categories
         if (!categories.some((category) => category.id === selectedCategoryId)) {
           selectedCategoryId = null
+          selectedOptionItemId = null
+        }
+        const selectedOptionItemExists =
+          selectedOptionItemId == null ||
+          categories.some((category) => category.items.some((item) => item.id === selectedOptionItemId))
+        if (!selectedOptionItemExists) {
+          selectedOptionItemId = null
         }
         renderMenu(categories)
         bindItemActions()
@@ -903,7 +1024,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
             itemId: item.id,
             name: item.name,
             priceMinor: item.priceMinor,
-            currency: item.currency
+            currency: item.currency,
+            options: getAvailableItemOptions(item).map((option) => ({
+              id: option.id,
+              name: option.name,
+              priceDeltaMinor: option.priceDeltaMinor
+            }))
           }))
         )
       } else {

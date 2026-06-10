@@ -7,6 +7,7 @@ import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.CatalogVenueDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuCategoryDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuItemDto
+import com.hookah.platform.backend.miniapp.guest.api.MenuItemOptionDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueDto
 import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionDto
@@ -17,6 +18,7 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
+import com.hookah.platform.backend.miniapp.guest.db.MenuItemOptionModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
 import com.hookah.platform.backend.miniapp.guest.db.VenueShort
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -215,5 +217,14 @@ private fun MenuItemModel.toDto(): MenuItemDto =
         name = name,
         priceMinor = priceMinor,
         currency = currency,
+        isAvailable = isAvailable,
+        options = options.map { it.toDto() },
+    )
+
+private fun MenuItemOptionModel.toDto(): MenuItemOptionDto =
+    MenuItemOptionDto(
+        id = id,
+        name = name,
+        priceDeltaMinor = priceDeltaMinor,
         isAvailable = isAvailable,
     )

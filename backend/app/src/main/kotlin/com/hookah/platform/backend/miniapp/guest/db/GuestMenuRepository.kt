@@ -55,9 +55,20 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
                             }
                         }
 
+                    val optionsByItem =
+                        loadAvailableOptions(
+                            connection = connection,
+                            venueId = venueId,
+                            itemIds = itemsByCategory.values.flatten().map { it.id },
+                        )
                     val mappedCategories =
                         categories.map { category ->
-                            category.copy(items = itemsByCategory[category.id].orEmpty())
+                            category.copy(
+                                items =
+                                    itemsByCategory[category.id].orEmpty().map { item ->
+                                        item.copy(options = optionsByItem[item.id].orEmpty())
+                                    },
+                            )
                         }
 
                     MenuModel(
@@ -159,6 +170,50 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
             items = emptyList(),
         )
 
+    private fun loadAvailableOptions(
+        connection: java.sql.Connection,
+        venueId: Long,
+        itemIds: List<Long>,
+    ): Map<Long, List<MenuItemOptionModel>> {
+        if (itemIds.isEmpty()) {
+            return emptyMap()
+        }
+        val placeholders = itemIds.joinToString(",") { "?" }
+        val sql =
+            """
+            SELECT id, item_id, name, price_delta_minor, is_available, sort_order
+            FROM menu_item_options
+            WHERE venue_id = ?
+              AND item_id IN ($placeholders)
+              AND is_available = true
+            ORDER BY item_id, sort_order, id
+            """.trimIndent()
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, venueId)
+            itemIds.forEachIndexed { index, itemId ->
+                statement.setLong(index + 2, itemId)
+            }
+            statement.executeQuery().use { rs ->
+                val result = mutableMapOf<Long, MutableList<MenuItemOptionModel>>()
+                while (rs.next()) {
+                    val itemId = rs.getLong("item_id")
+                    result.getOrPut(itemId) { mutableListOf() }.add(mapOption(rs))
+                }
+                result
+            }
+        }
+    }
+
+    private fun mapOption(rs: ResultSet): MenuItemOptionModel =
+        MenuItemOptionModel(
+            id = rs.getLong("id"),
+            itemId = rs.getLong("item_id"),
+            name = rs.getString("name"),
+            priceDeltaMinor = rs.getLong("price_delta_minor"),
+            isAvailable = rs.getBoolean("is_available"),
+            sortOrder = rs.getInt("sort_order"),
+        )
+
     private fun mapItem(rs: ResultSet): MenuItemModel =
         MenuItemModel(
             id = rs.getLong("id"),
@@ -168,6 +223,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
             isAvailable = rs.getBoolean("is_available"),
             sortOrder = rs.getInt("sort_order"),
             itemType = MenuSemanticType.nullableFromDb(rs.getString("item_type")),
+            options = emptyList(),
         )
 }
 
@@ -192,6 +248,16 @@ data class MenuItemModel(
     val isAvailable: Boolean,
     val sortOrder: Int,
     val itemType: MenuSemanticType? = null,
+    val options: List<MenuItemOptionModel> = emptyList(),
+)
+
+data class MenuItemOptionModel(
+    val id: Long,
+    val itemId: Long,
+    val name: String,
+    val priceDeltaMinor: Long,
+    val isAvailable: Boolean,
+    val sortOrder: Int,
 )
 
 fun MenuItemModel.effectiveType(category: MenuCategoryModel): MenuSemanticType = itemType ?: category.categoryType

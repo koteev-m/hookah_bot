@@ -84,6 +84,43 @@ type ShiftExtensionSettings = {
   configured: boolean
 }
 
+type GuestMenuOption = {
+  id: number
+  name: string
+  priceDeltaMinor: number
+  isAvailable?: boolean
+}
+
+type GuestMenuItem = {
+  id: number
+  name: string
+  priceMinor: number
+  currency: string
+  isAvailable: boolean
+  options?: GuestMenuOption[]
+}
+
+type GuestMenuCategory = {
+  id: number
+  name: string
+  items: GuestMenuItem[]
+}
+
+type AddBatchItemPayload = {
+  itemId: number
+  qty: number
+  selectedOptionId?: number | null
+}
+
+type AddBatchPayload = {
+  tableToken: string
+  tableSessionId: number
+  tabId: number
+  idempotencyKey?: string
+  items: AddBatchItemPayload[]
+  comment?: string | null
+}
+
 type TestTelegramWindow = Window & {
   Telegram?: {
     WebApp?: {
@@ -186,6 +223,24 @@ function buildShiftExtensionSettings(overrides: Partial<ShiftExtensionSettings> 
   }
 }
 
+function buildDefaultGuestMenu(): GuestMenuCategory[] {
+  return [
+    {
+      id: 20,
+      name: 'Кальянное меню',
+      items: [
+        {
+          id: 200,
+          name: 'Double Apple',
+          priceMinor: 150000,
+          currency: 'RUB',
+          isAvailable: true
+        }
+      ]
+    }
+  ]
+}
+
 async function installTelegramWebApp(page: Page, userId: number) {
   await page.addInitScript({
     content: `
@@ -252,13 +307,59 @@ async function expectTelegramBackButtonHidden(page: Page) {
 
 async function mockGuestApi(
   page: Page,
-  options: { restoreContext?: RestoreContext | null; extensionOptions?: ShiftExtensionOptions | null } = {}
+  options: {
+    restoreContext?: RestoreContext | null
+    extensionOptions?: ShiftExtensionOptions | null
+    menuCategories?: GuestMenuCategory[]
+  } = {}
 ) {
   let structuredMenuCalls = 0
   let restoreContext = options.restoreContext ?? null
   let extensionOptions = options.extensionOptions ?? buildShiftExtensionOptions()
+  const menuCategories = options.menuCategories ?? buildDefaultGuestMenu()
   let createExtensionRequestCalls = 0
   let activeOrderServiceCharges: ServiceCharge[] = []
+  const previewRequests: Array<{ items: AddBatchItemPayload[] }> = []
+  const addBatchRequests: AddBatchPayload[] = []
+  let submittedOrderItems: AddBatchItemPayload[] = []
+
+  const findMenuItem = (itemId: number) =>
+    menuCategories.flatMap((category) => category.items).find((item) => item.id === itemId) ?? null
+
+  const findOption = (item: GuestMenuItem | null, optionId: number | null | undefined) =>
+    optionId == null ? null : item?.options?.find((option) => option.id === optionId) ?? null
+
+  const buildOrderItem = (line: AddBatchItemPayload) => {
+    const item = findMenuItem(line.itemId)
+    const option = findOption(item, line.selectedOptionId)
+    const unitPriceMinor = (item?.priceMinor ?? 0) + (option?.priceDeltaMinor ?? 0)
+    const lineGrossMinor = unitPriceMinor * line.qty
+    return {
+      itemId: line.itemId,
+      qty: line.qty,
+      name: item?.name ?? `Item ${line.itemId}`,
+      selectedOption: option
+        ? {
+            optionId: option.id,
+            name: option.name,
+            priceDeltaMinor: option.priceDeltaMinor
+          }
+        : null,
+      priceMinor: unitPriceMinor,
+      currency: item?.currency ?? 'RUB',
+      lineGrossMinor,
+      manualDiscountMinor: 0,
+      promoDiscountMinor: 0,
+      discountMinor: 0,
+      linePayableMinor: lineGrossMinor,
+      isPromotionReward: false
+    }
+  }
+
+  const buildActiveOrderItems = () => {
+    const lines = submittedOrderItems.length > 0 ? submittedOrderItems : [{ itemId: 200, qty: 1 }]
+    return lines.map(buildOrderItem)
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -357,21 +458,7 @@ async function mockGuestApi(
     await route.fulfill(
       jsonResponse({
         venueId: 1,
-        categories: [
-          {
-            id: 20,
-            name: 'Кальянное меню',
-            items: [
-              {
-                id: 200,
-                name: 'Double Apple',
-                priceMinor: 150000,
-                currency: 'RUB',
-                isAvailable: true
-              }
-            ]
-          }
-        ]
+        categories: menuCategories
       })
     )
   })
@@ -393,6 +480,8 @@ async function mockGuestApi(
   })
 
   await page.route('**/api/guest/order/active?**', async (route) => {
+    const orderItems = buildActiveOrderItems()
+    const orderItemsTotal = orderItems.reduce((sum, item) => sum + item.lineGrossMinor, 0)
     const serviceChargeTotal = activeOrderServiceCharges.reduce((sum, charge) => sum + charge.totalMinor, 0)
     await route.fulfill(
       jsonResponse({
@@ -405,11 +494,11 @@ async function mockGuestApi(
           tabId: 88,
           tableNumber: '4',
           status: 'ACTIVE',
-          grossTotalMinor: 150000 + serviceChargeTotal,
+          grossTotalMinor: orderItemsTotal + serviceChargeTotal,
           manualDiscountTotalMinor: 0,
           promoDiscountTotalMinor: 0,
           loyaltyDiscountTotalMinor: 0,
-          finalPayableTotalMinor: 150000 + serviceChargeTotal,
+          finalPayableTotalMinor: orderItemsTotal + serviceChargeTotal,
           currency: 'RUB',
           discounts: [],
           serviceCharges: activeOrderServiceCharges,
@@ -417,25 +506,39 @@ async function mockGuestApi(
             {
               batchId: 333,
               comment: null,
-              items: [
-                {
-                  itemId: 200,
-                  qty: 1,
-                  name: 'Double Apple',
-                  priceMinor: 150000,
-                  currency: 'RUB',
-                  lineGrossMinor: 150000,
-                  manualDiscountMinor: 0,
-                  promoDiscountMinor: 0,
-                  linePayableMinor: 150000,
-                  isPromotionReward: false
-                }
-              ]
+              items: orderItems
             }
           ]
         }
       })
     )
+  })
+
+  await page.route('**/api/guest/order/preview', async (route) => {
+    const body = (await route.request().postDataJSON()) as { items: AddBatchItemPayload[] }
+    previewRequests.push({ items: body.items })
+    const previewItems = body.items.map(buildOrderItem)
+    const grossTotalMinor = previewItems.reduce((sum, item) => sum + item.lineGrossMinor, 0)
+    await route.fulfill(
+      jsonResponse({
+        preview: {
+          grossTotalMinor,
+          promoDiscountTotalMinor: 0,
+          loyaltyDiscountTotalMinor: 0,
+          finalPayableTotalMinor: grossTotalMinor,
+          currency: 'RUB',
+          discounts: [],
+          items: previewItems
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/guest/order/add-batch', async (route) => {
+    const body = (await route.request().postDataJSON()) as AddBatchPayload
+    addBatchRequests.push(body)
+    submittedOrderItems = body.items
+    await route.fulfill(jsonResponse({ orderId: 900, batchId: 444 }))
   })
 
   await page.route('**/api/guest/table/extension-options?**', async (route) => {
@@ -460,6 +563,8 @@ async function mockGuestApi(
   return {
     getStructuredMenuCalls: () => structuredMenuCalls,
     getCreateExtensionRequestCalls: () => createExtensionRequestCalls,
+    getPreviewRequests: () => previewRequests,
+    getAddBatchRequests: () => addBatchRequests,
     setRestoreContext: (context: RestoreContext | null) => {
       restoreContext = context
     },
@@ -745,6 +850,82 @@ test('table context opens category-first order menu and cart action', async ({ p
   await page.getByRole('button', { name: 'Добавить' }).click()
 
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+})
+
+test('guest mini app selects item flavor and submits structured selected option', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    restoreContext: buildRestoreContext(),
+    menuCategories: [
+      {
+        id: 20,
+        name: 'Кальянное меню',
+        items: [
+          {
+            id: 210,
+            name: 'Кальян',
+            priceMinor: 180000,
+            currency: 'RUB',
+            isAvailable: true,
+            options: [
+              { id: 301, name: 'Яблоко', priceDeltaMinor: 0, isAvailable: true },
+              { id: 302, name: 'Мята', priceDeltaMinor: 25000, isAvailable: true },
+              { id: 303, name: 'Недоступный вкус', priceDeltaMinor: 50000, isAvailable: false }
+            ]
+          },
+          {
+            id: 211,
+            name: 'Вода',
+            priceMinor: 20000,
+            currency: 'RUB',
+            isAvailable: true
+          }
+        ]
+      }
+    ]
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+
+  await expect(page.getByText('Кальян', { exact: true })).toBeVisible()
+  await expect(page.getByText('Выберите вкус')).toBeVisible()
+  await page.getByRole('button', { name: 'Выбрать' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
+  await expect(page.getByText('Кальян', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Яблоко/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Мята/ })).toBeVisible()
+  await expect(page.getByText('Недоступный вкус')).toHaveCount(0)
+
+  await page.getByRole('button', { name: /Яблоко/ }).click()
+  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await page.getByRole('button', { name: /Яблоко/ }).click()
+  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await page.getByRole('button', { name: /Мята/ }).click()
+
+  await expect(page.getByRole('button', { name: 'Корзина (3)' })).toBeVisible()
+  await page.getByRole('button', { name: 'Корзина (3)' }).click()
+
+  const appleLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Яблоко' })
+  const mintLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Мята' })
+  await expect(appleLine).toHaveCount(1)
+  await expect(mintLine).toHaveCount(1)
+  await expect(appleLine.locator('input')).toHaveValue('2')
+  await expect(mintLine.locator('input')).toHaveValue('1')
+
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Вкус: Яблоко')).toBeVisible()
+  await expect(page.getByText('Вкус: Мята')).toBeVisible()
+  await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
+
+  expect(api.getAddBatchRequests()).toHaveLength(1)
+  expect(api.getAddBatchRequests()[0].items).toEqual([
+    { itemId: 210, qty: 2, selectedOptionId: 301 },
+    { itemId: 210, qty: 1, selectedOptionId: 302 }
+  ])
 })
 
 test('guest creates shift extension request and sees pending then confirmed state', async ({ page }) => {

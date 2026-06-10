@@ -428,6 +428,11 @@ input[type="number"] {
   font-size: 0.95rem;
 }
 
+.menu-item-option-hint {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
 .menu-item-badge {
   display: inline-flex;
   align-items: center;
@@ -442,6 +447,26 @@ input[type="number"] {
   display: grid;
   gap: 0.5rem;
   align-content: center;
+}
+
+.menu-option-picker {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.menu-option-item-name {
+  margin: 0;
+  color: #475569;
+}
+
+.menu-option-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.menu-option-button {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .cart-screen {
@@ -472,6 +497,11 @@ input[type="number"] {
 .cart-item-price {
   color: #475569;
   font-size: 0.95rem;
+}
+
+.cart-item-option {
+  color: #334155;
+  font-size: 0.9rem;
 }
 
 .cart-item-controls {

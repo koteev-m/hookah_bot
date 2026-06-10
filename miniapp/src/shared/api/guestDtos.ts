@@ -65,6 +65,14 @@ export type MenuItemDto = {
   priceMinor: number
   currency: string
   isAvailable: boolean
+  options?: MenuItemOptionDto[]
+}
+
+export type MenuItemOptionDto = {
+  id: number
+  name: string
+  priceDeltaMinor: number
+  isAvailable?: boolean
 }
 
 export type TableResolveResponse = {
@@ -144,6 +152,7 @@ export type OrderBatchItemDto = {
   itemId: number
   qty: number
   name?: string | null
+  selectedOption?: SelectedOrderItemOptionDto | null
   priceMinor?: number | null
   currency?: string | null
   lineGrossMinor: number
@@ -202,6 +211,7 @@ export type JoinTabRequest = {
 export type AddBatchItemDto = {
   itemId: number
   qty: number
+  selectedOptionId?: number | null
 }
 
 export type AddBatchResponse = {
@@ -241,12 +251,19 @@ export type CartPreviewItemDto = {
   itemId: number
   name: string
   qty: number
+  selectedOption?: SelectedOrderItemOptionDto | null
   priceMinor: number
   currency: string
   lineGrossMinor: number
   discountMinor: number
   linePayableMinor: number
   isPromotionReward: boolean
+}
+
+export type SelectedOrderItemOptionDto = {
+  optionId: number
+  name: string
+  priceDeltaMinor: number
 }
 
 export type StaffCallRequest = {

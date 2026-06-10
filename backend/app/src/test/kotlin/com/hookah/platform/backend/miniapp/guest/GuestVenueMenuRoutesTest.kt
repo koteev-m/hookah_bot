@@ -48,7 +48,7 @@ class GuestVenueMenuRoutesTest {
         }
 
     @Test
-    fun `menu returns published categories and items`() =
+    fun `GuestMenu returns published categories items and available options`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-menu")
             val config = buildConfig(jdbcUrl)
@@ -78,6 +78,11 @@ class GuestVenueMenuRoutesTest {
             assertEquals(1, firstCategoryItems.size)
             assertEquals(menu.firstCategoryItemIds[0], firstCategoryItems[0].id)
             assertTrue(firstCategoryItems[0].isAvailable)
+            assertEquals(1, firstCategoryItems[0].options.size)
+            assertEquals(menu.activeOptionId, firstCategoryItems[0].options[0].id)
+            assertEquals("Яблоко", firstCategoryItems[0].options[0].name)
+            assertEquals(0L, firstCategoryItems[0].options[0].priceDeltaMinor)
+            assertTrue(firstCategoryItems[0].options[0].isAvailable)
 
             val secondCategoryItems = payload.categories[1].items
             assertEquals(1, secondCategoryItems.size)
@@ -229,11 +234,14 @@ class GuestVenueMenuRoutesTest {
                     true,
                     0,
                 )
+            val activeOptionId = insertMenuOption(connection, venueId, firstItemId, "Яблоко", 0, true, 0)
+            insertMenuOption(connection, venueId, firstItemId, "Недоступный вкус", 500, false, 1)
             return SeededMenu(
                 firstCategoryId = firstCategoryId,
                 secondCategoryId = secondCategoryId,
                 firstCategoryItemIds = listOf(firstItemId, secondItemId),
                 secondCategoryItemId = thirdItemId,
+                activeOptionId = activeOptionId,
             )
         }
     }
@@ -345,6 +353,38 @@ class GuestVenueMenuRoutesTest {
         error("Failed to insert menu item")
     }
 
+    private fun insertMenuOption(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        name: String,
+        priceDeltaMinor: Long,
+        isAvailable: Boolean,
+        sortOrder: Int,
+    ): Long {
+        connection.prepareStatement(
+            """
+            INSERT INTO menu_item_options (venue_id, item_id, name, price_delta_minor, is_available, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, itemId)
+            statement.setString(3, name)
+            statement.setLong(4, priceDeltaMinor)
+            statement.setBoolean(5, isAvailable)
+            statement.setInt(6, sortOrder)
+            statement.executeUpdate()
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) {
+                    return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert menu option")
+    }
+
     private data class SeededVenues(
         val publishedId: Long,
         val hiddenId: Long,
@@ -356,6 +396,7 @@ class GuestVenueMenuRoutesTest {
         val secondCategoryId: Long,
         val firstCategoryItemIds: List<Long>,
         val secondCategoryItemId: Long,
+        val activeOptionId: Long,
     )
 
     private companion object {

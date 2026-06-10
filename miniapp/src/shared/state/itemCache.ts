@@ -3,6 +3,13 @@ export type ItemMeta = {
   name: string
   priceMinor: number
   currency: string
+  options?: ItemOptionMeta[]
+}
+
+export type ItemOptionMeta = {
+  id: number
+  name: string
+  priceDeltaMinor: number
 }
 
 const cache = new Map<number, ItemMeta>()

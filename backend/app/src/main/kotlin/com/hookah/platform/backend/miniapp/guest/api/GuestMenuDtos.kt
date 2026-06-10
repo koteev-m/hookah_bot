@@ -22,4 +22,13 @@ data class MenuItemDto(
     val priceMinor: Long,
     val currency: String,
     val isAvailable: Boolean,
+    val options: List<MenuItemOptionDto> = emptyList(),
+)
+
+@Serializable
+data class MenuItemOptionDto(
+    val id: Long,
+    val name: String,
+    val priceDeltaMinor: Long,
+    val isAvailable: Boolean,
 )
