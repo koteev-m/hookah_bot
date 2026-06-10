@@ -366,7 +366,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
     refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
-    refs.navButtons.settings.hidden = true
+    refs.navButtons.settings.hidden = !hasPermission('SHIFT_EXTENSION_SETTINGS') && !hasPermission('VENUE_SETTINGS')
   }
 
   const canAccessRoute = (route: RouteName) => {
@@ -384,7 +384,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'tables':
         return hasPermission('TABLE_VIEW')
       case 'settings':
-        return hasPermission('VENUE_SETTINGS')
+        return hasPermission('SHIFT_EXTENSION_SETTINGS') || hasPermission('VENUE_SETTINGS')
       case 'staff':
         return currentRole !== 'STAFF'
       case 'chat':

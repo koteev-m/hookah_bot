@@ -35,6 +35,8 @@ import type {
   ShiftExtensionDecisionRequest,
   ShiftExtensionDecisionResponse,
   ShiftExtensionRequestsResponse,
+  ShiftExtensionSettingsResponse,
+  ShiftExtensionSettingsUpdateRequest,
   StaffChatLinkCodeResponse,
   VenueStaffCallActionResponse,
   VenueStaffCallsResponse,
@@ -884,6 +886,39 @@ export async function venueGetShiftExtensionRequests(
     backendUrl,
     `/api/venue/${params.venueId}/shift-extension-requests${suffix}`,
     { signal },
+    deps
+  )
+}
+
+export async function venueGetShiftExtensionSettings(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<ShiftExtensionSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/shift-extension-settings`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueUpdateShiftExtensionSettings(
+  backendUrl: string,
+  params: { venueId: number; body: ShiftExtensionSettingsUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<ShiftExtensionSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/shift-extension-settings`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
     deps
   )
 }

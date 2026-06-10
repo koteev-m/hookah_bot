@@ -73,6 +73,17 @@ type ServiceCharge = {
   currency: string
 }
 
+type ShiftExtensionSettings = {
+  venueId: number
+  enabled: boolean
+  durationMinutes: number
+  priceMinor: number | null
+  priceRub: string | null
+  currency: string
+  maxExtensionsPerSession: number | null
+  configured: boolean
+}
+
 type TestTelegramWindow = Window & {
   Telegram?: {
     WebApp?: {
@@ -157,6 +168,20 @@ function buildShiftExtensionOptions(overrides: Partial<ShiftExtensionOptions> = 
     tabId: 88,
     orderId: 900,
     pendingRequest: null,
+    ...overrides
+  }
+}
+
+function buildShiftExtensionSettings(overrides: Partial<ShiftExtensionSettings> = {}): ShiftExtensionSettings {
+  return {
+    venueId: 1,
+    enabled: false,
+    durationMinutes: 60,
+    priceMinor: null,
+    priceRub: null,
+    currency: 'RUB',
+    maxExtensionsPerSession: null,
+    configured: false,
     ...overrides
   }
 }
@@ -447,10 +472,21 @@ async function mockGuestApi(
   }
 }
 
-async function mockVenueShiftExtensionApi(page: Page) {
+async function mockVenueShiftExtensionApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+    settings?: ShiftExtensionSettings
+  } = {}
+) {
+  const role = options.role ?? 'STAFF'
+  const permissions = options.permissions ?? ['ORDER_QUEUE_VIEW', 'SHIFT_EXTENSION_VIEW', 'SHIFT_EXTENSION_CONFIRM']
   let requests = [buildShiftExtensionRequest()]
+  let settings = options.settings ?? buildShiftExtensionSettings()
   let approveCalls = 0
   let rejectCalls = 0
+  let updateSettingsCalls = 0
   const rejectedReasons: string[] = []
 
   await page.route('**/api/auth/telegram', async (route) => {
@@ -467,8 +503,8 @@ async function mockVenueShiftExtensionApi(page: Page) {
             venueName: 'Микс',
             venueCity: 'Москва',
             venueStatus: 'PUBLISHED',
-            role: 'STAFF',
-            permissions: ['ORDER_QUEUE_VIEW', 'SHIFT_EXTENSION_VIEW', 'SHIFT_EXTENSION_CONFIRM']
+            role,
+            permissions
           }
         ]
       })
@@ -491,6 +527,30 @@ async function mockVenueShiftExtensionApi(page: Page) {
 
   await page.route('**/api/venue/1/staff-calls**', async (route) => {
     await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/shift-extension-settings', async (route) => {
+    if (route.request().method() === 'PUT') {
+      updateSettingsCalls += 1
+      const body = (await route.request().postDataJSON()) as {
+        enabled: boolean
+        durationMinutes: number
+        priceMinor?: number | null
+        currency?: string | null
+        maxExtensionsPerSession?: number | null
+      }
+      settings = {
+        venueId: 1,
+        enabled: body.enabled,
+        durationMinutes: body.durationMinutes,
+        priceMinor: body.priceMinor ?? null,
+        priceRub: body.priceMinor == null ? null : String(body.priceMinor / 100),
+        currency: body.currency ?? 'RUB',
+        maxExtensionsPerSession: body.maxExtensionsPerSession ?? null,
+        configured: body.enabled && body.priceMinor != null
+      }
+    }
+    await route.fulfill(jsonResponse({ settings }))
   })
 
   await page.route('**/api/venue/1/shift-extension-requests**', async (route) => {
@@ -521,6 +581,8 @@ async function mockVenueShiftExtensionApi(page: Page) {
   return {
     getApproveCalls: () => approveCalls,
     getRejectCalls: () => rejectCalls,
+    getUpdateSettingsCalls: () => updateSettingsCalls,
+    getSettings: () => settings,
     getRejectedReasons: () => rejectedReasons,
     setRequests: (nextRequests: ShiftExtensionRequest[]) => {
       requests = nextRequests
@@ -656,6 +718,39 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await expect(page.getByText('Запросов на продление нет.')).toBeVisible()
   expect(api.getRejectCalls()).toBe(1)
   expect(api.getRejectedReasons()).toEqual(['Нет свободного времени'])
+})
+
+test('venue manager configures paid shift extension settings', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, {
+    role: 'MANAGER',
+    permissions: ['ORDER_QUEUE_VIEW', 'SHIFT_EXTENSION_VIEW', 'SHIFT_EXTENSION_CONFIRM', 'SHIFT_EXTENSION_SETTINGS'],
+    settings: buildShiftExtensionSettings()
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Настройки' })).toBeVisible()
+  await page.getByRole('button', { name: 'Настройки' }).click()
+  await expect(page.getByRole('heading', { name: 'Продление времени' })).toBeVisible()
+  await expect(page.getByText('Настройте цену и длительность, чтобы гости могли запросить продление.')).toBeVisible()
+
+  const settingsCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Продление времени' }) })
+  await settingsCard.getByLabel('Включить запросы на продление').check()
+  await settingsCard.locator('select').selectOption('60')
+  await settingsCard.getByPlaceholder('3000').fill('3000')
+  await settingsCard.getByRole('button', { name: 'Сохранить' }).click()
+
+  await expect(page.getByText('Настройки сохранены.')).toBeVisible()
+  await expect(settingsCard).toContainText('Включено · 60 мин')
+  await expect(settingsCard).toContainText(/3\s*000/)
+  expect(api.getUpdateSettingsCalls()).toBe(1)
+  expect(api.getSettings()).toMatchObject({
+    enabled: true,
+    durationMinutes: 60,
+    priceMinor: 300000,
+    configured: true
+  })
 })
 
 test('startup without URL table token restores active table context', async ({ page }) => {

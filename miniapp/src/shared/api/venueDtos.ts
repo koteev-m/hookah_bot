@@ -440,3 +440,27 @@ export type ShiftExtensionDecisionResponse = {
   request: ShiftExtensionRequestDto
   applied: boolean
 }
+
+export type ShiftExtensionSettingsDto = {
+  venueId: number
+  enabled: boolean
+  durationMinutes: number
+  priceMinor?: number | null
+  priceRub?: string | null
+  currency: string
+  maxExtensionsPerSession?: number | null
+  configured: boolean
+}
+
+export type ShiftExtensionSettingsResponse = {
+  settings: ShiftExtensionSettingsDto
+}
+
+export type ShiftExtensionSettingsUpdateRequest = {
+  enabled: boolean
+  durationMinutes: number
+  priceMinor?: number | null
+  priceRub?: string | null
+  currency?: string | null
+  maxExtensionsPerSession?: number | null
+}

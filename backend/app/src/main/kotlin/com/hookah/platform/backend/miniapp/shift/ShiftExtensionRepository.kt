@@ -76,6 +76,15 @@ data class CreateShiftExtensionRequestCommand(
     val comment: String?,
 )
 
+data class UpdateShiftExtensionSettingsCommand(
+    val venueId: Long,
+    val enabled: Boolean,
+    val durationMinutes: Int,
+    val priceMinor: Long?,
+    val currency: String,
+    val maxExtensionsPerSession: Int?,
+)
+
 data class ShiftExtensionDecisionResult(
     val request: ShiftExtensionRequestRecord,
     val orderId: Long,
@@ -91,6 +100,45 @@ class ShiftExtensionRepository(
             try {
                 ds.connection.use { connection ->
                     loadActiveSettings(connection, venueId)
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun getSettings(venueId: Long): ShiftExtensionSettings {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    loadSettings(connection, venueId) ?: defaultSettings(venueId)
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun upsertSettings(command: UpdateShiftExtensionSettingsCommand): ShiftExtensionSettings {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val updated = updateSettings(connection, command)
+                        if (updated == 0) {
+                            insertSettings(connection, command)
+                        }
+                        connection.commit()
+                        loadSettings(connection, command.venueId) ?: throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -420,6 +468,108 @@ class ShiftExtensionRepository(
                 }
             }
         }
+
+    private fun loadSettings(
+        connection: Connection,
+        venueId: Long,
+    ): ShiftExtensionSettings? =
+        connection.prepareStatement(
+            """
+            SELECT venue_id, enabled, duration_minutes, price_minor, currency, max_extensions_per_session
+            FROM shift_extension_settings
+            WHERE venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    ShiftExtensionSettings(
+                        venueId = rs.getLong("venue_id"),
+                        enabled = rs.getBoolean("enabled"),
+                        durationMinutes = rs.getInt("duration_minutes"),
+                        priceMinor =
+                            rs.getLong("price_minor").let { value ->
+                                if (rs.wasNull()) null else value
+                            },
+                        currency = rs.getString("currency"),
+                        maxExtensionsPerSession =
+                            rs.getInt("max_extensions_per_session").let { value ->
+                                if (rs.wasNull()) null else value
+                            },
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+
+    private fun updateSettings(
+        connection: Connection,
+        command: UpdateShiftExtensionSettingsCommand,
+    ): Int =
+        connection.prepareStatement(
+            """
+            UPDATE shift_extension_settings
+            SET enabled = ?,
+                duration_minutes = ?,
+                price_minor = ?,
+                currency = ?,
+                max_extensions_per_session = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setBoolean(1, command.enabled)
+            statement.setInt(2, command.durationMinutes)
+            if (command.priceMinor == null) {
+                statement.setNull(3, Types.BIGINT)
+            } else {
+                statement.setLong(3, command.priceMinor)
+            }
+            statement.setString(4, command.currency)
+            if (command.maxExtensionsPerSession == null) {
+                statement.setNull(5, Types.INTEGER)
+            } else {
+                statement.setInt(5, command.maxExtensionsPerSession)
+            }
+            statement.setLong(6, command.venueId)
+            statement.executeUpdate()
+        }
+
+    private fun insertSettings(
+        connection: Connection,
+        command: UpdateShiftExtensionSettingsCommand,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO shift_extension_settings (
+                venue_id,
+                enabled,
+                duration_minutes,
+                price_minor,
+                currency,
+                max_extensions_per_session
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, command.venueId)
+            statement.setBoolean(2, command.enabled)
+            statement.setInt(3, command.durationMinutes)
+            if (command.priceMinor == null) {
+                statement.setNull(4, Types.BIGINT)
+            } else {
+                statement.setLong(4, command.priceMinor)
+            }
+            statement.setString(5, command.currency)
+            if (command.maxExtensionsPerSession == null) {
+                statement.setNull(6, Types.INTEGER)
+            } else {
+                statement.setInt(6, command.maxExtensionsPerSession)
+            }
+            statement.executeUpdate()
+        }
+    }
 
     private fun insertRequest(
         connection: Connection,
@@ -886,6 +1036,16 @@ private fun normalizeIdempotencyKey(raw: String?): String? {
     }
     return normalized
 }
+
+private fun defaultSettings(venueId: Long): ShiftExtensionSettings =
+    ShiftExtensionSettings(
+        venueId = venueId,
+        enabled = false,
+        durationMinutes = 60,
+        priceMinor = null,
+        currency = "RUB",
+        maxExtensionsPerSession = null,
+    )
 
 private fun serviceChargeLabel(durationMinutes: Int): String =
     if (durationMinutes == 60) {

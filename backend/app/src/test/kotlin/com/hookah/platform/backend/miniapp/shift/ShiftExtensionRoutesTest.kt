@@ -15,6 +15,7 @@ import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -295,6 +296,235 @@ class ShiftExtensionRoutesTest {
             assertEquals(0, countRows(jdbcUrl, "shift_extension_requests"))
         }
 
+    @Test
+    fun `owner and manager can read update and upsert extension settings`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("shift-extension-settings-upsert")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerFixture = seedActiveTableOrderFixture(jdbcUrl, staffRole = "OWNER")
+            val managerFixture = seedActiveTableOrderFixture(jdbcUrl, staffRole = "MANAGER")
+            val token = issueToken(config, STAFF_USER_ID)
+
+            val ownerDefaultResponse =
+                client.get("/api/venue/${ownerFixture.venueId}/shift-extension-settings") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, ownerDefaultResponse.status)
+            val ownerDefault =
+                json.decodeFromString(
+                    ShiftExtensionSettingsResponse.serializer(),
+                    ownerDefaultResponse.bodyAsText(),
+                ).settings
+            assertEquals(false, ownerDefault.enabled)
+            assertEquals(60, ownerDefault.durationMinutes)
+            assertEquals(null, ownerDefault.priceMinor)
+
+            val ownerUpdateResponse =
+                updateVenueShiftExtensionSettings(
+                    token = token,
+                    venueId = ownerFixture.venueId,
+                    request =
+                        ShiftExtensionSettingsUpdateRequest(
+                            enabled = true,
+                            durationMinutes = 60,
+                            priceRub = "3000",
+                        ),
+                )
+            assertEquals(HttpStatusCode.OK, ownerUpdateResponse.status)
+            val ownerUpdated =
+                json.decodeFromString(
+                    ShiftExtensionSettingsResponse.serializer(),
+                    ownerUpdateResponse.bodyAsText(),
+                ).settings
+            assertEquals(true, ownerUpdated.enabled)
+            assertEquals(60, ownerUpdated.durationMinutes)
+            assertEquals(300000, ownerUpdated.priceMinor)
+            assertEquals("3000", ownerUpdated.priceRub)
+            assertEquals("RUB", ownerUpdated.currency)
+            assertEquals(true, ownerUpdated.configured)
+
+            val managerUpdateResponse =
+                updateVenueShiftExtensionSettings(
+                    token = token,
+                    venueId = managerFixture.venueId,
+                    request =
+                        ShiftExtensionSettingsUpdateRequest(
+                            enabled = true,
+                            durationMinutes = 90,
+                            priceMinor = 350000,
+                        ),
+                )
+            assertEquals(HttpStatusCode.OK, managerUpdateResponse.status)
+            assertEquals(2, countRows(jdbcUrl, "shift_extension_settings"))
+
+            val managerSecondUpdate =
+                updateVenueShiftExtensionSettings(
+                    token = token,
+                    venueId = managerFixture.venueId,
+                    request =
+                        ShiftExtensionSettingsUpdateRequest(
+                            enabled = true,
+                            durationMinutes = 120,
+                            priceRub = "4000.50",
+                        ),
+                )
+            assertEquals(HttpStatusCode.OK, managerSecondUpdate.status)
+            val managerUpdated =
+                json.decodeFromString(
+                    ShiftExtensionSettingsResponse.serializer(),
+                    managerSecondUpdate.bodyAsText(),
+                ).settings
+            assertEquals(120, managerUpdated.durationMinutes)
+            assertEquals(400050, managerUpdated.priceMinor)
+            assertEquals(2, countRows(jdbcUrl, "shift_extension_settings"))
+        }
+
+    @Test
+    fun `guest extension options become available after manager enables settings`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("shift-extension-settings-guest-options")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val fixture = seedActiveTableOrderFixture(jdbcUrl, staffRole = "MANAGER")
+            val managerToken = issueToken(config, STAFF_USER_ID)
+            val guestToken = issueToken(config, GUEST_USER_ID)
+
+            val unavailableResponse =
+                client.get(
+                    "/api/guest/table/extension-options?tableToken=${fixture.tableToken}" +
+                        "&tableSessionId=${fixture.tableSessionId}&tabId=${fixture.tabId}",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, unavailableResponse.status)
+            val unavailable =
+                json.decodeFromString(
+                    GuestShiftExtensionOptionsResponse.serializer(),
+                    unavailableResponse.bodyAsText(),
+                )
+            assertEquals(false, unavailable.available)
+            assertEquals("EXTENSION_NOT_CONFIGURED", unavailable.unavailableReason)
+
+            val updateResponse =
+                updateVenueShiftExtensionSettings(
+                    token = managerToken,
+                    venueId = fixture.venueId,
+                    request =
+                        ShiftExtensionSettingsUpdateRequest(
+                            enabled = true,
+                            durationMinutes = 60,
+                            priceMinor = 300000,
+                        ),
+                )
+            assertEquals(HttpStatusCode.OK, updateResponse.status)
+
+            val availableResponse =
+                client.get(
+                    "/api/guest/table/extension-options?tableToken=${fixture.tableToken}" +
+                        "&tableSessionId=${fixture.tableSessionId}&tabId=${fixture.tabId}",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, availableResponse.status)
+            val available =
+                json.decodeFromString(
+                    GuestShiftExtensionOptionsResponse.serializer(),
+                    availableResponse.bodyAsText(),
+                )
+            assertEquals(true, available.available)
+            assertEquals(60, available.durationMinutes)
+            assertEquals(300000, available.priceMinor)
+        }
+
+    @Test
+    fun `staff cannot update extension settings`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("shift-extension-settings-staff")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val fixture = seedActiveTableOrderFixture(jdbcUrl, staffRole = "STAFF")
+            val token = issueToken(config, STAFF_USER_ID)
+
+            val response =
+                updateVenueShiftExtensionSettings(
+                    token = token,
+                    venueId = fixture.venueId,
+                    request =
+                        ShiftExtensionSettingsUpdateRequest(
+                            enabled = true,
+                            durationMinutes = 60,
+                            priceMinor = 300000,
+                        ),
+                )
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            assertEquals(0, countRows(jdbcUrl, "shift_extension_settings"))
+        }
+
+    @Test
+    fun `invalid extension settings are rejected`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("shift-extension-settings-invalid")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val fixture = seedActiveTableOrderFixture(jdbcUrl, staffRole = "MANAGER")
+            val token = issueToken(config, STAFF_USER_ID)
+            val invalidRequests =
+                listOf(
+                    ShiftExtensionSettingsUpdateRequest(enabled = true, durationMinutes = 0, priceMinor = 300000),
+                    ShiftExtensionSettingsUpdateRequest(enabled = true, durationMinutes = 241, priceMinor = 300000),
+                    ShiftExtensionSettingsUpdateRequest(enabled = true, durationMinutes = 60, priceMinor = -1),
+                    ShiftExtensionSettingsUpdateRequest(enabled = true, durationMinutes = 60, priceRub = "3000.001"),
+                    ShiftExtensionSettingsUpdateRequest(enabled = true, durationMinutes = 60),
+                    ShiftExtensionSettingsUpdateRequest(
+                        enabled = false,
+                        durationMinutes = 60,
+                        priceMinor = 300000,
+                        currency = "USD",
+                    ),
+                    ShiftExtensionSettingsUpdateRequest(
+                        enabled = false,
+                        durationMinutes = 60,
+                        priceMinor = 300000,
+                        maxExtensionsPerSession = 0,
+                    ),
+                )
+
+            invalidRequests.forEach { request ->
+                val response =
+                    updateVenueShiftExtensionSettings(
+                        token = token,
+                        venueId = fixture.venueId,
+                        request = request,
+                    )
+                assertEquals(HttpStatusCode.BadRequest, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            }
+            assertEquals(0, countRows(jdbcUrl, "shift_extension_settings"))
+        }
+
     private suspend fun io.ktor.server.testing.ApplicationTestBuilder.createGuestExtensionRequest(
         token: String,
         fixture: ShiftExtensionFixture,
@@ -314,6 +544,16 @@ class ShiftExtensionRoutesTest {
                 ),
             ),
         )
+    }
+
+    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.updateVenueShiftExtensionSettings(
+        token: String,
+        venueId: Long,
+        request: ShiftExtensionSettingsUpdateRequest,
+    ) = client.put("/api/venue/$venueId/shift-extension-settings") {
+        contentType(ContentType.Application.Json)
+        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        setBody(json.encodeToString(ShiftExtensionSettingsUpdateRequest.serializer(), request))
     }
 
     private fun buildJdbcUrl(prefix: String): String {

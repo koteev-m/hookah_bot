@@ -918,6 +918,17 @@ input[type="number"] {
   margin-top: 0.5rem;
 }
 
+.venue-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #1f2a44;
+}
+
+.venue-settings-toggle input {
+  width: auto;
+}
+
 .venue-inline-actions {
   display: flex;
   flex-wrap: wrap;

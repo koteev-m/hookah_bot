@@ -34,7 +34,9 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import java.math.BigDecimal
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -154,6 +156,26 @@ fun Route.venueShiftExtensionRoutes(
     staffBillUpdateNotifier: StaffBillUpdateNotifier?,
     venueSettingsRepository: VenueSettingsRepository,
 ) {
+    route("/venue/{venueId}/shift-extension-settings") {
+        get {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireVenuePermission(venueAccessRepository, userId, venueId, VenuePermission.SHIFT_EXTENSION_SETTINGS)
+            val settings = shiftExtensionRepository.getSettings(venueId)
+            call.respond(ShiftExtensionSettingsResponse(settings = settings.toDto()))
+        }
+
+        put {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireVenuePermission(venueAccessRepository, userId, venueId, VenuePermission.SHIFT_EXTENSION_SETTINGS)
+            val request = call.receive<ShiftExtensionSettingsUpdateRequest>()
+            val command = request.toCommand(venueId)
+            val settings = shiftExtensionRepository.upsertSettings(command)
+            call.respond(ShiftExtensionSettingsResponse(settings = settings.toDto()))
+        }
+    }
+
     route("/venue/{venueId}/shift-extension-requests") {
         get {
             val userId = call.requireUserId()
@@ -351,10 +373,80 @@ private fun parseShiftExtensionStatus(raw: String): ShiftExtensionRequestStatus 
             status.name.equals(raw, ignoreCase = true)
     } ?: throw InvalidInputException("status must be one of: pending, approved, rejected, cancelled")
 
+private fun ShiftExtensionSettingsUpdateRequest.toCommand(venueId: Long): UpdateShiftExtensionSettingsCommand {
+    if (durationMinutes <= 0 || durationMinutes > 240) {
+        throw InvalidInputException("durationMinutes must be between 1 and 240")
+    }
+    val normalizedCurrency = currency?.trim()?.uppercase().takeUnless { it.isNullOrBlank() } ?: DEFAULT_CURRENCY
+    if (normalizedCurrency != DEFAULT_CURRENCY) {
+        throw InvalidInputException("currency must be RUB")
+    }
+    if (maxExtensionsPerSession != null && maxExtensionsPerSession <= 0) {
+        throw InvalidInputException("maxExtensionsPerSession must be positive")
+    }
+    val normalizedPriceMinor = resolveSettingsPriceMinor(priceMinor, priceRub)
+    if (enabled && normalizedPriceMinor == null) {
+        throw InvalidInputException("price must be configured when shift extension is enabled")
+    }
+    return UpdateShiftExtensionSettingsCommand(
+        venueId = venueId,
+        enabled = enabled,
+        durationMinutes = durationMinutes,
+        priceMinor = normalizedPriceMinor,
+        currency = normalizedCurrency,
+        maxExtensionsPerSession = maxExtensionsPerSession,
+    )
+}
+
+private fun resolveSettingsPriceMinor(
+    priceMinor: Long?,
+    priceRub: String?,
+): Long? {
+    if (priceMinor != null && !priceRub.isNullOrBlank()) {
+        throw InvalidInputException("set either priceMinor or priceRub")
+    }
+    priceMinor?.let { value ->
+        if (value <= 0L) {
+            throw InvalidInputException("priceMinor must be positive")
+        }
+        return value
+    }
+    val rawRub = priceRub?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val normalizedRub = rawRub.replace(',', '.')
+    val rub =
+        normalizedRub.toBigDecimalOrNull()
+            ?: throw InvalidInputException("priceRub must be a number")
+    if (rub <= BigDecimal.ZERO) {
+        throw InvalidInputException("priceRub must be positive")
+    }
+    return try {
+        rub.movePointRight(2).longValueExact()
+    } catch (e: ArithmeticException) {
+        throw InvalidInputException("priceRub must have at most two decimal places")
+    }
+}
+
 private suspend fun resolveVenueZoneId(
     venueSettingsRepository: VenueSettingsRepository,
     venueId: Long,
 ): ZoneId = venueSettingsRepository.resolveZoneId(venueId, defaultShiftExtensionZoneId)
+
+private fun ShiftExtensionSettings.toDto(): ShiftExtensionSettingsDto =
+    ShiftExtensionSettingsDto(
+        venueId = venueId,
+        enabled = enabled,
+        durationMinutes = durationMinutes,
+        priceMinor = priceMinor,
+        priceRub = priceMinor?.let { minor -> formatPriceRub(minor) },
+        currency = currency,
+        maxExtensionsPerSession = maxExtensionsPerSession,
+        configured = enabled && priceMinor != null,
+    )
+
+private fun formatPriceRub(priceMinor: Long): String {
+    val rub = BigDecimal.valueOf(priceMinor, 2).stripTrailingZeros()
+    return rub.toPlainString()
+}
 
 private fun ShiftExtensionRequestRecord.toDto(zoneId: ZoneId): ShiftExtensionRequestDto =
     ShiftExtensionRequestDto(

@@ -48,6 +48,33 @@ data class ShiftExtensionDecisionResponse(
 )
 
 @Serializable
+data class ShiftExtensionSettingsResponse(
+    val settings: ShiftExtensionSettingsDto,
+)
+
+@Serializable
+data class ShiftExtensionSettingsUpdateRequest(
+    val enabled: Boolean,
+    val durationMinutes: Int,
+    val priceMinor: Long? = null,
+    val priceRub: String? = null,
+    val currency: String? = null,
+    val maxExtensionsPerSession: Int? = null,
+)
+
+@Serializable
+data class ShiftExtensionSettingsDto(
+    val venueId: Long,
+    val enabled: Boolean,
+    val durationMinutes: Int,
+    val priceMinor: Long? = null,
+    val priceRub: String? = null,
+    val currency: String,
+    val maxExtensionsPerSession: Int? = null,
+    val configured: Boolean,
+)
+
+@Serializable
 data class ShiftExtensionRequestDto(
     val id: Long,
     val venueId: Long,
