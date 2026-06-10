@@ -24,11 +24,24 @@ import { showToast } from '../shared/ui/toast'
 const POLL_INTERVAL_MS = 15000
 const LAST_REQUEST_STORAGE_KEY = 'hookahGuestShiftExtensionLastRequest'
 
+export type GuestShiftExtensionAvailability = {
+  visible: boolean
+  enabled: boolean
+  pending: boolean
+  copy?: string
+  unavailableText?: string
+  unavailableReason?: string | null
+}
+
+type GuestShiftExtensionRenderMode = 'standalone' | 'menuDetail'
+
 type GuestShiftExtensionOptions = {
   root: HTMLDivElement | null
   backendUrl: string
   isDebug: boolean
   venueId: number | null
+  mode?: GuestShiftExtensionRenderMode
+  onAvailabilityChange?: (availability: GuestShiftExtensionAvailability) => void
 }
 
 type ExtensionRefs = {
@@ -186,9 +199,9 @@ function hasConfirmedCharge(order: ActiveOrderDto, requestId: number): boolean {
   return (order.serviceCharges ?? []).some((charge) => charge.sourceRequestId === requestId)
 }
 
-function buildDom(root: HTMLDivElement): ExtensionRefs {
+function buildDom(root: HTMLDivElement, mode: GuestShiftExtensionRenderMode): ExtensionRefs {
   const card = el('section', { className: 'card shift-extension-card' })
-  const title = el('h3', { text: 'Продление времени' })
+  const title = el('h3', { text: mode === 'menuDetail' ? 'Продление работы заведения' : 'Продление времени' })
   const body = el('p', { className: 'shift-extension-copy', text: '' })
   const meta = el('p', { className: 'venue-order-sub', text: '' })
   const message = el('p', { className: 'shift-extension-message', text: '' })
@@ -200,7 +213,7 @@ function buildDom(root: HTMLDivElement): ExtensionRefs {
 }
 
 export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOptions) {
-  const { root, backendUrl, isDebug, venueId } = options
+  const { root, backendUrl, isDebug, venueId, mode = 'standalone', onAvailabilityChange } = options
   if (!root) return () => undefined
 
   const deps = buildApiDeps(isDebug)
@@ -216,6 +229,22 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
   let currentOption: GuestShiftExtensionOptionsResponse | null = null
   let currentPendingRequest: ShiftExtensionRequestDto | null = null
   let loadSeq = 0
+  let availabilityKey = ''
+
+  const emitAvailability = (availability: GuestShiftExtensionAvailability) => {
+    if (!onAvailabilityChange) return
+    const key = [
+      availability.visible,
+      availability.enabled,
+      availability.pending,
+      availability.copy ?? '',
+      availability.unavailableText ?? '',
+      availability.unavailableReason ?? ''
+    ].join('|')
+    if (key === availabilityKey) return
+    availabilityKey = key
+    onAvailabilityChange(availability)
+  }
 
   const clearCard = () => {
     refs = null
@@ -224,7 +253,7 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
 
   const ensureRefs = () => {
     if (!refs) {
-      refs = buildDom(root)
+      refs = buildDom(root, mode)
       refs.button.addEventListener('click', () => void submitRequest())
     }
     return refs
@@ -271,33 +300,56 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     currentRefs.button.disabled = true
     currentPendingRequest = null
     setMessage('', 'info')
+    emitAvailability({
+      visible: true,
+      enabled: false,
+      pending: false,
+      unavailableText: text,
+      unavailableReason: currentOption?.unavailableReason ?? null
+    })
   }
 
   const renderAvailable = (option: GuestShiftExtensionOptionsResponse) => {
     const currentRefs = ensureRefs()
-    currentRefs.body.textContent = optionCopy(option)
+    const copy = optionCopy(option)
+    currentRefs.body.textContent = copy
     const proposedTime = extractTimeLabel(option.proposedOrderableUntil)
     currentRefs.meta.textContent = proposedTime ? `После подтверждения можно заказывать до ${proposedTime}.` : ''
     currentRefs.button.textContent = isSubmitting ? 'Отправляем…' : 'Продлить на 1 час'
     currentRefs.button.disabled = isSubmitting
     currentPendingRequest = null
     setMessage('', 'info')
+    emitAvailability({
+      visible: true,
+      enabled: !isSubmitting,
+      pending: false,
+      copy,
+      unavailableReason: null
+    })
   }
 
   const renderPending = (request: ShiftExtensionRequestDto) => {
     const currentRefs = ensureRefs()
-    currentRefs.body.textContent = optionCopy({
+    const copy = optionCopy({
       available: true,
       durationMinutes: request.durationMinutes,
       priceMinor: request.priceMinor,
       currency: request.currency
     })
+    currentRefs.body.textContent = copy
     const requestedUntil = extractTimeLabel(request.requestedUntil)
     currentRefs.meta.textContent = requestedUntil ? `Запрошено до ${requestedUntil}.` : ''
     currentRefs.button.textContent = 'Ожидает подтверждения'
     currentRefs.button.disabled = true
     currentPendingRequest = request
     setMessage('Ожидает подтверждения', 'info')
+    emitAvailability({
+      visible: true,
+      enabled: false,
+      pending: true,
+      copy,
+      unavailableReason: null
+    })
   }
 
   const renderConfirmed = (request: LastExtensionRequest) => {
@@ -311,6 +363,13 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     currentRefs.button.disabled = isSubmitting || !currentOption?.available
     currentPendingRequest = null
     setMessage('', 'success')
+    emitAvailability({
+      visible: true,
+      enabled: Boolean(currentOption?.available) && !isSubmitting,
+      pending: false,
+      copy: currentRefs.body.textContent ?? undefined,
+      unavailableReason: null
+    })
   }
 
   const renderMissingAfterPending = () => {
@@ -321,6 +380,13 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     currentRefs.button.disabled = isSubmitting || !currentOption?.available
     currentPendingRequest = null
     setMessage('', 'info')
+    emitAvailability({
+      visible: true,
+      enabled: Boolean(currentOption?.available) && !isSubmitting,
+      pending: false,
+      unavailableText: currentRefs.body.textContent ?? undefined,
+      unavailableReason: null
+    })
   }
 
   const evaluateLastRequest = async (scope: ExtensionScope, option: GuestShiftExtensionOptionsResponse) => {
@@ -397,6 +463,7 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     const baseScope = resolveBaseScope()
     if (!baseScope) {
       clearCard()
+      emitAvailability({ visible: false, enabled: false, pending: false, unavailableReason: null })
       currentScope = null
       currentOption = null
       currentPendingRequest = null
@@ -457,6 +524,16 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
       return
     }
     if (!optionResult.data.available || optionResult.data.priceMinor == null) {
+      if (optionResult.data.unavailableReason === 'EXTENSION_DISABLED') {
+        clearCard()
+        emitAvailability({
+          visible: false,
+          enabled: false,
+          pending: false,
+          unavailableReason: optionResult.data.unavailableReason
+        })
+        return
+      }
       renderUnavailable(unavailableCopy(optionResult.data.unavailableReason))
       return
     }

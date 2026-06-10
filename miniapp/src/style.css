@@ -919,14 +919,22 @@ input[type="number"] {
 }
 
 .venue-settings-toggle {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
   gap: 0.5rem;
   color: #1f2a44;
 }
 
 .venue-settings-toggle input {
   width: auto;
+  margin-top: 0.15rem;
+}
+
+.venue-settings-toggle-help {
+  grid-column: 2;
+  color: #64748b;
+  font-size: 0.85rem;
 }
 
 .venue-inline-actions {

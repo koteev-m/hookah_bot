@@ -163,7 +163,7 @@ function buildShiftExtensionRequest(overrides: Partial<ShiftExtensionRequest> = 
 function buildShiftExtensionOptions(overrides: Partial<ShiftExtensionOptions> = {}): ShiftExtensionOptions {
   return {
     available: false,
-    unavailableReason: 'EXTENSION_NOT_CONFIGURED',
+    unavailableReason: 'EXTENSION_DISABLED',
     tableSessionId: 77,
     tabId: 88,
     orderId: 900,
@@ -642,11 +642,17 @@ test('guest creates shift extension request and sees pending then confirmed stat
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toBeVisible()
+  await page.getByRole('button', { name: /Продление работы заведения/ }).click()
+
+  await expect(page.getByRole('heading', { name: 'Продление работы заведения' })).toBeVisible()
   await expect(page.getByText('Продление на 1 час')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Продлить на 1 час' })).toBeEnabled()
   await page.getByRole('button', { name: 'Продлить на 1 час' }).click()
 
   await expect(page.getByRole('button', { name: 'Ожидает подтверждения' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Корзина (1)' })).toHaveCount(0)
   expect(api.getCreateExtensionRequestCalls()).toBe(1)
   await page.evaluate(() => {
     const button = [...document.querySelectorAll('button')].find((node) => node.textContent === 'Ожидает подтверждения')
@@ -736,7 +742,8 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
   await expect(page.getByText('Настройте цену и длительность, чтобы гости могли запросить продление.')).toBeVisible()
 
   const settingsCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Продление времени' }) })
-  await settingsCard.getByLabel('Включить запросы на продление').check()
+  await expect(settingsCard.getByText('Если выключено, гости не увидят продление, но цена и длительность сохранятся.')).toBeVisible()
+  await settingsCard.getByLabel('Показывать гостям возможность продления').check()
   await settingsCard.locator('select').selectOption('60')
   await settingsCard.getByPlaceholder('3000').fill('3000')
   await settingsCard.getByRole('button', { name: 'Сохранить' }).click()

@@ -414,7 +414,16 @@ class ShiftExtensionRoutesTest {
                     unavailableResponse.bodyAsText(),
                 )
             assertEquals(false, unavailable.available)
-            assertEquals("EXTENSION_NOT_CONFIGURED", unavailable.unavailableReason)
+            assertEquals("EXTENSION_DISABLED", unavailable.unavailableReason)
+
+            val disabledCreateResponse =
+                createGuestExtensionRequest(
+                    token = guestToken,
+                    fixture = fixture,
+                    idempotencyKey = "disabled-extension",
+                )
+            assertEquals(HttpStatusCode.BadRequest, disabledCreateResponse.status)
+            assertApiErrorEnvelope(disabledCreateResponse, ApiErrorCodes.INVALID_INPUT)
 
             val updateResponse =
                 updateVenueShiftExtensionSettings(

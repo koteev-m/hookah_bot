@@ -205,6 +205,7 @@ class ShiftExtensionRepository(
                         val existingPending =
                             findPendingForUpdate(
                                 connection = connection,
+                                venueId = command.venueId,
                                 tableSessionId = command.tableSessionId,
                                 tabId = command.tabId,
                             )
@@ -654,24 +655,31 @@ class ShiftExtensionRepository(
 
     private fun findPendingForUpdate(
         connection: Connection,
+        venueId: Long,
         tableSessionId: Long,
         tabId: Long,
-    ): ShiftExtensionRequestRecord? =
-        connection.prepareStatement(
-            baseRequestSelect() +
+    ): ShiftExtensionRequestRecord? {
+        val requestId =
+            connection.prepareStatement(
                 """
-                WHERE ser.table_session_id = ?
-                  AND ser.tab_id = ?
-                  AND ser.status = 'PENDING'
-                ORDER BY ser.created_at DESC, ser.id DESC
+                SELECT id
+                FROM shift_extension_requests
+                WHERE venue_id = ?
+                  AND table_session_id = ?
+                  AND tab_id = ?
+                  AND status = 'PENDING'
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
                 FOR UPDATE
                 """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, tableSessionId)
-            statement.setLong(2, tabId)
-            statement.executeQuery().use { rs -> if (rs.next()) rs.toShiftExtensionRequestRecord() else null }
-        }
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, tabId)
+                statement.executeQuery().use { rs -> if (rs.next()) rs.getLong("id") else null }
+            } ?: return null
+        return loadRequest(connection, venueId, requestId)
+    }
 
     private fun loadRequest(
         connection: Connection,
@@ -694,19 +702,26 @@ class ShiftExtensionRepository(
         connection: Connection,
         venueId: Long,
         requestId: Long,
-    ): ShiftExtensionRequestRecord? =
-        connection.prepareStatement(
-            baseRequestSelect() +
+    ): ShiftExtensionRequestRecord? {
+        val locked =
+            connection.prepareStatement(
                 """
-                WHERE ser.venue_id = ?
-                  AND ser.id = ?
+                SELECT id
+                FROM shift_extension_requests
+                WHERE venue_id = ?
+                  AND id = ?
                 FOR UPDATE
                 """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.setLong(2, requestId)
-            statement.executeQuery().use { rs -> if (rs.next()) rs.toShiftExtensionRequestRecord() else null }
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, requestId)
+                statement.executeQuery().use { rs -> rs.next() }
+            }
+        if (!locked) {
+            return null
         }
+        return loadRequest(connection, venueId, requestId)
+    }
 
     private fun ensureActiveContext(
         connection: Connection,

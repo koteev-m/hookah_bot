@@ -73,13 +73,26 @@ fun Route.guestShiftExtensionRoutes(
             )
         val zoneId = resolveVenueZoneId(venueSettingsRepository, context.table.venueId)
 
-        val settings = shiftExtensionRepository.findActiveSettings(context.table.venueId)
+        val settings = shiftExtensionRepository.getSettings(context.table.venueId)
         val pending =
             shiftExtensionRepository.findPendingRequest(
                 tableSessionId = context.tableSession.id,
                 tabId = context.tabId,
             )
-        if (settings == null || settings.priceMinor == null) {
+        if (!settings.enabled) {
+            call.respond(
+                GuestShiftExtensionOptionsResponse(
+                    available = false,
+                    unavailableReason = "EXTENSION_DISABLED",
+                    tableSessionId = context.tableSession.id,
+                    tabId = context.tabId,
+                    orderId = context.orderId,
+                    pendingRequest = pending?.toDto(zoneId),
+                ),
+            )
+            return@get
+        }
+        if (settings.priceMinor == null) {
             call.respond(
                 GuestShiftExtensionOptionsResponse(
                     available = false,

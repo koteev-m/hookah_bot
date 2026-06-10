@@ -55,8 +55,12 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   enabledLabel.className = 'venue-settings-toggle'
   const enabledInput = document.createElement('input')
   enabledInput.type = 'checkbox'
-  const enabledText = el('span', { text: 'Включить запросы на продление' })
-  append(enabledLabel, enabledInput, enabledText)
+  const enabledText = el('span', { text: 'Показывать гостям возможность продления' })
+  const enabledHelp = el('span', {
+    className: 'venue-settings-toggle-help',
+    text: 'Если выключено, гости не увидят продление, но цена и длительность сохранятся.'
+  })
+  append(enabledLabel, enabledInput, enabledText, enabledHelp)
 
   const durationLabel = el('p', { className: 'field-label', text: 'Длительность' })
   const durationSelect = document.createElement('select')
@@ -133,7 +137,7 @@ function renderSettings(refs: VenueSettingsRefs, settings: ShiftExtensionSetting
   const state = settings.enabled ? 'Включено' : 'Выключено'
   refs.summary.textContent = `${state} · ${settings.durationMinutes} мин · ${price}`
   refs.hint.textContent = settings.configured
-    ? 'Гости увидят кнопку продления в активном счёте.'
+    ? 'Гости увидят продление в списке разделов активного счёта.'
     : 'Настройте цену и длительность, чтобы гости могли запросить продление.'
 }
 

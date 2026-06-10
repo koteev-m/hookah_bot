@@ -19,7 +19,7 @@ import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPrese
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
-import { renderGuestShiftExtensionCard } from './guestShiftExtension'
+import { renderGuestShiftExtensionCard, type GuestShiftExtensionAvailability } from './guestShiftExtension'
 
 const MAX_ITEM_QTY = 50
 const MAX_STAFF_COMMENT_LENGTH = 500
@@ -183,7 +183,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const menuBody = el('div', { className: 'menu-body' })
   const extensionSlot = el('div', { className: 'shift-extension-slot' }) as HTMLDivElement
 
-  append(wrapper, header, extensionSlot, staffSlot, status, message, retryButton, error, menuBody)
+  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody)
   root.replaceChildren(wrapper)
 
   return {
@@ -403,12 +403,32 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let tableSnapshot = getTableContext()
   let renderedOrderMenuMode: boolean | null = null
   let selectedCategoryId: number | null = null
+  let selectedService: 'shift-extension' | null = null
+  let latestCategories: MenuCategoryDto[] = []
+  let shiftExtensionAvailability: GuestShiftExtensionAvailability = {
+    visible: false,
+    enabled: false,
+    pending: false,
+    unavailableReason: null
+  }
+  let menuRendererReady = false
   const disposables: Array<() => void> = []
   const extensionDispose = renderGuestShiftExtensionCard({
     root: refs.extensionSlot,
     backendUrl,
     isDebug,
-    venueId
+    venueId,
+    mode: 'menuDetail',
+    onAvailabilityChange: (availability) => {
+      shiftExtensionAvailability = availability
+      if (!availability.visible && selectedService === 'shift-extension') {
+        selectedService = null
+      }
+      if (menuRendererReady && renderedOrderMenuMode === true) {
+        renderMenu(latestCategories)
+        bindItemActions()
+      }
+    }
   })
 
   const setStatus = (text: string) => {
@@ -596,6 +616,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       }
       const handler = () => {
         selectedCategoryId = category.id
+        selectedService = null
         renderMenu(categories)
         bindItemActions()
       }
@@ -603,6 +624,31 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       itemDisposables.push(() => button.removeEventListener('click', handler))
       list.appendChild(button)
     })
+    if (shiftExtensionAvailability.visible) {
+      const button = el('button', {
+        className: 'menu-category-button',
+        text: 'Продление работы заведения'
+      }) as HTMLButtonElement
+      const noteText = shiftExtensionAvailability.pending
+        ? 'Ожидает подтверждения'
+        : shiftExtensionAvailability.copy ?? shiftExtensionAvailability.unavailableText ?? ''
+      if (noteText) {
+        button.appendChild(el('span', { className: 'menu-category-note', text: noteText }))
+      }
+      const canOpenExtension = shiftExtensionAvailability.enabled || shiftExtensionAvailability.pending
+      button.disabled = !canOpenExtension
+      if (canOpenExtension) {
+        const handler = () => {
+          selectedCategoryId = null
+          selectedService = 'shift-extension'
+          renderMenu(categories)
+          refs.extensionSlot.dispatchEvent(new Event('hookah:guest-venue-refresh'))
+        }
+        button.addEventListener('click', handler)
+        itemDisposables.push(() => button.removeEventListener('click', handler))
+      }
+      list.appendChild(button)
+    }
     return list
   }
 
@@ -611,8 +657,25 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     itemRefs.clear()
     itemDisposables.forEach((dispose) => dispose())
     itemDisposables = []
-    if (!categories.length) {
+    if (!categories.length && !shiftExtensionAvailability.visible) {
       refs.menuBody.appendChild(el('p', { text: 'Меню заведения пока не загружено.' }))
+      return
+    }
+    if (selectedService === 'shift-extension') {
+      if (!shiftExtensionAvailability.visible) {
+        selectedService = null
+        renderMenu(categories)
+        return
+      }
+      const backButton = el('button', { className: 'button-small button-secondary', text: '← К разделам меню' }) as HTMLButtonElement
+      const backHandler = () => {
+        selectedService = null
+        renderMenu(categories)
+      }
+      backButton.addEventListener('click', backHandler)
+      itemDisposables.push(() => backButton.removeEventListener('click', backHandler))
+      refs.menuBody.appendChild(backButton)
+      refs.menuBody.appendChild(refs.extensionSlot)
       return
     }
     const selectedCategory = selectedCategoryId
@@ -627,6 +690,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const backButton = el('button', { className: 'button-small button-secondary', text: '← К разделам меню' }) as HTMLButtonElement
     const backHandler = () => {
       selectedCategoryId = null
+      selectedService = null
       renderMenu(categories)
     }
     backButton.addEventListener('click', backHandler)
@@ -636,6 +700,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
     updateMenuOrderState(getCartSnapshot())
   }
+
+  menuRendererReady = true
 
   const bindItemActions = () => {
     itemRefs.forEach((refs, itemId) => {
@@ -824,6 +890,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       if (orderMenuMode) {
         const menuData = detailsResult.data as MenuResponse
         const categories = menuData.categories ?? []
+        latestCategories = categories
         if (!categories.some((category) => category.id === selectedCategoryId)) {
           selectedCategoryId = null
         }

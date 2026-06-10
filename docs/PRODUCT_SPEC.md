@@ -139,15 +139,15 @@ SHOULD:
 ### Paid venue/shift extension — P1 design
 
 Product intent:
-- Paid extension is not an ordinary menu item and must not appear in guest structured `🍽 Меню`.
+- Paid extension is not an ordinary menu item/cart item/order batch item. In the Mini App it may appear as a service action in the guest ordering section list, separate from catalog categories and cart logic.
 - Guest requests extension from active table context, near/after configured closing time or whenever the venue exposes the action.
 - Venue staff/manager confirms operationally; the guest cannot self-add the charge without confirmation.
 - Confirmation adds a fixed, preconfigured charge to the current bill and extends the active table/session ordering window by the configured duration, default 60 minutes.
 - Extension can be repeated while the bill/session remains active.
 
 Guest flow:
-1. In table context, show `Продлить на 1 час` only when venue extension settings are enabled, price is configured, and the table session/order is active.
-2. Copy: `Продление на 1 час — 3 000 ₽. Персонал подтвердит возможность продления.`
+1. In table context, show service action `Продление работы заведения` in the ordering section list only when venue extension settings are enabled, price is configured, and the table session/order is active.
+2. Inside the service action, show button `Продлить на 1 час` and copy: `Продление на 1 час — 3 000 ₽. Персонал подтвердит возможность продления.`
 3. Guest sends request with optional comment; UI state becomes `Ожидает подтверждения`.
 4. If approved, guest sees `Продление подтверждено до HH:mm. Сумма добавлена в счёт.`
 5. If rejected or timed out, guest sees a clear non-mutating status and the bill is unchanged.
@@ -186,6 +186,7 @@ Implementation slices:
 1. Data/API slice: settings, request, service charge and session extension persistence with PostgreSQL/H2 migrations and backend tests.
 2. Guest/Venue UI slice: Mini App request/approve/reject screens plus staff-chat notification/update.
 3. Regression slice: bill snapshot parity, repeated extension, role denial, timezone and closed-session tests.
+4. Bot parity follow-up: owner/manager bot settings for extension enabled/duration/price and guest bot table menu service entry `Продление работы заведения` when enabled.
 
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
 MUST:
