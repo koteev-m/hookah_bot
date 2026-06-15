@@ -1060,16 +1060,28 @@ input[type="number"] {
 }
 
 .venue-menu-options-title {
-  margin-top: 0.35rem;
   color: #475569;
   font-size: 0.85rem;
   font-weight: 700;
 }
 
+.venue-menu-option-section {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.venue-menu-option-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .venue-menu-options {
   display: grid;
   gap: 0.35rem;
-  margin-top: 0.15rem;
 }
 
 .venue-menu-option {
@@ -1088,6 +1100,26 @@ input[type="number"] {
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
+}
+
+.venue-menu-option-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.venue-menu-option-toggle {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.venue-menu-option-toggle input {
+  width: auto;
 }
 
 .venue-menu-item-actions {

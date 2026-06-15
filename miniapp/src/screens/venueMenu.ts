@@ -4,15 +4,18 @@ import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   venueCreateCategory,
   venueCreateItem,
+  venueCreateOption,
   venueDeleteCategory,
   venueDeleteItem,
+  venueDeleteOption,
   venueGetMenu,
   venueReorderCategories,
   venueReorderItems,
   venueSetItemAvailability,
   venueSetOptionAvailability,
   venueUpdateCategory,
-  venueUpdateItem
+  venueUpdateItem,
+  venueUpdateOption
 } from '../shared/api/venueApi'
 import type { VenueAccessDto, VenueMenuCategoryDto, VenueMenuItemDto, VenueMenuOptionDto } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
@@ -111,6 +114,16 @@ function parsePriceMinor(raw: string): number | null {
   return Math.round(value * 100)
 }
 
+function parseOptionPriceDeltaMinor(raw: string): number | null {
+  const normalized = raw.replace(',', '.').trim()
+  if (!normalized) return 0
+  const value = Number.parseFloat(normalized)
+  if (!Number.isFinite(value) || value < 0) {
+    return null
+  }
+  return Math.round(value * 100)
+}
+
 function formatOptionPrice(option: VenueMenuOptionDto, currency: string) {
   if (option.priceDeltaMinor <= 0) {
     return ''
@@ -121,8 +134,13 @@ function formatOptionPrice(option: VenueMenuOptionDto, currency: string) {
 function renderOptionRow(
   option: VenueMenuOptionDto,
   currency: string,
+  canManage: boolean,
   canManageAvailability: boolean,
-  onToggle: (option: VenueMenuOptionDto) => void
+  handlers: {
+    onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void
+    onDeleteOption: (option: VenueMenuOptionDto) => void
+    onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
+  }
 ) {
   const row = el('div', { className: 'venue-menu-option' })
   const info = el('div', { className: 'venue-menu-option-info' })
@@ -136,16 +154,47 @@ function renderOptionRow(
     info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
   }
 
-  const toggleButton = el('button', {
-    className: 'button-small button-secondary',
-    text: option.isAvailable ? 'В стоп-лист' : 'Включить'
-  }) as HTMLButtonElement
-  toggleButton.addEventListener('click', () => onToggle(option))
+  const actions = el('div', { className: 'venue-menu-option-actions' })
 
   if (canManageAvailability) {
-    append(row, info, toggleButton)
-  } else {
-    append(row, info)
+    const availabilityLabel = el('label', { className: 'venue-menu-option-toggle' })
+    const availabilityInput = document.createElement('input')
+    availabilityInput.type = 'checkbox'
+    availabilityInput.checked = option.isAvailable
+    availabilityInput.addEventListener('change', () => {
+      availabilityInput.disabled = true
+      handlers.onSetOptionAvailability(option, availabilityInput.checked)
+    })
+    append(availabilityLabel, availabilityInput, el('span', { text: 'Доступен гостям' }))
+    actions.appendChild(availabilityLabel)
+  }
+
+  if (canManage) {
+    const editButton = el('button', { className: 'button-small', text: 'Править вкус' }) as HTMLButtonElement
+    const deleteButton = el('button', { className: 'button-small button-secondary', text: 'Удалить вкус' }) as HTMLButtonElement
+    editButton.addEventListener('click', () => {
+      const nextName = window.prompt('Название вкуса', option.name)
+      if (nextName === null) return
+      const trimmed = nextName.trim()
+      const priceRaw = window.prompt('Доплата к вкусу, ₽', String(option.priceDeltaMinor / 100))
+      if (priceRaw === null) return
+      const priceDeltaMinor = parseOptionPriceDeltaMinor(priceRaw)
+      if (!trimmed || priceDeltaMinor === null) {
+        showToast('Проверьте название и доплату')
+        return
+      }
+      handlers.onEditOption(option, trimmed, priceDeltaMinor)
+    })
+    deleteButton.addEventListener('click', () => {
+      if (!window.confirm('Удалить вкус?')) return
+      handlers.onDeleteOption(option)
+    })
+    append(actions, editButton, deleteButton)
+  }
+
+  append(row, info)
+  if (actions.childElementCount > 0) {
+    row.appendChild(actions)
   }
   return row
 }
@@ -158,7 +207,10 @@ function renderItemRow(
   onDelete: (item: VenueMenuItemDto) => void,
   onToggle: (item: VenueMenuItemDto) => void,
   onMove: (item: VenueMenuItemDto, direction: 'up' | 'down') => void,
-  onToggleOption: (option: VenueMenuOptionDto) => void
+  onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void,
+  onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void,
+  onDeleteOption: (option: VenueMenuOptionDto) => void,
+  onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
 ) {
   const row = el('div', { className: 'venue-menu-item' })
   const info = el('div', { className: 'venue-menu-item-info' })
@@ -168,13 +220,44 @@ function renderItemRow(
   if (!item.isAvailable) {
     info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
   }
-  if (item.options.length) {
-    const optionsTitle = el('span', { className: 'venue-menu-options-title', text: 'Опции / вкусы' })
+  if (item.options.length || canManage) {
+    const optionSection = el('div', { className: 'venue-menu-option-section' })
+    const optionHeader = el('div', { className: 'venue-menu-option-header' })
+    const optionsTitle = el('span', { className: 'venue-menu-options-title', text: 'Вкусы / опции' })
+    optionHeader.appendChild(optionsTitle)
+    if (canManage) {
+      const addOptionButton = el('button', { className: 'button-small', text: 'Добавить вкус' }) as HTMLButtonElement
+      addOptionButton.addEventListener('click', () => {
+        const nextName = window.prompt('Название вкуса', '')
+        if (nextName === null) return
+        const trimmed = nextName.trim()
+        const priceRaw = window.prompt('Доплата к вкусу, ₽', '0')
+        if (priceRaw === null) return
+        const priceDeltaMinor = parseOptionPriceDeltaMinor(priceRaw)
+        if (!trimmed || priceDeltaMinor === null) {
+          showToast('Проверьте название и доплату')
+          return
+        }
+        onCreateOption(item, trimmed, priceDeltaMinor)
+      })
+      optionHeader.appendChild(addOptionButton)
+    }
     const optionsList = el('div', { className: 'venue-menu-options' })
-    item.options.forEach((option) => {
-      optionsList.appendChild(renderOptionRow(option, item.currency, canManageAvailability, onToggleOption))
-    })
-    append(info, optionsTitle, optionsList)
+    if (!item.options.length) {
+      optionsList.appendChild(el('p', { className: 'venue-empty', text: 'Добавьте вкусы, чтобы гости выбирали их при заказе.' }))
+    } else {
+      item.options.forEach((option) => {
+        optionsList.appendChild(
+          renderOptionRow(option, item.currency, canManage, canManageAvailability, {
+            onEditOption,
+            onDeleteOption,
+            onSetOptionAvailability
+          })
+        )
+      })
+    }
+    append(optionSection, optionHeader, optionsList)
+    info.appendChild(optionSection)
   }
 
   const actions = el('div', { className: 'venue-menu-item-actions' })
@@ -217,7 +300,10 @@ function renderCategoryCard(
     onDeleteItem: (item: VenueMenuItemDto) => void
     onToggleItem: (item: VenueMenuItemDto) => void
     onMoveItem: (item: VenueMenuItemDto, direction: 'up' | 'down') => void
-    onToggleOption: (option: VenueMenuOptionDto) => void
+    onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void
+    onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void
+    onDeleteOption: (option: VenueMenuOptionDto) => void
+    onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
   }
 ) {
   const card = el('div', { className: 'card venue-menu-category' })
@@ -255,7 +341,10 @@ function renderCategoryCard(
         handlers.onDeleteItem,
         handlers.onToggleItem,
         handlers.onMoveItem,
-        handlers.onToggleOption
+        handlers.onCreateOption,
+        handlers.onEditOption,
+        handlers.onDeleteOption,
+        handlers.onSetOptionAvailability
       )
     )
   })
@@ -484,10 +573,10 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             showToast('Порядок позиций обновлён')
             void loadMenu()
           },
-          onToggleOption: async (option) => {
-            const result = await venueSetOptionAvailability(
+          onCreateOption: async (item, name, priceDeltaMinor) => {
+            const result = await venueCreateOption(
               backendUrl,
-              { venueId, optionId: option.id, body: { isAvailable: !option.isAvailable } },
+              { venueId, body: { itemId: item.id, name, priceDeltaMinor, isAvailable: true } },
               deps
             )
             if (disposed) return
@@ -495,7 +584,45 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               showError(result.error)
               return
             }
-            showToast(option.isAvailable ? 'Опция в стоп-листе' : 'Опция возвращена')
+            showToast('Вкус добавлен')
+            void loadMenu()
+          },
+          onEditOption: async (option, name, priceDeltaMinor) => {
+            const result = await venueUpdateOption(
+              backendUrl,
+              { venueId, optionId: option.id, body: { name, priceDeltaMinor } },
+              deps
+            )
+            if (disposed) return
+            if (!result.ok) {
+              showError(result.error)
+              return
+            }
+            showToast('Вкус обновлён')
+            void loadMenu()
+          },
+          onDeleteOption: async (option) => {
+            const result = await venueDeleteOption(backendUrl, { venueId, optionId: option.id }, deps)
+            if (disposed) return
+            if (!result.ok) {
+              showError(result.error)
+              return
+            }
+            showToast('Вкус удалён')
+            void loadMenu()
+          },
+          onSetOptionAvailability: async (option, isAvailable) => {
+            const result = await venueSetOptionAvailability(
+              backendUrl,
+              { venueId, optionId: option.id, body: { isAvailable } },
+              deps
+            )
+            if (disposed) return
+            if (!result.ok) {
+              showError(result.error)
+              return
+            }
+            showToast(isAvailable ? 'Вкус доступен гостям' : 'Вкус скрыт от гостей')
             void loadMenu()
           }
         })

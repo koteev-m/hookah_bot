@@ -106,6 +106,33 @@ type GuestMenuCategory = {
   items: GuestMenuItem[]
 }
 
+type VenueMenuOptionFixture = {
+  id: number
+  itemId: number
+  name: string
+  priceDeltaMinor: number
+  isAvailable: boolean
+  sortOrder: number
+}
+
+type VenueMenuItemFixture = {
+  id: number
+  categoryId: number
+  name: string
+  priceMinor: number
+  currency: string
+  isAvailable: boolean
+  sortOrder: number
+  options: VenueMenuOptionFixture[]
+}
+
+type VenueMenuCategoryFixture = {
+  id: number
+  name: string
+  sortOrder: number
+  items: VenueMenuItemFixture[]
+}
+
 type AddBatchItemPayload = {
   itemId: number
   qty: number
@@ -820,6 +847,165 @@ async function mockVenueShiftExtensionApi(
   }
 }
 
+function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
+  return [
+    {
+      id: 30,
+      name: 'Кальянное меню',
+      sortOrder: 0,
+      items: [
+        {
+          id: 310,
+          categoryId: 30,
+          name: 'Кальян',
+          priceMinor: 180000,
+          currency: 'RUB',
+          isAvailable: true,
+          sortOrder: 0,
+          options: []
+        }
+      ]
+    }
+  ]
+}
+
+async function mockVenueMenuApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+    categories?: VenueMenuCategoryFixture[]
+  } = {}
+) {
+  const role = options.role ?? 'MANAGER'
+  const permissions = options.permissions ?? ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE']
+  const categories = options.categories ?? buildDefaultVenueMenu()
+  let createOptionCalls = 0
+  let updateOptionCalls = 0
+  let deleteOptionCalls = 0
+  let availabilityCalls = 0
+  let nextOptionId = 900
+
+  const allItems = () => categories.flatMap((category) => category.items)
+  const allOptions = () => allItems().flatMap((item) => item.options)
+  const findItem = (itemId: number) => allItems().find((item) => item.id === itemId) ?? null
+  const findOption = (optionId: number) => allOptions().find((option) => option.id === optionId) ?? null
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role,
+            permissions
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/venue/menu?**', async (route) => {
+    await route.fulfill(jsonResponse({ venueId: 1, categories }))
+  })
+
+  await page.route('**/api/venue/menu/options**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const method = request.method()
+
+    if (method === 'POST') {
+      createOptionCalls += 1
+      const body = (await request.postDataJSON()) as {
+        itemId: number
+        name: string
+        priceDeltaMinor: number
+        isAvailable: boolean
+      }
+      const item = findItem(body.itemId)
+      if (!item) {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return
+      }
+      const option = {
+        id: nextOptionId++,
+        itemId: item.id,
+        name: body.name,
+        priceDeltaMinor: body.priceDeltaMinor,
+        isAvailable: body.isAvailable,
+        sortOrder: item.options.length
+      }
+      item.options.push(option)
+      await route.fulfill(jsonResponse(option))
+      return
+    }
+
+    const availabilityMatch = url.pathname.match(/\/api\/venue\/menu\/options\/(\d+)\/availability$/)
+    if (availabilityMatch && method === 'PATCH') {
+      availabilityCalls += 1
+      const option = findOption(Number(availabilityMatch[1]))
+      const body = (await request.postDataJSON()) as { isAvailable: boolean }
+      if (!option) {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return
+      }
+      option.isAvailable = body.isAvailable
+      await route.fulfill(jsonResponse(option))
+      return
+    }
+
+    const optionMatch = url.pathname.match(/\/api\/venue\/menu\/options\/(\d+)$/)
+    if (optionMatch && method === 'PATCH') {
+      updateOptionCalls += 1
+      const option = findOption(Number(optionMatch[1]))
+      const body = (await request.postDataJSON()) as {
+        name?: string | null
+        priceDeltaMinor?: number | null
+        isAvailable?: boolean | null
+      }
+      if (!option) {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return
+      }
+      if (body.name != null) option.name = body.name
+      if (body.priceDeltaMinor != null) option.priceDeltaMinor = body.priceDeltaMinor
+      if (body.isAvailable != null) option.isAvailable = body.isAvailable
+      await route.fulfill(jsonResponse(option))
+      return
+    }
+
+    if (optionMatch && method === 'DELETE') {
+      deleteOptionCalls += 1
+      const optionId = Number(optionMatch[1])
+      categories.forEach((category) => {
+        category.items.forEach((item) => {
+          item.options = item.options.filter((option) => option.id !== optionId)
+        })
+      })
+      await route.fulfill(jsonResponse({ ok: true }))
+      return
+    }
+
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
+  })
+
+  return {
+    getCategories: () => categories,
+    getCreateOptionCalls: () => createOptionCalls,
+    getUpdateOptionCalls: () => updateOptionCalls,
+    getDeleteOptionCalls: () => deleteOptionCalls,
+    getAvailabilityCalls: () => availabilityCalls
+  }
+}
+
 test('pre-QR guest card shows info/photo menu and hides structured order menu', async ({ page }) => {
   const api = await mockGuestApi(page)
 
@@ -1105,6 +1291,96 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
     priceMinor: 300000,
     configured: true
   })
+})
+
+test('venue manager manages menu item flavors from mini app', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuApi(page)
+  const dialogReplies: string[] = []
+  page.on('dialog', async (dialog) => {
+    if (dialog.type() === 'prompt') {
+      await dialog.accept(dialogReplies.shift() ?? '')
+      return
+    }
+    await dialog.accept()
+  })
+  const hookahItem = () => page.locator('.venue-menu-item').filter({ hasText: 'Кальян' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Меню' }).click()
+  await expect(page.getByRole('heading', { name: 'Меню' })).toBeVisible()
+  await expect(hookahItem().getByText('Вкусы / опции')).toBeVisible()
+  await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
+
+  dialogReplies.push('Яблоко', '250')
+  await hookahItem().getByRole('button', { name: 'Добавить вкус' }).click()
+  await expect(hookahItem().getByText('Яблоко')).toBeVisible()
+  await expect(hookahItem().getByText(/\+250/)).toBeVisible()
+  expect(api.getCreateOptionCalls()).toBe(1)
+
+  dialogReplies.push('Яблоко без мяты', '0')
+  await hookahItem().getByRole('button', { name: 'Править вкус' }).click()
+  await expect(hookahItem().getByText('Яблоко без мяты')).toBeVisible()
+  expect(api.getUpdateOptionCalls()).toBe(1)
+
+  const editedOption = () => page.locator('.venue-menu-option').filter({ hasText: 'Яблоко без мяты' })
+  await editedOption().getByLabel('Доступен гостям').uncheck()
+  await expect(editedOption().getByText('Стоп-лист')).toBeVisible()
+  expect(api.getAvailabilityCalls()).toBe(1)
+
+  await editedOption().getByRole('button', { name: 'Удалить вкус' }).click()
+  await expect(page.getByText('Яблоко без мяты')).toHaveCount(0)
+  await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
+  expect(api.getDeleteOptionCalls()).toBe(1)
+  expect(api.getCategories()[0].items[0].options).toHaveLength(0)
+})
+
+test('venue staff sees menu flavors without edit controls', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueMenuApi(page, {
+    role: 'STAFF',
+    permissions: ['MENU_VIEW'],
+    categories: [
+      {
+        id: 30,
+        name: 'Кальянное меню',
+        sortOrder: 0,
+        items: [
+          {
+            id: 310,
+            categoryId: 30,
+            name: 'Кальян',
+            priceMinor: 180000,
+            currency: 'RUB',
+            isAvailable: true,
+            sortOrder: 0,
+            options: [
+              {
+                id: 401,
+                itemId: 310,
+                name: 'Яблоко',
+                priceDeltaMinor: 0,
+                isAvailable: true,
+                sortOrder: 0
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Меню' }).click()
+  const hookahItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян' })
+  await expect(hookahItem.getByText('Вкусы / опции')).toBeVisible()
+  await expect(hookahItem.getByText('Яблоко')).toBeVisible()
+  await expect(hookahItem.getByRole('button', { name: 'Добавить вкус' })).toHaveCount(0)
+  await expect(hookahItem.getByRole('button', { name: 'Править вкус' })).toHaveCount(0)
+  await expect(hookahItem.getByRole('button', { name: 'Удалить вкус' })).toHaveCount(0)
+  await expect(hookahItem.getByLabel('Доступен гостям')).toHaveCount(0)
 })
 
 test('startup without URL table token restores active table context', async ({ page }) => {
