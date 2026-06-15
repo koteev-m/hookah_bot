@@ -227,6 +227,145 @@ class VenueMenuRoutesTest {
         }
 
     @Test
+    fun `menu options stay scoped to owning item in venue and guest responses`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-item-scope")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val token = issueToken(config)
+
+            val category =
+                client.post("/api/venue/menu/categories?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Кальянное меню","categoryType":"HOOKAH"}""")
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuCategoryDto.serializer(), response.bodyAsText())
+                }
+
+            val hookahItem =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Кальян",
+                          "priceMinor": 180000,
+                          "currency": "RUB",
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+
+            val waterItem =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Вода",
+                          "priceMinor": 20000,
+                          "currency": "RUB",
+                          "isAvailable": true,
+                          "itemType": "DRINK"
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+
+            val activeOption =
+                client.post("/api/venue/menu/options?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "itemId": ${hookahItem.id},
+                          "name": "Яблоко",
+                          "priceDeltaMinor": 0,
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuOptionDto.serializer(), response.bodyAsText())
+                }
+
+            val unavailableOption =
+                client.post("/api/venue/menu/options?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "itemId": ${hookahItem.id},
+                          "name": "Недоступный вкус",
+                          "priceDeltaMinor": 0,
+                          "isAvailable": false
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuOptionDto.serializer(), response.bodyAsText())
+                }
+
+            val venueMenuResponse =
+                client.get("/api/venue/menu?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, venueMenuResponse.status)
+            val venueMenu = json.decodeFromString(VenueMenuResponse.serializer(), venueMenuResponse.bodyAsText())
+            val venueItems = venueMenu.categories.flatMap { it.items }.associateBy { it.id }
+            assertEquals(
+                listOf(activeOption.id, unavailableOption.id),
+                venueItems.getValue(hookahItem.id).options.map { it.id },
+            )
+            assertTrue(venueItems.getValue(waterItem.id).options.isEmpty())
+
+            val guestMenuResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, guestMenuResponse.status)
+            val guestMenu = json.decodeFromString(MenuResponse.serializer(), guestMenuResponse.bodyAsText())
+            val guestItems = guestMenu.categories.flatMap { it.items }.associateBy { it.id }
+            assertEquals(listOf(activeOption.id), guestItems.getValue(hookahItem.id).options.map { it.id })
+            assertTrue(guestItems.getValue(waterItem.id).options.isEmpty())
+        }
+
+    @Test
     fun `reorder rejects foreign ids`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-reorder")

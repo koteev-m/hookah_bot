@@ -12,6 +12,7 @@ data class MenuResponse(
 data class MenuCategoryDto(
     val id: Long,
     val name: String,
+    val categoryType: String,
     val items: List<MenuItemDto>,
 )
 
@@ -22,6 +23,8 @@ data class MenuItemDto(
     val priceMinor: Long,
     val currency: String,
     val isAvailable: Boolean,
+    val itemType: String? = null,
+    val effectiveItemType: String,
     val options: List<MenuItemOptionDto> = emptyList(),
 )
 

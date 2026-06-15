@@ -97,12 +97,15 @@ type GuestMenuItem = {
   priceMinor: number
   currency: string
   isAvailable: boolean
+  itemType?: string | null
+  effectiveItemType: string
   options?: GuestMenuOption[]
 }
 
 type GuestMenuCategory = {
   id: number
   name: string
+  categoryType: string
   items: GuestMenuItem[]
 }
 
@@ -123,6 +126,8 @@ type VenueMenuItemFixture = {
   currency: string
   isAvailable: boolean
   sortOrder: number
+  itemType?: string | null
+  effectiveItemType: string
   options: VenueMenuOptionFixture[]
 }
 
@@ -130,6 +135,7 @@ type VenueMenuCategoryFixture = {
   id: number
   name: string
   sortOrder: number
+  categoryType: string
   items: VenueMenuItemFixture[]
 }
 
@@ -256,13 +262,15 @@ function buildDefaultGuestMenu(): GuestMenuCategory[] {
     {
       id: 20,
       name: 'Кальянное меню',
+      categoryType: 'HOOKAH',
       items: [
         {
           id: 200,
           name: 'Double Apple',
           priceMinor: 150000,
           currency: 'RUB',
-          isAvailable: true
+          isAvailable: true,
+          effectiveItemType: 'HOOKAH'
         }
       ]
     }
@@ -853,6 +861,7 @@ function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
       id: 30,
       name: 'Кальянное меню',
       sortOrder: 0,
+      categoryType: 'HOOKAH',
       items: [
         {
           id: 310,
@@ -862,6 +871,7 @@ function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
           currency: 'RUB',
           isAvailable: true,
           sortOrder: 0,
+          effectiveItemType: 'HOOKAH',
           options: []
         }
       ]
@@ -1048,6 +1058,7 @@ test('guest mini app selects item flavor and submits structured selected option'
       {
         id: 20,
         name: 'Кальянное меню',
+        categoryType: 'HOOKAH',
         items: [
           {
             id: 210,
@@ -1055,6 +1066,7 @@ test('guest mini app selects item flavor and submits structured selected option'
             priceMinor: 180000,
             currency: 'RUB',
             isAvailable: true,
+            effectiveItemType: 'HOOKAH',
             options: [
               { id: 301, name: 'Яблоко', priceDeltaMinor: 0, isAvailable: true },
               { id: 302, name: 'Мята', priceDeltaMinor: 25000, isAvailable: true },
@@ -1066,7 +1078,8 @@ test('guest mini app selects item flavor and submits structured selected option'
             name: 'Вода',
             priceMinor: 20000,
             currency: 'RUB',
-            isAvailable: true
+            isAvailable: true,
+            effectiveItemType: 'DRINK'
           }
         ]
       }
@@ -1079,6 +1092,9 @@ test('guest mini app selects item flavor and submits structured selected option'
 
   await expect(page.getByText('Кальян', { exact: true })).toBeVisible()
   await expect(page.getByText('Выберите вкус')).toBeVisible()
+  const waterItem = page.locator('.menu-item').filter({ hasText: 'Вода' })
+  await expect(waterItem.getByText('Выберите вкус')).toHaveCount(0)
+  await expect(waterItem.getByText('Выберите опцию')).toHaveCount(0)
   await page.getByRole('button', { name: 'Выбрать' }).click()
 
   await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
@@ -1295,7 +1311,76 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
 
 test('venue manager manages menu item flavors from mini app', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  const api = await mockVenueMenuApi(page)
+  const api = await mockVenueMenuApi(page, {
+    categories: [
+      {
+        id: 30,
+        name: 'Кальянное меню',
+        sortOrder: 0,
+        categoryType: 'HOOKAH',
+        items: [
+          {
+            id: 310,
+            categoryId: 30,
+            name: 'Кальян',
+            priceMinor: 180000,
+            currency: 'RUB',
+            isAvailable: true,
+            sortOrder: 0,
+            effectiveItemType: 'HOOKAH',
+            options: []
+          }
+        ]
+      },
+      {
+        id: 31,
+        name: 'Напитки',
+        sortOrder: 1,
+        categoryType: 'DRINK',
+        items: [
+          {
+            id: 320,
+            categoryId: 31,
+            name: 'Вода',
+            priceMinor: 20000,
+            currency: 'RUB',
+            isAvailable: true,
+            sortOrder: 0,
+            effectiveItemType: 'DRINK',
+            options: [
+              {
+                id: 410,
+                itemId: 320,
+                name: 'Газированная',
+                priceDeltaMinor: 0,
+                isAvailable: true,
+                sortOrder: 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        id: 32,
+        name: 'Кухня',
+        sortOrder: 2,
+        categoryType: 'FOOD',
+        items: [
+          {
+            id: 330,
+            categoryId: 32,
+            name: 'Сэндвич',
+            priceMinor: 45000,
+            currency: 'RUB',
+            isAvailable: true,
+            sortOrder: 0,
+            effectiveItemType: 'FOOD',
+            options: []
+          }
+        ]
+      }
+    ]
+  })
   const dialogReplies: string[] = []
   page.on('dialog', async (dialog) => {
     if (dialog.type() === 'prompt') {
@@ -1305,6 +1390,8 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
     await dialog.accept()
   })
   const hookahItem = () => page.locator('.venue-menu-item').filter({ hasText: 'Кальян' })
+  const waterItem = () => page.locator('.venue-menu-item').filter({ hasText: 'Вода' })
+  const kitchenItem = () => page.locator('.venue-menu-item').filter({ hasText: 'Сэндвич' })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
@@ -1312,11 +1399,20 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   await expect(page.getByRole('heading', { level: 2, name: 'Меню', exact: true })).toBeVisible()
   await expect(hookahItem().getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
+  await expect(waterItem().getByText('Опции')).toBeVisible()
+  await expect(waterItem().getByText('Газированная')).toBeVisible()
+  await expect(waterItem().getByRole('button', { name: 'Добавить опцию' })).toBeVisible()
+  await expect(waterItem().getByText('Вкусы / опции')).toHaveCount(0)
+  await expect(waterItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toHaveCount(0)
+  await expect(kitchenItem().getByText('Вкусы / опции')).toHaveCount(0)
+  await expect(kitchenItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toHaveCount(0)
 
   dialogReplies.push('Яблоко', '250')
   await hookahItem().getByRole('button', { name: 'Добавить вкус' }).click()
   await expect(hookahItem().getByText('Яблоко')).toBeVisible()
   await expect(hookahItem().getByText(/\+250/)).toBeVisible()
+  await expect(waterItem().getByText('Яблоко')).toHaveCount(0)
+  await expect(kitchenItem().getByText('Яблоко')).toHaveCount(0)
   expect(api.getCreateOptionCalls()).toBe(1)
 
   dialogReplies.push('Яблоко без мяты', '0')
@@ -1334,6 +1430,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
   expect(api.getDeleteOptionCalls()).toBe(1)
   expect(api.getCategories()[0].items[0].options).toHaveLength(0)
+  expect(api.getCategories()[1].items[0].options.map((option) => option.name)).toEqual(['Газированная'])
 })
 
 test('venue staff sees menu flavors without edit controls', async ({ page }) => {
@@ -1346,6 +1443,7 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
         id: 30,
         name: 'Кальянное меню',
         sortOrder: 0,
+        categoryType: 'HOOKAH',
         items: [
           {
             id: 310,
@@ -1355,6 +1453,7 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
             currency: 'RUB',
             isAvailable: true,
             sortOrder: 0,
+            effectiveItemType: 'HOOKAH',
             options: [
               {
                 id: 401,

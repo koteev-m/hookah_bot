@@ -88,6 +88,7 @@ class GuestVenueMenuRoutesTest {
             assertEquals(1, secondCategoryItems.size)
             assertEquals(menu.secondCategoryItemId, secondCategoryItems[0].id)
             assertTrue(secondCategoryItems[0].isAvailable)
+            assertEquals(0, secondCategoryItems[0].options.size)
         }
 
     @Test

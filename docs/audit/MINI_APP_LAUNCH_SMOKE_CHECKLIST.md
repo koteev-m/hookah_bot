@@ -51,7 +51,8 @@ Remaining:
 
 - repeat this smoke after any additional release batch;
 - P1 follow-up: paid venue/shift extension is implemented in backend and Guest/Venue Mini App, but Venue approve/reject is still a standalone `Продления` island; next target is order/table detail integration, staff-chat live message actions, Guest Bot entry and Owner/Manager Bot settings parity;
-- P1 follow-up: Guest/Menu Options & Flavors parity is active. Guest Bot can collect hookah flavor/options, but Guest Mini App and shared order persistence do not yet store selected options as structured order modifiers.
+- P1 follow-up: Guest/Menu Options & Flavors parity remains in smoke scope. Guest Bot and Guest Mini App both submit structured selected options; this must stay covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
+- P1 follow-up: Venue Mini App navigation IA must be aligned with the bot sections without mixing it into option/flavor fixes: `Работа смены` (заказы, вызовы, брони, стоп-лист), `Настройки` (профиль/карточка, заказное меню, столы, QR, персонал, чат персонала, бронь, публикация), `Статистика`, `Продвижение`, `Предпросмотр для гостя`.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
@@ -75,11 +76,11 @@ Remaining:
 - `TelegramBotRouterTableTokenTest`
   - WebApp fallback sends supported `cmd=start_quick_order`.
 
-Known option/flavor coverage gap:
+Known option/flavor coverage:
 
-- Guest Mini App has no automated smoke for item option/flavor selection.
-- Shared guest order tests currently cover `itemId`/`qty` add-batch behavior, but not selected option persistence, price delta, stale option rejection or distinct cart lines for the same item with different options.
-- Guest Bot option selection exists, but the current persistence path must be reworked and tested as structured selected-option data instead of comment-only flavor context.
+- Guest Mini App smoke covers item option/flavor selection, selected option persistence in cart submission and line-level preference notes.
+- Backend guest order tests cover selected option persistence, price delta, unavailable/foreign option rejection and distinct cart lines for the same item with different options.
+- Backend guest menu tests must keep asserting that an option is returned only for its owning item and unavailable options stay hidden.
 
 Manual runtime coverage for each release batch:
 

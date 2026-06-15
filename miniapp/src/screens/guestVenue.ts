@@ -234,7 +234,7 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
     const price = el('span', { className: 'menu-item-price', text: formatPrice(item.priceMinor, item.currency) })
     append(info, name, price)
     if (itemOptions.length > 0) {
-      info.appendChild(el('span', { className: 'menu-item-option-hint', text: 'Выберите вкус' }))
+      info.appendChild(el('span', { className: 'menu-item-option-hint', text: getOptionCopy(item).hint }))
     }
 
     const controls = el('div', { className: 'menu-item-controls' })
@@ -278,6 +278,21 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
 
 function getAvailableItemOptions(item: MenuItemDto): MenuItemOptionDto[] {
   return (item.options ?? []).filter((option) => option.isAvailable !== false)
+}
+
+function isHookahMenuItem(item: MenuItemDto) {
+  return item.effectiveItemType === 'HOOKAH'
+}
+
+function getOptionCopy(item: MenuItemDto) {
+  const isHookah = isHookahMenuItem(item)
+  return {
+    hint: isHookah ? 'Выберите вкус' : 'Выберите опцию',
+    chooseTitle: isHookah ? 'Выберите вкус' : 'Выберите опцию',
+    selectedLabel: isHookah ? 'Вкус' : 'Опция',
+    backToChoice: isHookah ? '← К выбору вкуса' : '← К выбору опции',
+    notePlaceholder: isHookah ? 'Например: поменьше холодка, без мяты, покрепче' : 'Например: без сахара, без льда, потеплее'
+  }
 }
 
 function formatOptionButtonText(option: MenuItemOptionDto, currency: string): string {
@@ -704,6 +719,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const renderOptionPicker = (item: MenuItemDto, categories: MenuCategoryDto[]) => {
     const section = el('section', { className: 'card menu-option-picker' })
     const options = getAvailableItemOptions(item)
+    const optionCopy = getOptionCopy(item)
     const selectedOption =
       selectedOptionChoice && options.some((option) => option.id === selectedOptionChoice?.id) ? selectedOptionChoice : null
     if (selectedOptionChoice && !selectedOption) {
@@ -712,14 +728,14 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (selectedOption) {
       section.appendChild(el('h4', { text: 'Пожелания к приготовлению' }))
       section.appendChild(el('p', { className: 'menu-option-item-name', text: item.name }))
-      section.appendChild(el('p', { className: 'menu-option-selected', text: `Вкус: ${selectedOption.name}` }))
+      section.appendChild(el('p', { className: 'menu-option-selected', text: `${optionCopy.selectedLabel}: ${selectedOption.name}` }))
       const noteField = el('label', { className: 'menu-option-note-field' })
       const noteText = el('span', { text: 'Пожелания к приготовлению' })
       const noteInput = document.createElement('input')
       noteInput.className = 'menu-option-note-input'
       noteInput.type = 'text'
       noteInput.maxLength = MAX_ITEM_PREFERENCE_NOTE_LENGTH
-      noteInput.placeholder = 'Например: поменьше холодка, без мяты, покрепче'
+      noteInput.placeholder = optionCopy.notePlaceholder
       append(noteField, noteText, noteInput)
       const helper = el('p', {
         className: 'menu-option-note-helper',
@@ -728,7 +744,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       const actions = el('div', { className: 'menu-option-actions' })
       const backButton = el('button', {
         className: 'button-small button-secondary',
-        text: '← К выбору вкуса'
+        text: optionCopy.backToChoice
       }) as HTMLButtonElement
       const addButton = el('button', { className: 'button-small', text: 'Добавить в корзину' }) as HTMLButtonElement
       const backHandler = () => {
@@ -767,7 +783,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       return section
     }
 
-    section.appendChild(el('h4', { text: 'Выберите вкус' }))
+    section.appendChild(el('h4', { text: optionCopy.chooseTitle }))
     section.appendChild(el('p', { className: 'menu-option-item-name', text: item.name }))
     const optionList = el('div', { className: 'menu-option-list' })
     options.forEach((option) => {

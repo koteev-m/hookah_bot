@@ -56,6 +56,7 @@ export type MenuResponse = {
 export type MenuCategoryDto = {
   id: number
   name: string
+  categoryType?: MenuSemanticType | null
   items: MenuItemDto[]
 }
 
@@ -65,6 +66,8 @@ export type MenuItemDto = {
   priceMinor: number
   currency: string
   isAvailable: boolean
+  itemType?: MenuSemanticType | null
+  effectiveItemType?: MenuSemanticType | null
   options?: MenuItemOptionDto[]
 }
 
@@ -74,6 +77,8 @@ export type MenuItemOptionDto = {
   priceDeltaMinor: number
   isAvailable?: boolean
 }
+
+export type MenuSemanticType = 'HOOKAH' | 'TEA' | 'DRINK' | 'FOOD' | 'OTHER' | string
 
 export type TableResolveResponse = {
   venueId: number

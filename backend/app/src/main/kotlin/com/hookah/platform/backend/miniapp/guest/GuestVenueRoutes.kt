@@ -21,6 +21,7 @@ import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemOptionModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
 import com.hookah.platform.backend.miniapp.guest.db.VenueShort
+import com.hookah.platform.backend.miniapp.guest.db.effectiveType
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.telegram.TelegramDownloadedFile
 import com.hookah.platform.backend.telegram.db.VenueInfoSection
@@ -208,16 +209,19 @@ private fun MenuCategoryModel.toDto(): MenuCategoryDto =
     MenuCategoryDto(
         id = id,
         name = name,
-        items = items.map { it.toDto() },
+        categoryType = categoryType.dbValue,
+        items = items.map { it.toDto(this) },
     )
 
-private fun MenuItemModel.toDto(): MenuItemDto =
+private fun MenuItemModel.toDto(category: MenuCategoryModel): MenuItemDto =
     MenuItemDto(
         id = id,
         name = name,
         priceMinor = priceMinor,
         currency = currency,
         isAvailable = isAvailable,
+        itemType = itemType?.dbValue,
+        effectiveItemType = effectiveType(category).dbValue,
         options = options.map { it.toDto() },
     )
 

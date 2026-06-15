@@ -131,11 +131,38 @@ function formatOptionPrice(option: VenueMenuOptionDto, currency: string) {
   return `+${formatPrice(option.priceDeltaMinor, currency)}`
 }
 
+function isHookahMenuItem(item: VenueMenuItemDto) {
+  return item.effectiveItemType === 'HOOKAH'
+}
+
+function getScopedOptions(item: VenueMenuItemDto) {
+  return (item.options ?? []).filter((option) => option.itemId === item.id)
+}
+
+function getOptionCopy(isHookah: boolean) {
+  return {
+    title: isHookah ? 'Вкусы / опции' : 'Опции',
+    addButton: isHookah ? 'Добавить вкус' : 'Добавить опцию',
+    editButton: isHookah ? 'Править вкус' : 'Править опцию',
+    deleteButton: isHookah ? 'Удалить вкус' : 'Удалить опцию',
+    namePrompt: isHookah ? 'Название вкуса' : 'Название опции',
+    pricePrompt: isHookah ? 'Доплата к вкусу, ₽' : 'Доплата к опции, ₽',
+    deleteConfirm: isHookah ? 'Удалить вкус?' : 'Удалить опцию?',
+    emptyText: 'Добавьте вкусы, чтобы гости выбирали их при заказе.',
+    addedToast: isHookah ? 'Вкус добавлен' : 'Опция добавлена',
+    updatedToast: isHookah ? 'Вкус обновлён' : 'Опция обновлена',
+    deletedToast: isHookah ? 'Вкус удалён' : 'Опция удалена',
+    enabledToast: isHookah ? 'Вкус доступен гостям' : 'Опция доступна гостям',
+    disabledToast: isHookah ? 'Вкус скрыт от гостей' : 'Опция скрыта от гостей'
+  }
+}
+
 function renderOptionRow(
   option: VenueMenuOptionDto,
   currency: string,
   canManage: boolean,
   canManageAvailability: boolean,
+  copy: ReturnType<typeof getOptionCopy>,
   handlers: {
     onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void
     onDeleteOption: (option: VenueMenuOptionDto) => void
@@ -170,13 +197,13 @@ function renderOptionRow(
   }
 
   if (canManage) {
-    const editButton = el('button', { className: 'button-small', text: 'Править вкус' }) as HTMLButtonElement
-    const deleteButton = el('button', { className: 'button-small button-secondary', text: 'Удалить вкус' }) as HTMLButtonElement
+    const editButton = el('button', { className: 'button-small', text: copy.editButton }) as HTMLButtonElement
+    const deleteButton = el('button', { className: 'button-small button-secondary', text: copy.deleteButton }) as HTMLButtonElement
     editButton.addEventListener('click', () => {
-      const nextName = window.prompt('Название вкуса', option.name)
+      const nextName = window.prompt(copy.namePrompt, option.name)
       if (nextName === null) return
       const trimmed = nextName.trim()
-      const priceRaw = window.prompt('Доплата к вкусу, ₽', String(option.priceDeltaMinor / 100))
+      const priceRaw = window.prompt(copy.pricePrompt, String(option.priceDeltaMinor / 100))
       if (priceRaw === null) return
       const priceDeltaMinor = parseOptionPriceDeltaMinor(priceRaw)
       if (!trimmed || priceDeltaMinor === null) {
@@ -186,7 +213,7 @@ function renderOptionRow(
       handlers.onEditOption(option, trimmed, priceDeltaMinor)
     })
     deleteButton.addEventListener('click', () => {
-      if (!window.confirm('Удалить вкус?')) return
+      if (!window.confirm(copy.deleteConfirm)) return
       handlers.onDeleteOption(option)
     })
     append(actions, editButton, deleteButton)
@@ -212,6 +239,12 @@ function renderItemRow(
   onDeleteOption: (option: VenueMenuOptionDto) => void,
   onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
 ) {
+  const itemOptions = getScopedOptions(item)
+  const isHookah = isHookahMenuItem(item)
+  const optionCopy = getOptionCopy(isHookah)
+  const shouldRenderOptions = itemOptions.length > 0 || (isHookah && canManage)
+  const canAddOptions = canManage && (isHookah || itemOptions.length > 0)
+
   const row = el('div', { className: 'venue-menu-item' })
   const info = el('div', { className: 'venue-menu-item-info' })
   const name = el('strong', { text: item.name })
@@ -220,18 +253,18 @@ function renderItemRow(
   if (!item.isAvailable) {
     info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
   }
-  if (item.options.length || canManage) {
+  if (shouldRenderOptions) {
     const optionSection = el('div', { className: 'venue-menu-option-section' })
     const optionHeader = el('div', { className: 'venue-menu-option-header' })
-    const optionsTitle = el('span', { className: 'venue-menu-options-title', text: 'Вкусы / опции' })
+    const optionsTitle = el('span', { className: 'venue-menu-options-title', text: optionCopy.title })
     optionHeader.appendChild(optionsTitle)
-    if (canManage) {
-      const addOptionButton = el('button', { className: 'button-small', text: 'Добавить вкус' }) as HTMLButtonElement
+    if (canAddOptions) {
+      const addOptionButton = el('button', { className: 'button-small', text: optionCopy.addButton }) as HTMLButtonElement
       addOptionButton.addEventListener('click', () => {
-        const nextName = window.prompt('Название вкуса', '')
+        const nextName = window.prompt(optionCopy.namePrompt, '')
         if (nextName === null) return
         const trimmed = nextName.trim()
-        const priceRaw = window.prompt('Доплата к вкусу, ₽', '0')
+        const priceRaw = window.prompt(optionCopy.pricePrompt, '0')
         if (priceRaw === null) return
         const priceDeltaMinor = parseOptionPriceDeltaMinor(priceRaw)
         if (!trimmed || priceDeltaMinor === null) {
@@ -243,12 +276,12 @@ function renderItemRow(
       optionHeader.appendChild(addOptionButton)
     }
     const optionsList = el('div', { className: 'venue-menu-options' })
-    if (!item.options.length) {
-      optionsList.appendChild(el('p', { className: 'venue-empty', text: 'Добавьте вкусы, чтобы гости выбирали их при заказе.' }))
+    if (!itemOptions.length) {
+      optionsList.appendChild(el('p', { className: 'venue-empty', text: optionCopy.emptyText }))
     } else {
-      item.options.forEach((option) => {
+      itemOptions.forEach((option) => {
         optionsList.appendChild(
-          renderOptionRow(option, item.currency, canManage, canManageAvailability, {
+          renderOptionRow(option, item.currency, canManage, canManageAvailability, optionCopy, {
             onEditOption,
             onDeleteOption,
             onSetOptionAvailability
@@ -426,6 +459,14 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     refs.error.hidden = false
   }
 
+  const findItemById = (itemId: number) =>
+    menu.flatMap((category) => category.items).find((item) => item.id === itemId) ?? null
+
+  const getOptionCopyForOption = (option: VenueMenuOptionDto) => {
+    const ownerItem = findItemById(option.itemId)
+    return getOptionCopy(ownerItem ? isHookahMenuItem(ownerItem) : false)
+  }
+
   const renderMenu = () => {
     refs.categories.replaceChildren()
     if (!menu.length) {
@@ -584,7 +625,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               showError(result.error)
               return
             }
-            showToast('Вкус добавлен')
+            showToast(getOptionCopy(isHookahMenuItem(item)).addedToast)
             void loadMenu()
           },
           onEditOption: async (option, name, priceDeltaMinor) => {
@@ -598,7 +639,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               showError(result.error)
               return
             }
-            showToast('Вкус обновлён')
+            showToast(getOptionCopyForOption(option).updatedToast)
             void loadMenu()
           },
           onDeleteOption: async (option) => {
@@ -608,7 +649,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               showError(result.error)
               return
             }
-            showToast('Вкус удалён')
+            showToast(getOptionCopyForOption(option).deletedToast)
             void loadMenu()
           },
           onSetOptionAvailability: async (option, isAvailable) => {
@@ -622,7 +663,8 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               showError(result.error)
               return
             }
-            showToast(isAvailable ? 'Вкус доступен гостям' : 'Вкус скрыт от гостей')
+            const copy = getOptionCopyForOption(option)
+            showToast(isAvailable ? copy.enabledToast : copy.disabledToast)
             void loadMenu()
           }
         })

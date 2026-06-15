@@ -171,6 +171,7 @@ export type VenueMenuCategoryDto = {
   id: number
   name: string
   sortOrder: number
+  categoryType: MenuSemanticType
   items: VenueMenuItemDto[]
 }
 
@@ -182,6 +183,8 @@ export type VenueMenuItemDto = {
   currency: string
   isAvailable: boolean
   sortOrder: number
+  itemType?: MenuSemanticType | null
+  effectiveItemType: MenuSemanticType
   options: VenueMenuOptionDto[]
 }
 
@@ -196,10 +199,12 @@ export type VenueMenuOptionDto = {
 
 export type VenueCreateCategoryRequest = {
   name: string
+  categoryType?: MenuSemanticType | null
 }
 
 export type VenueUpdateCategoryRequest = {
   name?: string | null
+  categoryType?: MenuSemanticType | null
 }
 
 export type VenueCreateItemRequest = {
@@ -208,6 +213,7 @@ export type VenueCreateItemRequest = {
   priceMinor: number
   currency: string
   isAvailable: boolean
+  itemType?: MenuSemanticType | null
 }
 
 export type VenueUpdateItemRequest = {
@@ -216,7 +222,10 @@ export type VenueUpdateItemRequest = {
   priceMinor?: number | null
   currency?: string | null
   isAvailable?: boolean | null
+  itemType?: MenuSemanticType | null
 }
+
+export type MenuSemanticType = 'HOOKAH' | 'TEA' | 'DRINK' | 'FOOD' | 'OTHER' | string
 
 export type VenueAvailabilityRequest = {
   isAvailable: boolean
