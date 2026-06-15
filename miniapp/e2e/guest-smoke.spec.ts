@@ -1309,7 +1309,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await page.getByRole('button', { name: 'Меню' }).click()
-  await expect(page.getByRole('heading', { name: 'Меню' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: 'Меню', exact: true })).toBeVisible()
   await expect(hookahItem().getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
 
