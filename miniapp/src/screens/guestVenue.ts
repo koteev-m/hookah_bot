@@ -441,6 +441,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let selectedCategoryId: number | null = null
   let selectedService: 'shift-extension' | null = null
   let selectedOptionItemId: number | null = null
+  let selectedOptionChoice: MenuItemOptionDto | null = null
   let latestCategories: MenuCategoryDto[] = []
   let shiftExtensionAvailability: GuestShiftExtensionAvailability = {
     visible: false,
@@ -659,6 +660,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         selectedCategoryId = category.id
         selectedService = null
         selectedOptionItemId = null
+        selectedOptionChoice = null
         renderMenu(categories)
         bindItemActions()
       }
@@ -684,6 +686,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
           selectedCategoryId = null
           selectedService = 'shift-extension'
           selectedOptionItemId = null
+          selectedOptionChoice = null
           renderMenu(categories)
           refs.extensionSlot.dispatchEvent(new Event('hookah:guest-venue-refresh'))
         }
@@ -700,19 +703,73 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   const renderOptionPicker = (item: MenuItemDto, categories: MenuCategoryDto[]) => {
     const section = el('section', { className: 'card menu-option-picker' })
+    const options = getAvailableItemOptions(item)
+    const selectedOption =
+      selectedOptionChoice && options.some((option) => option.id === selectedOptionChoice?.id) ? selectedOptionChoice : null
+    if (selectedOptionChoice && !selectedOption) {
+      selectedOptionChoice = null
+    }
+    if (selectedOption) {
+      section.appendChild(el('h4', { text: 'Пожелания к приготовлению' }))
+      section.appendChild(el('p', { className: 'menu-option-item-name', text: item.name }))
+      section.appendChild(el('p', { className: 'menu-option-selected', text: `Вкус: ${selectedOption.name}` }))
+      const noteField = el('label', { className: 'menu-option-note-field' })
+      const noteText = el('span', { text: 'Пожелания к приготовлению' })
+      const noteInput = document.createElement('input')
+      noteInput.className = 'menu-option-note-input'
+      noteInput.type = 'text'
+      noteInput.maxLength = MAX_ITEM_PREFERENCE_NOTE_LENGTH
+      noteInput.placeholder = 'Например: поменьше холодка, без мяты, покрепче'
+      append(noteField, noteText, noteInput)
+      const helper = el('p', {
+        className: 'menu-option-note-helper',
+        text: 'Если пожеланий нет, просто добавьте в корзину.'
+      })
+      const actions = el('div', { className: 'menu-option-actions' })
+      const backButton = el('button', {
+        className: 'button-small button-secondary',
+        text: '← К выбору вкуса'
+      }) as HTMLButtonElement
+      const addButton = el('button', { className: 'button-small', text: 'Добавить в корзину' }) as HTMLButtonElement
+      const backHandler = () => {
+        selectedOptionChoice = null
+        renderMenu(categories)
+      }
+      const addHandler = () => {
+        if (!canPlaceOrders()) {
+          setMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
+          return
+        }
+        const result = addToCart(item.id, {
+          selectedOptionId: selectedOption.id,
+          selectedOptionName: selectedOption.name,
+          priceDeltaMinor: selectedOption.priceDeltaMinor,
+          preferenceNote: noteInput.value
+        })
+        if (!result.ok) {
+          setMessage(result.reason === 'limit' ? 'Лимит: не более 50 позиций в корзине.' : 'Не удалось добавить позицию.')
+          return
+        }
+        selectedOptionItemId = null
+        selectedOptionChoice = null
+        setMessage('')
+        renderMenu(categories)
+        bindItemActions()
+      }
+      backButton.addEventListener('click', backHandler)
+      addButton.addEventListener('click', addHandler)
+      itemDisposables.push(() => {
+        backButton.removeEventListener('click', backHandler)
+        addButton.removeEventListener('click', addHandler)
+      })
+      append(actions, backButton, addButton)
+      append(section, noteField, helper, actions)
+      return section
+    }
+
     section.appendChild(el('h4', { text: 'Выберите вкус' }))
     section.appendChild(el('p', { className: 'menu-option-item-name', text: item.name }))
-    const noteField = el('label', { className: 'menu-option-note-field' })
-    const noteText = el('span', { text: 'Пожелание к вкусу' })
-    const noteInput = document.createElement('input')
-    noteInput.className = 'menu-option-note-input'
-    noteInput.type = 'text'
-    noteInput.maxLength = MAX_ITEM_PREFERENCE_NOTE_LENGTH
-    noteInput.placeholder = 'Например: поменьше холодка, без мяты, покрепче'
-    append(noteField, noteText, noteInput)
-    section.appendChild(noteField)
     const optionList = el('div', { className: 'menu-option-list' })
-    const options = getAvailableItemOptions(item)
     options.forEach((option) => {
       const button = el('button', {
         className: 'menu-option-button',
@@ -723,20 +780,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
           setMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
           return
         }
-        const result = addToCart(item.id, {
-          selectedOptionId: option.id,
-          selectedOptionName: option.name,
-          priceDeltaMinor: option.priceDeltaMinor,
-          preferenceNote: noteInput.value
-        })
-        if (!result.ok) {
-          setMessage(result.reason === 'limit' ? 'Лимит: не более 50 позиций в корзине.' : 'Не удалось добавить позицию.')
-          return
-        }
-        selectedOptionItemId = null
+        selectedOptionChoice = option
         setMessage('')
         renderMenu(categories)
-        bindItemActions()
       }
       button.addEventListener('click', handler)
       itemDisposables.push(() => button.removeEventListener('click', handler))
@@ -762,6 +808,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (selectedService === 'shift-extension') {
       if (!shiftExtensionAvailability.visible) {
         selectedService = null
+        selectedOptionChoice = null
         renderMenu(categories)
         return
       }
@@ -769,6 +816,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       const backHandler = () => {
         selectedService = null
         selectedOptionItemId = null
+        selectedOptionChoice = null
         renderMenu(categories)
       }
       backButton.addEventListener('click', backHandler)
@@ -781,18 +829,22 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       const item = findMenuItem(selectedOptionItemId)
       if (!item) {
         selectedOptionItemId = null
+        selectedOptionChoice = null
         renderMenu(categories)
         return
       }
-      const backButton = el('button', { className: 'button-small button-secondary', text: '← Назад' }) as HTMLButtonElement
-      const backHandler = () => {
-        selectedOptionItemId = null
-        renderMenu(categories)
-        bindItemActions()
+      if (!selectedOptionChoice) {
+        const backButton = el('button', { className: 'button-small button-secondary', text: '← Назад' }) as HTMLButtonElement
+        const backHandler = () => {
+          selectedOptionItemId = null
+          selectedOptionChoice = null
+          renderMenu(categories)
+          bindItemActions()
+        }
+        backButton.addEventListener('click', backHandler)
+        itemDisposables.push(() => backButton.removeEventListener('click', backHandler))
+        refs.menuBody.appendChild(backButton)
       }
-      backButton.addEventListener('click', backHandler)
-      itemDisposables.push(() => backButton.removeEventListener('click', backHandler))
-      refs.menuBody.appendChild(backButton)
       refs.menuBody.appendChild(renderOptionPicker(item, categories))
       return
     }
@@ -810,6 +862,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       selectedCategoryId = null
       selectedService = null
       selectedOptionItemId = null
+      selectedOptionChoice = null
       renderMenu(categories)
     }
     backButton.addEventListener('click', backHandler)
@@ -831,6 +884,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         }
         if (refs.hasOptions) {
           selectedOptionItemId = itemId
+          selectedOptionChoice = null
           selectedService = null
           renderMenu(latestCategories)
           return
@@ -1019,12 +1073,14 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         if (!categories.some((category) => category.id === selectedCategoryId)) {
           selectedCategoryId = null
           selectedOptionItemId = null
+          selectedOptionChoice = null
         }
         const selectedOptionItemExists =
           selectedOptionItemId == null ||
           categories.some((category) => category.items.some((item) => item.id === selectedOptionItemId))
         if (!selectedOptionItemExists) {
           selectedOptionItemId = null
+          selectedOptionChoice = null
         }
         renderMenu(categories)
         bindItemActions()

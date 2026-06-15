@@ -459,6 +459,12 @@ input[type="number"] {
   color: #475569;
 }
 
+.menu-option-selected {
+  margin: 0;
+  font-weight: 600;
+  color: #0f172a;
+}
+
 .menu-option-note-field {
   display: grid;
   gap: 0.35rem;
@@ -475,6 +481,19 @@ input[type="number"] {
   font: inherit;
   color: #0f172a;
   background: #fff;
+}
+
+.menu-option-note-helper {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.menu-option-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .menu-option-list {

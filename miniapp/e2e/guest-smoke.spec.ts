@@ -900,25 +900,43 @@ test('guest mini app selects item flavor and submits structured selected option'
   await expect(page.getByRole('button', { name: /Яблоко/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /Мята/ })).toBeVisible()
   await expect(page.getByText('Недоступный вкус')).toHaveCount(0)
-  await expect(page.getByLabel('Пожелание к вкусу')).toBeVisible()
+  await expect(page.getByLabel('Пожелания к приготовлению')).toHaveCount(0)
 
-  await page.getByLabel('Пожелание к вкусу').fill('поменьше холодка')
   await page.getByRole('button', { name: /Яблоко/ }).click()
+  await expect(page.getByRole('heading', { name: 'Пожелания к приготовлению' })).toBeVisible()
+  await expect(page.getByText('Вкус: Яблоко')).toBeVisible()
+  await expect(page.getByText('Если пожеланий нет, просто добавьте в корзину.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Добавить в корзину' })).toBeVisible()
+  await page.getByRole('button', { name: /К выбору вкуса/ }).click()
+  await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
+  await expect(page.getByLabel('Пожелания к приготовлению')).toHaveCount(0)
+
+  await page.getByRole('button', { name: /Яблоко/ }).click()
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
   await page.getByRole('button', { name: 'Выбрать' }).click()
-  await page.getByLabel('Пожелание к вкусу').fill(' поменьше холодка ')
   await page.getByRole('button', { name: /Яблоко/ }).click()
+  await page.getByLabel('Пожелания к приготовлению').fill('поменьше холодка')
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
   await page.getByRole('button', { name: 'Выбрать' }).click()
-  await page.getByLabel('Пожелание к вкусу').fill('без мяты')
   await page.getByRole('button', { name: /Яблоко/ }).click()
+  await page.getByLabel('Пожелания к приготовлению').fill(' поменьше холодка ')
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
+  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await page.getByRole('button', { name: /Яблоко/ }).click()
+  await page.getByLabel('Пожелания к приготовлению').fill('без мяты')
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
   await page.getByRole('button', { name: 'Выбрать' }).click()
   await page.getByRole('button', { name: /Мята/ }).click()
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
 
-  await expect(page.getByRole('button', { name: 'Корзина (4)' })).toBeVisible()
-  await page.getByRole('button', { name: 'Корзина (4)' }).click()
+  await expect(page.getByRole('button', { name: 'Корзина (5)' })).toBeVisible()
+  await page.getByRole('button', { name: 'Корзина (5)' }).click()
 
+  const appleLines = page.locator('.cart-item').filter({ hasText: 'Вкус: Яблоко' })
   const appleLine = page.locator('.cart-item').filter({ hasText: 'Пожелание: поменьше холодка' })
   const appleNoMintLine = page.locator('.cart-item').filter({ hasText: 'Пожелание: без мяты' })
   const mintLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Мята' })
+  await expect(appleLines).toHaveCount(3)
   await expect(appleLine).toHaveCount(1)
   await expect(appleNoMintLine).toHaveCount(1)
   await expect(mintLine).toHaveCount(1)
@@ -930,7 +948,7 @@ test('guest mini app selects item flavor and submits structured selected option'
 
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
-  await expect(page.getByText('Вкус: Яблоко')).toHaveCount(2)
+  await expect(page.getByText('Вкус: Яблоко')).toHaveCount(3)
   await expect(page.getByText('Вкус: Мята')).toBeVisible()
   await expect(page.getByText('Пожелание: поменьше холодка')).toBeVisible()
   await expect(page.getByText('Пожелание: без мяты')).toBeVisible()
@@ -938,9 +956,10 @@ test('guest mini app selects item flavor and submits structured selected option'
 
   expect(api.getAddBatchRequests()).toHaveLength(1)
   const submittedItems = api.getAddBatchRequests()[0].items
-  expect(submittedItems).toHaveLength(3)
+  expect(submittedItems).toHaveLength(4)
   expect(submittedItems).toEqual(
     expect.arrayContaining([
+      { itemId: 210, qty: 1, selectedOptionId: 301 },
       { itemId: 210, qty: 2, selectedOptionId: 301, preferenceNote: 'поменьше холодка' },
       { itemId: 210, qty: 1, selectedOptionId: 301, preferenceNote: 'без мяты' },
       { itemId: 210, qty: 1, selectedOptionId: 302 }
