@@ -5,6 +5,7 @@ export type CartLineOptionInput = {
   selectedOptionId?: number | null
   selectedOptionName?: string | null
   priceDeltaMinor?: number | null
+  preferenceNote?: string | null
 }
 
 export type CartLine = {
@@ -14,6 +15,7 @@ export type CartLine = {
   selectedOptionId?: number | null
   selectedOptionName?: string | null
   priceDeltaMinor?: number | null
+  preferenceNote?: string | null
 }
 
 export type CartSnapshot = {
@@ -36,6 +38,7 @@ type PersistedCartLine = {
   selectedOptionId?: number | null
   selectedOptionName?: string | null
   priceDeltaMinor?: number | null
+  preferenceNote?: string | null
 }
 
 type LegacyPersistedCartEntry = [number, number]
@@ -48,6 +51,7 @@ type PersistedDraft = {
 
 const MAX_QTY = 50
 const MAX_DISTINCT = 50
+const MAX_PREFERENCE_NOTE_LENGTH = 200
 const cartDraftLocalStoragePrefix = 'hookah_guest_cart_draft:'
 const listeners = new Set<CartListener>()
 let items = new Map<string, CartLine>()
@@ -79,20 +83,37 @@ function normalizeSelectedOptionId(selectedOptionId: number | null | undefined):
   return Number.isInteger(normalized) && normalized > 0 ? normalized : null
 }
 
-export function buildCartLineKey(itemId: number, selectedOptionId?: number | null): string {
-  return `${itemId}:${normalizeSelectedOptionId(selectedOptionId) ?? 'base'}`
+function normalizePreferenceNote(preferenceNote: string | null | undefined): string | null {
+  const normalized = preferenceNote?.trim() ?? ''
+  if (!normalized) {
+    return null
+  }
+  return normalized.slice(0, MAX_PREFERENCE_NOTE_LENGTH)
+}
+
+export function buildCartLineKey(itemId: number, selectedOptionId?: number | null, preferenceNote?: string | null): string {
+  const optionPart = normalizeSelectedOptionId(selectedOptionId) ?? 'base'
+  const notePart = encodeURIComponent(normalizePreferenceNote(preferenceNote) ?? '')
+  return `${itemId}:${optionPart}:${notePart}`
 }
 
 function resolveLineOption(
   itemId: number,
   input?: CartLineOptionInput | null
-): { selectedOptionId: number | null; selectedOptionName: string | null; priceDeltaMinor: number | null } {
+): {
+  selectedOptionId: number | null
+  selectedOptionName: string | null
+  priceDeltaMinor: number | null
+  preferenceNote: string | null
+} {
+  const preferenceNote = normalizePreferenceNote(input?.preferenceNote)
   const selectedOptionId = normalizeSelectedOptionId(input?.selectedOptionId)
   if (selectedOptionId == null) {
     return {
       selectedOptionId: null,
       selectedOptionName: null,
-      priceDeltaMinor: null
+      priceDeltaMinor: null,
+      preferenceNote
     }
   }
   const metaOption = getItemMeta(itemId)?.options?.find((option) => option.id === selectedOptionId)
@@ -103,21 +124,24 @@ function resolveLineOption(
   return {
     selectedOptionId,
     selectedOptionName,
-    priceDeltaMinor
+    priceDeltaMinor,
+    preferenceNote
   }
 }
 
 function buildLine(itemId: number, qty: number, input?: CartLineOptionInput | null, existing?: CartLine): CartLine {
   const option = resolveLineOption(itemId, input)
   const selectedOptionId = option.selectedOptionId ?? existing?.selectedOptionId ?? null
-  const key = buildCartLineKey(itemId, selectedOptionId)
+  const preferenceNote = option.preferenceNote ?? existing?.preferenceNote ?? null
+  const key = buildCartLineKey(itemId, selectedOptionId, preferenceNote)
   return {
     key,
     itemId,
     qty,
     selectedOptionId,
     selectedOptionName: option.selectedOptionName ?? existing?.selectedOptionName ?? null,
-    priceDeltaMinor: option.priceDeltaMinor ?? existing?.priceDeltaMinor ?? null
+    priceDeltaMinor: option.priceDeltaMinor ?? existing?.priceDeltaMinor ?? null,
+    preferenceNote
   }
 }
 
@@ -187,7 +211,8 @@ function persistActiveDraft(): void {
       qty: line.qty,
       selectedOptionId: line.selectedOptionId ?? null,
       selectedOptionName: line.selectedOptionName ?? null,
-      priceDeltaMinor: line.priceDeltaMinor ?? null
+      priceDeltaMinor: line.priceDeltaMinor ?? null,
+      preferenceNote: line.preferenceNote ?? null
     }))
   }
   if (itemMeta.length > 0) {
@@ -221,7 +246,8 @@ function normalizePersistedLine(entry: LegacyPersistedCartEntry | PersistedCartL
     priceDeltaMinor:
       typeof entry.priceDeltaMinor === 'number' && Number.isFinite(entry.priceDeltaMinor)
         ? Math.trunc(entry.priceDeltaMinor)
-        : null
+        : null,
+    preferenceNote: typeof entry.preferenceNote === 'string' ? normalizePreferenceNote(entry.preferenceNote) : null
   }
 }
 
@@ -246,7 +272,7 @@ function loadDraftFromStorage(storageKey: string): { items: Map<string, CartLine
       if (!isValidItemId(itemId) || qty <= 0) {
         continue
       }
-      const key = buildCartLineKey(itemId, line.selectedOptionId)
+      const key = buildCartLineKey(itemId, line.selectedOptionId, line.preferenceNote)
       const existing = restored.get(key)
       if (!existing && restored.size >= MAX_DISTINCT) {
         continue
@@ -260,7 +286,8 @@ function loadDraftFromStorage(storageKey: string): { items: Map<string, CartLine
           {
             selectedOptionId: line.selectedOptionId,
             selectedOptionName: line.selectedOptionName,
-            priceDeltaMinor: line.priceDeltaMinor
+            priceDeltaMinor: line.priceDeltaMinor,
+            preferenceNote: line.preferenceNote
           },
           existing
         )
@@ -342,7 +369,7 @@ export function addToCart(itemId: number, option?: CartLineOptionInput | null): 
   if (!isValidItemId(itemId)) {
     return { ok: false, reason: 'invalid' }
   }
-  const key = buildCartLineKey(itemId, option?.selectedOptionId)
+  const key = buildCartLineKey(itemId, option?.selectedOptionId, option?.preferenceNote)
   const currentLine = items.get(key)
   const current = normalizeQty(currentLine?.qty ?? 0)
   if (current === 0 && items.size >= MAX_DISTINCT) {
@@ -360,11 +387,11 @@ export function addToCart(itemId: number, option?: CartLineOptionInput | null): 
   return { ok: true }
 }
 
-export function removeFromCart(itemId: number, selectedOptionId?: number | null): void {
+export function removeFromCart(itemId: number, selectedOptionId?: number | null, preferenceNote?: string | null): void {
   if (!isValidItemId(itemId)) {
     return
   }
-  removeCartLine(buildCartLineKey(itemId, selectedOptionId))
+  removeCartLine(buildCartLineKey(itemId, selectedOptionId, preferenceNote))
 }
 
 export function removeCartLine(lineKey: string): void {
@@ -383,11 +410,16 @@ export function removeCartLine(lineKey: string): void {
   notify()
 }
 
-export function setCartQty(itemId: number, qty: number, selectedOptionId?: number | null): SetQtyResult {
+export function setCartQty(
+  itemId: number,
+  qty: number,
+  selectedOptionId?: number | null,
+  preferenceNote?: string | null
+): SetQtyResult {
   if (!isValidItemId(itemId)) {
     return { ok: false, reason: 'invalid' }
   }
-  return setCartLineQty(buildCartLineKey(itemId, selectedOptionId), qty, itemId, selectedOptionId)
+  return setCartLineQty(buildCartLineKey(itemId, selectedOptionId, preferenceNote), qty, itemId, selectedOptionId)
 }
 
 export function setCartLineQty(
@@ -417,7 +449,8 @@ export function setCartLineQty(
         {
           selectedOptionId: currentLine?.selectedOptionId ?? fallbackSelectedOptionId ?? null,
           selectedOptionName: currentLine?.selectedOptionName ?? null,
-          priceDeltaMinor: currentLine?.priceDeltaMinor ?? null
+          priceDeltaMinor: currentLine?.priceDeltaMinor ?? null,
+          preferenceNote: currentLine?.preferenceNote ?? null
         },
         currentLine
       )

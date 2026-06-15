@@ -153,6 +153,7 @@ export type OrderBatchItemDto = {
   qty: number
   name?: string | null
   selectedOption?: SelectedOrderItemOptionDto | null
+  preferenceNote?: string | null
   priceMinor?: number | null
   currency?: string | null
   lineGrossMinor: number
@@ -212,6 +213,7 @@ export type AddBatchItemDto = {
   itemId: number
   qty: number
   selectedOptionId?: number | null
+  preferenceNote?: string | null
 }
 
 export type AddBatchResponse = {
@@ -252,6 +254,7 @@ export type CartPreviewItemDto = {
   name: string
   qty: number
   selectedOption?: SelectedOrderItemOptionDto | null
+  preferenceNote?: string | null
   priceMinor: number
   currency: string
   lineGrossMinor: number

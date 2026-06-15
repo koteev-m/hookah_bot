@@ -49,6 +49,7 @@ Recently verified:
 - Cross-channel bill snapshot automation protects Mini App full bill vs Telegram/staff bill totals.
 - Live staff-chat order messages, bill-affecting refresh and button lifecycle passed staging smoke. Current follow-up is batch-level clarity, not stale totals.
 - Guest table session persistence/restore and Telegram BackButton navigation passed staging smoke on 2026-06-08: returning guest stays in table context without repeat QR, menu/order/profile/support navigation keeps context, and BackButton no longer loops.
+- Guest/Menu Options & Flavors parity is now an active P1 follow-up: Guest Bot can collect hookah flavor/options, but Guest Mini App and shared order persistence do not yet handle selected options as structured order modifiers.
 
 ## 2. Sources Merged
 
@@ -122,6 +123,7 @@ Done:
 
 Remaining P1/P2:
 
+- Guest/Menu Options & Flavors parity: Mini App must show/select item options/flavors with the same behavior as Guest Bot, and both channels must persist selected options structurally.
 - richer profile/promotions/loyalty polish in Mini App;
 - richer active order display with totals/promo/loyalty parity where needed;
 - booking create/confirm/change/cancel smoke passed for current staging MVP; keep it in regression smoke after future booking changes.
@@ -155,6 +157,7 @@ Remaining P1:
 
 - final staging smoke after each release batch;
 - real venue settings screen, or keep bot as canonical;
+- Venue Mini App menu option CRUD/flavor-profile parity for OWNER/MANAGER, while preserving STAFF no-settings/no-menu-management boundaries;
 - venue stats screen;
 - deeper operational frontend smoke/e2e coverage beyond the minimal Guest Mini App browser smoke.
 
@@ -232,7 +235,7 @@ Closed readiness blocks:
 - Venue Mini App inline `web_app` entry for venue roles;
 - venue settings hidden safely;
 - bookings MVP screens;
-- stop-list options parity;
+- stop-list option availability parity, excluding selected-option order modifiers;
 - platform cockpit baseline;
 - launch smoke/e2e coverage baseline;
 - support/tickets launch-safe baseline;
@@ -276,12 +279,13 @@ These items were recorded after the pilot release snapshot, CI hardening, deploy
 | P1 CLOSED | Staff-chat main order vs doporders clarity | Product spec already models `order_batches` with statuses; Venue Mini App can show batches, and live staff-chat now separates the main order and doporders/add-batches in one message. Staging smoke passed: one live message, venue-local time without `UTC`, separate blocks and clear batch statuses/actions. | One live staff-chat message stays canonical, visually separates the main order and each doporder/add-batch, shows batch status, and applies action buttons to the correct operational context. | Keep in regression smoke. Preserve `OrderBillSnapshot` as money source. |
 | P1 CLOSED | Guest table session persistence/restore | Backend has authenticated `GET /api/guest/table/restore`; Mini App startup restores the latest safe active table context when no explicit QR token is present, and explicit QR/start token still wins. Automated coverage includes active restore, cross-user denial, closed-only denial, latest-context selection, browser startup restore and account-switch storage isolation. Staging smoke passed on 2026-06-08: reopen without QR restores table context, `Мой заказ` / menu / profile / support navigation keeps context, Telegram BackButton no longer loops, and root can close cleanly. | While an active table session/tab/order exists, returning guest re-enters table context safely without rescanning QR; after bill close, table context resets. | Keep in regression smoke. Preserve QR/start-token priority and account-switch isolation. |
 | P1 IN PROGRESS | Paid venue/shift extension | Backend data/API, Guest Mini App request UX, bill service charges, Venue Mini App owner/manager settings, Venue order queue/detail approval, Staff Chat pending approve/reject actions and Guest Bot ordering-menu section request entry are implemented. Existing `order_batch_items` require `menu_item_id`, so extension remains a separate service charge rather than a normal menu/cart item. Owner/Manager Bot settings parity is still pending. | Guest requests extension from active table context through service action `Продление работы заведения` in Mini App and bot ordering section flow; STAFF/MANAGER see and approve/reject fixed-price requests inside active order/table/bill context and staff-chat live order message; MANAGER/OWNER configure price/duration in Mini App and bot; approval adds a dedicated service charge and extends the active table/session orderable window. | Next slice: Owner/Manager Bot settings parity for enabled/duration/price with STAFF hidden/forbidden, then regression smoke/docs closure. Preserve STAFF no-settings rule and never expose extension as catalog item/cart item/order batch item. |
+| P1 ACTIVE | Guest/Menu Options & Flavors Parity | Backend selected-option persistence, Guest Bot structured submit, and Guest Mini App option picker/cart identity are in progress/implemented by slices. Guest Mini App now needs line-level preparation note polish; Venue Mini App still lacks full owner/manager option CRUD/flavor-profile parity. | Menu item options/flavors are structured order modifiers. Guest Bot and Guest Mini App both show/select them; same item with different selected option or line-level `Пожелание к вкусу` is a distinct cart/order line; selected options affect price; line preference notes do not affect price; venue order detail, guest active order/bill, Guest Bot `Мой заказ` and staff chat show selected options/notes; unavailable/stop-listed options are hidden or rejected. | Remaining slices: finish Guest Mini App line-level preference note smoke; add Guest Bot input parity for optional line note; D Venue Mini App option CRUD/flavor-profile parity; E smoke/docs closure. |
 | P2 | Owner working days/hours/exceptions UX | Current owner bot has weekday base schedule controls and date-specific override controls (`open`/`closed`, time fields), which can be unclear when base day and override disagree. | UI should clearly separate weekly schedule from concrete-date exceptions, show whether a day is working/closed/overridden, and make each button's effect explicit. | UX audit/fix-pack after P1 operational blocks. |
 | P2 | Owner timezone setup hint | `venue_settings.timezone` is the source of truth for venue-local time formatting. Current code has basic city/address inference rules, but no external geocoding or rich owner-facing timezone suggestion flow. | Owner setup should suggest a timezone from city/address and clearly allow manual override; all venue-context guest/staff/manager/owner times should render in venue local time. | Later owner setup improvement. Do not add geocoding dependency in the staff-chat timestamp fix. |
 | P2 | `📖 Фото-меню` optional subsections | Current info/photo-menu model is a flat visible info section with media attachments; structured `🍽 Заказное меню` is separate. | Simple mode keeps one image list; advanced mode lets owner/manager enable subsections such as кальянное меню, напитки, чай, пробой посуды and custom sections. Guest sees subsections first when enabled. | Product model/read-model design; avoid confusing this with structured order menu. |
 | P2 | Owner multi-image upload UX | Owner media upload keeps the upload state and confirms each media item, which can create repeated messages with `Готово`/`Назад`. | Multiple images should be collected without N noisy confirmation screens; after upload, return to an image list with change/delete/back actions. | Telegram UX debt fix-pack. Keep album-end logic explicit and avoid guessing Telegram media group completion. |
 
-Recommended next block: implement `P1 Paid venue/shift extension` Owner/Manager Bot settings parity, then close the cross-channel regression smoke.
+Recommended next blocks: finish `P1 Paid venue/shift extension` Owner/Manager Bot settings parity and regression smoke, then start `P1 Guest/Menu Options & Flavors Parity` with backend structured selected-option persistence first.
 
 ### Internal AI Assistant Core
 
@@ -371,6 +375,7 @@ Goal: move from launch-safe Mini App to full operational parity.
 
 Guest Mini App:
 
+- order menu option/flavor picker with structured selected-option cart identity;
 - profile/history/favorites polish;
 - richer active order display;
 - support flow polish;
@@ -382,7 +387,7 @@ Venue Mini App:
 - real settings screen or explicit bot-canonical policy;
 - bookings screens;
 - stats;
-- richer menu/options management;
+- richer menu/options management, including option CRUD and flavor-profile parity;
 - tables/QR lifecycle polish;
 - staff calls dashboard polish.
 

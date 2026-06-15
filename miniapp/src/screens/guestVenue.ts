@@ -24,6 +24,7 @@ import { renderGuestShiftExtensionCard, type GuestShiftExtensionAvailability } f
 
 const MAX_ITEM_QTY = 50
 const MAX_STAFF_COMMENT_LENGTH = 500
+const MAX_ITEM_PREFERENCE_NOTE_LENGTH = 200
 
 type VenueScreenOptions = {
   root: HTMLDivElement | null
@@ -701,6 +702,15 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const section = el('section', { className: 'card menu-option-picker' })
     section.appendChild(el('h4', { text: 'Выберите вкус' }))
     section.appendChild(el('p', { className: 'menu-option-item-name', text: item.name }))
+    const noteField = el('label', { className: 'menu-option-note-field' })
+    const noteText = el('span', { text: 'Пожелание к вкусу' })
+    const noteInput = document.createElement('input')
+    noteInput.className = 'menu-option-note-input'
+    noteInput.type = 'text'
+    noteInput.maxLength = MAX_ITEM_PREFERENCE_NOTE_LENGTH
+    noteInput.placeholder = 'Например: поменьше холодка, без мяты, покрепче'
+    append(noteField, noteText, noteInput)
+    section.appendChild(noteField)
     const optionList = el('div', { className: 'menu-option-list' })
     const options = getAvailableItemOptions(item)
     options.forEach((option) => {
@@ -716,7 +726,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         const result = addToCart(item.id, {
           selectedOptionId: option.id,
           selectedOptionName: option.name,
-          priceDeltaMinor: option.priceDeltaMinor
+          priceDeltaMinor: option.priceDeltaMinor,
+          preferenceNote: noteInput.value
         })
         if (!result.ok) {
           setMessage(result.reason === 'limit' ? 'Лимит: не более 50 позиций в корзине.' : 'Не удалось добавить позицию.')

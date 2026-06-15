@@ -51,6 +51,7 @@ Remaining:
 
 - repeat this smoke after any additional release batch;
 - P1 follow-up: paid venue/shift extension is implemented in backend and Guest/Venue Mini App, but Venue approve/reject is still a standalone `Продления` island; next target is order/table detail integration, staff-chat live message actions, Guest Bot entry and Owner/Manager Bot settings parity;
+- P1 follow-up: Guest/Menu Options & Flavors parity is active. Guest Bot can collect hookah flavor/options, but Guest Mini App and shared order persistence do not yet store selected options as structured order modifiers.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
@@ -73,6 +74,12 @@ Remaining:
   - invalid reason/comment and rate limit are rejected.
 - `TelegramBotRouterTableTokenTest`
   - WebApp fallback sends supported `cmd=start_quick_order`.
+
+Known option/flavor coverage gap:
+
+- Guest Mini App has no automated smoke for item option/flavor selection.
+- Shared guest order tests currently cover `itemId`/`qty` add-batch behavior, but not selected option persistence, price delta, stale option rejection or distinct cart lines for the same item with different options.
+- Guest Bot option selection exists, but the current persistence path must be reworked and tested as structured selected-option data instead of comment-only flavor context.
 
 Manual runtime coverage for each release batch:
 
@@ -362,6 +369,7 @@ Expected:
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
 - Guest table session restore and Telegram BackButton navigation passed staging smoke; keep restore, QR priority, account-switch isolation and no-loop BackButton behavior in regression smoke.
 - Paid venue/shift extension is implemented for backend and Mini App as a confirmed service charge/session extension, not as a normal menu/cart/order-batch item. Remaining parity gaps: order-scoped Venue Mini App approve/reject, staff-chat live message pending actions, Guest Bot table menu entry and Owner/Manager Bot settings.
+- Guest/Menu Options & Flavors parity is not complete: Guest Bot has hookah flavor/options UX, Guest Mini App does not expose the same picker, and shared guest order persistence is not yet structured for selected options. Target behavior: options/flavors are order modifiers, same item with different option is a separate line, selected options affect price, unavailable options are hidden/rejected, and staff/venue/staff-chat read models show the selection.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
@@ -371,20 +379,26 @@ Expected:
 
 1. Expand the lightweight Playwright/Vite smoke harness with fixture-driven UI tests for:
    - guest cart/order/staff call;
+   - guest item option/flavor picker, cart line identity and checkout payload;
    - venue order detail/full bill;
    - platform safe sections.
-2. Extend cross-channel bill snapshots only if new money-affecting adjustments are added.
+2. Add backend cross-channel tests for selected menu options before enabling Mini App option checkout:
+   - same item with different option/flavor produces separate order lines;
+   - selected option price deltas affect preview, checkout and bill snapshots;
+   - disabled/stale option ids are rejected at preview/checkout;
+   - Guest Bot and Guest Mini App submit the same structured selected-option shape.
+3. Extend cross-channel bill snapshots when selected option price deltas are implemented.
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block: paid venue/shift extension Owner/Manager Bot settings parity and cross-channel regression closure.
+Recommended next implementation blocks: paid venue/shift extension Owner/Manager Bot settings parity and cross-channel regression closure; then Guest/Menu Options & Flavors parity starting with backend structured selected-option persistence.
 
 Manual paid extension smoke after full parity:
 
 1. Configure extension for a venue in Venue Mini App: enabled, fixed one-hour duration and price.
 2. Configure the same extension in Owner/Manager Bot once the remaining bot settings parity slice is implemented; confirm copy `Показывать гостям возможность продления`.
 3. Guest Mini App active table context shows service entry `Продление работы заведения` in the ordering section list, then `Продлить на 1 час` inside that service screen.
-4. Guest Bot `🍽️ Меню` section list shows `Продление работы заведения` alongside ordering sections and creates the same fixed-price request.
+4. Guest Bot `🍽️ Меню` and `Мой заказ → Дозаказать` section lists show `Продление работы заведения` alongside ordering sections and create the same fixed-price request.
 5. Guest creates one extension request; repeated taps/callbacks do not duplicate pending requests.
 6. Venue Mini App order queue shows a pending extension badge/count on the affected order/table.
 7. Venue Mini App order detail shows `Запрос на продление работы заведения`, `На 1 час — 3 000 ₽`, `✅ Подтвердить продление`, `❌ Отказать`.
@@ -395,3 +409,16 @@ Manual paid extension smoke after full parity:
 12. As STAFF, confirm price/duration/settings are not editable in Mini App or bot.
 13. As MANAGER/OWNER, confirm settings are editable in Mini App; repeat in bot after the remaining bot settings parity slice lands.
 14. Close bill/session and confirm extension request/approve endpoints are denied and extension UI disappears or disables safely.
+
+Manual options/flavors parity smoke after implementation:
+
+1. Configure a hookah item with two available flavors/options and one stop-listed option.
+2. Guest Bot ordering flow shows only available options and requires/selects one before adding the hookah to cart.
+3. Guest Mini App ordering flow shows the same option picker before adding the hookah to cart.
+4. Add the same hookah with two different flavors; cart and checkout keep two separate lines.
+5. In Guest Mini App, add optional `Пожелание к вкусу` to one selected flavor; same item/flavor/same note increments qty, while same item/flavor/different note stays a separate line.
+6. Confirm selected option price deltas appear in preview, checkout, guest active order/bill, Venue Mini App order detail and staff chat.
+7. Confirm line preference notes appear in guest active order, Venue Mini App order detail, staff chat and Guest Bot `Мой заказ`; notes must not affect price.
+8. Disable an option after selection and confirm preview/checkout rejects the stale option without silently adding the base item.
+9. Confirm Guest Bot no longer relies only on `Выбранные вкусы` comment text for persistence; selected option data is structured in order/read models. Guest Bot input for optional `Пожелание к вкусу` remains a follow-up until implemented.
+10. As OWNER/MANAGER, manage options in Venue Mini App once option CRUD/flavor-profile parity slice lands; as STAFF, confirm edit controls are hidden/forbidden.

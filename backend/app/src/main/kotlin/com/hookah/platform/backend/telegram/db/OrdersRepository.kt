@@ -26,6 +26,7 @@ data class OrderBatchItemInput(
     val itemId: Long,
     val qty: Int,
     val selectedOptionId: Long? = null,
+    val preferenceNote: String? = null,
 )
 
 data class OrderItemSelectedOptionDetails(
@@ -39,6 +40,7 @@ data class OrderBatchItemDetails(
     val qty: Int,
     val itemName: String? = null,
     val selectedOption: OrderItemSelectedOptionDetails? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,
@@ -96,6 +98,7 @@ data class CreatedOrderBatchItem(
     val itemName: String,
     val qty: Int,
     val selectedOption: OrderItemSelectedOptionDetails? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long,
     val currency: String,
     val promoDiscountMinor: Long = 0L,
@@ -117,6 +120,7 @@ data class GuestOrderCartPreviewItem(
     val itemName: String,
     val qty: Int,
     val selectedOption: OrderItemSelectedOptionDetails? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long,
     val currency: String,
     val lineGrossMinor: Long,
@@ -142,6 +146,7 @@ data class UserActiveOrderItemSummary(
     val itemName: String,
     val qty: Int,
     val selectedOption: OrderItemSelectedOptionDetails? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,
@@ -569,6 +574,7 @@ class OrdersRepository(
                 obiop.menu_item_option_id,
                 obiop.option_name_snapshot,
                 obiop.price_delta_minor_snapshot,
+                obi.preference_note,
                 SUM(obi.qty) AS qty,
                 CASE
                     WHEN mi.price_minor IS NULL THEN NULL
@@ -614,6 +620,7 @@ class OrdersRepository(
                 obiop.menu_item_option_id,
                 obiop.option_name_snapshot,
                 obiop.price_delta_minor_snapshot,
+                obi.preference_note,
                 mi.price_minor,
                 mi.currency,
                 obi.discount_percent,
@@ -637,6 +644,7 @@ class OrdersRepository(
                                 itemName = itemName,
                                 qty = qty,
                                 selectedOption = rs.toSelectedOptionDetails(),
+                                preferenceNote = rs.getString("preference_note"),
                                 priceMinor =
                                     rs.getLong("price_minor").let {
                                             value ->
@@ -1032,8 +1040,8 @@ class OrdersRepository(
         val insertedItems = mutableListOf<InsertedOrderBatchItem>()
         connection.prepareStatement(
             """
-            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty)
-            VALUES (?, ?, ?)
+            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, preference_note)
+            VALUES (?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -1041,6 +1049,11 @@ class OrdersRepository(
                 statement.setLong(1, batchId)
                 statement.setLong(2, item.itemId)
                 statement.setInt(3, item.qty)
+                if (item.preferenceNote != null) {
+                    statement.setString(4, item.preferenceNote)
+                } else {
+                    statement.setNull(4, Types.VARCHAR)
+                }
                 statement.executeUpdate()
                 statement.generatedKeys.use { keys ->
                     if (!keys.next()) error("Failed to insert batch item")
@@ -1049,6 +1062,7 @@ class OrdersRepository(
                             batchItemId = keys.getLong(1),
                             menuItemId = item.itemId,
                             qty = item.qty,
+                            preferenceNote = item.preferenceNote,
                             selectedOption = selectedOptionsByKey[item.toKey()],
                         ),
                     )
@@ -1071,14 +1085,19 @@ class OrdersRepository(
     ): InsertedOrderBatchItem =
         connection.prepareStatement(
             """
-            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty)
-            VALUES (?, ?, ?)
+            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, preference_note)
+            VALUES (?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             statement.setLong(1, batchId)
             statement.setLong(2, item.itemId)
             statement.setInt(3, item.qty)
+            if (item.preferenceNote != null) {
+                statement.setString(4, item.preferenceNote)
+            } else {
+                statement.setNull(4, Types.VARCHAR)
+            }
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
                 if (!keys.next()) error("Failed to insert batch item")
@@ -1086,6 +1105,7 @@ class OrdersRepository(
                     batchItemId = keys.getLong(1),
                     menuItemId = item.itemId,
                     qty = item.qty,
+                    preferenceNote = item.preferenceNote,
                     selectedOption = selectedOption,
                 )
                     .also { inserted ->
@@ -1267,6 +1287,7 @@ class OrdersRepository(
                     itemName = menuItem.name,
                     qty = input.qty,
                     selectedOption = selectedOption?.toDetails(),
+                    preferenceNote = input.preferenceNote,
                     priceMinor = menuItem.effectivePriceMinor(selectedOption),
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
@@ -1368,6 +1389,7 @@ class OrdersRepository(
                     itemName = item.itemName,
                     qty = item.qty,
                     selectedOption = item.selectedOption,
+                    preferenceNote = item.preferenceNote,
                     priceMinor = item.priceMinor,
                     currency = item.currency,
                     lineGrossMinor = gross,
@@ -1843,6 +1865,8 @@ class OrdersRepository(
                 itemId = inserted.menuItemId,
                 itemName = menuItem.name,
                 qty = inserted.qty,
+                selectedOption = inserted.selectedOption?.toDetails(),
+                preferenceNote = inserted.preferenceNote,
                 priceMinor = menuItem.priceMinor,
                 currency = menuItem.currency,
             )
@@ -1857,6 +1881,7 @@ class OrdersRepository(
             SELECT obi.menu_item_id,
                    COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
                    obi.qty,
+                   obi.preference_note,
                    obiop.menu_item_option_id,
                    obiop.option_name_snapshot,
                    obiop.price_delta_minor_snapshot,
@@ -1889,6 +1914,7 @@ class OrdersRepository(
                                 itemName = rs.getString("item_name"),
                                 qty = rs.getInt("qty"),
                                 selectedOption = rs.toSelectedOptionDetails(),
+                                preferenceNote = rs.getString("preference_note"),
                                 priceMinor = rs.getLong("price_minor"),
                                 currency = rs.getString("currency"),
                                 promoDiscountMinor = rs.getLong("promo_discount_minor"),
@@ -1911,6 +1937,7 @@ class OrdersRepository(
         val batchItemId: Long,
         val menuItemId: Long,
         val qty: Int,
+        val preferenceNote: String? = null,
         val selectedOption: CheckoutSelectedOption? = null,
     )
 
@@ -1930,6 +1957,7 @@ class OrdersRepository(
         val itemName: String,
         val qty: Int,
         val selectedOption: OrderItemSelectedOptionDetails? = null,
+        val preferenceNote: String? = null,
         val priceMinor: Long,
         val currency: String,
         val effectiveType: MenuSemanticType,
@@ -1954,6 +1982,7 @@ class OrdersRepository(
     private data class OrderBatchItemInputKey(
         val itemId: Long,
         val selectedOptionId: Long?,
+        val preferenceNote: String?,
     )
 
     private data class CheckoutSelectedOption(
@@ -2069,6 +2098,7 @@ class OrdersRepository(
                    obi.order_batch_id,
                    obi.menu_item_id,
                    obi.qty,
+                   obi.preference_note,
                    obi.discount_percent,
                    COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
                    CASE WHEN opri.id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward,
@@ -2111,6 +2141,7 @@ class OrdersRepository(
                             qty = rs.getInt("qty"),
                             itemName = rs.getString("item_name")?.takeIf { it.isNotBlank() },
                             selectedOption = rs.toSelectedOptionDetails(),
+                            preferenceNote = rs.getString("preference_note"),
                             priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) null else value },
                             currency = rs.getString("currency"),
                             discountPercent =
@@ -2129,7 +2160,11 @@ class OrdersRepository(
     }
 
     private fun OrderBatchItemInput.toKey(): OrderBatchItemInputKey =
-        OrderBatchItemInputKey(itemId = itemId, selectedOptionId = selectedOptionId)
+        OrderBatchItemInputKey(
+            itemId = itemId,
+            selectedOptionId = selectedOptionId,
+            preferenceNote = preferenceNote,
+        )
 
     private fun CheckoutMenuItem.effectivePriceMinor(selectedOption: CheckoutSelectedOption?): Long =
         priceMinor + (selectedOption?.priceDeltaMinor ?: 0L)

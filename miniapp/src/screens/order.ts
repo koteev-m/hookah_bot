@@ -273,6 +273,9 @@ function renderBatches(container: HTMLElement, batches: OrderBatchDto[]) {
       if (item.selectedOption?.name) {
         info.appendChild(el('span', { className: 'order-item-details', text: `Вкус: ${item.selectedOption.name}` }))
       }
+      if (item.preferenceNote) {
+        info.appendChild(el('span', { className: 'order-item-details', text: `Пожелание: ${item.preferenceNote}` }))
+      }
       const priceMeta = renderItemPriceMeta(item)
       if (priceMeta) {
         info.appendChild(el('span', { className: 'order-item-details', text: priceMeta }))

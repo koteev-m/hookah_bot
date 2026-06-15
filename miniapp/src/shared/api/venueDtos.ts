@@ -268,6 +268,8 @@ export type OrderBatchItemDto = {
   itemId: number
   name: string
   qty: number
+  selectedOption?: OrderItemSelectedOptionDto | null
+  preferenceNote?: string | null
   priceMinor?: number | null
   currency?: string | null
   lineGrossMinor: number
@@ -309,10 +311,18 @@ export type OrderBillExcludedItemDto = {
   itemId: number
   name: string
   qty: number
+  selectedOption?: OrderItemSelectedOptionDto | null
+  preferenceNote?: string | null
   lineGrossMinor: number
   currency: string
   status: 'excluded' | 'canceled' | 'rejected_batch'
   reason?: string | null
+}
+
+export type OrderItemSelectedOptionDto = {
+  optionId?: number | null
+  name: string
+  priceDeltaMinor: number
 }
 
 export type OrderBillDto = {

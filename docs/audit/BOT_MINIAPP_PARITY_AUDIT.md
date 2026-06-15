@@ -6,6 +6,7 @@
 >
 > Current correction as of 2026-06-03: several P1 gaps described below were later fixed or changed by product decision. In particular, STAFF close bill/order is allowed in Mini App, manager/owner bill controls exist in Mini App, booking screens exist, guest history/favorites exist, pre-QR guest cards no longer expose structured order menu, and info/photo-menu media is served through backend proxy.
 > Additional correction: STAFF booking management is split from order status updates. STAFF can view bookings and mark arrived/no-show; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
+> Additional correction as of 2026-06-10: Guest/Menu Options & Flavors parity is now an active P1 follow-up in `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Guest Bot supports hookah option/flavor UX, but selected flavors are not persisted as first-class order modifiers and Guest Mini App still lacks equivalent option selection.
 
 Режим: read-only аудит. Backend, frontend business logic, миграции, checkout, ledger, promotions, loyalty и AI flows не менялись.
 
@@ -17,6 +18,7 @@
 
 Mini App отстаёт в основном не по расчётам, а по ширине продукта:
 
+- guest menu options/flavors are not yet structured parity: Bot has selection UX, Mini App lacks it, and order persistence is still item-only/comment-assisted;
 - guest profile/promotions/loyalty progress screens не доведены до bot parity; history/favorites baseline уже есть;
 - platform placements/support/analytics частично скрыты или объяснены как bot-only;
 - final staging smoke remains required for initData, money, staff notifications and role denied paths.
@@ -90,7 +92,7 @@ Mini App frontend:
 | `/start` без QR | Role-aware guest menu, catalog entry, Mini App entry, venue onboarding lead | `mode=guest` opens catalog through WebApp auth | Partial parity | Bot has richer entry menu and onboarding actions | P2 | Keep bot as entrypoint; enrich Mini App catalog after pilot smoke. |
 | `/start <tableToken>` / QR | Resolves table, shows table context menu and Mini App choice | Resolves table by token, hides QR CTA after context, routes to venue/menu/cart/order | Done | Needs runtime smoke in Telegram only | P2 | Continue manual smoke with real WebApp `initData`. |
 | Table context actions | Menu, cart, my order, quick order, shared bill, staff call, venue promos, favorites, history, profile, change table | Menu, cart, my order, support, staff call; bookings safe fallback | Partial | Profile/history/favorites/promos/change-table are not first-class Mini App actions | P1 | Add guest account hub: profile, history, favorites, venue promotions, loyalty progress. |
-| Menu | Bot menu supports order flow and richer callbacks | Venue menu lists categories/items, add to cart, unavailable disabled | Partial | Guest Mini App does not expose item options/modifiers/photos/descriptions as order modifiers | P2 | Keep core simple for pilot; plan menu richness after launch-critical parity. |
+| Menu | Bot menu supports order flow and richer callbacks, including hookah flavor/option selection | Venue menu lists categories/items, add to cart, unavailable disabled, but does not expose option/flavor picker | Partial | Guest Mini App does not expose item options/modifiers/photos/descriptions as order modifiers; Bot flavor choice is comment-assisted rather than structured persistence | P1 | Implement Guest/Menu Options & Flavors parity from the active roadmap: backend selected-option persistence, Bot structured submit, Mini App option picker and smoke closure. |
 | Cart / checkout | Bot cart includes promo/loyalty preview and fallback quick order | Cart submits scoped `tableSessionId/tabId`, supports personal/shared tabs and fallback chat command | Done / smoke | Cart UI shows basic item totals, not full preview breakdown before checkout | P2 | Add cart preview breakdown later if product needs pre-checkout transparency. |
 | Active order / My order | Bot active order shows status and bill lines | Mini App active order uses scoped `tableSessionId/tabId`, shows items, prices, promo/loyalty/manual totals, final total | Done | Needs cross-channel snapshot/manual comparison | P2 | Keep manual parity checklist until snapshot tests exist. |
 | Shared bill / tabs | Bot has shared bill entry and invite flow | Cart screen supports personal/shared tab selection, create/join invite | Partial | Table home has no explicit `Общий счёт` action; behavior is buried inside cart | P1 | Add a clear table-home entry or surface tab mode more explicitly in cart header. |
@@ -118,7 +120,8 @@ Mini App frontend:
 | Cancel/reject order/batch/item | Bot has richer cancel/reject flows | Mini App has order reject for owner/manager; no item-level cancel/exclude controls | Partial | Item/batch granular management is bot-only | P1 | Add only backend-supported actions; otherwise keep explicit bot-only text. |
 | Staff calls lifecycle | Bot has active calls and callbacks for ack/done in router paths | Mini App has support/staff screens; route details need smoke for ack/done parity | Partial | Staff call lifecycle may still be more visible in bot than Mini App | P1 | Add/verify Venue Mini App active staff call list with ack/done smoke tests. |
 | Menu CRUD | Bot owner/manager menu management exists | Mini App menu supports category/item CRUD, reorder, item availability | Done / partial | Uses prompt-style inputs; not polished | P2 | Accept for pilot; later replace prompts with forms. |
-| Option stop-list | Bot stop-list supports item/options | Mini App displays options/flavors and availability toggle | Done | Guest order model still does not persist selected option modifiers | P2 | Keep availability parity; build modifiers separately. |
+| Option stop-list | Bot stop-list supports item/options | Mini App displays options/flavors and availability toggle | Partial | Availability parity exists, but guest order model still does not persist selected option modifiers and Venue Mini App lacks full option CRUD/flavor-profile parity | P1 | Build structured selected-option modifiers first, then finish Venue Mini App option CRUD/flavor-profile parity for OWNER/MANAGER. |
+| Option line preference note | Bot renders structured order/read-model lines but does not yet collect optional preparation notes | Guest Mini App collects optional `Пожелание к вкусу` on selected option lines | Partial | Bot input parity for line-level preference note is missing; note must remain separate from structured flavor and have no price semantics | P1 follow-up | Add a small Guest Bot conversational step for optional line note after flavor selection, or explicitly skip with “без пожеланий”. |
 | Tables / QR | Bot tables/QR flows exist | Mini App tables screen supports create, rotate, rotate all by permission, QR export | Partial | Staff sees tables if backend permission allows read; product policy should confirm | P2 | Align staff table visibility with role matrix before launch. |
 | Staff management | Bot owner staff management exists | Mini App staff screen supports list, invite, role update/remove by permissions | Partial | Member labels are `User <id>`, not names; manager invite capability is conservative | P2 | Polish identity display; keep permissions conservative. |
 | Staff chat link | Bot supports staff chat bind/status | Mini App chat link/status screen exists | Partial | Needs runtime verification in Telegram group | P2 | Include group binding in venue pilot runbook. |
@@ -303,7 +306,7 @@ Acceptance:
 ## 11. P2 Backlog
 
 - Rich guest catalog cards: media, hours, contacts, public promotion teasers.
-- Guest menu media/descriptions/options/modifiers/top-list.
+- Guest menu media/descriptions/top-list.
 - Cart pre-submit promo/loyalty preview polish.
 - Cross-channel bill snapshot tests.
 - Venue dashboard stats.

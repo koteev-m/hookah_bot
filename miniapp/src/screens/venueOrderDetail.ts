@@ -427,6 +427,12 @@ function renderBatches(
       const row = el('div', { className: 'order-item' })
       const info = el('div', { className: 'order-item-main' })
       info.appendChild(el('span', { className: 'order-item-name', text: item.name }))
+      if (item.selectedOption?.name) {
+        info.appendChild(el('span', { className: 'order-item-details', text: `Вкус: ${item.selectedOption.name}` }))
+      }
+      if (item.preferenceNote) {
+        info.appendChild(el('span', { className: 'order-item-details', text: `Пожелание: ${item.preferenceNote}` }))
+      }
       const statusMeta = renderItemStatusMeta(item)
       const priceMeta = renderItemPriceMeta(item, discountLabel)
       if (statusMeta) {

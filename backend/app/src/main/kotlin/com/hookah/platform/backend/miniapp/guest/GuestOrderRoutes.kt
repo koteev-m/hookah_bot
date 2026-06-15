@@ -54,6 +54,7 @@ private const val ITEMS_MAX_SIZE = 50
 private const val QTY_MIN = 1
 private const val QTY_MAX = 50
 private const val COMMENT_MAX_LENGTH = 500
+private const val ITEM_PREFERENCE_NOTE_MAX_LENGTH = 200
 private const val IDEMPOTENCY_KEY_MAX_LENGTH = 128
 private const val DEFAULT_CURRENCY = "RUB"
 
@@ -312,6 +313,7 @@ private fun normalizeIdempotencyKey(idempotencyKey: String): String {
 private data class NormalizedItemKey(
     val itemId: Long,
     val selectedOptionId: Long?,
+    val preferenceNote: String?,
 )
 
 private fun normalizeItems(items: List<AddBatchItemDto>): List<OrderBatchItemInput> {
@@ -334,7 +336,8 @@ private fun normalizeItems(items: List<AddBatchItemDto>): List<OrderBatchItemInp
         if (item.qty !in QTY_MIN..QTY_MAX) {
             throw InvalidInputException("qty must be between $QTY_MIN and $QTY_MAX")
         }
-        val key = NormalizedItemKey(item.itemId, item.selectedOptionId)
+        val preferenceNote = normalizeItemPreferenceNote(item.preferenceNote)
+        val key = NormalizedItemKey(item.itemId, item.selectedOptionId, preferenceNote)
         grouped[key] = (grouped[key] ?: 0) + item.qty
     }
     if (grouped.size < ITEMS_MIN_SIZE || grouped.size > ITEMS_MAX_SIZE) {
@@ -344,7 +347,12 @@ private fun normalizeItems(items: List<AddBatchItemDto>): List<OrderBatchItemInp
         if (qty !in QTY_MIN..QTY_MAX) {
             throw InvalidInputException("qty must be between $QTY_MIN and $QTY_MAX")
         }
-        OrderBatchItemInput(itemId = key.itemId, qty = qty, selectedOptionId = key.selectedOptionId)
+        OrderBatchItemInput(
+            itemId = key.itemId,
+            qty = qty,
+            selectedOptionId = key.selectedOptionId,
+            preferenceNote = key.preferenceNote,
+        )
     }
 }
 
@@ -355,6 +363,17 @@ private fun normalizeComment(comment: String?): String? {
     }
     if (trimmed.length > COMMENT_MAX_LENGTH) {
         throw InvalidInputException("comment length must be <= $COMMENT_MAX_LENGTH")
+    }
+    return trimmed
+}
+
+private fun normalizeItemPreferenceNote(preferenceNote: String?): String? {
+    val trimmed = preferenceNote?.trim().orEmpty()
+    if (trimmed.isEmpty()) {
+        return null
+    }
+    if (trimmed.length > ITEM_PREFERENCE_NOTE_MAX_LENGTH) {
+        throw InvalidInputException("preferenceNote length must be <= $ITEM_PREFERENCE_NOTE_MAX_LENGTH")
     }
     return trimmed
 }
@@ -424,6 +443,7 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
                                 qty = item.qty,
                                 name = item.itemName,
                                 selectedOption = item.selectedOption?.toDto(),
+                                preferenceNote = item.preferenceNote,
                                 priceMinor = item.priceMinor,
                                 currency = item.currency,
                                 lineGrossMinor = item.lineGrossMinor(),
@@ -457,6 +477,7 @@ private fun GuestOrderCartPreview.toDto(): CartPreviewDto =
                     name = item.itemName,
                     qty = item.qty,
                     selectedOption = item.selectedOption?.toDto(),
+                    preferenceNote = item.preferenceNote,
                     priceMinor = item.priceMinor,
                     currency = item.currency,
                     lineGrossMinor = item.lineGrossMinor,
@@ -555,7 +576,8 @@ private suspend fun staffChatCreatedBatchItemsSummary(
     if (batch.items.isNotEmpty()) {
         return batch.items.joinToString(separator = ", ") { item ->
             val itemName = item.selectedOption?.let { option -> "${item.itemName} · ${option.name}" } ?: item.itemName
-            "$itemName x${item.qty} — ${formatStaffSummaryMoney(item.priceMinor * item.qty, item.currency)}"
+            val note = item.preferenceNote?.takeIf { it.isNotBlank() }?.let { "; пожелание: $it" }.orEmpty()
+            "$itemName x${item.qty}$note — ${formatStaffSummaryMoney(item.priceMinor * item.qty, item.currency)}"
         }
     }
     val itemIds = fallbackItems.map { it.itemId }.toSet()

@@ -128,6 +128,7 @@ Product intent:
 - Staff/venue order detail and staff-chat live order messages must show selected options next to the ordered item.
 - Stop-listed or unavailable options must be hidden from guest choice and rejected safely at preview/checkout if submitted stale.
 - Guest Bot must stop relying only on comment-only flavor persistence such as `Выбранные вкусы`; comment can remain guest-visible context, but money/read-model truth must be structured.
+- Optional guest preparation preference text (`Пожелание к вкусу`) is allowed only as a line-level note attached to the selected cart/order line. It is not a custom flavor, has no price semantics, must be length-limited, and must not replace venue-configured structured options.
 
 Current gap:
 - Venue menu configuration supports item options/flavors and option availability.
@@ -138,10 +139,10 @@ Current gap:
 Target behavior:
 1. Guest menu DTOs expose available options for each item that needs a guest choice.
 2. Guest Bot and Guest Mini App render an item option picker before adding that item to cart.
-3. Cart identity includes item id plus selected option id(s), so `Classic · Ягодный` and `Classic · Мята` remain distinct lines.
+3. Cart identity includes item id plus selected option id(s) plus normalized line preference note, so `Classic · Ягодный · без мяты` and `Classic · Ягодный · покрепче` remain distinct lines.
 4. Preview and checkout include option price deltas and validate the option belongs to the item/venue and is available.
 5. Order/batch/read-model snapshots preserve selected option id, name and price delta at checkout time so later option edits do not rewrite historical bills.
-6. Venue order detail, staff chat and guest active order/bill show selected options in human copy under the ordered item.
+6. Venue order detail, staff chat, Guest Bot `Мой заказ` and guest active order/bill show selected options and line-level preference notes in human copy under the ordered item.
 7. If an option is disabled between selection and submit, preview/checkout rejects it with clear guest copy and does not silently downgrade to the base item.
 
 Implementation slices:
@@ -150,6 +151,9 @@ B. Guest Bot submits structured selected option data instead of comment-only fla
 C. Guest Mini App item option picker, cart line identity by selected option and structured preview/checkout payload.
 D. Venue Mini App option CRUD/flavor-profile parity for OWNER/MANAGER, with STAFF limited by existing menu/availability permissions.
 E. Smoke/docs closure: bot vs Mini App option parity, staff chat/order detail display, unavailable option rejection and money snapshot tests.
+
+Current follow-up after the Mini App note slice:
+- Guest Mini App can collect `Пожелание к вкусу` for option items. Guest Bot input for the same optional line-level note remains a parity TODO; until then, bot must still submit structured `selectedOptionId` and render any existing line note returned by read models.
 
 ## Block 9 — Tables & QR
 MUST:

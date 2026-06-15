@@ -531,6 +531,7 @@ class GuestOrderRoutesTest {
                                             itemId = itemId,
                                             qty = 2,
                                             selectedOptionId = optionId,
+                                            preferenceNote = " поменьше холодка ",
                                         ),
                                     ),
                                 comment = null,
@@ -546,6 +547,7 @@ class GuestOrderRoutesTest {
             assertEquals(optionId, snapshot.optionId)
             assertEquals("Ягодный микс", snapshot.name)
             assertEquals(30_000L, snapshot.priceDeltaMinor)
+            assertEquals("поменьше холодка", fetchPreferenceNote(jdbcUrl, payload.batchId))
 
             val activeResponse =
                 client.get(
@@ -564,6 +566,7 @@ class GuestOrderRoutesTest {
             assertEquals(optionId, activeItem.selectedOption?.optionId)
             assertEquals("Ягодный микс", activeItem.selectedOption?.name)
             assertEquals(30_000L, activeItem.selectedOption?.priceDeltaMinor)
+            assertEquals("поменьше холодка", activeItem.preferenceNote)
             assertEquals(260_000L, activePayload.order?.grossTotalMinor)
             assertEquals(260_000L, activePayload.order?.finalPayableTotalMinor)
 
@@ -575,12 +578,15 @@ class GuestOrderRoutesTest {
             assertEquals(optionId, venueItem.selectedOption?.optionId)
             assertEquals("Ягодный микс", venueItem.selectedOption?.name)
             assertEquals(30_000L, venueItem.selectedOption?.priceDeltaMinor)
+            assertEquals("поменьше холодка", venueItem.preferenceNote)
 
             val notification = notifications.single()
             val notificationSummary = assertNotNull(notification.itemsSummary)
             assertTrue(notificationSummary.contains("Авторский кальян · Ягодный микс"), notificationSummary)
+            assertTrue(notificationSummary.contains("пожелание: поменьше холодка"), notificationSummary)
             assertEquals(260_000L, notification.bill?.grossTotalMinor)
             assertEquals("Ягодный микс", notification.bill?.activeItems?.single()?.selectedOption?.name)
+            assertEquals("поменьше холодка", notification.bill?.activeItems?.single()?.preferenceNote)
         }
 
     @Test
@@ -665,11 +671,32 @@ class GuestOrderRoutesTest {
                             comment = null,
                         ),
                 )
+            val tooLongNoteResponse =
+                postAddBatchRequest(
+                    request =
+                        AddBatchRequest(
+                            tableToken = "option-reject-token",
+                            tableSessionId = tableSessionId,
+                            tabId = personalTabId,
+                            idempotencyKey = "option-reject-too-long-note",
+                            items =
+                                listOf(
+                                    AddBatchItemDto(
+                                        itemId = itemId,
+                                        qty = 1,
+                                        preferenceNote = "а".repeat(201),
+                                    ),
+                                ),
+                            comment = null,
+                        ),
+                )
 
             assertEquals(HttpStatusCode.BadRequest, unavailableResponse.status)
             assertApiErrorEnvelope(unavailableResponse, ApiErrorCodes.INVALID_INPUT)
             assertEquals(HttpStatusCode.BadRequest, foreignResponse.status)
             assertApiErrorEnvelope(foreignResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(HttpStatusCode.BadRequest, tooLongNoteResponse.status)
+            assertApiErrorEnvelope(tooLongNoteResponse, ApiErrorCodes.INVALID_INPUT)
             assertEquals(0, countRows(jdbcUrl, "order_batch_item_options"))
         }
 
@@ -709,7 +736,24 @@ class GuestOrderRoutesTest {
                                 tabId = personalTabId,
                                 items =
                                     listOf(
-                                        AddBatchItemDto(itemId = itemId, qty = 1, selectedOptionId = mintOptionId),
+                                        AddBatchItemDto(
+                                            itemId = itemId,
+                                            qty = 1,
+                                            selectedOptionId = mintOptionId,
+                                            preferenceNote = "без мяты",
+                                        ),
+                                        AddBatchItemDto(
+                                            itemId = itemId,
+                                            qty = 1,
+                                            selectedOptionId = mintOptionId,
+                                            preferenceNote = " без мяты ",
+                                        ),
+                                        AddBatchItemDto(
+                                            itemId = itemId,
+                                            qty = 1,
+                                            selectedOptionId = mintOptionId,
+                                            preferenceNote = "покрепче",
+                                        ),
                                         AddBatchItemDto(itemId = itemId, qty = 1, selectedOptionId = berryOptionId),
                                     ),
                             ),
@@ -719,12 +763,14 @@ class GuestOrderRoutesTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             val preview = json.decodeFromString(CartPreviewResponse.serializer(), response.bodyAsText()).preview
-            assertEquals(2, preview.items.size)
-            assertEquals(listOf("Мята", "Ягоды"), preview.items.map { it.selectedOption?.name })
-            assertEquals(listOf(100_000L, 130_000L), preview.items.map { it.priceMinor })
-            assertEquals(listOf(100_000L, 130_000L), preview.items.map { it.lineGrossMinor })
-            assertEquals(230_000L, preview.grossTotalMinor)
-            assertEquals(230_000L, preview.finalPayableTotalMinor)
+            assertEquals(3, preview.items.size)
+            assertEquals(listOf("Мята", "Мята", "Ягоды"), preview.items.map { it.selectedOption?.name })
+            assertEquals(listOf("без мяты", "покрепче", null), preview.items.map { it.preferenceNote })
+            assertEquals(listOf(2, 1, 1), preview.items.map { it.qty })
+            assertEquals(listOf(100_000L, 100_000L, 130_000L), preview.items.map { it.priceMinor })
+            assertEquals(listOf(200_000L, 100_000L, 130_000L), preview.items.map { it.lineGrossMinor })
+            assertEquals(430_000L, preview.grossTotalMinor)
+            assertEquals(430_000L, preview.finalPayableTotalMinor)
             assertEquals(0, countRows(jdbcUrl, "orders"))
             assertEquals(0, countRows(jdbcUrl, "order_batch_item_options"))
         }
@@ -2821,6 +2867,26 @@ class GuestOrderRoutesTest {
                         name = rs.getString("option_name_snapshot"),
                         priceDeltaMinor = rs.getLong("price_delta_minor_snapshot"),
                     )
+                }
+            }
+        }
+    }
+
+    private fun fetchPreferenceNote(
+        jdbcUrl: String,
+        batchId: Long,
+    ): String? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT preference_note
+                FROM order_batch_items
+                WHERE order_batch_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchId)
+                statement.executeQuery().use { rs ->
+                    return if (rs.next()) rs.getString("preference_note") else null
                 }
             }
         }

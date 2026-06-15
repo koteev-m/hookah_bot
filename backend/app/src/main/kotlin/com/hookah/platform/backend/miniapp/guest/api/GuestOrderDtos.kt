@@ -62,6 +62,7 @@ data class OrderBatchItemDto(
     val qty: Int,
     val name: String? = null,
     val selectedOption: SelectedOrderItemOptionDto? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val lineGrossMinor: Long = 0,
@@ -93,6 +94,7 @@ data class AddBatchItemDto(
     val itemId: Long,
     val qty: Int,
     val selectedOptionId: Long? = null,
+    val preferenceNote: String? = null,
 )
 
 @Serializable
@@ -139,6 +141,7 @@ data class CartPreviewItemDto(
     val name: String,
     val qty: Int,
     val selectedOption: SelectedOrderItemOptionDto? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long,
     val currency: String,
     val lineGrossMinor: Long,

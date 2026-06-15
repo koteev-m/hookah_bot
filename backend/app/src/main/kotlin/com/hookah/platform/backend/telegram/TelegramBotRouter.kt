@@ -6062,6 +6062,9 @@ class TelegramBotRouter(
                         discountPercent = item.discountPercent,
                         promoDiscountMinor = item.promoDiscountMinor,
                     )?.let { priceText -> append(" — $priceText") }
+                    item.preferenceNote?.takeIf { it.isNotBlank() }?.let { note ->
+                        append("\n  Пожелание: $note")
+                    }
                 }
             }
             val promoSummary =
@@ -6115,6 +6118,9 @@ class TelegramBotRouter(
                                 discountPercent = item.discountPercent,
                                 promoDiscountMinor = item.promoDiscountMinor,
                             )?.let { priceText -> append(" — $priceText") }
+                            item.preferenceNote?.takeIf { it.isNotBlank() }?.let { note ->
+                                append("\n  Пожелание: $note")
+                            }
                         }
                     },
                 )
@@ -23621,6 +23627,9 @@ class TelegramBotRouter(
             items.forEach { (_, item) ->
                 append("• ${formatVenueOrderItemName(item)} ×${item.qty}")
                 buildVenueOrderBillItemPriceText(item)?.let { priceText -> append(" — $priceText") }
+                item.preferenceNote?.takeIf { it.isNotBlank() }?.let { note ->
+                    append("\n  Пожелание: $note")
+                }
                 append("\n")
             }
         }.trimEnd()
@@ -23634,6 +23643,9 @@ class TelegramBotRouter(
             append("\n\n")
             append("${formatVenueOrderItemName(item)} ×${item.qty}")
             buildVenueOrderBillItemPriceText(item)?.let { priceText -> append(" — $priceText") }
+            item.preferenceNote?.takeIf { it.isNotBlank() }?.let { note ->
+                append("\nПожелание: $note")
+            }
         }
 
     private fun formatVenueOrderItemName(item: OrderBatchItemDetail): String =
@@ -27534,7 +27546,8 @@ class TelegramBotRouter(
     ): String {
         if (createdBatch.items.isNotEmpty()) {
             return createdBatch.items.joinToString(separator = ", ") { item ->
-                "${formatOrderItemName(item.itemName, item.selectedOption)} x${item.qty} — " +
+                val note = item.preferenceNote?.takeIf { it.isNotBlank() }?.let { "; пожелание: $it" }.orEmpty()
+                "${formatOrderItemName(item.itemName, item.selectedOption)} x${item.qty}$note — " +
                     formatCompactMoney(item.priceMinor * item.qty, item.currency)
             }
         }

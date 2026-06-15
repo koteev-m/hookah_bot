@@ -283,10 +283,14 @@ function formatDiscount(amountMinor: number, currency: string) {
 }
 
 function compareCartRequestItems(
-  left: { itemId: number; selectedOptionId?: number | null },
-  right: { itemId: number; selectedOptionId?: number | null }
+  left: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null },
+  right: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null }
 ): number {
-  return left.itemId - right.itemId || (left.selectedOptionId ?? 0) - (right.selectedOptionId ?? 0)
+  return (
+    left.itemId - right.itemId ||
+    (left.selectedOptionId ?? 0) - (right.selectedOptionId ?? 0) ||
+    (left.preferenceNote ?? '').localeCompare(right.preferenceNote ?? '')
+  )
 }
 
 function isLoyaltyDiscount(ruleType: string | null | undefined, label: string) {
@@ -663,7 +667,8 @@ export function renderCartScreen(options: CartScreenOptions) {
       .map((line) => ({
         itemId: line.itemId,
         qty: line.qty,
-        ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {})
+        ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {}),
+        ...(line.preferenceNote ? { preferenceNote: line.preferenceNote } : {})
       }))
       .sort(compareCartRequestItems)
 
@@ -672,7 +677,12 @@ export function renderCartScreen(options: CartScreenOptions) {
       tableToken,
       tableSessionId,
       tabId,
-      items: buildPreviewItems().map((item) => [item.itemId, item.selectedOptionId ?? null, item.qty])
+      items: buildPreviewItems().map((item) => [
+        item.itemId,
+        item.selectedOptionId ?? null,
+        item.preferenceNote ?? null,
+        item.qty
+      ])
     })
 
   const resetCartPreview = (message = '') => {
@@ -846,6 +856,9 @@ export function renderCartScreen(options: CartScreenOptions) {
       if (optionName) {
         info.appendChild(el('span', { className: 'cart-item-option', text: `Вкус: ${optionName}` }))
       }
+      if (line.preferenceNote) {
+        info.appendChild(el('span', { className: 'cart-item-option', text: `Пожелание: ${line.preferenceNote}` }))
+      }
       if (priceText) {
         const price = el('span', { className: 'cart-item-price', text: priceText })
         info.appendChild(price)
@@ -879,7 +892,8 @@ export function renderCartScreen(options: CartScreenOptions) {
           const result = addToCart(line.itemId, {
             selectedOptionId: line.selectedOptionId,
             selectedOptionName: line.selectedOptionName,
-            priceDeltaMinor: line.priceDeltaMinor
+            priceDeltaMinor: line.priceDeltaMinor,
+            preferenceNote: line.preferenceNote
           })
           if (!result.ok) {
             setMessage(result.reason === 'limit' ? 'Можно выбрать не более 50 разных позиций.' : 'Некорректное значение.')
@@ -947,7 +961,8 @@ export function renderCartScreen(options: CartScreenOptions) {
       .map((line) => ({
         itemId: line.itemId,
         qty: line.qty,
-        ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {})
+        ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {}),
+        ...(line.preferenceNote ? { preferenceNote: line.preferenceNote } : {})
       }))
       .sort(compareCartRequestItems)
 
@@ -956,14 +971,14 @@ export function renderCartScreen(options: CartScreenOptions) {
     tableSessionId: number,
     tabId: number,
     comment: string | null,
-    items: Array<{ itemId: number; qty: number; selectedOptionId?: number | null }>
+    items: Array<{ itemId: number; qty: number; selectedOptionId?: number | null; preferenceNote?: string | null }>
   ) =>
     JSON.stringify({
       tableToken,
       tableSessionId,
       tabId,
       comment,
-      items: items.map((item) => [item.itemId, item.selectedOptionId ?? null, item.qty])
+      items: items.map((item) => [item.itemId, item.selectedOptionId ?? null, item.preferenceNote ?? null, item.qty])
     })
 
   const generateIdempotencyKey = () =>

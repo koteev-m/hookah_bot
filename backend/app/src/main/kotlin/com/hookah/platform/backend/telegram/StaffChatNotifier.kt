@@ -942,6 +942,9 @@ private fun formatStaffBillActiveItems(
                 item.discountPercent?.let { discountPercent ->
                     append(" (скидка ").append(discountPercent).append("%)")
                 }
+                item.preferenceNote?.takeIf { it.isNotBlank() }?.let { note ->
+                    append('\n').append("  Пожелание: ").append(note)
+                }
             }
         }
         ?: "• нет активных позиций"
@@ -953,6 +956,9 @@ private fun formatStaffBillExcludedItems(items: List<OrderBillExcludedItemSnapsh
             append(" — ").append(formatStaffChatMoney(item.lineGrossMinor, item.currency))
             item.reason?.takeIf { it.isNotBlank() }?.let { reason ->
                 append("; причина: ").append(reason)
+            }
+            item.preferenceNote?.takeIf { it.isNotBlank() }?.let { note ->
+                append('\n').append("  Пожелание: ").append(note)
             }
         }
     }
