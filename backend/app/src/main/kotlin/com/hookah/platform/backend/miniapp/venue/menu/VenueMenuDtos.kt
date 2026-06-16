@@ -28,6 +28,7 @@ data class VenueMenuItemDto(
     val sortOrder: Int,
     val itemType: String? = null,
     val effectiveItemType: String,
+    val supportsBaseFlavorProfiles: Boolean = false,
     val missingBaseFlavorProfilesCount: Int = 0,
     val options: List<VenueMenuOptionDto>,
 )

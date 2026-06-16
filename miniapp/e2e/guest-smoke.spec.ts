@@ -128,6 +128,7 @@ type VenueMenuItemFixture = {
   sortOrder: number
   itemType?: string | null
   effectiveItemType: string
+  supportsBaseFlavorProfiles?: boolean
   missingBaseFlavorProfilesCount?: number
   options: VenueMenuOptionFixture[]
 }
@@ -873,6 +874,7 @@ function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
           isAvailable: true,
           sortOrder: 0,
           effectiveItemType: 'HOOKAH',
+          supportsBaseFlavorProfiles: true,
           missingBaseFlavorProfilesCount: 8,
           options: []
         }
@@ -898,6 +900,7 @@ async function mockVenueMenuApi(
   let availabilityCalls = 0
   let applyBaseFlavorProfileCalls = 0
   let createItemCalls = 0
+  let updateItemCalls = 0
   let itemAvailabilityCalls = 0
   let nextItemId = 950
   let nextOptionId = 900
@@ -918,8 +921,12 @@ async function mockVenueMenuApi(
   const findItem = (itemId: number) => allItems().find((item) => item.id === itemId) ?? null
   const findOption = (optionId: number) => allOptions().find((option) => option.id === optionId) ?? null
   const normalizeFlavorNameKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru-RU')
+  const isLegacyHookahCategory = (category: VenueMenuCategoryFixture) =>
+    category.name.trim().toLocaleLowerCase('ru-RU') === 'кальянное меню'
+  const supportsBaseFlavorProfiles = (category: VenueMenuCategoryFixture, itemType?: string | null) =>
+    itemType === 'HOOKAH' || (!itemType && (category.categoryType === 'HOOKAH' || isLegacyHookahCategory(category)))
   const updateMissingBaseFlavorProfilesCount = (item: VenueMenuItemFixture) => {
-    if (item.effectiveItemType !== 'HOOKAH') {
+    if (item.effectiveItemType !== 'HOOKAH' && item.supportsBaseFlavorProfiles !== true) {
       item.missingBaseFlavorProfilesCount = 0
       return
     }
@@ -971,7 +978,7 @@ async function mockVenueMenuApi(
         await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
         return
       }
-      if (item.effectiveItemType !== 'HOOKAH') {
+      if (item.effectiveItemType !== 'HOOKAH' && item.supportsBaseFlavorProfiles !== true) {
         await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'invalid' }) })
         return
       }
@@ -1023,6 +1030,7 @@ async function mockVenueMenuApi(
         await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
         return
       }
+      const itemSupportsBaseFlavorProfiles = supportsBaseFlavorProfiles(category, body.itemType)
       const item = {
         id: nextItemId++,
         categoryId: category.id,
@@ -1033,10 +1041,41 @@ async function mockVenueMenuApi(
         sortOrder: category.items.length,
         itemType: body.itemType ?? null,
         effectiveItemType: body.itemType ?? category.categoryType,
-        missingBaseFlavorProfilesCount: body.itemType === 'HOOKAH' || (!body.itemType && category.categoryType === 'HOOKAH') ? 8 : 0,
+        supportsBaseFlavorProfiles: itemSupportsBaseFlavorProfiles,
+        missingBaseFlavorProfilesCount: itemSupportsBaseFlavorProfiles ? 8 : 0,
         options: []
       }
       category.items.push(item)
+      await route.fulfill(jsonResponse(item))
+      return
+    }
+
+    const itemMatch = url.pathname.match(/\/api\/venue\/menu\/items\/(\d+)$/)
+    if (itemMatch && method === 'PATCH') {
+      updateItemCalls += 1
+      const item = findItem(Number(itemMatch[1]))
+      const body = (await request.postDataJSON()) as {
+        name?: string | null
+        priceMinor?: number | null
+        currency?: string | null
+        isAvailable?: boolean | null
+        itemType?: string | null
+      }
+      if (!item) {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return
+      }
+      if (body.name != null) item.name = body.name
+      if (body.priceMinor != null) item.priceMinor = body.priceMinor
+      if (body.currency != null) item.currency = body.currency
+      if (body.isAvailable != null) item.isAvailable = body.isAvailable
+      if (body.itemType !== undefined) {
+        item.itemType = body.itemType
+        const category = findCategory(item.categoryId)
+        item.effectiveItemType = body.itemType ?? category?.categoryType ?? 'OTHER'
+        item.supportsBaseFlavorProfiles = category ? supportsBaseFlavorProfiles(category, body.itemType) : false
+        updateMissingBaseFlavorProfilesCount(item)
+      }
       await route.fulfill(jsonResponse(item))
       return
     }
@@ -1149,6 +1188,7 @@ async function mockVenueMenuApi(
     getAvailabilityCalls: () => availabilityCalls,
     getApplyBaseFlavorProfileCalls: () => applyBaseFlavorProfileCalls,
     getCreateItemCalls: () => createItemCalls,
+    getUpdateItemCalls: () => updateItemCalls,
     getItemAvailabilityCalls: () => itemAvailabilityCalls
   }
 }
@@ -1456,7 +1496,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
         id: 30,
         name: 'Кальянное меню',
         sortOrder: 0,
-        categoryType: 'HOOKAH',
+        categoryType: 'OTHER',
         items: [
           {
             id: 310,
@@ -1466,7 +1506,8 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
             currency: 'RUB',
             isAvailable: true,
             sortOrder: 0,
-            effectiveItemType: 'HOOKAH',
+            effectiveItemType: 'OTHER',
+            supportsBaseFlavorProfiles: true,
             missingBaseFlavorProfilesCount: 8,
             options: []
           }
@@ -1487,6 +1528,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
             isAvailable: true,
             sortOrder: 0,
             effectiveItemType: 'DRINK',
+            supportsBaseFlavorProfiles: false,
             missingBaseFlavorProfilesCount: 0,
             options: [
               {
@@ -1516,6 +1558,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
             isAvailable: true,
             sortOrder: 0,
             effectiveItemType: 'FOOD',
+            supportsBaseFlavorProfiles: false,
             missingBaseFlavorProfilesCount: 0,
             options: []
           }
@@ -1551,6 +1594,8 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   await expect(hookahItem().getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
   await expect(hookahItem().getByRole('button', { name: 'Добавить базовые вкусы' })).toBeVisible()
+  await expect(hookahItem().getByRole('button', { name: 'Добавить вкус' })).toBeVisible()
+  await expect(hookahItem().getByRole('button', { name: 'Добавить опцию' })).toHaveCount(0)
   await expect(waterItem().getByText('Опции')).toBeVisible()
   await expect(waterItem().getByText('Газированная')).toBeVisible()
   await expect(waterItem().getByRole('button', { name: 'Добавить опцию' })).toBeVisible()
@@ -1614,7 +1659,11 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   await expensiveHookahItem.getByRole('button', { name: 'Добавить базовые вкусы' }).click()
   await expect(expensiveHookahItem.getByText('Ягодный')).toBeVisible()
   await expect(expensiveHookahItem.getByRole('button', { name: 'Добавить базовые вкусы' })).toHaveCount(0)
+  dialogReplies.push('Кальян дорогой', '2700')
+  await expensiveHookahItem.getByRole('button', { name: 'Править позицию' }).click()
+  await expect(expensiveHookahItem.getByText(/2\s*700/)).toBeVisible()
   expect(api.getCreateItemCalls()).toBe(1)
+  expect(api.getUpdateItemCalls()).toBe(1)
   expect(api.getApplyBaseFlavorProfileCalls()).toBe(2)
 })
 

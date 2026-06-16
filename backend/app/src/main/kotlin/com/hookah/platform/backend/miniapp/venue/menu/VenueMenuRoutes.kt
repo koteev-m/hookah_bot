@@ -456,6 +456,7 @@ private fun VenueMenuItem.toDto(
         sortOrder = sortOrder,
         itemType = itemType?.dbValue,
         effectiveItemType = effectiveType.dbValue,
+        supportsBaseFlavorProfiles = supportsBaseFlavorProfiles,
         missingBaseFlavorProfilesCount =
             if (supportsBaseFlavorProfiles) {
                 HookahFlavorProfileService.missingBaseProfileCount(options.map { it.name })

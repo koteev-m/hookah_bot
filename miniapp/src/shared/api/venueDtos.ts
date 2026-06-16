@@ -185,6 +185,7 @@ export type VenueMenuItemDto = {
   sortOrder: number
   itemType?: MenuSemanticType | null
   effectiveItemType: MenuSemanticType
+  supportsBaseFlavorProfiles?: boolean
   missingBaseFlavorProfilesCount?: number
   options: VenueMenuOptionDto[]
 }

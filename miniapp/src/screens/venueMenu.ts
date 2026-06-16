@@ -133,7 +133,7 @@ function formatOptionPrice(option: VenueMenuOptionDto, currency: string) {
 }
 
 function isHookahMenuItem(item: VenueMenuItemDto) {
-  return item.effectiveItemType === 'HOOKAH'
+  return item.effectiveItemType === 'HOOKAH' || item.supportsBaseFlavorProfiles === true
 }
 
 function getScopedOptions(item: VenueMenuItemDto) {
@@ -307,7 +307,7 @@ function renderItemRow(
   }
 
   const actions = el('div', { className: 'venue-menu-item-actions' })
-  const editButton = el('button', { className: 'button-small', text: 'Править' }) as HTMLButtonElement
+  const editButton = el('button', { className: 'button-small', text: 'Править позицию' }) as HTMLButtonElement
   const deleteButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
   const upButton = el('button', { className: 'button-small button-secondary', text: '↑' }) as HTMLButtonElement
   const downButton = el('button', { className: 'button-small button-secondary', text: '↓' }) as HTMLButtonElement

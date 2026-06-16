@@ -462,6 +462,7 @@ class VenueMenuRoutesTest {
                     json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
                 }
             assertEquals(8, hookahItem.missingBaseFlavorProfilesCount)
+            assertTrue(hookahItem.supportsBaseFlavorProfiles)
 
             val waterItem =
                 client.post("/api/venue/menu/items?venueId=$venueId") {
@@ -486,6 +487,7 @@ class VenueMenuRoutesTest {
                     json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
                 }
             assertEquals(0, waterItem.missingBaseFlavorProfilesCount)
+            assertFalse(waterItem.supportsBaseFlavorProfiles)
 
             val applyResponse =
                 client.post("/api/venue/menu/items/${hookahItem.id}/base-flavor-profiles?venueId=$venueId") {
@@ -596,6 +598,44 @@ class VenueMenuRoutesTest {
             val guestItems = guestMenu.categories.flatMap { it.items }.associateBy { it.id }
             assertEquals(8, guestItems.getValue(hookahItem.id).options.size)
             assertTrue(guestItems.getValue(waterItem.id).options.isEmpty())
+
+            val legacyCategory =
+                client.post("/api/venue/menu/categories?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Кальянное меню"}""")
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuCategoryDto.serializer(), response.bodyAsText())
+                }
+            assertEquals("OTHER", legacyCategory.categoryType)
+
+            val legacyHookahItem =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${legacyCategory.id},
+                          "name": "Кальян legacy",
+                          "priceMinor": 190000,
+                          "currency": "RUB",
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+            assertEquals("OTHER", legacyHookahItem.effectiveItemType)
+            assertTrue(legacyHookahItem.supportsBaseFlavorProfiles)
+            assertEquals(8, legacyHookahItem.missingBaseFlavorProfilesCount)
         }
 
     @Test
@@ -1100,6 +1140,7 @@ class VenueMenuRoutesTest {
         val sortOrder: Int,
         val itemType: String? = null,
         val effectiveItemType: String = "OTHER",
+        val supportsBaseFlavorProfiles: Boolean = false,
         val missingBaseFlavorProfilesCount: Int = 0,
         val options: List<VenueMenuOptionDto>,
     )
