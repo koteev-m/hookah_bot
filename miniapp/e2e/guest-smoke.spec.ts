@@ -1673,9 +1673,9 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
 
 test('venue staff sees menu flavors without edit controls', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  await mockVenueMenuApi(page, {
+  const api = await mockVenueMenuApi(page, {
     role: 'STAFF',
-    permissions: ['MENU_VIEW'],
+    permissions: ['MENU_VIEW', 'MENU_AVAILABILITY_MANAGE'],
     categories: [
       {
         id: 30,
@@ -1712,13 +1712,29 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
 
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
   const hookahItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян' })
+  const appleOption = hookahItem.locator('.venue-menu-option').filter({ hasText: 'Яблоко' })
   await expect(hookahItem.getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem.getByText('Яблоко')).toBeVisible()
+  await expect(page.getByPlaceholder('Новая категория')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Добавить позицию' })).toHaveCount(0)
   await expect(hookahItem.getByRole('button', { name: 'Добавить вкус' })).toHaveCount(0)
+  await expect(hookahItem.getByRole('button', { name: 'Добавить базовые вкусы' })).toHaveCount(0)
+  await expect(hookahItem.getByRole('button', { name: 'Править позицию' })).toHaveCount(0)
   await expect(hookahItem.getByRole('button', { name: 'Править вкус' })).toHaveCount(0)
   await expect(hookahItem.getByRole('button', { name: 'Удалить вкус' })).toHaveCount(0)
-  await expect(hookahItem.getByLabel('Доступно гостям')).toHaveCount(0)
-  await expect(hookahItem.getByLabel('Доступен гостям')).toHaveCount(0)
+  await expect(hookahItem.getByRole('button', { name: 'Удалить' })).toHaveCount(0)
+  await expect(hookahItem.getByRole('button', { name: '↑' })).toHaveCount(0)
+  await expect(hookahItem.getByRole('button', { name: '↓' })).toHaveCount(0)
+  await expect(hookahItem.getByLabel('Доступно гостям')).toBeChecked()
+  await expect(hookahItem.getByLabel('Доступен гостям')).toBeChecked()
+
+  await appleOption.getByLabel('Доступен гостям').uncheck()
+  await expect(appleOption.getByLabel('В стоп-листе')).not.toBeChecked()
+  await expect(appleOption.locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toBeVisible()
+  await hookahItem.getByLabel('Доступно гостям').uncheck()
+  await expect(hookahItem.locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toHaveCount(2)
+  expect(api.getAvailabilityCalls()).toBe(1)
+  expect(api.getItemAvailabilityCalls()).toBe(1)
 })
 
 test('startup without URL table token restores active table context', async ({ page }) => {

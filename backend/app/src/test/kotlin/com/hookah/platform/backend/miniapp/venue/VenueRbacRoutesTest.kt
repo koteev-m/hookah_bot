@@ -257,6 +257,7 @@ class VenueRbacRoutesTest {
                     "SHIFT_EXTENSION_VIEW",
                     "SHIFT_EXTENSION_CONFIRM",
                     "MENU_VIEW",
+                    "MENU_AVAILABILITY_MANAGE",
                     "TABLE_VIEW",
                 ),
                 venuesById.getValue(staffVenueId).permissions.toSet(),

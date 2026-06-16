@@ -7,6 +7,7 @@
 > Current correction as of 2026-06-03: several P1 gaps described below were later fixed or changed by product decision. In particular, STAFF close bill/order is allowed in Mini App, manager/owner bill controls exist in Mini App, booking screens exist, guest history/favorites exist, pre-QR guest cards no longer expose structured order menu, and info/photo-menu media is served through backend proxy.
 > Additional correction: STAFF booking management is split from order status updates. STAFF can view bookings and mark arrived/no-show; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
 > Additional correction as of 2026-06-16: Guest/Menu Options & Flavors parity is CLOSED after staging smoke. Guest Bot and Guest Mini App use structured selected options; Venue Mini App supports item-scoped flavor CRUD, item-level and flavor-level stop-list, and hookah-only shared `Добавить базовые вкусы`.
+> Additional correction as of 2026-06-16: STAFF stop-list policy is aligned. STAFF may toggle menu item and item option/flavor availability during a shift, but cannot edit menu content, prices, categories, flavor CRUD or base flavor profiles.
 
 Режим: read-only аудит. Backend, frontend business logic, миграции, checkout, ledger, promotions, loyalty и AI flows не менялись.
 
@@ -120,7 +121,7 @@ Mini App frontend:
 | Cancel/reject order/batch/item | Bot has richer cancel/reject flows | Mini App has order reject for owner/manager; no item-level cancel/exclude controls | Partial | Item/batch granular management is bot-only | P1 | Add only backend-supported actions; otherwise keep explicit bot-only text. |
 | Staff calls lifecycle | Bot has active calls and callbacks for ack/done in router paths | Mini App has support/staff screens; route details need smoke for ack/done parity | Partial | Staff call lifecycle may still be more visible in bot than Mini App | P1 | Add/verify Venue Mini App active staff call list with ack/done smoke tests. |
 | Menu CRUD | Bot owner/manager menu management exists | Mini App menu supports category/item CRUD, reorder, item availability | Done / partial | Uses prompt-style inputs; not polished | P2 | Accept for pilot; later replace prompts with forms. |
-| Option stop-list | Bot stop-list supports item/options, base flavor profile apply and normalize helpers | Mini App displays item-scoped options/flavors, structured guest selected options, explicit item/option stop-list toggles and shared hookah-only `Добавить базовые вкусы` | Done / smoke | Normalize/reset helper remains optional; broad menu IA parity remains separate | P2 | Keep shared base profile apply and item/flavor stop-list in regression smoke; add normalize/reset only if venues need it after pilots. |
+| Option stop-list | Bot stop-list supports item/options, base flavor profile apply and normalize helpers | Mini App displays item-scoped options/flavors, structured guest selected options, explicit item/option stop-list toggles and shared hookah-only `Добавить базовые вкусы` | Done / smoke | STAFF can toggle availability only; normalize/reset helper remains optional; broad menu IA parity remains separate | P2 | Keep shared base profile apply and item/flavor stop-list in regression smoke; add normalize/reset only if venues need it after pilots. |
 | Option line preference note | Bot renders structured order/read-model lines but does not yet collect optional preparation notes | Guest Mini App collects optional `Пожелание к вкусу` on selected option lines | Partial | Bot input parity for line-level preference note is missing; note must remain separate from structured flavor and have no price semantics | P1 follow-up | Add a small Guest Bot conversational step for optional line note after flavor selection, or explicitly skip with “без пожеланий”. |
 | Tables / QR | Bot tables/QR flows exist | Mini App tables screen supports create, rotate, rotate all by permission, QR export | Partial | Staff sees tables if backend permission allows read; product policy should confirm | P2 | Align staff table visibility with role matrix before launch. |
 | Staff management | Bot owner staff management exists | Mini App staff screen supports list, invite, role update/remove by permissions | Partial | Member labels are `User <id>`, not names; manager invite capability is conservative | P2 | Polish identity display; keep permissions conservative. |
@@ -242,7 +243,9 @@ Acceptance:
 
 ### P1.3 — STAFF order/stop-list permissions differ by surface
 
-Why it matters: Staff-facing capabilities must not depend on whether staff uses Telegram bot or Mini App. Current code suggests Mini App disallows STAFF closing an order while bot staff chat has a close bill path; older stop-list flows also require policy alignment.
+Current correction: STAFF order/close policy and operational stop-list policy are aligned in current code. STAFF may toggle item/option availability in Bot and Venue Mini App, but menu content editing remains MANAGER/OWNER-only.
+
+Why it mattered historically: Staff-facing capabilities must not depend on whether staff uses Telegram bot or Mini App. Older code suggested Mini App disallowed STAFF stop-list while Telegram staff stop-list callbacks existed.
 
 Affected modules:
 

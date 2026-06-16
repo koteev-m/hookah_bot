@@ -6,17 +6,17 @@
 
 ## Current status
 
-STAFF может работать с заказами, вызовами и закрытием счёта, но не получает финансовые bill-edit права и не управляет меню/столами/персоналом/настройками.
+STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
 - `ORDER_STATUS_UPDATE`;
 - `MENU_VIEW`;
+- `MENU_AVAILABILITY_MANAGE`;
 - `TABLE_VIEW`.
 
 STAFF не получает:
 - `MENU_MANAGE`;
-- `MENU_AVAILABILITY_MANAGE`;
 - `TABLE_MANAGE`;
 - `TABLE_TOKEN_ROTATE`;
 - `TABLE_TOKEN_ROTATE_ALL`;
@@ -65,7 +65,9 @@ STAFF Mini App behavior:
 - View active bookings.
 - Mark booking guest as arrived (`SEATED`).
 - Mark booking guest as no-show (`NO_SHOW`).
-- View menu read-only.
+- View menu content without edit controls.
+- Put menu item into stop-list and return it from stop-list.
+- Put item option/flavor into stop-list and return it from stop-list.
 - View tables read-only.
 - Use Venue Mini App working panel.
 
@@ -73,6 +75,11 @@ STAFF Mini App behavior:
 
 - Manual item discount.
 - Exclude/restore bill items.
+- Edit menu item/category names.
+- Edit menu prices.
+- Create/delete/reorder menu categories or items.
+- Add/edit/delete flavors/options.
+- Apply base flavor profiles.
 - Confirm new booking.
 - Cancel booking.
 - Change/propose booking time.

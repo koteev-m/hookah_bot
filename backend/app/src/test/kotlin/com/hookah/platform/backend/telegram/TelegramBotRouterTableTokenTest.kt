@@ -6762,7 +6762,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `staff stoplist callbacks are denied`() =
+    fun `staff stoplist callbacks can manage item and option availability`() =
         runBlocking {
             val option =
                 VenueMenuOption(
@@ -6771,7 +6771,7 @@ class TelegramBotRouterTableTokenTest {
                     itemId = 7001L,
                     name = "Мята",
                     priceDeltaMinor = 0L,
-                    isAvailable = false,
+                    isAvailable = true,
                     sortOrder = 10,
                 )
             val item =
@@ -6782,7 +6782,7 @@ class TelegramBotRouterTableTokenTest {
                     name = "Авторский кальян",
                     priceMinor = 85_000L,
                     currency = "RUB",
-                    isAvailable = false,
+                    isAvailable = true,
                     sortOrder = 10,
                     options = listOf(option),
                 )
@@ -6797,6 +6797,12 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
             coEvery { venueMenuRepository.getMenu(10L) } returns listOf(category)
+            coEvery {
+                venueMenuRepository.setItemAvailability(10L, 7001L, false)
+            } returns item.copy(isAvailable = false)
+            coEvery {
+                venueMenuRepository.setOptionAvailability(10L, 8001L, false)
+            } returns option.copy(isAvailable = false)
 
             router.process(
                 TelegramUpdate(
@@ -6823,19 +6829,55 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
-            coVerify(exactly = 0) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
-            coVerify {
-                outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
+            coVerify(exactly = 1) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
+            coVerify(exactly = 1) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
+            coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
             }
         }
 
     @Test
-    fun `staff direct owner stoplist mutation callbacks are denied`() =
+    fun `staff direct owner stoplist availability callbacks are allowed`() =
         runBlocking {
+            val option =
+                VenueMenuOption(
+                    id = 8001L,
+                    venueId = 10L,
+                    itemId = 7001L,
+                    name = "Мята",
+                    priceDeltaMinor = 0L,
+                    isAvailable = true,
+                    sortOrder = 10,
+                )
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Авторский кальян",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 10,
+                    options = listOf(option),
+                )
+            val category =
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Кальянное меню",
+                    sortOrder = 10,
+                    items = listOf(item),
+                )
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueMenuRepository.getMenu(10L) } returns listOf(category)
+            coEvery {
+                venueMenuRepository.setItemAvailability(10L, 7001L, false)
+            } returns item.copy(isAvailable = false)
+            coEvery {
+                venueMenuRepository.setOptionAvailability(10L, 8001L, false)
+            } returns option.copy(isAvailable = false)
 
             router.process(
                 TelegramUpdate(
@@ -6862,9 +6904,9 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
-            coVerify(exactly = 0) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
-            coVerify(exactly = 2) {
+            coVerify(exactly = 1) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
+            coVerify(exactly = 1) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
+            coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
             }
         }

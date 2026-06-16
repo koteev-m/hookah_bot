@@ -30,7 +30,7 @@
 - `ℹ️ Информация` и `📖 Фото-меню` разделены от `🍽 Заказного меню` в Telegram bot и Mini App.
 - Guest Mini App показывает visible+filled info sections; media info sections открываются через backend proxy без раскрытия Telegram token/file URL.
 - Venue Owner/Manager/Staff входят в Venue Mini App через inline `web_app` button, чтобы Telegram WebView передавал `initData`.
-- STAFF может закрывать счёт/заказ, но не может управлять скидками, исключениями, stop-list/menu/table/staff/settings.
+- STAFF может закрывать счёт/заказ и управлять операционным stop-list по позициям/вкусам, но не может управлять скидками, исключениями, структурой/контентом меню, столами, персоналом или настройками.
 - STAFF booking policy разделён: STAFF видит брони и отмечает `Гость пришёл` / `Не пришёл`, а confirm/cancel/change/message/settings остаются MANAGER/OWNER.
 - Platform Owner определяется через `PLATFORM_OWNER_TELEGRAM_ID`; legacy aliases остаются совместимостью.
 - Platform onboarding поддерживает `trial=0`, commercial terms, subscription sync and create/link venue.
@@ -142,6 +142,7 @@ Done:
 - gross/manual/promo/loyalty/excluded/final display;
 - staff calls lifecycle baseline;
 - STAFF close bill/order;
+- STAFF operational stop-list for menu items and item options/flavors;
 - manager/owner bill controls for manual discount and item exclude/restore;
 - menu and stop-list baseline;
 - explicit item-level and option/flavor-level stop-list controls;
@@ -157,7 +158,7 @@ Remaining P1:
 
 - final staging smoke after each release batch;
 - real venue settings screen, or keep bot as canonical;
-- Venue Mini App normalize/reset helper only if still needed after pilots; base flavor profile apply, item-level stop-list and flavor-level stop-list parity are smoke-passed. Preserve STAFF no-settings/no-menu-management boundaries;
+- Venue Mini App normalize/reset helper only if still needed after pilots; base flavor profile apply, item-level stop-list and flavor-level stop-list parity are smoke-passed. Preserve STAFF no-settings/no-menu-content-management boundaries while keeping operational stop-list allowed;
 - venue stats screen;
 - deeper operational frontend smoke/e2e coverage beyond the minimal Guest Mini App browser smoke.
 

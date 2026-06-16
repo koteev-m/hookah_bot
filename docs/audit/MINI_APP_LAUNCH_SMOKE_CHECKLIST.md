@@ -15,7 +15,7 @@
 - `📖 Фото-меню` is an info section, not the order menu.
 - info-section images/PDFs are loaded through backend media proxy.
 - Venue Owner/Manager/Staff Mini App entry must be opened through inline `web_app` buttons.
-- STAFF can close bill/order but cannot edit discounts, exclusions, stop-list, menu, tables, staff, settings or staff chat link.
+- STAFF can close bill/order and manage operational stop-list for menu items/options, but cannot edit discounts, exclusions, menu content/structure, tables, staff, settings or staff chat link.
 - STAFF booking actions are operational only: view bookings and mark `Гость пришёл` / `Не пришёл`; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
@@ -288,7 +288,7 @@ Expected:
 - final total equals backend DTO and Telegram full bill;
 - promo/loyalty labels match readable breakdown;
 - canceled/rejected/excluded items do not affect payable total.
-- STAFF can close bill/order but cannot mutate bill/menu/stop-list/tables/staff/settings/staff chat link.
+- STAFF can close bill/order and mutate only menu item/option availability for operational stop-list; STAFF cannot mutate bill discounts/exclusions, menu content/structure, tables, staff, settings or staff chat link.
 - STAFF booking management paths are denied while arrival/no-show remains allowed.
 - MANAGER/OWNER booking management remains unchanged.
 - venue support is a launch-safe informational path, not a half-working ticket UI.
@@ -424,6 +424,6 @@ Manual options/flavors parity regression smoke:
 7. Confirm line preference notes appear in guest active order, Venue Mini App order detail, staff chat and Guest Bot `Мой заказ`; notes must not affect price.
 8. Disable an option after selection and confirm preview/checkout rejects the stale option without silently adding the base item.
 9. Confirm Guest Bot no longer relies only on `Выбранные вкусы` comment text for persistence; selected option data is structured in order/read models. Guest Bot input for optional `Пожелание к вкусу` remains a follow-up until implemented.
-10. As OWNER/MANAGER, manage options in Venue Mini App, apply `Добавить базовые вкусы` only to hookah items, and confirm STAFF edit/apply controls are hidden/forbidden.
+10. As OWNER/MANAGER, manage options in Venue Mini App, apply `Добавить базовые вкусы` only to hookah items, and confirm STAFF edit/apply/content controls are hidden/forbidden while item/flavor stop-list toggles remain available.
 11. Confirm repeated `Добавить базовые вкусы` does not create duplicates.
 12. Confirm water/kitchen/drink items do not receive hookah flavors.

@@ -27,7 +27,7 @@ Telegram Bot остаётся самой широкой venue-management пов�
 | A. Work shift / orders | Implemented. Bot shift hub has `📦 Заказы`; callbacks include `staff_venue_orders_root:*`, order detail/status/bill callbacks. | Implemented: queue/detail/audit/status/reject/close/item bill adjustment routes. | Implemented: order queue/detail, full bill, status actions, bill controls where allowed. | `ORDER_QUEUE_VIEW`, `ORDER_STATUS_UPDATE`; STAFF can operate order status/close but not manager-only bill edits. | `TelegramBotRouter.kt`, `TelegramKeyboards.kt`, `VenueOrderRoutes.kt`, `VenueOrdersRepository.kt`, `venueOrders.ts`, `venueOrderDetail.ts` | Medium: large queues and route parity need smoke; UI ignores `nextCursor`. | M1 IA shell; later M4 order audit/pagination. | Mini App build/e2e; backend route tests if pagination/audit added. |
 | A. Work shift / staff calls | Implemented/partial in bot. Shift hub has `🛎 Вызовы`; staff chat callbacks `sc_call_ack:*`, `sc_call_done:*`. | Implemented: `GET /api/venue/{venueId}/staff-calls`, ack/done routes. | Implemented: calls list, accept/close. | Uses `ORDER_QUEUE_VIEW` to view and `ORDER_STATUS_UPDATE` to act. | `VenueStaffCallRoutes.kt`, `StaffCallRepository.kt`, `venueCalls.ts`, `venueApi.ts` | Low/Medium: owner bot calls entry historically less direct; Mini App route is real. | M1 keep under `Работа смены`; no new logic. | E2E smoke for accept/done. |
 | A. Work shift / bookings | Implemented/partial. Bot has booking list, confirm/cancel/change/message, seated/no-show, hold settings. | Implemented: booking list/status routes, reminder/expiry workers in backend. | Implemented: booking list, confirm/cancel/change, seated/no-show. | `BOOKING_VIEW`; `BOOKING_ARRIVAL_UPDATE`; `BOOKING_MANAGE` for management actions. | `VenueBookingRoutes.kt`, `GuestBookingRepository.kt`, `venueBookings.ts`, `TelegramBotRouter.kt` | Medium: hold/settings parity in Mini App is not complete. | M1 group under `Работа смены`; M5 booking settings later. | Booking route/RBAC tests and Telegram runtime smoke. |
-| A. Work shift / stop-list | Implemented. Bot shift hub has `🚫 Стоп-лист`; menu item and option availability flows exist. | Implemented via Venue Menu item/option availability routes. | Implemented/smoke-passed inside menu constructor: item-level and option/flavor stop-list. | `MENU_VIEW`, `MENU_AVAILABILITY_MANAGE`, `MENU_MANAGE` for content. STAFF sees only allowed controls. | `VenueMenuRoutes.kt`, `HookahFlavorProfileService.kt`, `venueMenu.ts` | Low: options/flavors parity closed; do not reopen except regression. | M1 show menu under `Настройки`; keep stop-list semantics in menu screen for now. | Regression smoke for item/option availability. |
+| A. Work shift / stop-list | Implemented. Bot shift hub has `🚫 Стоп-лист`; menu item and option availability flows exist. | Implemented via Venue Menu item/option availability routes. | Implemented/smoke-passed inside menu constructor: item-level and option/flavor stop-list. | `MENU_VIEW` + `MENU_AVAILABILITY_MANAGE` allow STAFF/MANAGER/OWNER operational stop-list. `MENU_MANAGE` remains MANAGER/OWNER-only for content. | `VenueMenuRoutes.kt`, `HookahFlavorProfileService.kt`, `venueMenu.ts` | Low: options/flavors parity closed; keep stop-list in regression. | M1 show menu under `Настройки`; STAFF availability parity is implemented as a focused follow-up. | Regression smoke for item/option availability and hidden STAFF content controls. |
 | A. Work shift / staff chat alerts | Implemented. Bot can link staff chat and staff chat notifier sends order/call messages. | Implemented: staff chat status/link-code/unlink backend; outbox/notifier. | Implemented: chat status/link-code screen; unlink wrapper exists but screen does not expose unlink. | `STAFF_CHAT_LINK`; unlink backend owner-only. | `VenueRoutes.kt`, `StaffChatNotifier.kt`, `venueChatLink.ts`, `venueApi.ts` | Medium: runtime Telegram group binding must be smoke-tested. | M1 group under `Настройки`; later M6 unlink/status diagnostics. | Manual Telegram group smoke. |
 | B. Settings / venue profile-card | Implemented in bot: profile/card fields, address, contacts, description/info sections, hours. | Partial: guest venue/info section routes exist; no broad Venue Mini App settings API for all fields. | Partial: current `settings` screen only manages paid shift extension settings. | `VENUE_SETTINGS` exists but has no matching broad route; `SHIFT_EXTENSION_SETTINGS` works. | `VenueRepository.kt`, `VenueInfoSectionsRepository.kt`, `VenueBookingHoursRepository.kt`, `VenueSettingsRepository.kt`, `venueSettings.ts` | High: exposing generic settings would create dead ends or partial writes. | M5 design small settings APIs by field; keep bot canonical meanwhile. | Route/RBAC tests per setting slice. |
 | B. Paid shift extension settings | Implemented in Mini App and backend; bot ordering entry exists, Owner/Manager Bot settings parity is still active roadmap item. | Implemented: settings and pending request routes. | Implemented: settings screen; pending requests screen exists but was hidden before M1. | `SHIFT_EXTENSION_VIEW`, `SHIFT_EXTENSION_CONFIRM`, `SHIFT_EXTENSION_SETTINGS`; STAFF has view/confirm but no settings. | `ShiftExtensionRoutes.kt`, `venueSettings.ts`, `venueShiftExtensions.ts`, `venueApp.ts` | Low for surfacing existing screen; Medium for bot settings parity. | M1 make requests discoverable; separate paid-extension bot settings closure remains. | Mini App build/e2e; shift extension route tests if changed. |
@@ -58,8 +58,24 @@ Definition of Done:
 - No backend/API/DB changes.
 - Existing route permissions stay unchanged.
 - `Продления` appears only when `SHIFT_EXTENSION_VIEW` is present.
-- STAFF still does not see staff/settings content controls beyond current RBAC.
+- STAFF still does not see staff/settings/menu content controls beyond current RBAC.
 - Mini App build passes.
+
+### M1a — STAFF Operational Stop-List Parity
+
+Status: implemented as a focused RBAC follow-up after M1.
+
+Scope:
+
+- STAFF gets `MENU_AVAILABILITY_MANAGE`, but not `MENU_MANAGE`.
+- STAFF can toggle menu item availability and item option/flavor availability in Bot and Venue Mini App.
+- STAFF cannot create/edit/delete/reorder categories/items, edit prices, add/delete flavors/options or apply base flavor profiles.
+
+Definition of Done:
+
+- Backend route tests allow STAFF item/option availability and deny STAFF content endpoints.
+- Mini App smoke shows STAFF stop-list toggles and hides content controls.
+- Bot staff stop-list callbacks remain allowed.
 
 ### M2 — Venue Stats Read-Only Mini App
 

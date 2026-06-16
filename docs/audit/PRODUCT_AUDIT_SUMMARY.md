@@ -191,7 +191,7 @@
 3. Two users shared tab: personal/shared order visibility remains scoped.
 4. Mini App staff call creates row and staff chat notification.
 5. `WebApp.sendData` fallback creates quick chat order.
-6. STAFF cannot/can stop-list according to final permission decision.
+6. STAFF can manage operational stop-list for menu items/options, but cannot edit menu content.
 7. Manager cannot access owner-only settings/staff chat link in UI and API.
 8. Booking create/update/cancel emits analytics and appears in venue queue.
 9. Display number resets per venue day and appears in Mini App queue/detail.

@@ -134,7 +134,7 @@ Current state:
 - Venue menu configuration supports item-scoped options/flavors and both item-level and option-level availability.
 - Guest Bot and Guest Mini App submit structured selected options; cart/read models preserve selected option snapshots and line-level preparation notes when present.
 - Guest Mini App hides unavailable options in the picker, and backend preview/checkout rejects unavailable or foreign selected options.
-- Venue Mini App exposes item-scoped option/flavor CRUD and explicit stop-list controls for OWNER/MANAGER. Hookah items show `Вкусы / опции`; non-hookah items show neutral `Опции` only when options are configured.
+- Venue Mini App exposes item-scoped option/flavor CRUD for OWNER/MANAGER and operational stop-list toggles for STAFF/MANAGER/OWNER. STAFF may change only item/option availability; STAFF must not create/edit/delete/reorder items, edit prices, add/delete flavors or apply base flavor profiles. Hookah items show `Вкусы / опции`; non-hookah items show neutral `Опции` only when options are configured.
 - Venue Mini App applies missing bot canonical base flavor profiles through item-scoped `Добавить базовые вкусы` for hookah items.
 - Staging smoke passed: new/old hookah items show the same editor controls, base profiles are copied only to that hookah item, repeated apply does not duplicate profiles, owner/manager can add/edit/delete/toggle flavors, whole item stop-list and flavor-level stop-list work, water/kitchen/drink items do not receive hookah flavors, and Guest Mini App shows the picker only for the selected hookah item.
 

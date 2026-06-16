@@ -819,7 +819,7 @@ class VenueMenuRoutesTest {
         }
 
     @Test
-    fun `staff can view menu but cannot manage item or option availability`() =
+    fun `staff can manage stoplist availability but cannot manage menu content`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-staff-availability")
             val config = buildConfig(jdbcUrl)
@@ -890,18 +890,6 @@ class VenueMenuRoutesTest {
             val viewPayload = json.decodeFromString(VenueMenuResponse.serializer(), viewResponse.bodyAsText())
             assertEquals(1, viewPayload.categories.size)
 
-            val itemAvailabilityResponse =
-                client.patch("/api/venue/menu/items/${item.id}/availability?venueId=$venueId") {
-                    headers {
-                        append(HttpHeaders.Authorization, "Bearer $staffToken")
-                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-                    }
-                    setBody("""{"isAvailable":false}""")
-                }
-
-            assertEquals(HttpStatusCode.Forbidden, itemAvailabilityResponse.status)
-            assertApiErrorEnvelope(itemAvailabilityResponse, ApiErrorCodes.FORBIDDEN)
-
             val optionAvailabilityResponse =
                 client.patch("/api/venue/menu/options/${option.id}/availability?venueId=$venueId") {
                     headers {
@@ -911,8 +899,47 @@ class VenueMenuRoutesTest {
                     setBody("""{"isAvailable":false}""")
                 }
 
-            assertEquals(HttpStatusCode.Forbidden, optionAvailabilityResponse.status)
-            assertApiErrorEnvelope(optionAvailabilityResponse, ApiErrorCodes.FORBIDDEN)
+            assertEquals(HttpStatusCode.OK, optionAvailabilityResponse.status)
+            val stoppedOption =
+                json.decodeFromString(VenueMenuOptionDto.serializer(), optionAvailabilityResponse.bodyAsText())
+            assertFalse(stoppedOption.isAvailable)
+
+            val guestMenuAfterOptionStopResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.OK, guestMenuAfterOptionStopResponse.status)
+            val guestMenuAfterOptionStop =
+                json.decodeFromString(MenuResponse.serializer(), guestMenuAfterOptionStopResponse.bodyAsText())
+            val guestItemAfterOptionStop =
+                guestMenuAfterOptionStop.categories.flatMap { it.items }.single { it.id == item.id }
+            assertTrue(guestItemAfterOptionStop.options.isEmpty())
+
+            val itemAvailabilityResponse =
+                client.patch("/api/venue/menu/items/${item.id}/availability?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"isAvailable":false}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, itemAvailabilityResponse.status)
+            val stoppedItem =
+                json.decodeFromString(
+                    VenueMenuItemDto.serializer(),
+                    itemAvailabilityResponse.bodyAsText(),
+                )
+            assertFalse(stoppedItem.isAvailable)
+
+            val guestMenuAfterItemStopResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.OK, guestMenuAfterItemStopResponse.status)
+            val guestMenuAfterItemStop =
+                json.decodeFromString(MenuResponse.serializer(), guestMenuAfterItemStopResponse.bodyAsText())
+            assertTrue(guestMenuAfterItemStop.categories.flatMap { it.items }.none { it.id == item.id })
 
             val createCategoryResponse =
                 client.post("/api/venue/menu/categories?venueId=$venueId") {

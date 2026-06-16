@@ -100,6 +100,7 @@ object VenuePermissions {
                     VenuePermission.SHIFT_EXTENSION_VIEW,
                     VenuePermission.SHIFT_EXTENSION_CONFIRM,
                     VenuePermission.MENU_VIEW,
+                    VenuePermission.MENU_AVAILABILITY_MANAGE,
                     VenuePermission.TABLE_VIEW,
                 )
         }
