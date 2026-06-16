@@ -24,6 +24,7 @@
 - Cross-channel bill snapshot automation covers Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, exclusions and restore.
 - Live staff-chat order messages, bill-affecting refresh, button lifecycle, venue-local timestamps and main order vs doporders clarity passed staging smoke.
 - Guest table session persistence/restore and Telegram BackButton navigation passed staging smoke on 2026-06-08: reopen without repeat QR restores table context, guest menu/order/profile/support navigation keeps context, and BackButton no longer loops.
+- M2 Venue Mini App read-only `Статистика` passed staging smoke on 2026-06-16: OWNER/MANAGER see stats, periods work, cards/top items render, STAFF does not see stats, and empty state is safe.
 - Platform owner lifecycle and commercial terms flows are in smoke scope.
 
 ## Current Staging Smoke Status
@@ -46,13 +47,16 @@ Confirmed:
 - platform archived venue action copy is explicit that restore immediately publishes with current backend behavior.
 - CI release validation passed for the current release snapshot: backend ktlint, backend compile, release-critical routes, venue booking/RBAC, Telegram lightweight tests, migration sanity, compose, Mini App build, backend Docker build and aggregate.
 - Guest table session restore passed on staging on 2026-06-08: returning guest opens the active table context without rescanning QR, `Мой заказ` and adjacent guest screens keep `tableSessionId`/`tabId` context, and Telegram BackButton does not loop between screens.
+- Venue Mini App M2 stats passed staging smoke on 2026-06-16: OWNER/MANAGER see `Статистика`, periods `Сегодня` / `7 дней` / `30 дней` work, stats cards and top items render, STAFF does not see stats, and empty state works safely.
 
 Remaining:
 
 - repeat this smoke after any additional release batch;
 - P1 follow-up: paid venue/shift extension is implemented in backend and Guest/Venue Mini App, but Venue approve/reject is still a standalone `Продления` island; next target is order/table detail integration, staff-chat live message actions, Guest Bot entry and Owner/Manager Bot settings parity;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
-- P1 follow-up: Venue Mini App navigation IA must be aligned with the bot sections without mixing it into option/flavor fixes: `Работа смены` (заказы, вызовы, брони, стоп-лист), `Настройки` (профиль/карточка, заказное меню, столы, QR, персонал, чат персонала, бронь, публикация), `Статистика`, `Продвижение`, `Предпросмотр для гостя`.
+- P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
+- P1 next parity block: Venue Mini App bookings queue/lifecycle. Keep STAFF arrival/no-show split and MANAGER/OWNER booking management actions.
+- P2 stats follow-up: custom date range picker (`from`/`to`), arbitrary period stats and future AI-generated summaries/insights.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
@@ -293,6 +297,27 @@ Expected:
 - MANAGER/OWNER booking management remains unchanged.
 - venue support is a launch-safe informational path, not a half-working ticket UI.
 
+### M2 Venue Mini App statistics smoke status
+
+Status: staging smoke PASSED on 2026-06-16.
+
+Checks:
+
+1. Open Venue Mini App as OWNER or MANAGER.
+2. Confirm `Статистика` is visible.
+3. Open `Статистика`.
+4. Switch periods `Сегодня`, `7 дней`, `30 дней`.
+5. Confirm stats cards and top items render without frontend money recalculation.
+6. Confirm an empty venue renders zero/empty state safely.
+7. Open Venue Mini App as STAFF.
+8. Confirm STAFF does not see `Статистика`.
+
+Follow-up, not current smoke blocker:
+
+- custom `from`/`to` date range picker;
+- arbitrary period backend stats;
+- AI-generated summaries/insights over selected period.
+
 ## 5. Platform Mini App Manual Smoke
 
 Preconditions:
@@ -394,7 +419,16 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation blocks: paid venue/shift extension Owner/Manager Bot settings parity and cross-channel regression closure; then broad Venue Mini App IA parity with bot sections.
+Recommended next parity implementation block: Venue Mini App bookings queue/lifecycle. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+
+Manual bookings lifecycle smoke after next parity slice:
+
+1. Open Venue Mini App as STAFF and confirm `Брони` shows booking list/details.
+2. As STAFF, mark a booking `Гость пришёл` and `Не пришёл`; confirm management actions are hidden.
+3. As MANAGER/OWNER, confirm/change/cancel a booking.
+4. Confirm lifecycle copy and empty/error states are clear.
+5. Trigger direct STAFF manage attempts and confirm they are denied.
+6. Confirm Telegram bot booking actions remain aligned with Mini App behavior.
 
 Manual paid extension smoke after full parity:
 

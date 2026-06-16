@@ -153,14 +153,14 @@ Done:
 - staff-chat live message clarity for main order vs doporders passed staging smoke: one live message, venue-local time without `UTC`, separate blocks and clear batch statuses/actions;
 - guest table session persistence/restore passed staging smoke: reopening Mini App without repeat QR restores the active table context, internal guest navigation keeps that context, and Telegram BackButton exits from root instead of looping;
 - venue settings hidden safely instead of dead-end placeholder;
-- Venue Mini App read-only `Статистика` implemented for OWNER/MANAGER on existing `VenueStatsRepository` semantics;
+- Venue Mini App read-only `Статистика` CLOSED after staging smoke for OWNER/MANAGER on existing `VenueStatsRepository` semantics;
 
 Remaining P1:
 
 - final staging smoke after each release batch;
 - real venue settings screen, or keep bot as canonical;
 - Venue Mini App normalize/reset helper only if still needed after pilots; base flavor profile apply, item-level stop-list and flavor-level stop-list parity are smoke-passed. Preserve STAFF no-settings/no-menu-content-management boundaries while keeping operational stop-list allowed;
-- advanced analytics/platform dashboards/network stats remain later; read-only venue stats is covered by M2;
+- custom date range picker, arbitrary period stats, AI-generated summaries, advanced analytics/platform dashboards/network stats remain later; read-only venue stats is covered by closed M2;
 - deeper operational frontend smoke/e2e coverage beyond the minimal Guest Mini App browser smoke.
 
 ### Platform Owner
@@ -285,16 +285,17 @@ Goal: переносить уже реализованные Telegram Bot venue-
 Milestones:
 
 1. M1: Venue Mini App IA shell: сгруппировать уже работающие экраны под `Работа смены` и `Настройки`, сделать уже реализованные `Продления` видимыми по `SHIFT_EXTENSION_VIEW`, не показывать отсутствующие `Продвижение` / `Предпросмотр для гостя`.
-2. M2: read-only venue stats route + screen after SQL/RBAC tests. Status: implemented; keep in smoke.
-3. M3: read-only promotions/growth summary; builders stay bot-canonical until explicit Mini App APIs/RBAC exist.
-4. M4: guest preview entry using guest-visible read models only.
-5. M5: small venue settings slices, not one bulk settings endpoint.
-6. M6: staff chat diagnostics/unlink polish.
-7. M7: menu semantic type/media polish after current options/flavors regression remains green.
+2. M2: read-only venue stats route + screen after SQL/RBAC tests. Status: CLOSED / staging smoke passed; keep in regression.
+3. M3: Venue Mini App bookings queue/lifecycle parity; keep STAFF arrival/no-show split and MANAGER/OWNER management actions.
+4. M4: read-only promotions/growth summary; builders stay bot-canonical until explicit Mini App APIs/RBAC exist.
+5. M5: guest preview entry using guest-visible read models only.
+6. M6: small venue settings slices, not one bulk settings endpoint.
+7. M7: staff chat diagnostics/unlink polish.
+8. M8: menu semantic type/media polish after current options/flavors regression remains green.
 
 | Priority | Block | Current evidence | Product target | Recommended action |
 | --- | --- | --- | --- | --- |
-| P1 ACTIVE | Venue Bot-to-Mini-App Parity Program | Bot selected-venue hub already has sections `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`; Venue Mini App has M1 IA shell and M2 read-only `Статистика`. Full map is in `docs/audit/VENUE_BOT_TO_MINIAPP_PARITY_PROGRAM.md`. | Venue Mini App should match implemented bot capabilities where practical while hiding missing/placeholder functionality. Bot and Mini App are two clients over one backend; users choose by convenience, not missing critical venue functions. | Next slice after M2: choose a small backend-backed read-only block, likely promotions/growth summary or guest preview. Keep `Продвижение` / `Предпросмотр` out of nav until real routes/screens exist. |
+| P1 ACTIVE | Venue Bot-to-Mini-App Parity Program | Bot selected-venue hub already has sections `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`; Venue Mini App has M1 IA shell and M2 read-only `Статистика` closed after staging smoke. Full map is in `docs/audit/VENUE_BOT_TO_MINIAPP_PARITY_PROGRAM.md`. | Venue Mini App should match implemented bot capabilities where practical while hiding missing/placeholder functionality. Bot and Mini App are two clients over one backend; users choose by convenience, not missing critical venue functions. | Next parity slice after M2: Venue Mini App bookings queue/lifecycle. Keep `Продвижение` / `Предпросмотр` out of nav until real routes/screens exist. |
 | P1 CLOSED | Staff-chat main order vs doporders clarity | Product spec already models `order_batches` with statuses; Venue Mini App can show batches, and live staff-chat now separates the main order and doporders/add-batches in one message. Staging smoke passed: one live message, venue-local time without `UTC`, separate blocks and clear batch statuses/actions. | One live staff-chat message stays canonical, visually separates the main order and each doporder/add-batch, shows batch status, and applies action buttons to the correct operational context. | Keep in regression smoke. Preserve `OrderBillSnapshot` as money source. |
 | P1 CLOSED | Guest table session persistence/restore | Backend has authenticated `GET /api/guest/table/restore`; Mini App startup restores the latest safe active table context when no explicit QR token is present, and explicit QR/start token still wins. Automated coverage includes active restore, cross-user denial, closed-only denial, latest-context selection, browser startup restore and account-switch storage isolation. Staging smoke passed on 2026-06-08: reopen without QR restores table context, `Мой заказ` / menu / profile / support navigation keeps context, Telegram BackButton no longer loops, and root can close cleanly. | While an active table session/tab/order exists, returning guest re-enters table context safely without rescanning QR; after bill close, table context resets. | Keep in regression smoke. Preserve QR/start-token priority and account-switch isolation. |
 | P1 IN PROGRESS | Paid venue/shift extension | Backend data/API, Guest Mini App request UX, bill service charges, Venue Mini App owner/manager settings, Venue order queue/detail approval, Staff Chat pending approve/reject actions and Guest Bot ordering-menu section request entry are implemented. Existing `order_batch_items` require `menu_item_id`, so extension remains a separate service charge rather than a normal menu/cart item. Owner/Manager Bot settings parity is still pending. | Guest requests extension from active table context through service action `Продление работы заведения` in Mini App and bot ordering section flow; STAFF/MANAGER see and approve/reject fixed-price requests inside active order/table/bill context and staff-chat live order message; MANAGER/OWNER configure price/duration in Mini App and bot; approval adds a dedicated service charge and extends the active table/session orderable window. | Next slice: Owner/Manager Bot settings parity for enabled/duration/price with STAFF hidden/forbidden, then regression smoke/docs closure. Preserve STAFF no-settings rule and never expose extension as catalog item/cart item/order batch item. |
@@ -304,7 +305,7 @@ Milestones:
 | P2 | `📖 Фото-меню` optional subsections | Current info/photo-menu model is a flat visible info section with media attachments; structured `🍽 Заказное меню` is separate. | Simple mode keeps one image list; advanced mode lets owner/manager enable subsections such as кальянное меню, напитки, чай, пробой посуды and custom sections. Guest sees subsections first when enabled. | Product model/read-model design; avoid confusing this with structured order menu. |
 | P2 | Owner multi-image upload UX | Owner media upload keeps the upload state and confirms each media item, which can create repeated messages with `Готово`/`Назад`. | Multiple images should be collected without N noisy confirmation screens; after upload, return to an image list with change/delete/back actions. | Telegram UX debt fix-pack. Keep album-end logic explicit and avoid guessing Telegram media group completion. |
 
-Recommended next blocks: complete `P1 Paid venue/shift extension` Owner/Manager Bot settings parity and regression smoke in parallel with the bounded Venue Bot-to-Mini-App parity program milestones. Do not reopen the closed options/flavors slice unless new smoke/code evidence contradicts the current status.
+Recommended next parity block: M3 Venue Mini App bookings queue/lifecycle. In parallel, complete `P1 Paid venue/shift extension` Owner/Manager Bot settings parity and regression smoke. Do not reopen the closed options/flavors or stats slices unless new smoke/code evidence contradicts the current status.
 
 ### Internal AI Assistant Core
 
@@ -406,7 +407,7 @@ Venue Mini App:
 - real settings screen or explicit bot-canonical policy;
 - bot-like information architecture shell for existing working screens;
 - bookings screens stay in regression after current MVP;
-- stats read-only screen is implemented; keep in smoke and defer advanced analytics/platform dashboards;
+- stats read-only screen is CLOSED after staging smoke; defer custom date range picker, arbitrary period stats, AI summaries and advanced analytics/platform dashboards;
 - menu/options/flavors stay in regression; only optional normalize/reset, DB duplicate/race protection and later semantic/media polish remain;
 - tables/QR lifecycle polish;
 - staff calls dashboard polish.
@@ -611,7 +612,7 @@ Before market launch, close:
 - real bookings screens;
 - real venue settings screen;
 - guest profile/history/favorites polish;
-- venue stats;
+- custom date range venue stats and AI summaries;
 - platform placements cockpit parity;
 - platform support/tickets;
 - platform analytics;
@@ -787,11 +788,11 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 ## 12. Next Development Block
 
-Latest completed block: cross-channel bill snapshot automation.
+Latest completed parity block: M2 Venue Mini App read-only statistics staging smoke.
 
-Status: backend regression coverage now protects Mini App full bill vs Telegram/staff bill totals for manual discounts, promo discounts, excluded items and restored items.
+Status: OWNER/MANAGER see `Статистика`, periods `Сегодня` / `7 дней` / `30 дней` work, cards/top items render, STAFF does not see stats, and empty state is safe.
 
-Next block should be chosen from the remaining accepted P2/follow-up list after this batch validates. Do not restart growth, loyalty, support, analytics or Telegram-native AI scope until pilot operations remain stable after the next release batch.
+Next practical parity block: Venue Mini App bookings queue/lifecycle. Do not restart promotions, growth, loyalty, support, advanced analytics or Telegram-native AI scope until booking operations remain stable.
 
 Historical implementation prompt:
 

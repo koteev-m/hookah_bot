@@ -157,7 +157,7 @@ E. Smoke/docs closure: bot vs Mini App option parity, staff chat/order detail di
 Remaining follow-ups after parity closure:
 - Mini App normalize/reset base flavor profiles only if still needed after venue pilots.
 - DB-level duplicate/race protection for base flavor profile apply only if concurrent apply becomes a real operational issue.
-- Broad Venue Mini App IA parity with bot sections remains separate. `Работа смены`, `Настройки` and read-only `Статистика` now have real screens; `Продвижение` and `Предпросмотр для гостя` must stay hidden until backend-backed screens exist.
+- Broad Venue Mini App IA parity with bot sections remains separate. `Работа смены`, `Настройки` and read-only `Статистика` now have real screens; M2 read-only `Статистика` passed staging smoke for OWNER/MANAGER with STAFF hidden. `Продвижение` and `Предпросмотр для гостя` must stay hidden until backend-backed screens exist. Custom date range stats and AI-generated summaries are later follow-ups, not current launch scope.
 
 ## Block 9 — Tables & QR
 MUST:
