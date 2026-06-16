@@ -56,6 +56,7 @@ type VenueShellRefs = {
   accessState: HTMLParagraphElement
   venueSelect: HTMLSelectElement
   navButtons: Record<NavRouteName, HTMLButtonElement>
+  navSections: Array<{ element: HTMLDivElement; buttons: HTMLButtonElement[] }>
   content: HTMLDivElement
   errorCard: HTMLDivElement
   errorTitle: HTMLHeadingElement
@@ -144,29 +145,37 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     orders: el('button', { className: 'nav-button', text: 'Заказы' }) as HTMLButtonElement,
     bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
-    extensions: el('button', { className: 'nav-button', text: 'Продления' }) as HTMLButtonElement,
-    menu: el('button', { className: 'nav-button', text: 'Меню' }) as HTMLButtonElement,
+    extensions: el('button', { className: 'nav-button', text: 'Запросы продления' }) as HTMLButtonElement,
+    menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
-    settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
+    settings: el('button', { className: 'nav-button', text: 'Настройки продления' }) as HTMLButtonElement,
     chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement,
     support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
   }
-  navButtons.settings.hidden = true
-  navButtons.extensions.hidden = true
-  append(
-    nav,
-    navButtons.dashboard,
-    navButtons.orders,
-    navButtons.bookings,
-    navButtons.calls,
-    navButtons.menu,
-    navButtons.tables,
-    navButtons.staff,
-    navButtons.settings,
-    navButtons.chat,
-    navButtons.support
-  )
+
+  const navSections = [
+    {
+      title: 'Работа смены',
+      buttons: [navButtons.dashboard, navButtons.orders, navButtons.bookings, navButtons.calls, navButtons.extensions]
+    },
+    {
+      title: 'Настройки',
+      buttons: [navButtons.menu, navButtons.tables, navButtons.staff, navButtons.chat, navButtons.settings]
+    },
+    {
+      title: 'Помощь',
+      buttons: [navButtons.support]
+    }
+  ].map((section) => {
+    const group = el('div', { className: 'venue-nav-section' }) as HTMLDivElement
+    const label = el('span', { className: 'venue-nav-section-title', text: section.title })
+    const actions = el('div', { className: 'venue-nav-section-actions' })
+    append(actions, ...section.buttons)
+    append(group, label, actions)
+    nav.appendChild(group)
+    return { element: group, buttons: section.buttons }
+  })
 
   const errorCard = el('div', { className: 'error-card venue-error' }) as HTMLDivElement
   errorCard.hidden = true
@@ -186,6 +195,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     accessState,
     venueSelect,
     navButtons,
+    navSections,
     content,
     errorCard,
     errorTitle,
@@ -361,12 +371,15 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
     refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
-    refs.navButtons.extensions.hidden = true
+    refs.navButtons.extensions.hidden = !hasPermission('SHIFT_EXTENSION_VIEW')
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
     refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
-    refs.navButtons.settings.hidden = !hasPermission('SHIFT_EXTENSION_SETTINGS') && !hasPermission('VENUE_SETTINGS')
+    refs.navButtons.settings.hidden = !hasPermission('SHIFT_EXTENSION_SETTINGS')
+    refs.navSections.forEach((section) => {
+      section.element.hidden = section.buttons.every((button) => button.hidden)
+    })
   }
 
   const canAccessRoute = (route: RouteName) => {
@@ -384,7 +397,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'tables':
         return hasPermission('TABLE_VIEW')
       case 'settings':
-        return hasPermission('SHIFT_EXTENSION_SETTINGS') || hasPermission('VENUE_SETTINGS')
+        return hasPermission('SHIFT_EXTENSION_SETTINGS')
       case 'staff':
         return currentRole !== 'STAFF'
       case 'chat':

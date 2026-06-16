@@ -1423,7 +1423,11 @@ test('venue staff sees pending shift extension requests and can approve or rejec
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: 'Продления' })).toHaveCount(0)
+  const extensionRequestsButton = page.getByRole('button', { name: 'Запросы продления', exact: true })
+  await expect(extensionRequestsButton).toBeVisible()
+  await extensionRequestsButton.click()
+  await expect(page.getByRole('heading', { name: 'Продления' })).toBeVisible()
+  await expect(page.getByText('Запрос на продление')).toBeVisible()
   await page.getByRole('button', { name: 'Заказы' }).click()
   await expect(page.getByText('Запрос на продление')).toBeVisible()
   await page.getByRole('button', { name: 'Открыть' }).click()
@@ -1432,7 +1436,7 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await expect(page.getByText('Гость ожидает подтверждения')).toBeVisible()
   await expect(page.getByRole('button', { name: '✅ Подтвердить продление' })).toBeVisible()
   await expect(page.getByRole('button', { name: '❌ Отказать' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Настройки' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Настройки продления', exact: true })).toHaveCount(0)
 
   await page.getByRole('button', { name: '✅ Подтвердить продление' }).click()
 
@@ -1464,8 +1468,8 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: 'Настройки' })).toBeVisible()
-  await page.getByRole('button', { name: 'Настройки' }).click()
+  await expect(page.getByRole('button', { name: 'Настройки продления', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Настройки продления', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Продление времени' })).toBeVisible()
   await expect(page.getByText('Настройте цену и длительность, чтобы гости могли запросить продление.')).toBeVisible()
 
@@ -1582,7 +1586,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Меню' }).click()
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Меню', exact: true })).toBeVisible()
   await expect(hookahItem().getByLabel('Доступно гостям')).toBeChecked()
   await hookahItem().getByLabel('Доступно гостям').uncheck()
@@ -1706,7 +1710,7 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Меню' }).click()
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
   const hookahItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян' })
   await expect(hookahItem.getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem.getByText('Яблоко')).toBeVisible()

@@ -891,6 +891,23 @@ input[type="number"] {
 }
 
 .venue-nav {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.venue-nav-section {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.venue-nav-section-title {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.venue-nav-section-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
