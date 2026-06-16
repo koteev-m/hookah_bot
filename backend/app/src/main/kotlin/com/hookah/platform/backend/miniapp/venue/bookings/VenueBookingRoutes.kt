@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.venue.bookings
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
@@ -21,14 +22,20 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
+import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Serializable
 private data class VenueBookingChangeRequest(
-    val scheduledAt: String,
+    val scheduledAt: String? = null,
+    val scheduledLocalDate: String? = null,
+    val scheduledLocalTime: String? = null,
 )
 
 @Serializable
@@ -54,6 +61,12 @@ private data class VenueBookingDto(
     val displayNumber: Int? = null,
     val status: String,
     val scheduledAt: String,
+    val scheduledAtDisplay: String? = null,
+    val scheduledLocalDate: String? = null,
+    val scheduledLocalTime: String? = null,
+    val serviceDate: String? = null,
+    val arrivalDeadlineAt: String? = null,
+    val arrivalDeadlineAtDisplay: String? = null,
     val partySize: Int? = null,
     val comment: String? = null,
     val guestDisplayName: String? = null,
@@ -76,20 +89,13 @@ fun Route.venueBookingRoutes(
                 throw ForbiddenException()
             }
             val bookings = guestBookingRepository.listActiveByVenue(venueId = venueId)
+            val zoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val holdMinutes = guestBookingRepository.getHoldMinutes(venueId)
             call.respond(
                 VenueBookingListResponse(
                     items =
                         bookings.map { booking ->
-                            VenueBookingDto(
-                                bookingId = booking.id,
-                                displayNumber = booking.displayNumber,
-                                status = booking.status.toApi(),
-                                scheduledAt = booking.scheduledAt.toString(),
-                                partySize = booking.partySize,
-                                comment = booking.comment,
-                                guestDisplayName = booking.guestDisplayName,
-                                lastGuestConfirmationAt = booking.lastGuestConfirmationAt?.toString(),
-                            )
+                            booking.toVenueBookingDto(zoneId = zoneId, holdMinutes = holdMinutes)
                         },
                 ),
             )
@@ -131,8 +137,8 @@ fun Route.venueBookingRoutes(
                 call.parameters["bookingId"]?.toLongOrNull()
                     ?: throw InvalidInputException("bookingId must be a number")
             val request = call.receive<VenueBookingChangeRequest>()
-            val scheduledAt = parseBookingInstant(request.scheduledAt)
             val zoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val scheduledAt = parseBookingInstant(request, zoneId)
             val updated =
                 guestBookingRepository.updateByVenue(
                     bookingId = bookingId,
@@ -157,7 +163,7 @@ fun Route.venueBookingRoutes(
                 VenueBookingStatusResponse(
                     bookingId = updated.id,
                     status = updated.status.toApi(),
-                    scheduledAt = request.scheduledAt,
+                    scheduledAt = updated.scheduledAt.toString(),
                 ),
             )
         }
@@ -215,7 +221,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.performVenueStatu
     requiredPermission: VenuePermission,
     status: BookingStatus,
     cancelReasonText: String? = null,
-): com.hookah.platform.backend.miniapp.guest.db.BookingRecord {
+): BookingRecord {
     val userId = requireUserId()
     val venueId = requireVenueId()
     val role = resolveVenueRole(venueAccessRepository, userId, venueId)
@@ -250,7 +256,31 @@ private suspend fun io.ktor.server.application.ApplicationCall.performVenueStatu
     } ?: throw NotFoundException()
 }
 
-private fun formatBookingDisplayLabel(booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord): String =
+private fun BookingRecord.toVenueBookingDto(
+    zoneId: ZoneId,
+    holdMinutes: Int,
+): VenueBookingDto {
+    val localDateTime = scheduledAt.atZone(zoneId).toLocalDateTime()
+    val effectiveDeadlineAt = arrivalDeadlineAt ?: scheduledAt.plus(Duration.ofMinutes(holdMinutes.toLong()))
+    return VenueBookingDto(
+        bookingId = id,
+        displayNumber = displayNumber,
+        status = status.toApi(),
+        scheduledAt = scheduledAt.toString(),
+        scheduledAtDisplay = formatBookingNotificationTime(scheduledAt, zoneId),
+        scheduledLocalDate = localDateTime.toLocalDate().toString(),
+        scheduledLocalTime = BOOKING_LOCAL_TIME_FORMAT.format(localDateTime),
+        serviceDate = (displayDate ?: localDateTime.toLocalDate()).toString(),
+        arrivalDeadlineAt = effectiveDeadlineAt.toString(),
+        arrivalDeadlineAtDisplay = formatBookingNotificationTime(effectiveDeadlineAt, zoneId),
+        partySize = partySize,
+        comment = comment,
+        guestDisplayName = guestDisplayName,
+        lastGuestConfirmationAt = lastGuestConfirmationAt?.toString(),
+    )
+}
+
+private fun formatBookingDisplayLabel(booking: BookingRecord): String =
     booking.displayNumber?.let { "Бронь №$it" } ?: "Бронь"
 
 private suspend fun formatBookingVenueName(
@@ -276,12 +306,27 @@ private const val MAX_CANCEL_REASON_LENGTH = 500
 private val BOOKING_NOTIFICATION_TIME_FORMAT: DateTimeFormatter =
     DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm", Locale.forLanguageTag("ru-RU"))
 
-private fun parseBookingInstant(value: String): Instant {
-    val trimmed = value.trim()
-    if (trimmed.isBlank()) {
-        throw InvalidInputException("scheduledAt must not be blank")
+private fun parseBookingInstant(
+    request: VenueBookingChangeRequest,
+    zoneId: ZoneId,
+): Instant {
+    request.scheduledAt?.trim()?.takeIf { it.isNotBlank() }?.let { value ->
+        return runCatching { Instant.parse(value) }.getOrElse {
+            throw InvalidInputException("scheduledAt must be ISO-8601 instant")
+        }
     }
-    return runCatching { Instant.parse(trimmed) }.getOrElse {
-        throw InvalidInputException("scheduledAt must be ISO-8601 instant")
+    val localDate = request.scheduledLocalDate?.trim()?.takeIf { it.isNotBlank() }
+    val localTime = request.scheduledLocalTime?.trim()?.takeIf { it.isNotBlank() }
+    if (localDate == null || localTime == null) {
+        throw InvalidInputException("scheduledAt or scheduledLocalDate/scheduledLocalTime must be provided")
+    }
+    return runCatching {
+        val date = LocalDate.parse(localDate)
+        val time = LocalTime.parse(localTime)
+        LocalDateTime.of(date, time).atZone(zoneId).toInstant()
+    }.getOrElse {
+        throw InvalidInputException("scheduledLocalDate/scheduledLocalTime must be valid venue-local date and time")
     }
 }
+
+private val BOOKING_LOCAL_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")

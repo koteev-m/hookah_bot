@@ -52,7 +52,11 @@ function bookingStatusLabel(status: string): string {
   }
 }
 
-function dateInputValue(value: string): string {
+function dateInputValue(booking: VenueBookingDto): string {
+  if (booking.scheduledLocalDate) {
+    return booking.scheduledLocalDate
+  }
+  const value = booking.scheduledAt
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     return ''
@@ -60,7 +64,11 @@ function dateInputValue(value: string): string {
   return date.toISOString().slice(0, 10)
 }
 
-function timeInputValue(value: string): string {
+function timeInputValue(booking: VenueBookingDto): string {
+  if (booking.scheduledLocalTime) {
+    return booking.scheduledLocalTime
+  }
+  const value = booking.scheduledAt
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     return ''
@@ -68,18 +76,17 @@ function timeInputValue(value: string): string {
   return date.toTimeString().slice(0, 5)
 }
 
-function buildScheduledAt(dateValue: string, timeValue: string): string | null {
+function buildChangeRequest(dateValue: string, timeValue: string) {
   if (!dateValue || !timeValue) {
     return null
   }
-  const date = new Date(`${dateValue}T${timeValue}:00`)
-  if (Number.isNaN(date.getTime())) {
-    return null
+  return {
+    scheduledLocalDate: dateValue,
+    scheduledLocalTime: timeValue
   }
-  return date.toISOString()
 }
 
-function formatBookingTime(value: string): string {
+function formatDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     return value
@@ -91,6 +98,14 @@ function formatBookingTime(value: string): string {
     hour: '2-digit',
     minute: '2-digit'
   })
+}
+
+function formatBookingTime(booking: VenueBookingDto): string {
+  return booking.scheduledAtDisplay || formatDateTime(booking.scheduledAt)
+}
+
+function partySizeLabel(value?: number | null): string {
+  return value == null ? 'гостей: —' : `гостей: ${value}`
 }
 
 function renderApiError(status: HTMLParagraphElement, error: ApiErrorInfo, isDebug: boolean) {
@@ -141,12 +156,12 @@ function renderChangeForm(
   const dateInput = document.createElement('input')
   dateInput.type = 'date'
   dateInput.className = 'venue-input'
-  dateInput.value = dateInputValue(booking.scheduledAt)
+  dateInput.value = dateInputValue(booking)
 
   const timeInput = document.createElement('input')
   timeInput.type = 'time'
   timeInput.className = 'venue-input'
-  timeInput.value = timeInputValue(booking.scheduledAt)
+  timeInput.value = timeInputValue(booking)
 
   const submitButton = el('button', { className: 'button-small', text: 'Перенести' }) as HTMLButtonElement
   submitButton.addEventListener('click', () => onChange(booking, dateInput.value, timeInput.value))
@@ -170,7 +185,7 @@ function renderBookings(
   list.replaceChildren()
   if (!bookings.length) {
     const empty = el('section', { className: 'card' })
-    empty.appendChild(el('p', { className: 'venue-empty', text: 'Активных броней нет.' }))
+    empty.appendChild(el('p', { className: 'venue-empty', text: 'Активных броней пока нет.' }))
     list.appendChild(empty)
     return
   }
@@ -181,21 +196,27 @@ function renderBookings(
     row.appendChild(
       el('p', {
         className: 'venue-order-meta',
-        text: `${formatBookingTime(booking.scheduledAt)} · ${booking.partySize ?? '—'} гостей · ${bookingStatusLabel(booking.status)}`
+        text: `${formatBookingTime(booking)} · ${partySizeLabel(booking.partySize)} · ${bookingStatusLabel(booking.status)}`
       })
     )
     row.appendChild(el('p', { className: 'venue-order-sub', text: `Гость: ${booking.guestDisplayName || 'Гость'}` }))
+    if (booking.serviceDate) {
+      row.appendChild(el('p', { className: 'venue-order-sub', text: `Смена: ${booking.serviceDate}` }))
+    }
+    if (booking.arrivalDeadlineAtDisplay) {
+      row.appendChild(el('p', { className: 'venue-order-sub', text: `Держим до: ${booking.arrivalDeadlineAtDisplay}` }))
+    }
     if (booking.comment) {
       row.appendChild(el('p', { className: 'venue-order-sub', text: booking.comment }))
     }
     if (booking.status.toLowerCase() === 'changed') {
-      row.appendChild(el('p', { className: 'venue-order-sub', text: `Новое время: ${formatBookingTime(booking.scheduledAt)}` }))
+      row.appendChild(el('p', { className: 'venue-order-sub', text: `Новое время: ${formatBookingTime(booking)}` }))
     }
     if (booking.lastGuestConfirmationAt) {
       row.appendChild(
         el('p', {
           className: 'venue-order-sub',
-          text: `Гость подтвердил: ${formatBookingTime(booking.lastGuestConfirmationAt)}`
+          text: `Гость подтвердил: ${formatDateTime(booking.lastGuestConfirmationAt)}`
         })
       )
     }
@@ -325,8 +346,8 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
 
   const changeBooking = async (booking: VenueBookingDto, dateValue: string, timeValue: string) => {
     if (isLoading || !canManage) return
-    const scheduledAt = buildScheduledAt(dateValue, timeValue)
-    if (!scheduledAt) {
+    const request = buildChangeRequest(dateValue, timeValue)
+    if (!request) {
       refs.status.textContent = 'Выберите дату и время.'
       return
     }
@@ -336,7 +357,7 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     setLoading(true)
     const result = await venueChangeBooking(
       backendUrl,
-      { venueId, bookingId: booking.bookingId, body: { scheduledAt } },
+      { venueId, bookingId: booking.bookingId, body: request },
       deps,
       controller.signal
     )

@@ -93,6 +93,11 @@ class VenueBookingRoutesTest {
             assertEquals(bookingId.toString(), item.getValue("bookingId").jsonPrimitive.content)
             assertEquals("pending", item.getValue("status").jsonPrimitive.content)
             assertEquals("window", item.getValue("comment").jsonPrimitive.content)
+            assertEquals("10.01.2030, 21:30", item.getValue("scheduledAtDisplay").jsonPrimitive.content)
+            assertEquals("2030-01-10", item.getValue("scheduledLocalDate").jsonPrimitive.content)
+            assertEquals("21:30", item.getValue("scheduledLocalTime").jsonPrimitive.content)
+            assertEquals("2030-01-10", item.getValue("serviceDate").jsonPrimitive.content)
+            assertEquals("10.01.2030, 22:00", item.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
 
             val confirmResponse =
                 client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
@@ -120,7 +125,7 @@ class VenueBookingRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer $managerToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"scheduledAt":"2030-01-10T19:30:00Z"}""")
+                    setBody("""{"scheduledLocalDate":"2030-01-10","scheduledLocalTime":"22:30"}""")
                 }
             assertEquals(HttpStatusCode.OK, changeResponse.status)
 
@@ -158,6 +163,12 @@ class VenueBookingRoutesTest {
             assertTrue(cancelMessage.contains("Booking Venue"))
             assertTrue(cancelMessage.contains("10.01.2030, 22:30"))
             assertTrue(cancelMessage.contains("Причина: зал закрыт"))
+
+            val invalidTransitionResponse =
+                client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, invalidTransitionResponse.status)
         }
 
     @Test
@@ -265,6 +276,80 @@ class VenueBookingRoutesTest {
                     noShowResponse.bodyAsText(),
                 ).jsonObject.getValue("status").jsonPrimitive.content,
             )
+        }
+
+    @Test
+    fun `venue booking list is empty-safe and foreign venue access is denied`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-bookings-access-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+
+            val managerToken = issueToken(config, MANAGER_ID)
+            val emptyListResponse =
+                client.get("/api/venue/bookings?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, emptyListResponse.status)
+            assertTrue(
+                json.parseToJsonElement(emptyListResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .isEmpty(),
+            )
+
+            val foreignListResponse =
+                client.get("/api/venue/bookings?venueId=$foreignVenueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignListResponse.status)
+
+            val guestToken = issueToken(config, GUEST_ID)
+            val createResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId,"scheduledAt":"2030-01-10T18:30:00Z","partySize":2}""")
+                }
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val bookingId =
+                json.parseToJsonElement(createResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("bookingId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+
+            val foreignUpdateResponse =
+                client.post("/api/venue/bookings/$bookingId/confirm?venueId=$foreignVenueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignUpdateResponse.status)
         }
 
     private fun issueToken(

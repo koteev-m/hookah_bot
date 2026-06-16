@@ -155,6 +155,23 @@ type VenueStatsResponse = {
   topItems: Array<{ itemName: string; qty: number }>
 }
 
+type VenueBookingFixture = {
+  bookingId: number
+  displayNumber?: number | null
+  status: string
+  scheduledAt: string
+  scheduledAtDisplay?: string | null
+  scheduledLocalDate?: string | null
+  scheduledLocalTime?: string | null
+  serviceDate?: string | null
+  arrivalDeadlineAt?: string | null
+  arrivalDeadlineAtDisplay?: string | null
+  partySize?: number | null
+  comment?: string | null
+  guestDisplayName?: string | null
+  lastGuestConfirmationAt?: string | null
+}
+
 type AddBatchItemPayload = {
   itemId: number
   qty: number
@@ -962,6 +979,154 @@ async function mockVenueStatsApi(
   }
 }
 
+function buildVenueBooking(overrides: Partial<VenueBookingFixture> = {}): VenueBookingFixture {
+  return {
+    bookingId: 701,
+    displayNumber: 12,
+    status: 'pending',
+    scheduledAt: '2030-01-10T18:30:00Z',
+    scheduledAtDisplay: '10.01.2030, 21:30',
+    scheduledLocalDate: '2030-01-10',
+    scheduledLocalTime: '21:30',
+    serviceDate: '2030-01-10',
+    arrivalDeadlineAt: '2030-01-10T19:00:00Z',
+    arrivalDeadlineAtDisplay: '10.01.2030, 22:00',
+    partySize: 4,
+    comment: 'у окна',
+    guestDisplayName: 'Алексей',
+    lastGuestConfirmationAt: null,
+    ...overrides
+  }
+}
+
+async function mockVenueBookingsApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+    bookings?: VenueBookingFixture[]
+  } = {}
+) {
+  const role = options.role ?? 'MANAGER'
+  const permissions = options.permissions ?? ['BOOKING_VIEW', 'BOOKING_MANAGE', 'BOOKING_ARRIVAL_UPDATE']
+  let bookings = options.bookings ?? [buildVenueBooking()]
+  let confirmCalls = 0
+  let cancelCalls = 0
+  let changeCalls = 0
+  let seatCalls = 0
+  let noShowCalls = 0
+  const changeRequests: unknown[] = []
+  const cancelReasons: Array<string | null> = []
+
+  const activeBookings = () => bookings.filter((booking) => ['pending', 'confirmed', 'changed'].includes(booking.status))
+  const findBooking = (bookingId: number) => bookings.find((booking) => booking.bookingId === bookingId) ?? null
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role,
+            permissions
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/guest/venue/1', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 1,
+          name: 'Микс',
+          city: 'Москва',
+          address: 'Пилотная, 1',
+          status: 'PUBLISHED'
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/bookings**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (url.pathname === '/api/venue/bookings' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ items: activeBookings() }))
+      return
+    }
+
+    const actionMatch = url.pathname.match(/\/api\/venue\/bookings\/(\d+)\/([^/]+)$/)
+    if (!actionMatch || request.method() !== 'POST') {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+
+    const bookingId = Number(actionMatch[1])
+    const action = actionMatch[2]
+    const booking = findBooking(bookingId)
+    if (!booking) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+
+    if (action === 'confirm') {
+      confirmCalls += 1
+      booking.status = 'confirmed'
+    } else if (action === 'cancel') {
+      cancelCalls += 1
+      const body = (await request.postDataJSON()) as { reasonText?: string | null }
+      cancelReasons.push(body.reasonText ?? null)
+      booking.status = 'canceled'
+    } else if (action === 'change') {
+      changeCalls += 1
+      const body = (await request.postDataJSON()) as {
+        scheduledLocalDate?: string | null
+        scheduledLocalTime?: string | null
+      }
+      changeRequests.push(body)
+      booking.status = 'changed'
+      booking.scheduledLocalDate = body.scheduledLocalDate ?? booking.scheduledLocalDate
+      booking.scheduledLocalTime = body.scheduledLocalTime ?? booking.scheduledLocalTime
+      booking.scheduledAtDisplay = `${body.scheduledLocalDate ?? booking.scheduledLocalDate}, ${body.scheduledLocalTime ?? booking.scheduledLocalTime}`
+    } else if (action === 'seat') {
+      seatCalls += 1
+      booking.status = 'seated'
+    } else if (action === 'no-show') {
+      noShowCalls += 1
+      booking.status = 'no_show'
+    }
+
+    await route.fulfill(jsonResponse({ bookingId: booking.bookingId, status: booking.status, scheduledAt: booking.scheduledAt }))
+  })
+
+  return {
+    getConfirmCalls: () => confirmCalls,
+    getCancelCalls: () => cancelCalls,
+    getChangeCalls: () => changeCalls,
+    getSeatCalls: () => seatCalls,
+    getNoShowCalls: () => noShowCalls,
+    getChangeRequests: () => changeRequests,
+    getCancelReasons: () => cancelReasons,
+    setBookings: (nextBookings: VenueBookingFixture[]) => {
+      bookings = nextBookings
+    }
+  }
+}
+
 function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
   return [
     {
@@ -1595,6 +1760,70 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
     priceMinor: 300000,
     configured: true
   })
+})
+
+test('venue manager manages bookings queue lifecycle', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueBookingsApi(page, { role: 'MANAGER' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Брони', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Брони' })).toBeVisible()
+  await expect(page.getByText('Бронь №12')).toBeVisible()
+  await expect(page.getByText(/10\.01\.2030, 21:30/)).toBeVisible()
+  await expect(page.getByText('Гость: Алексей')).toBeVisible()
+  await expect(page.getByText('Держим до: 10.01.2030, 22:00')).toBeVisible()
+  await expect(page.getByText('у окна')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Подтвердить' }).click()
+  await expect(page.locator('.venue-booking-card .venue-order-meta').filter({ hasText: 'подтверждена' })).toBeVisible()
+  expect(api.getConfirmCalls()).toBe(1)
+
+  await page.getByText('Перенести бронь').click()
+  await page.locator('.venue-booking-change input[type="date"]').fill('2030-01-11')
+  await page.locator('.venue-booking-change input[type="time"]').fill('20:15')
+  await page.locator('.venue-booking-change').getByRole('button', { name: 'Перенести' }).click()
+  await expect(page.locator('.venue-booking-card .venue-order-meta').filter({ hasText: 'перенесена' })).toBeVisible()
+  expect(api.getChangeCalls()).toBe(1)
+  expect(api.getChangeRequests()).toEqual([{ scheduledLocalDate: '2030-01-11', scheduledLocalTime: '20:15' }])
+
+  page.once('dialog', async (dialog) => {
+    await dialog.accept('Гость попросил отменить')
+  })
+  await page.getByRole('button', { name: 'Отменить' }).click()
+  await expect(page.getByText('Активных броней пока нет.')).toBeVisible()
+  expect(api.getCancelCalls()).toBe(1)
+  expect(api.getCancelReasons()).toEqual(['Гость попросил отменить'])
+})
+
+test('venue staff sees booking arrival controls only', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueBookingsApi(page, {
+    role: 'STAFF',
+    permissions: ['BOOKING_VIEW', 'BOOKING_ARRIVAL_UPDATE']
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Брони', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Брони' })).toBeVisible()
+  await expect(page.getByText('Бронь №12')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Подтвердить' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Отменить' })).toHaveCount(0)
+  await expect(page.getByText('Перенести бронь')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Гость пришёл' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Не пришёл' })).toBeVisible()
+
+  page.once('dialog', async (dialog) => {
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: 'Гость пришёл' }).click()
+  await expect(page.getByText('Активных броней пока нет.')).toBeVisible()
+  expect(api.getSeatCalls()).toBe(1)
+  expect(api.getNoShowCalls()).toBe(0)
 })
 
 test('venue manager sees read-only statistics and switches period', async ({ page }) => {

@@ -113,6 +113,12 @@ export type VenueBookingDto = {
   displayNumber?: number | null
   status: 'pending' | 'confirmed' | 'changed' | 'canceled' | 'expired' | 'no_show' | 'seated' | string
   scheduledAt: string
+  scheduledAtDisplay?: string | null
+  scheduledLocalDate?: string | null
+  scheduledLocalTime?: string | null
+  serviceDate?: string | null
+  arrivalDeadlineAt?: string | null
+  arrivalDeadlineAtDisplay?: string | null
   partySize?: number | null
   comment?: string | null
   guestDisplayName?: string | null
@@ -124,7 +130,9 @@ export type VenueBookingListResponse = {
 }
 
 export type VenueBookingChangeRequest = {
-  scheduledAt: string
+  scheduledAt?: string | null
+  scheduledLocalDate?: string | null
+  scheduledLocalTime?: string | null
 }
 
 export type VenueBookingCancelRequest = {

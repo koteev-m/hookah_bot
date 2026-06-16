@@ -419,16 +419,17 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next parity implementation block: Venue Mini App bookings queue/lifecycle. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Recommended next parity smoke block: Venue Mini App bookings queue/lifecycle M3. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
-Manual bookings lifecycle smoke after next parity slice:
+Manual bookings lifecycle smoke after M3 deploy:
 
 1. Open Venue Mini App as STAFF and confirm `Брони` shows booking list/details.
 2. As STAFF, mark a booking `Гость пришёл` and `Не пришёл`; confirm management actions are hidden.
 3. As MANAGER/OWNER, confirm/change/cancel a booking.
-4. Confirm lifecycle copy and empty/error states are clear.
-5. Trigger direct STAFF manage attempts and confirm they are denied.
-6. Confirm Telegram bot booking actions remain aligned with Mini App behavior.
+4. Confirm scheduled time and `Держим до` render in venue-local timezone.
+5. Confirm lifecycle copy and empty/error states are clear, including `Активных броней пока нет.`
+6. Trigger direct STAFF manage attempts and confirm they are denied.
+7. Confirm Telegram bot booking actions remain aligned with Mini App behavior.
 
 Manual paid extension smoke after full parity:
 
