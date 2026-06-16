@@ -141,6 +141,20 @@ type VenueMenuCategoryFixture = {
   items: VenueMenuItemFixture[]
 }
 
+type VenueStatsResponse = {
+  venueId: number
+  period: 'today' | '7d' | '30d'
+  periodTitle: string
+  periodStart: string
+  ordersCount: number
+  revenueMinor: number
+  averageCheckMinor: number
+  discountMinor: number
+  cancelledItemsCount: number
+  currency: string
+  topItems: Array<{ itemName: string; qty: number }>
+}
+
 type AddBatchItemPayload = {
   itemId: number
   qty: number
@@ -857,6 +871,97 @@ async function mockVenueShiftExtensionApi(
   }
 }
 
+function buildVenueStats(period: 'today' | '7d' | '30d', overrides: Partial<VenueStatsResponse> = {}): VenueStatsResponse {
+  const titles = {
+    today: 'Сегодня',
+    '7d': '7 дней',
+    '30d': '30 дней'
+  } as const
+  const ordersCount = period === 'today' ? 4 : period === '7d' ? 8 : 15
+  return {
+    venueId: 1,
+    period,
+    periodTitle: titles[period],
+    periodStart: '2026-06-16T00:00:00+03:00',
+    ordersCount,
+    revenueMinor: ordersCount * 125000,
+    averageCheckMinor: 125000,
+    discountMinor: period === 'today' ? 15000 : 30000,
+    cancelledItemsCount: period === 'today' ? 1 : 2,
+    currency: 'RUB',
+    topItems: [
+      { itemName: 'Кальян', qty: period === 'today' ? 5 : 11 },
+      { itemName: 'Чай', qty: 3 }
+    ],
+    ...overrides
+  }
+}
+
+async function mockVenueStatsApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+    statsByPeriod?: Partial<Record<'today' | '7d' | '30d', VenueStatsResponse>>
+  } = {}
+) {
+  const role = options.role ?? 'MANAGER'
+  const permissions = options.permissions ?? []
+  const periods: string[] = []
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role,
+            permissions
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/guest/venue/1', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 1,
+          name: 'Микс',
+          city: 'Москва',
+          address: 'Пилотная, 1',
+          status: 'PUBLISHED'
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/stats**', async (route) => {
+    const url = new URL(route.request().url())
+    const period = (url.searchParams.get('period') || 'today') as 'today' | '7d' | '30d'
+    periods.push(period)
+    const stats = options.statsByPeriod?.[period] ?? buildVenueStats(period)
+    await route.fulfill(jsonResponse(stats))
+  })
+
+  return {
+    getPeriods: () => periods
+  }
+}
+
 function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
   return [
     {
@@ -1490,6 +1595,50 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
     priceMinor: 300000,
     configured: true
   })
+})
+
+test('venue manager sees read-only statistics and switches period', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStatsApi(page, { role: 'MANAGER' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Статистика', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Статистика', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
+  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Заказы' }).getByText('4')).toBeVisible()
+  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Выручка' })).toContainText(/5\s*000/)
+  await expect(page.getByText('Кальян')).toBeVisible()
+
+  await page.getByRole('button', { name: '7 дней' }).click()
+
+  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Заказы' }).getByText('8')).toBeVisible()
+  expect(api.getPeriods()).toEqual(['today', '7d'])
+})
+
+test('venue owner sees statistics section', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStatsApi(page, { role: 'OWNER' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Статистика', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Статистика', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
+  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Средний чек' })).toContainText(/1\s*250/)
+})
+
+test('venue staff does not see statistics section', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStatsApi(page, { role: 'STAFF', permissions: ['ORDER_QUEUE_VIEW'] })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Статистика', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/stats'
+  })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
 })
 
 test('venue manager manages menu item flavors from mini app', async ({ page }) => {

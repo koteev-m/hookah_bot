@@ -21,6 +21,8 @@ import type {
   VenueMenuResponse,
   VenueReorderCategoriesRequest,
   VenueReorderItemsRequest,
+  VenueStatsPeriod,
+  VenueStatsResponse,
   VenueUpdateCategoryRequest,
   VenueUpdateItemRequest,
   VenueUpdateOptionRequest,
@@ -57,6 +59,21 @@ export async function venueGetMe(
   signal?: AbortSignal
 ) {
   return requestApi<VenueMeResponse>(backendUrl, '/api/venue/me', { signal }, deps)
+}
+
+export async function venueGetStats(
+  backendUrl: string,
+  params: { venueId: number; period: VenueStatsPeriod },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ period: params.period })
+  return requestApi<VenueStatsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/stats?${search.toString()}`,
+    { signal },
+    deps
+  )
 }
 
 export async function venueGetMenu(

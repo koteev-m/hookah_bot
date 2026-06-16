@@ -22,6 +22,7 @@ import { renderVenueOrdersScreen } from './venueOrders'
 import { renderVenueSettingsScreen } from './venueSettings'
 import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
 import { renderVenueStaffScreen } from './venueStaff'
+import { renderVenueStatsScreen } from './venueStats'
 import { renderVenueSupportScreen } from './supportScreens'
 import { renderVenueTablesScreen } from './venueTables'
 
@@ -39,6 +40,7 @@ type RouteName =
   | 'menu'
   | 'tables'
   | 'staff'
+  | 'stats'
   | 'settings'
   | 'bookings'
   | 'chat'
@@ -96,6 +98,7 @@ function resolveRoute(): Route {
       'menu',
       'tables',
       'staff',
+      'stats',
       'settings',
       'bookings',
       'chat',
@@ -149,6 +152,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
+    stats: el('button', { className: 'nav-button', text: 'Статистика' }) as HTMLButtonElement,
     settings: el('button', { className: 'nav-button', text: 'Настройки продления' }) as HTMLButtonElement,
     chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement,
     support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
@@ -162,6 +166,10 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     {
       title: 'Настройки',
       buttons: [navButtons.menu, navButtons.tables, navButtons.staff, navButtons.chat, navButtons.settings]
+    },
+    {
+      title: 'Статистика',
+      buttons: [navButtons.stats]
     },
     {
       title: 'Помощь',
@@ -375,6 +383,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
+    refs.navButtons.stats.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
     refs.navButtons.settings.hidden = !hasPermission('SHIFT_EXTENSION_SETTINGS')
     refs.navSections.forEach((section) => {
@@ -400,6 +409,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         return hasPermission('SHIFT_EXTENSION_SETTINGS')
       case 'staff':
         return currentRole !== 'STAFF'
+      case 'stats':
+        return currentRole === 'OWNER' || currentRole === 'MANAGER'
       case 'chat':
         return hasPermission('STAFF_CHAT_LINK')
       default:
@@ -476,6 +487,8 @@ export function mountVenueApp(options: VenueAppOptions) {
           access,
           currentUserId: currentUserId ?? 0
         })
+      case 'stats':
+        return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'settings':
         return renderVenueSettingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'chat':
@@ -518,6 +531,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.menu, 'click', () => navigate('#/menu')))
   disposables.push(on(refs.navButtons.tables, 'click', () => navigate('#/tables')))
   disposables.push(on(refs.navButtons.staff, 'click', () => navigate('#/staff')))
+  disposables.push(on(refs.navButtons.stats, 'click', () => navigate('#/stats')))
   disposables.push(on(refs.navButtons.settings, 'click', () => navigate('#/settings')))
   disposables.push(on(refs.navButtons.chat, 'click', () => navigate('#/chat')))
   disposables.push(on(refs.navButtons.support, 'click', () => navigate('#/support')))

@@ -937,6 +937,48 @@ input[type="number"] {
   gap: 0.5rem;
 }
 
+.venue-stats-periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.venue-stats-periods button[data-active="true"] {
+  background: #1f2a44;
+  color: #ffffff;
+}
+
+.venue-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.venue-stats-metric,
+.venue-stats-top-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-stats-metric {
+  flex-direction: column;
+}
+
+.venue-stats-metric span {
+  color: #52617d;
+  font-size: 0.9rem;
+}
+
+.venue-stats-top-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
 .venue-orders-controls {
   display: grid;
   gap: 0.5rem;

@@ -12,6 +12,27 @@ export type VenueMeResponse = {
   venues: VenueAccessDto[]
 }
 
+export type VenueStatsPeriod = 'today' | '7d' | '30d'
+
+export type VenueStatsTopItemDto = {
+  itemName: string
+  qty: number
+}
+
+export type VenueStatsResponse = {
+  venueId: number
+  period: VenueStatsPeriod
+  periodTitle: string
+  periodStart: string
+  ordersCount: number
+  revenueMinor: number
+  averageCheckMinor: number
+  discountMinor: number
+  cancelledItemsCount: number
+  currency: string
+  topItems: VenueStatsTopItemDto[]
+}
+
 export type StaffChatLinkCodeResponse = {
   code: string
   expiresAt: string
