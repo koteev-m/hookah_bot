@@ -1,5 +1,6 @@
 import { requestApi, requestBinary, type RequestDependencies } from './request'
 import type {
+  VenueApplyBaseFlavorProfilesResponse,
   VenueAvailabilityRequest,
   VenueBookingChangeRequest,
   VenueBookingCancelRequest,
@@ -357,6 +358,24 @@ export async function venueCreateOption(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueApplyBaseFlavorProfiles(
+  backendUrl: string,
+  params: { venueId: number; itemId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueApplyBaseFlavorProfilesResponse>(
+    backendUrl,
+    `/api/venue/menu/items/${params.itemId}/base-flavor-profiles?${search.toString()}`,
+    {
+      method: 'POST',
       signal
     },
     deps

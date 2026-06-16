@@ -2,6 +2,7 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  venueApplyBaseFlavorProfiles,
   venueCreateCategory,
   venueCreateItem,
   venueCreateOption,
@@ -238,6 +239,7 @@ function renderItemRow(
   onSetItemAvailability: (item: VenueMenuItemDto, isAvailable: boolean) => void,
   onMove: (item: VenueMenuItemDto, direction: 'up' | 'down') => void,
   onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void,
+  onApplyBaseFlavorProfiles: (item: VenueMenuItemDto) => void,
   onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void,
   onDeleteOption: (option: VenueMenuOptionDto) => void,
   onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
@@ -247,6 +249,7 @@ function renderItemRow(
   const optionCopy = getOptionCopy(isHookah)
   const shouldRenderOptions = itemOptions.length > 0 || (isHookah && canManage)
   const canAddOptions = canManage && (isHookah || itemOptions.length > 0)
+  const canApplyBaseFlavorProfiles = isHookah && canManage && (item.missingBaseFlavorProfilesCount ?? 0) > 0
 
   const row = el('div', { className: 'venue-menu-item' })
   const info = el('div', { className: 'venue-menu-item-info' })
@@ -261,6 +264,13 @@ function renderItemRow(
     const optionHeader = el('div', { className: 'venue-menu-option-header' })
     const optionsTitle = el('span', { className: 'venue-menu-options-title', text: optionCopy.title })
     optionHeader.appendChild(optionsTitle)
+    if (canApplyBaseFlavorProfiles) {
+      const applyBaseButton = el('button', { className: 'button-small', text: 'Добавить базовые вкусы' }) as HTMLButtonElement
+      applyBaseButton.addEventListener('click', () => {
+        onApplyBaseFlavorProfiles(item)
+      })
+      optionHeader.appendChild(applyBaseButton)
+    }
     if (canAddOptions) {
       const addOptionButton = el('button', { className: 'button-small', text: optionCopy.addButton }) as HTMLButtonElement
       addOptionButton.addEventListener('click', () => {
@@ -348,6 +358,7 @@ function renderCategoryCard(
     onSetItemAvailability: (item: VenueMenuItemDto, isAvailable: boolean) => void
     onMoveItem: (item: VenueMenuItemDto, direction: 'up' | 'down') => void
     onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void
+    onApplyBaseFlavorProfiles: (item: VenueMenuItemDto) => void
     onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void
     onDeleteOption: (option: VenueMenuOptionDto) => void
     onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
@@ -387,10 +398,11 @@ function renderCategoryCard(
         handlers.onEditItem,
         handlers.onDeleteItem,
         handlers.onSetItemAvailability,
-        handlers.onMoveItem,
-        handlers.onCreateOption,
-        handlers.onEditOption,
-        handlers.onDeleteOption,
+          handlers.onMoveItem,
+          handlers.onCreateOption,
+          handlers.onApplyBaseFlavorProfiles,
+          handlers.onEditOption,
+          handlers.onDeleteOption,
         handlers.onSetOptionAvailability
       )
     )
@@ -640,6 +652,16 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               return
             }
             showToast(getOptionCopy(isHookahMenuItem(item)).addedToast)
+            void loadMenu()
+          },
+          onApplyBaseFlavorProfiles: async (item) => {
+            const result = await venueApplyBaseFlavorProfiles(backendUrl, { venueId, itemId: item.id }, deps)
+            if (disposed) return
+            if (!result.ok) {
+              showError(result.error)
+              return
+            }
+            showToast(`Добавлено вкусов: ${result.data.addedCount}. Уже были: ${result.data.existingCount}.`)
             void loadMenu()
           },
           onEditOption: async (option, name, priceDeltaMinor) => {

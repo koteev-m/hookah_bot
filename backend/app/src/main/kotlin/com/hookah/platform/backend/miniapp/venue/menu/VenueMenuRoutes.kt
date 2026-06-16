@@ -206,6 +206,29 @@ fun Route.venueMenuRoutes(
             call.respond(updated.toDto())
         }
 
+        post("/menu/items/{id}/base-flavor-profiles") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            ensureMenuManage(venueAccessRepository, userId, venueId)
+            val itemId =
+                call.parameters["id"]?.toLongOrNull()
+                    ?: throw InvalidInputException("itemId must be a number")
+            val result =
+                HookahFlavorProfileService.applyMissingBaseProfiles(
+                    venueMenuRepository = venueMenuRepository,
+                    venueId = venueId,
+                    itemId = itemId,
+                )
+            call.respond(
+                ApplyBaseFlavorProfilesResponse(
+                    itemId = result.itemId,
+                    addedCount = result.addedCount,
+                    existingCount = result.existingCount,
+                    options = result.options.map { it.toDto() },
+                ),
+            )
+        }
+
         post("/menu/reorder/categories") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
@@ -404,14 +427,25 @@ private fun VenueMenuCategory.toDto(): VenueMenuCategoryDto =
         items = items.map { it.toDto(this) },
     )
 
-private fun VenueMenuItem.toDto(category: VenueMenuCategory): VenueMenuItemDto = toDto(effectiveType(category))
+private fun VenueMenuItem.toDto(category: VenueMenuCategory): VenueMenuItemDto =
+    toDto(
+        effectiveType = effectiveType(category),
+        supportsBaseFlavorProfiles = HookahFlavorProfileService.isHookahFlavorProfileItem(category, this),
+    )
 
 private fun VenueMenuItem.toDtoWithCategory(category: VenueMenuCategory?): VenueMenuItemDto =
     if (category == null) toDto() else toDto(category)
 
-private fun VenueMenuItem.toDto(): VenueMenuItemDto = toDto(itemType ?: MenuSemanticType.OTHER)
+private fun VenueMenuItem.toDto(): VenueMenuItemDto =
+    toDto(
+        effectiveType = itemType ?: MenuSemanticType.OTHER,
+        supportsBaseFlavorProfiles = itemType == MenuSemanticType.HOOKAH,
+    )
 
-private fun VenueMenuItem.toDto(effectiveType: MenuSemanticType): VenueMenuItemDto =
+private fun VenueMenuItem.toDto(
+    effectiveType: MenuSemanticType,
+    supportsBaseFlavorProfiles: Boolean,
+): VenueMenuItemDto =
     VenueMenuItemDto(
         id = id,
         categoryId = categoryId,
@@ -422,6 +456,12 @@ private fun VenueMenuItem.toDto(effectiveType: MenuSemanticType): VenueMenuItemD
         sortOrder = sortOrder,
         itemType = itemType?.dbValue,
         effectiveItemType = effectiveType.dbValue,
+        missingBaseFlavorProfilesCount =
+            if (supportsBaseFlavorProfiles) {
+                HookahFlavorProfileService.missingBaseProfileCount(options.map { it.name })
+            } else {
+                0
+            },
         options = options.map { it.toDto() },
     )
 

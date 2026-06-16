@@ -415,6 +415,250 @@ class VenueMenuRoutesTest {
         }
 
     @Test
+    fun `base flavor profiles apply only to hookah items and stay item scoped`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-base-flavor-profiles")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val token = issueToken(config)
+
+            val category =
+                client.post("/api/venue/menu/categories?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Кальянное меню","categoryType":"HOOKAH"}""")
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuCategoryDto.serializer(), response.bodyAsText())
+                }
+
+            val hookahItem =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Кальян классический",
+                          "priceMinor": 180000,
+                          "currency": "RUB",
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+            assertEquals(8, hookahItem.missingBaseFlavorProfilesCount)
+
+            val waterItem =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Вода",
+                          "priceMinor": 20000,
+                          "currency": "RUB",
+                          "isAvailable": true,
+                          "itemType": "DRINK"
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+            assertEquals(0, waterItem.missingBaseFlavorProfilesCount)
+
+            val applyResponse =
+                client.post("/api/venue/menu/items/${hookahItem.id}/base-flavor-profiles?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, applyResponse.status)
+            val applied =
+                json.decodeFromString(
+                    ApplyBaseFlavorProfilesResponse.serializer(),
+                    applyResponse.bodyAsText(),
+                )
+            assertEquals(hookahItem.id, applied.itemId)
+            assertEquals(8, applied.addedCount)
+            assertEquals(0, applied.existingCount)
+            assertEquals(8, applied.options.size)
+            assertTrue(applied.options.all { it.itemId == hookahItem.id })
+            assertTrue(applied.options.all { it.priceDeltaMinor == 0L && it.isAvailable })
+
+            val repeatResponse =
+                client.post("/api/venue/menu/items/${hookahItem.id}/base-flavor-profiles?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, repeatResponse.status)
+            val repeated =
+                json.decodeFromString(
+                    ApplyBaseFlavorProfilesResponse.serializer(),
+                    repeatResponse.bodyAsText(),
+                )
+            assertEquals(0, repeated.addedCount)
+            assertEquals(8, repeated.existingCount)
+            assertEquals(8, repeated.options.size)
+
+            val invalidWaterResponse =
+                client.post("/api/venue/menu/items/${waterItem.id}/base-flavor-profiles?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.BadRequest, invalidWaterResponse.status)
+            assertApiErrorEnvelope(invalidWaterResponse, ApiErrorCodes.INVALID_INPUT)
+
+            val partialItem =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Кальян премиум",
+                          "priceMinor": 260000,
+                          "currency": "RUB",
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+
+            client.post("/api/venue/menu/options?venueId=$venueId") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $token")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody("""{"itemId":${partialItem.id},"name":"ягодный","priceDeltaMinor":0,"isAvailable":true}""")
+            }.also { response ->
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+
+            val partialApplyResponse =
+                client.post("/api/venue/menu/items/${partialItem.id}/base-flavor-profiles?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, partialApplyResponse.status)
+            val partiallyApplied =
+                json.decodeFromString(
+                    ApplyBaseFlavorProfilesResponse.serializer(),
+                    partialApplyResponse.bodyAsText(),
+                )
+            assertEquals(7, partiallyApplied.addedCount)
+            assertEquals(1, partiallyApplied.existingCount)
+            assertEquals(8, partiallyApplied.options.size)
+            assertEquals(1, partiallyApplied.options.count { it.name.equals("ягодный", ignoreCase = true) })
+
+            val menuResponse =
+                client.get("/api/venue/menu?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, menuResponse.status)
+            val menu = json.decodeFromString(VenueMenuResponse.serializer(), menuResponse.bodyAsText())
+            val venueItems = menu.categories.flatMap { it.items }.associateBy { it.id }
+            assertEquals(0, venueItems.getValue(hookahItem.id).missingBaseFlavorProfilesCount)
+            assertEquals(0, venueItems.getValue(waterItem.id).missingBaseFlavorProfilesCount)
+            assertEquals(8, venueItems.getValue(hookahItem.id).options.size)
+            assertTrue(venueItems.getValue(waterItem.id).options.isEmpty())
+
+            val guestMenuResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, guestMenuResponse.status)
+            val guestMenu = json.decodeFromString(MenuResponse.serializer(), guestMenuResponse.bodyAsText())
+            val guestItems = guestMenu.categories.flatMap { it.items }.associateBy { it.id }
+            assertEquals(8, guestItems.getValue(hookahItem.id).options.size)
+            assertTrue(guestItems.getValue(waterItem.id).options.isEmpty())
+        }
+
+    @Test
+    fun `staff cannot apply base flavor profiles`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-base-flavor-staff")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val staffUserId = 200502L
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            seedVenueWithRole(jdbcUrl, staffUserId, "STAFF", venueId)
+            val managerToken = issueToken(config)
+            val staffToken = issueToken(config, staffUserId)
+
+            val category =
+                client.post("/api/venue/menu/categories?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Кальянное меню","categoryType":"HOOKAH"}""")
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuCategoryDto.serializer(), response.bodyAsText())
+                }
+
+            val item =
+                client.post("/api/venue/menu/items?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "categoryId": ${category.id},
+                          "name": "Кальян",
+                          "priceMinor": 180000,
+                          "currency": "RUB",
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueMenuItemDto.serializer(), response.bodyAsText())
+                }
+
+            val staffResponse =
+                client.post("/api/venue/menu/items/${item.id}/base-flavor-profiles?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, staffResponse.status)
+            assertApiErrorEnvelope(staffResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
     fun `reorder rejects foreign ids`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-reorder")
@@ -856,6 +1100,7 @@ class VenueMenuRoutesTest {
         val sortOrder: Int,
         val itemType: String? = null,
         val effectiveItemType: String = "OTHER",
+        val missingBaseFlavorProfilesCount: Int = 0,
         val options: List<VenueMenuOptionDto>,
     )
 
@@ -867,6 +1112,14 @@ class VenueMenuRoutesTest {
         val priceDeltaMinor: Long,
         val isAvailable: Boolean,
         val sortOrder: Int,
+    )
+
+    @Serializable
+    private data class ApplyBaseFlavorProfilesResponse(
+        val itemId: Long,
+        val addedCount: Int,
+        val existingCount: Int,
+        val options: List<VenueMenuOptionDto>,
     )
 
     companion object {

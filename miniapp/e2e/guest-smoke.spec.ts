@@ -128,6 +128,7 @@ type VenueMenuItemFixture = {
   sortOrder: number
   itemType?: string | null
   effectiveItemType: string
+  missingBaseFlavorProfilesCount?: number
   options: VenueMenuOptionFixture[]
 }
 
@@ -872,6 +873,7 @@ function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
           isAvailable: true,
           sortOrder: 0,
           effectiveItemType: 'HOOKAH',
+          missingBaseFlavorProfilesCount: 8,
           options: []
         }
       ]
@@ -894,16 +896,41 @@ async function mockVenueMenuApi(
   let updateOptionCalls = 0
   let deleteOptionCalls = 0
   let availabilityCalls = 0
+  let applyBaseFlavorProfileCalls = 0
   let createItemCalls = 0
   let itemAvailabilityCalls = 0
   let nextItemId = 950
   let nextOptionId = 900
+  const baseFlavorProfiles = [
+    'Ягодный',
+    'Фруктовый',
+    'Цитрусовый',
+    'Десертный',
+    'Освежающий / мятный',
+    'Напиточный',
+    'Пряный',
+    'Цветочный'
+  ]
 
   const allItems = () => categories.flatMap((category) => category.items)
   const allOptions = () => allItems().flatMap((item) => item.options)
   const findCategory = (categoryId: number) => categories.find((category) => category.id === categoryId) ?? null
   const findItem = (itemId: number) => allItems().find((item) => item.id === itemId) ?? null
   const findOption = (optionId: number) => allOptions().find((option) => option.id === optionId) ?? null
+  const normalizeFlavorNameKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru-RU')
+  const updateMissingBaseFlavorProfilesCount = (item: VenueMenuItemFixture) => {
+    if (item.effectiveItemType !== 'HOOKAH') {
+      item.missingBaseFlavorProfilesCount = 0
+      return
+    }
+    const existingKeys = new Set(item.options.map((option) => normalizeFlavorNameKey(option.name)))
+    item.missingBaseFlavorProfilesCount = baseFlavorProfiles.filter(
+      (profile) => !existingKeys.has(normalizeFlavorNameKey(profile))
+    ).length
+  }
+  const updateAllMissingBaseFlavorProfilesCount = () => allItems().forEach(updateMissingBaseFlavorProfilesCount)
+
+  updateAllMissingBaseFlavorProfilesCount()
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -936,6 +963,51 @@ async function mockVenueMenuApi(
     const url = new URL(request.url())
     const method = request.method()
 
+    const baseFlavorMatch = url.pathname.match(/\/api\/venue\/menu\/items\/(\d+)\/base-flavor-profiles$/)
+    if (baseFlavorMatch && method === 'POST') {
+      applyBaseFlavorProfileCalls += 1
+      const item = findItem(Number(baseFlavorMatch[1]))
+      if (!item) {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return
+      }
+      if (item.effectiveItemType !== 'HOOKAH') {
+        await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'invalid' }) })
+        return
+      }
+      const existingKeys = new Set(item.options.map((option) => normalizeFlavorNameKey(option.name)))
+      let existingCount = 0
+      const createdOptions: VenueMenuOptionFixture[] = []
+      baseFlavorProfiles.forEach((profileName) => {
+        const key = normalizeFlavorNameKey(profileName)
+        if (existingKeys.has(key)) {
+          existingCount += 1
+          return
+        }
+        const option = {
+          id: nextOptionId++,
+          itemId: item.id,
+          name: profileName,
+          priceDeltaMinor: 0,
+          isAvailable: true,
+          sortOrder: item.options.length
+        }
+        item.options.push(option)
+        createdOptions.push(option)
+        existingKeys.add(key)
+      })
+      updateMissingBaseFlavorProfilesCount(item)
+      await route.fulfill(
+        jsonResponse({
+          itemId: item.id,
+          addedCount: createdOptions.length,
+          existingCount,
+          options: item.options
+        })
+      )
+      return
+    }
+
     if (method === 'POST') {
       createItemCalls += 1
       const body = (await request.postDataJSON()) as {
@@ -961,6 +1033,7 @@ async function mockVenueMenuApi(
         sortOrder: category.items.length,
         itemType: body.itemType ?? null,
         effectiveItemType: body.itemType ?? category.categoryType,
+        missingBaseFlavorProfilesCount: body.itemType === 'HOOKAH' || (!body.itemType && category.categoryType === 'HOOKAH') ? 8 : 0,
         options: []
       }
       category.items.push(item)
@@ -1012,6 +1085,7 @@ async function mockVenueMenuApi(
         sortOrder: item.options.length
       }
       item.options.push(option)
+      updateMissingBaseFlavorProfilesCount(item)
       await route.fulfill(jsonResponse(option))
       return
     }
@@ -1046,6 +1120,7 @@ async function mockVenueMenuApi(
       if (body.name != null) option.name = body.name
       if (body.priceDeltaMinor != null) option.priceDeltaMinor = body.priceDeltaMinor
       if (body.isAvailable != null) option.isAvailable = body.isAvailable
+      updateAllMissingBaseFlavorProfilesCount()
       await route.fulfill(jsonResponse(option))
       return
     }
@@ -1058,6 +1133,7 @@ async function mockVenueMenuApi(
           item.options = item.options.filter((option) => option.id !== optionId)
         })
       })
+      updateAllMissingBaseFlavorProfilesCount()
       await route.fulfill(jsonResponse({ ok: true }))
       return
     }
@@ -1071,6 +1147,7 @@ async function mockVenueMenuApi(
     getUpdateOptionCalls: () => updateOptionCalls,
     getDeleteOptionCalls: () => deleteOptionCalls,
     getAvailabilityCalls: () => availabilityCalls,
+    getApplyBaseFlavorProfileCalls: () => applyBaseFlavorProfileCalls,
     getCreateItemCalls: () => createItemCalls,
     getItemAvailabilityCalls: () => itemAvailabilityCalls
   }
@@ -1128,6 +1205,7 @@ test('guest mini app selects item flavor and submits structured selected option'
             isAvailable: true,
             effectiveItemType: 'HOOKAH',
             options: [
+              { id: 304, name: 'Ягодный', priceDeltaMinor: 0, isAvailable: true },
               { id: 301, name: 'Яблоко', priceDeltaMinor: 0, isAvailable: true },
               { id: 302, name: 'Мята', priceDeltaMinor: 25000, isAvailable: true },
               { id: 303, name: 'Недоступный вкус', priceDeltaMinor: 50000, isAvailable: false }
@@ -1160,6 +1238,7 @@ test('guest mini app selects item flavor and submits structured selected option'
   await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
   await expect(page.getByText('Кальян', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: /Яблоко/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Ягодный/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /Мята/ })).toBeVisible()
   await expect(page.getByText('Недоступный вкус')).toHaveCount(0)
   await expect(page.getByLabel('Пожелания к приготовлению')).toHaveCount(0)
@@ -1388,6 +1467,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
             isAvailable: true,
             sortOrder: 0,
             effectiveItemType: 'HOOKAH',
+            missingBaseFlavorProfilesCount: 8,
             options: []
           }
         ]
@@ -1407,6 +1487,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
             isAvailable: true,
             sortOrder: 0,
             effectiveItemType: 'DRINK',
+            missingBaseFlavorProfilesCount: 0,
             options: [
               {
                 id: 410,
@@ -1435,6 +1516,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
             isAvailable: true,
             sortOrder: 0,
             effectiveItemType: 'FOOD',
+            missingBaseFlavorProfilesCount: 0,
             options: []
           }
         ]
@@ -1468,13 +1550,25 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   expect(api.getItemAvailabilityCalls()).toBe(2)
   await expect(hookahItem().getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
+  await expect(hookahItem().getByRole('button', { name: 'Добавить базовые вкусы' })).toBeVisible()
   await expect(waterItem().getByText('Опции')).toBeVisible()
   await expect(waterItem().getByText('Газированная')).toBeVisible()
   await expect(waterItem().getByRole('button', { name: 'Добавить опцию' })).toBeVisible()
+  await expect(waterItem().getByRole('button', { name: 'Добавить базовые вкусы' })).toHaveCount(0)
   await expect(waterItem().getByText('Вкусы / опции')).toHaveCount(0)
   await expect(waterItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toHaveCount(0)
+  await expect(kitchenItem().getByRole('button', { name: 'Добавить базовые вкусы' })).toHaveCount(0)
   await expect(kitchenItem().getByText('Вкусы / опции')).toHaveCount(0)
   await expect(kitchenItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toHaveCount(0)
+
+  await hookahItem().getByRole('button', { name: 'Добавить базовые вкусы' }).click()
+  await expect(page.getByText('Добавлено вкусов: 8. Уже были: 0.')).toBeVisible()
+  await expect(hookahItem().getByText('Ягодный')).toBeVisible()
+  await expect(hookahItem().getByText('Фруктовый')).toBeVisible()
+  await expect(hookahItem().getByRole('button', { name: 'Добавить базовые вкусы' })).toHaveCount(0)
+  await expect(waterItem().getByText('Ягодный')).toHaveCount(0)
+  await expect(kitchenItem().getByText('Ягодный')).toHaveCount(0)
+  expect(api.getApplyBaseFlavorProfileCalls()).toBe(1)
 
   dialogReplies.push('Яблоко', '250')
   await hookahItem().getByRole('button', { name: 'Добавить вкус' }).click()
@@ -1485,7 +1579,11 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   expect(api.getCreateOptionCalls()).toBe(1)
 
   dialogReplies.push('Яблоко без мяты', '0')
-  await hookahItem().getByRole('button', { name: 'Править вкус' }).click()
+  await hookahItem()
+    .locator('.venue-menu-option')
+    .filter({ hasText: 'Яблоко' })
+    .getByRole('button', { name: 'Править вкус' })
+    .click()
   await expect(hookahItem().getByText('Яблоко без мяты')).toBeVisible()
   expect(api.getUpdateOptionCalls()).toBe(1)
 
@@ -1500,9 +1598,9 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
 
   await editedOption().getByRole('button', { name: 'Удалить вкус' }).click()
   await expect(page.getByText('Яблоко без мяты')).toHaveCount(0)
-  await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
+  await expect(hookahItem().getByText('Ягодный')).toBeVisible()
   expect(api.getDeleteOptionCalls()).toBe(1)
-  expect(api.getCategories()[0].items[0].options).toHaveLength(0)
+  expect(api.getCategories()[0].items[0].options).toHaveLength(8)
   expect(api.getCategories()[1].items[0].options.map((option) => option.name)).toEqual(['Газированная'])
 
   await hookahCategory().getByPlaceholder('Название позиции').fill('Кальян дорогой')
@@ -1511,8 +1609,13 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   const expensiveHookahItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян дорогой' })
   await expect(expensiveHookahItem.getByText('Вкусы / опции')).toBeVisible()
   await expect(expensiveHookahItem.getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
+  await expect(expensiveHookahItem.getByRole('button', { name: 'Добавить базовые вкусы' })).toBeVisible()
   await expect(expensiveHookahItem.getByRole('button', { name: 'Добавить вкус' })).toBeVisible()
+  await expensiveHookahItem.getByRole('button', { name: 'Добавить базовые вкусы' }).click()
+  await expect(expensiveHookahItem.getByText('Ягодный')).toBeVisible()
+  await expect(expensiveHookahItem.getByRole('button', { name: 'Добавить базовые вкусы' })).toHaveCount(0)
   expect(api.getCreateItemCalls()).toBe(1)
+  expect(api.getApplyBaseFlavorProfileCalls()).toBe(2)
 })
 
 test('venue staff sees menu flavors without edit controls', async ({ page }) => {

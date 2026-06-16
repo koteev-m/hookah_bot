@@ -185,6 +185,7 @@ export type VenueMenuItemDto = {
   sortOrder: number
   itemType?: MenuSemanticType | null
   effectiveItemType: MenuSemanticType
+  missingBaseFlavorProfilesCount?: number
   options: VenueMenuOptionDto[]
 }
 
@@ -195,6 +196,13 @@ export type VenueMenuOptionDto = {
   priceDeltaMinor: number
   isAvailable: boolean
   sortOrder: number
+}
+
+export type VenueApplyBaseFlavorProfilesResponse = {
+  itemId: number
+  addedCount: number
+  existingCount: number
+  options: VenueMenuOptionDto[]
 }
 
 export type VenueCreateCategoryRequest = {

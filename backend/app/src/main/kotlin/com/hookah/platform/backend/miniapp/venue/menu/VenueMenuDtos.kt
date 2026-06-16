@@ -28,6 +28,7 @@ data class VenueMenuItemDto(
     val sortOrder: Int,
     val itemType: String? = null,
     val effectiveItemType: String,
+    val missingBaseFlavorProfilesCount: Int = 0,
     val options: List<VenueMenuOptionDto>,
 )
 
@@ -39,6 +40,14 @@ data class VenueMenuOptionDto(
     val priceDeltaMinor: Long,
     val isAvailable: Boolean,
     val sortOrder: Int,
+)
+
+@Serializable
+data class ApplyBaseFlavorProfilesResponse(
+    val itemId: Long,
+    val addedCount: Int,
+    val existingCount: Int,
+    val options: List<VenueMenuOptionDto>,
 )
 
 @Serializable

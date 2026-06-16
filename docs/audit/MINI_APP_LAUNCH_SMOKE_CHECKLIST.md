@@ -79,10 +79,10 @@ Remaining:
 Known option/flavor coverage:
 
 - Guest Mini App smoke covers item option/flavor selection, selected option persistence in cart submission and line-level preference notes.
-- Venue Mini App smoke covers item-level stop-list toggles, option/flavor-level stop-list toggles, item-scoped hookah flavor CRUD and the new hookah item empty state with `Добавить вкус`.
+- Venue Mini App smoke covers item-level stop-list toggles, option/flavor-level stop-list toggles, item-scoped hookah flavor CRUD, shared hookah-only `Добавить базовые вкусы`, and the new hookah item empty state with `Добавить вкус`.
 - Backend guest order tests cover selected option persistence, price delta, unavailable/foreign option rejection and distinct cart lines for the same item with different options.
 - Backend guest menu tests must keep asserting that an option is returned only for its owning item and unavailable options stay hidden.
-- Follow-up: Mini App does not yet expose bot's base flavor profile batch actions (`Добавить базовые вкусы`, normalize). Add a shared template/batch API first, then expose it as item-scoped hookah-only UI.
+- Follow-up: Mini App exposes shared item-scoped `Добавить базовые вкусы`; bot-only normalize/reset remains deferred unless pilots need it.
 
 Manual runtime coverage for each release batch:
 
@@ -424,4 +424,4 @@ Manual options/flavors parity smoke after implementation:
 7. Confirm line preference notes appear in guest active order, Venue Mini App order detail, staff chat and Guest Bot `Мой заказ`; notes must not affect price.
 8. Disable an option after selection and confirm preview/checkout rejects the stale option without silently adding the base item.
 9. Confirm Guest Bot no longer relies only on `Выбранные вкусы` comment text for persistence; selected option data is structured in order/read models. Guest Bot input for optional `Пожелание к вкусу` remains a follow-up until implemented.
-10. As OWNER/MANAGER, manage options in Venue Mini App once option CRUD/flavor-profile parity slice lands; as STAFF, confirm edit controls are hidden/forbidden.
+10. As OWNER/MANAGER, manage options in Venue Mini App, apply `Добавить базовые вкусы` only to hookah items, and confirm STAFF edit/apply controls are hidden/forbidden.
