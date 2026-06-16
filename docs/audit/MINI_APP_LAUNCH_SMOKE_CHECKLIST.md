@@ -51,7 +51,7 @@ Remaining:
 
 - repeat this smoke after any additional release batch;
 - P1 follow-up: paid venue/shift extension is implemented in backend and Guest/Venue Mini App, but Venue approve/reject is still a standalone `Продления` island; next target is order/table detail integration, staff-chat live message actions, Guest Bot entry and Owner/Manager Bot settings parity;
-- P1 follow-up: Guest/Menu Options & Flavors parity remains in smoke scope. Guest Bot and Guest Mini App both submit structured selected options; this must stay covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
+- P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
 - P1 follow-up: Venue Mini App navigation IA must be aligned with the bot sections without mixing it into option/flavor fixes: `Работа смены` (заказы, вызовы, брони, стоп-лист), `Настройки` (профиль/карточка, заказное меню, столы, QR, персонал, чат персонала, бронь, публикация), `Статистика`, `Продвижение`, `Предпросмотр для гостя`.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -82,7 +82,7 @@ Known option/flavor coverage:
 - Venue Mini App smoke covers item-level stop-list toggles, option/flavor-level stop-list toggles, item-scoped hookah flavor CRUD, shared hookah-only `Добавить базовые вкусы`, and the new hookah item empty state with `Добавить вкус`.
 - Backend guest order tests cover selected option persistence, price delta, unavailable/foreign option rejection and distinct cart lines for the same item with different options.
 - Backend guest menu tests must keep asserting that an option is returned only for its owning item and unavailable options stay hidden.
-- Follow-up: Mini App exposes shared item-scoped `Добавить базовые вкусы`; bot-only normalize/reset remains deferred unless pilots need it.
+- Follow-ups: Mini App normalize/reset remains deferred unless pilots need it; DB-level duplicate/race protection for base flavor apply is optional if concurrent apply becomes an issue.
 
 Manual runtime coverage for each release batch:
 
@@ -372,7 +372,7 @@ Expected:
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
 - Guest table session restore and Telegram BackButton navigation passed staging smoke; keep restore, QR priority, account-switch isolation and no-loop BackButton behavior in regression smoke.
 - Paid venue/shift extension is implemented for backend and Mini App as a confirmed service charge/session extension, not as a normal menu/cart/order-batch item. Remaining parity gaps: order-scoped Venue Mini App approve/reject, staff-chat live message pending actions, Guest Bot table menu entry and Owner/Manager Bot settings.
-- Guest/Menu Options & Flavors parity is not complete: Guest Bot has hookah flavor/options UX, Guest Mini App does not expose the same picker, and shared guest order persistence is not yet structured for selected options. Target behavior: options/flavors are order modifiers, same item with different option is a separate line, selected options affect price, unavailable options are hidden/rejected, and staff/venue/staff-chat read models show the selection.
+- Guest/Menu Options & Flavors parity is CLOSED after staging smoke: owner/manager can create hookah items, apply canonical base flavor profiles only to that item, repeat apply without duplicates, manage flavor CRUD and stop-list, stop-list the whole item, water/kitchen/drink items do not receive hookah flavors, Guest Mini App shows the picker only for the selected hookah item, and `selectedOptionId` / `preferenceNote` still work.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
@@ -394,7 +394,7 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation blocks: paid venue/shift extension Owner/Manager Bot settings parity and cross-channel regression closure; then Guest/Menu Options & Flavors parity starting with backend structured selected-option persistence.
+Recommended next implementation blocks: paid venue/shift extension Owner/Manager Bot settings parity and cross-channel regression closure; then broad Venue Mini App IA parity with bot sections.
 
 Manual paid extension smoke after full parity:
 
@@ -413,7 +413,7 @@ Manual paid extension smoke after full parity:
 13. As MANAGER/OWNER, confirm settings are editable in Mini App; repeat in bot after the remaining bot settings parity slice lands.
 14. Close bill/session and confirm extension request/approve endpoints are denied and extension UI disappears or disables safely.
 
-Manual options/flavors parity smoke after implementation:
+Manual options/flavors parity regression smoke:
 
 1. Configure a hookah item with two available flavors/options and one stop-listed option.
 2. Guest Bot ordering flow shows only available options and requires/selects one before adding the hookah to cart.
@@ -425,3 +425,5 @@ Manual options/flavors parity smoke after implementation:
 8. Disable an option after selection and confirm preview/checkout rejects the stale option without silently adding the base item.
 9. Confirm Guest Bot no longer relies only on `Выбранные вкусы` comment text for persistence; selected option data is structured in order/read models. Guest Bot input for optional `Пожелание к вкусу` remains a follow-up until implemented.
 10. As OWNER/MANAGER, manage options in Venue Mini App, apply `Добавить базовые вкусы` only to hookah items, and confirm STAFF edit/apply controls are hidden/forbidden.
+11. Confirm repeated `Добавить базовые вкусы` does not create duplicates.
+12. Confirm water/kitchen/drink items do not receive hookah flavors.

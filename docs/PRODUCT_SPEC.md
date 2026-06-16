@@ -118,7 +118,7 @@ SHOULD:
 - Bulk edit / import; optional PDF attachment as secondary (not primary).
 - Informational `Фото-меню` can stay as one media list in simple mode, but may support optional owner-defined subsections in advanced mode. This is separate from the structured order menu.
 
-### Guest/Menu Options & Flavors Parity — active P1 design
+### Guest/Menu Options & Flavors Parity — CLOSED / staging smoke passed
 
 Product intent:
 - Menu item options/flavors are structured order modifiers, not free-text comments.
@@ -135,7 +135,8 @@ Current state:
 - Guest Bot and Guest Mini App submit structured selected options; cart/read models preserve selected option snapshots and line-level preparation notes when present.
 - Guest Mini App hides unavailable options in the picker, and backend preview/checkout rejects unavailable or foreign selected options.
 - Venue Mini App exposes item-scoped option/flavor CRUD and explicit stop-list controls for OWNER/MANAGER. Hookah items show `Вкусы / опции`; non-hookah items show neutral `Опции` only when options are configured.
-- Venue Mini App can apply missing bot canonical base flavor profiles through item-scoped `Добавить базовые вкусы` for hookah items. Remaining parity gap: bot-only normalize/reset action for hookah flavor profiles.
+- Venue Mini App applies missing bot canonical base flavor profiles through item-scoped `Добавить базовые вкусы` for hookah items.
+- Staging smoke passed: new/old hookah items show the same editor controls, base profiles are copied only to that hookah item, repeated apply does not duplicate profiles, owner/manager can add/edit/delete/toggle flavors, whole item stop-list and flavor-level stop-list work, water/kitchen/drink items do not receive hookah flavors, and Guest Mini App shows the picker only for the selected hookah item.
 
 Target behavior:
 1. Guest menu DTOs expose available options for each item that needs a guest choice.
@@ -153,9 +154,10 @@ C. Guest Mini App item option picker, cart line identity by selected option and 
 D. Venue Mini App option CRUD/flavor-profile parity for OWNER/MANAGER, with STAFF limited by existing menu/availability permissions.
 E. Smoke/docs closure: bot vs Mini App option parity, staff chat/order detail display, unavailable option rejection and money snapshot tests.
 
-Current follow-up after the Mini App stop-list slice:
-- Guest Mini App can collect `Пожелание к вкусу` for option items. Guest Bot input for the same optional line-level note remains a parity TODO; until then, bot must still submit structured `selectedOptionId` and render any existing line note returned by read models.
-- Mini App `Добавить базовые вкусы` uses the shared backend profile service and remains item-scoped hookah-only. Normalize/reset flow stays a later follow-up; do not implement it as global flavors across all items.
+Remaining follow-ups after parity closure:
+- Mini App normalize/reset base flavor profiles only if still needed after venue pilots.
+- DB-level duplicate/race protection for base flavor profile apply only if concurrent apply becomes a real operational issue.
+- Broad Venue Mini App IA parity with bot sections remains separate: `Работа смены`, `Настройки`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`.
 
 ## Block 9 — Tables & QR
 MUST:
