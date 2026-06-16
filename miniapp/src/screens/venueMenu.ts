@@ -186,13 +186,16 @@ function renderOptionRow(
   if (canManageAvailability) {
     const availabilityLabel = el('label', { className: 'venue-menu-option-toggle' })
     const availabilityInput = document.createElement('input')
+    const availabilityText = el('span', {
+      text: option.isAvailable ? 'Доступен гостям' : 'В стоп-листе'
+    })
     availabilityInput.type = 'checkbox'
     availabilityInput.checked = option.isAvailable
     availabilityInput.addEventListener('change', () => {
       availabilityInput.disabled = true
       handlers.onSetOptionAvailability(option, availabilityInput.checked)
     })
-    append(availabilityLabel, availabilityInput, el('span', { text: 'Доступен гостям' }))
+    append(availabilityLabel, availabilityInput, availabilityText)
     actions.appendChild(availabilityLabel)
   }
 
@@ -232,7 +235,7 @@ function renderItemRow(
   canManageAvailability: boolean,
   onEdit: (item: VenueMenuItemDto) => void,
   onDelete: (item: VenueMenuItemDto) => void,
-  onToggle: (item: VenueMenuItemDto) => void,
+  onSetItemAvailability: (item: VenueMenuItemDto, isAvailable: boolean) => void,
   onMove: (item: VenueMenuItemDto, direction: 'up' | 'down') => void,
   onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void,
   onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void,
@@ -295,22 +298,33 @@ function renderItemRow(
 
   const actions = el('div', { className: 'venue-menu-item-actions' })
   const editButton = el('button', { className: 'button-small', text: 'Править' }) as HTMLButtonElement
-  const toggleButton = el('button', { className: 'button-small', text: item.isAvailable ? 'Стоп' : 'Включить' }) as HTMLButtonElement
   const deleteButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
   const upButton = el('button', { className: 'button-small button-secondary', text: '↑' }) as HTMLButtonElement
   const downButton = el('button', { className: 'button-small button-secondary', text: '↓' }) as HTMLButtonElement
 
   editButton.addEventListener('click', () => onEdit(item))
-  toggleButton.addEventListener('click', () => onToggle(item))
   deleteButton.addEventListener('click', () => onDelete(item))
   upButton.addEventListener('click', () => onMove(item, 'up'))
   downButton.addEventListener('click', () => onMove(item, 'down'))
 
+  if (canManageAvailability) {
+    const availabilityLabel = el('label', { className: 'venue-menu-option-toggle' })
+    const availabilityInput = document.createElement('input')
+    const availabilityText = el('span', {
+      text: item.isAvailable ? 'Доступно гостям' : 'В стоп-листе'
+    })
+    availabilityInput.type = 'checkbox'
+    availabilityInput.checked = item.isAvailable
+    availabilityInput.addEventListener('change', () => {
+      availabilityInput.disabled = true
+      onSetItemAvailability(item, availabilityInput.checked)
+    })
+    append(availabilityLabel, availabilityInput, availabilityText)
+    actions.appendChild(availabilityLabel)
+  }
+
   if (canManage) {
     append(actions, editButton, upButton, downButton, deleteButton)
-  }
-  if (canManageAvailability) {
-    actions.insertBefore(toggleButton, actions.children[1] ?? null)
   }
   if (actions.childElementCount > 0) {
     append(row, info, actions)
@@ -331,7 +345,7 @@ function renderCategoryCard(
     onCreateItem: (category: VenueMenuCategoryDto, name: string, priceMinor: number, currency: string) => void
     onEditItem: (item: VenueMenuItemDto) => void
     onDeleteItem: (item: VenueMenuItemDto) => void
-    onToggleItem: (item: VenueMenuItemDto) => void
+    onSetItemAvailability: (item: VenueMenuItemDto, isAvailable: boolean) => void
     onMoveItem: (item: VenueMenuItemDto, direction: 'up' | 'down') => void
     onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void
     onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void
@@ -372,7 +386,7 @@ function renderCategoryCard(
         canManageAvailability,
         handlers.onEditItem,
         handlers.onDeleteItem,
-        handlers.onToggleItem,
+        handlers.onSetItemAvailability,
         handlers.onMoveItem,
         handlers.onCreateOption,
         handlers.onEditOption,
@@ -578,10 +592,10 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             showToast('Позиция удалена')
             void loadMenu()
           },
-          onToggleItem: async (item) => {
+          onSetItemAvailability: async (item, isAvailable) => {
             const result = await venueSetItemAvailability(
               backendUrl,
-              { venueId, itemId: item.id, body: { isAvailable: !item.isAvailable } },
+              { venueId, itemId: item.id, body: { isAvailable } },
               deps
             )
             if (disposed) return
@@ -589,7 +603,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               showError(result.error)
               return
             }
-            showToast(item.isAvailable ? 'В стоп-листе' : 'Возвращено в продажу')
+            showToast(isAvailable ? 'Позиция доступна гостям' : 'Позиция в стоп-листе')
             void loadMenu()
           },
           onMoveItem: async (item, direction) => {

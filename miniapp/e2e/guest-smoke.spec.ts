@@ -894,10 +894,14 @@ async function mockVenueMenuApi(
   let updateOptionCalls = 0
   let deleteOptionCalls = 0
   let availabilityCalls = 0
+  let createItemCalls = 0
+  let itemAvailabilityCalls = 0
+  let nextItemId = 950
   let nextOptionId = 900
 
   const allItems = () => categories.flatMap((category) => category.items)
   const allOptions = () => allItems().flatMap((item) => item.options)
+  const findCategory = (categoryId: number) => categories.find((category) => category.id === categoryId) ?? null
   const findItem = (itemId: number) => allItems().find((item) => item.id === itemId) ?? null
   const findOption = (optionId: number) => allOptions().find((option) => option.id === optionId) ?? null
 
@@ -925,6 +929,60 @@ async function mockVenueMenuApi(
 
   await page.route('**/api/venue/menu?**', async (route) => {
     await route.fulfill(jsonResponse({ venueId: 1, categories }))
+  })
+
+  await page.route('**/api/venue/menu/items**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const method = request.method()
+
+    if (method === 'POST') {
+      createItemCalls += 1
+      const body = (await request.postDataJSON()) as {
+        categoryId: number
+        name: string
+        priceMinor: number
+        currency: string
+        isAvailable: boolean
+        itemType?: string | null
+      }
+      const category = findCategory(body.categoryId)
+      if (!category) {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return
+      }
+      const item = {
+        id: nextItemId++,
+        categoryId: category.id,
+        name: body.name,
+        priceMinor: body.priceMinor,
+        currency: body.currency,
+        isAvailable: body.isAvailable,
+        sortOrder: category.items.length,
+        itemType: body.itemType ?? null,
+        effectiveItemType: body.itemType ?? category.categoryType,
+        options: []
+      }
+      category.items.push(item)
+      await route.fulfill(jsonResponse(item))
+      return
+    }
+
+    const availabilityMatch = url.pathname.match(/\/api\/venue\/menu\/items\/(\d+)\/availability$/)
+    if (availabilityMatch && method === 'PATCH') {
+      itemAvailabilityCalls += 1
+      const item = findItem(Number(availabilityMatch[1]))
+      const body = (await request.postDataJSON()) as { isAvailable: boolean }
+      if (!item) {
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return
+      }
+      item.isAvailable = body.isAvailable
+      await route.fulfill(jsonResponse(item))
+      return
+    }
+
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
   })
 
   await page.route('**/api/venue/menu/options**', async (route) => {
@@ -1012,7 +1070,9 @@ async function mockVenueMenuApi(
     getCreateOptionCalls: () => createOptionCalls,
     getUpdateOptionCalls: () => updateOptionCalls,
     getDeleteOptionCalls: () => deleteOptionCalls,
-    getAvailabilityCalls: () => availabilityCalls
+    getAvailabilityCalls: () => availabilityCalls,
+    getCreateItemCalls: () => createItemCalls,
+    getItemAvailabilityCalls: () => itemAvailabilityCalls
   }
 }
 
@@ -1392,11 +1452,20 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   const hookahItem = () => page.locator('.venue-menu-item').filter({ hasText: 'Кальян' })
   const waterItem = () => page.locator('.venue-menu-item').filter({ hasText: 'Вода' })
   const kitchenItem = () => page.locator('.venue-menu-item').filter({ hasText: 'Сэндвич' })
+  const hookahCategory = () =>
+    page.locator('.venue-menu-category').filter({ has: page.getByRole('heading', { name: 'Кальянное меню' }) })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await page.getByRole('button', { name: 'Меню' }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Меню', exact: true })).toBeVisible()
+  await expect(hookahItem().getByLabel('Доступно гостям')).toBeChecked()
+  await hookahItem().getByLabel('Доступно гостям').uncheck()
+  await expect(hookahItem().getByLabel('В стоп-листе')).not.toBeChecked()
+  await expect(hookahItem().locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toBeVisible()
+  await hookahItem().getByLabel('В стоп-листе').check()
+  await expect(hookahItem().getByLabel('Доступно гостям')).toBeChecked()
+  expect(api.getItemAvailabilityCalls()).toBe(2)
   await expect(hookahItem().getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
   await expect(waterItem().getByText('Опции')).toBeVisible()
@@ -1422,8 +1491,12 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
 
   const editedOption = () => page.locator('.venue-menu-option').filter({ hasText: 'Яблоко без мяты' })
   await editedOption().getByLabel('Доступен гостям').uncheck()
-  await expect(editedOption().getByText('Стоп-лист')).toBeVisible()
+  await expect(editedOption().getByLabel('В стоп-листе')).not.toBeChecked()
+  await expect(editedOption().locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toBeVisible()
   expect(api.getAvailabilityCalls()).toBe(1)
+  await editedOption().getByLabel('В стоп-листе').check()
+  await expect(editedOption().getByLabel('Доступен гостям')).toBeChecked()
+  expect(api.getAvailabilityCalls()).toBe(2)
 
   await editedOption().getByRole('button', { name: 'Удалить вкус' }).click()
   await expect(page.getByText('Яблоко без мяты')).toHaveCount(0)
@@ -1431,6 +1504,15 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   expect(api.getDeleteOptionCalls()).toBe(1)
   expect(api.getCategories()[0].items[0].options).toHaveLength(0)
   expect(api.getCategories()[1].items[0].options.map((option) => option.name)).toEqual(['Газированная'])
+
+  await hookahCategory().getByPlaceholder('Название позиции').fill('Кальян дорогой')
+  await hookahCategory().getByPlaceholder('Цена (например 350)').fill('2500')
+  await hookahCategory().getByRole('button', { name: 'Добавить позицию' }).click()
+  const expensiveHookahItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян дорогой' })
+  await expect(expensiveHookahItem.getByText('Вкусы / опции')).toBeVisible()
+  await expect(expensiveHookahItem.getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
+  await expect(expensiveHookahItem.getByRole('button', { name: 'Добавить вкус' })).toBeVisible()
+  expect(api.getCreateItemCalls()).toBe(1)
 })
 
 test('venue staff sees menu flavors without edit controls', async ({ page }) => {
@@ -1479,6 +1561,7 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
   await expect(hookahItem.getByRole('button', { name: 'Добавить вкус' })).toHaveCount(0)
   await expect(hookahItem.getByRole('button', { name: 'Править вкус' })).toHaveCount(0)
   await expect(hookahItem.getByRole('button', { name: 'Удалить вкус' })).toHaveCount(0)
+  await expect(hookahItem.getByLabel('Доступно гостям')).toHaveCount(0)
   await expect(hookahItem.getByLabel('Доступен гостям')).toHaveCount(0)
 })
 

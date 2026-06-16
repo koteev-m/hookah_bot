@@ -79,8 +79,10 @@ Remaining:
 Known option/flavor coverage:
 
 - Guest Mini App smoke covers item option/flavor selection, selected option persistence in cart submission and line-level preference notes.
+- Venue Mini App smoke covers item-level stop-list toggles, option/flavor-level stop-list toggles, item-scoped hookah flavor CRUD and the new hookah item empty state with `Добавить вкус`.
 - Backend guest order tests cover selected option persistence, price delta, unavailable/foreign option rejection and distinct cart lines for the same item with different options.
 - Backend guest menu tests must keep asserting that an option is returned only for its owning item and unavailable options stay hidden.
+- Follow-up: Mini App does not yet expose bot's base flavor profile batch actions (`Добавить базовые вкусы`, normalize). Add a shared template/batch API first, then expose it as item-scoped hookah-only UI.
 
 Manual runtime coverage for each release batch:
 

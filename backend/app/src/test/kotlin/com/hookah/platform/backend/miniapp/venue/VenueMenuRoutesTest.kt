@@ -363,6 +363,55 @@ class VenueMenuRoutesTest {
             val guestItems = guestMenu.categories.flatMap { it.items }.associateBy { it.id }
             assertEquals(listOf(activeOption.id), guestItems.getValue(hookahItem.id).options.map { it.id })
             assertTrue(guestItems.getValue(waterItem.id).options.isEmpty())
+
+            val stopOptionResponse =
+                client.patch("/api/venue/menu/options/${activeOption.id}/availability?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"isAvailable":false}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, stopOptionResponse.status)
+
+            val guestMenuAfterOptionStopResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, guestMenuAfterOptionStopResponse.status)
+            val guestMenuAfterOptionStop =
+                json.decodeFromString(MenuResponse.serializer(), guestMenuAfterOptionStopResponse.bodyAsText())
+            val guestItemsAfterOptionStop =
+                guestMenuAfterOptionStop.categories.flatMap { it.items }.associateBy { it.id }
+            assertTrue(guestItemsAfterOptionStop.containsKey(hookahItem.id))
+            assertTrue(guestItemsAfterOptionStop.getValue(hookahItem.id).options.isEmpty())
+            assertTrue(guestItemsAfterOptionStop.containsKey(waterItem.id))
+
+            val stopItemResponse =
+                client.patch("/api/venue/menu/items/${hookahItem.id}/availability?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"isAvailable":false}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, stopItemResponse.status)
+
+            val guestMenuAfterItemStopResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, guestMenuAfterItemStopResponse.status)
+            val guestMenuAfterItemStop =
+                json.decodeFromString(MenuResponse.serializer(), guestMenuAfterItemStopResponse.bodyAsText())
+            val guestItemsAfterItemStop =
+                guestMenuAfterItemStop.categories.flatMap { it.items }.associateBy { it.id }
+            assertFalse(guestItemsAfterItemStop.containsKey(hookahItem.id))
+            assertTrue(guestItemsAfterItemStop.containsKey(waterItem.id))
         }
 
     @Test
