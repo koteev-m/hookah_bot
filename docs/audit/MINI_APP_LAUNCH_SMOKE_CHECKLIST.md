@@ -57,7 +57,7 @@ Remaining:
 - P1 follow-up: paid venue/shift extension is implemented in backend and Guest/Venue Mini App, but Venue approve/reject is still a standalone `Продления` island; next target is order/table detail integration, staff-chat live message actions, Guest Bot entry and Owner/Manager Bot settings parity;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
-- P1 next parity target: M4B Unified Messages Inbox UX. Keep M4A booking conversation behavior in regression, then verify multi-venue thread cards, context labels, active/resolved filters and unread/status state.
+- P1 current parity smoke target: M4B Unified Messages Inbox UX is implemented locally. Keep M4A booking conversation behavior in regression, then verify multi-venue thread cards, context labels, active/resolved filters and unread/status state.
 - P2 stats follow-up: custom date range picker (`from`/`to`), arbitrary period stats and future AI-generated summaries/insights.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -406,7 +406,7 @@ Expected:
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
-- M4A booking conversation threads are staging-closed after UX polish. M4B unified inbox UX is not implemented yet: Guest/Venue inbox cards still need multi-venue/context clarity, status/unread state and active/resolved filters. Venue/admin bot full inbox, structured reschedule proposals, general tickets, Platform Support Center, audit events and DB-level duplicate/race protection are follow-ups.
+- M4A booking conversation threads are staging-closed after UX polish. M4B unified inbox UX is implemented locally and needs staging smoke: Guest/Venue inbox cards show multi-venue/context clarity, status/unread state and active/resolved filters. Venue/admin bot full inbox, structured reschedule proposals, general tickets, Platform Support Center, audit events and DB-level duplicate/race protection are follow-ups.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
 ## 10. Recommended Next Test Investment
@@ -427,7 +427,7 @@ Expected:
 
 Recommended next parity smoke block: M4B Unified Messages Inbox UX. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
-Manual M4B inbox smoke after implementation:
+Manual M4B inbox smoke after deployment:
 
 1. Create or seed multiple booking/general-like threads for one guest across at least two venues.
 2. Open Guest Mini App `Сообщения` / `Мои обращения` and confirm it shows a list of thread cards, not one merged chat.

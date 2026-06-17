@@ -2,7 +2,7 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { venueGetSupportThread, venueGetSupportThreads, venueSendSupportThreadMessage } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { SupportMessageDto, SupportThreadDto } from '../shared/api/supportDtos'
+import type { SupportMessageDto, SupportThreadDto, SupportThreadFilter } from '../shared/api/supportDtos'
 import type { VenueAccessDto } from '../shared/api/venueDtos'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
@@ -19,6 +19,8 @@ type VenueMessagesOptions = {
 type VenueMessagesRefs = {
   status: HTMLParagraphElement
   refreshButton: HTMLButtonElement
+  activeButton: HTMLButtonElement
+  resolvedButton: HTMLButtonElement
   list: HTMLDivElement
   detail: HTMLDivElement
 }
@@ -51,10 +53,39 @@ function formatDateTime(value?: string | null): string {
 }
 
 function bookingTitle(thread: SupportThreadDto): string {
+  if (thread.contextLabel) return thread.contextLabel
   const displayNumber = thread.booking?.displayNumber
   if (displayNumber) return `Бронь №${displayNumber}`
   if (thread.bookingId) return `Бронь #${thread.bookingId}`
   return thread.title
+}
+
+function statusLabel(status: string): string {
+  switch (status.toUpperCase()) {
+    case 'NEW':
+      return 'Новое'
+    case 'OPEN':
+      return 'В работе'
+    case 'WAITING_GUEST':
+      return 'Ждём вас'
+    case 'RESOLVED':
+      return 'Решено'
+    case 'CLOSED':
+      return 'Закрыто'
+    default:
+      return status
+  }
+}
+
+function previewText(thread: SupportThreadDto): string {
+  const value = thread.lastMessagePreview?.trim()
+  if (!value) return 'Сообщений пока нет.'
+  return value.length > 120 ? `${value.slice(0, 117)}...` : value
+}
+
+function unreadCount(thread: SupportThreadDto): number {
+  const value = thread.unreadCount ?? 0
+  return Number.isFinite(value) && value > 0 ? value : 0
 }
 
 function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
@@ -73,6 +104,10 @@ function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
   })
 }
 
+function guestDisplay(thread: SupportThreadDto): string {
+  return thread.guestDisplayName?.trim() || 'Гость'
+}
+
 function buildDom(root: HTMLDivElement): VenueMessagesRefs {
   const wrapper = el('div', { className: 'venue-messages-screen' })
   const header = el('section', { className: 'card' })
@@ -83,14 +118,18 @@ function buildDom(root: HTMLDivElement): VenueMessagesRefs {
   })
   const status = el('p', { className: 'status', text: '' })
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
-  append(header, title, hint, status, refreshButton)
+  const filterActions = el('div', { className: 'message-filter-tabs' })
+  const activeButton = el('button', { className: 'button-small', text: 'Активные' }) as HTMLButtonElement
+  const resolvedButton = el('button', { className: 'button-small button-secondary', text: 'Завершённые' }) as HTMLButtonElement
+  append(filterActions, activeButton, resolvedButton)
+  append(header, title, hint, status, filterActions, refreshButton)
   const layout = el('div', { className: 'venue-messages-layout' })
   const list = el('div', { className: 'venue-messages-list' })
   const detail = el('div', { className: 'venue-messages-detail' })
   append(layout, list, detail)
   append(wrapper, header, layout)
   root.replaceChildren(wrapper)
-  return { status, refreshButton, list, detail }
+  return { status, refreshButton, activeButton, resolvedButton, list, detail }
 }
 
 export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
@@ -103,6 +142,13 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
   let abortController: AbortController | null = null
   let threads: SupportThreadDto[] = []
   const canReply = access.permissions.includes('BOOKING_MANAGE')
+  let currentFilter: SupportThreadFilter = 'active'
+  let selectedThreadId: number | null = initialThreadId ?? null
+
+  const updateFilterButtons = () => {
+    refs.activeButton.dataset.active = String(currentFilter === 'active')
+    refs.resolvedButton.dataset.active = String(currentFilter === 'resolved')
+  }
 
   const setLoading = (loading: boolean) => {
     refs.refreshButton.disabled = loading
@@ -119,14 +165,21 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     }
     threads.forEach((thread) => {
       const card = el('section', { className: 'card venue-message-thread-card' })
+      card.dataset.selected = String(thread.threadId === selectedThreadId)
       const title = el('h3', { text: bookingTitle(thread) })
+      const guest = el('p', { className: 'venue-order-sub', text: `Гость: ${guestDisplay(thread)}` })
       const meta = el('p', {
         className: 'venue-order-sub',
-        text: `${thread.status.toLowerCase()} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
+        text: `${statusLabel(thread.status)} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
       })
+      const preview = el('p', { className: 'message-preview', text: previewText(thread) })
+      const unread = unreadCount(thread)
+      if (unread > 0) {
+        card.appendChild(el('span', { className: 'menu-item-badge', text: `Новых: ${unread}` }))
+      }
       const openButton = el('button', { className: 'button-small', text: 'Открыть' }) as HTMLButtonElement
       openButton.addEventListener('click', () => void loadThread(thread.threadId))
-      append(card, title, meta, openButton)
+      append(card, title, guest, meta, preview, openButton)
       refs.list.appendChild(card)
     })
   }
@@ -136,7 +189,8 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     const controller = new AbortController()
     abortController = controller
     setLoading(true)
-    const result = await venueGetSupportThreads(backendUrl, { venueId }, deps, controller.signal)
+    updateFilterButtons()
+    const result = await venueGetSupportThreads(backendUrl, { venueId, filter: currentFilter }, deps, controller.signal)
     if (disposed || abortController !== controller) return
     abortController = null
     setLoading(false)
@@ -147,13 +201,15 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     refs.status.textContent = ''
     threads = result.data.items
     renderThreadList()
-    if (threads.length && refs.detail.childElementCount === 0) {
+    const selectedStillVisible = selectedThreadId && threads.some((thread) => thread.threadId === selectedThreadId)
+    if (threads.length && (!selectedStillVisible || refs.detail.childElementCount === 0)) {
       const preferredThreadId =
         initialThreadId && threads.some((thread) => thread.threadId === initialThreadId)
           ? initialThreadId
           : threads[0].threadId
       void loadThread(preferredThreadId)
     } else if (!threads.length) {
+      selectedThreadId = null
       refs.detail.replaceChildren()
     }
   }
@@ -172,6 +228,11 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
       renderApiError(refs.status, result.error, isDebug)
       return
     }
+    selectedThreadId = result.data.thread.threadId
+    threads = threads.map((thread) =>
+      thread.threadId === selectedThreadId ? { ...thread, unreadCount: 0, lastMessagePreview: result.data.thread.lastMessagePreview } : thread
+    )
+    renderThreadList()
     renderThreadDetail(result.data.thread, result.data.messages)
   }
 
@@ -181,7 +242,7 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     const meta = el('p', {
       className: 'venue-order-sub',
       text: thread.booking
-        ? `${formatDateTime(thread.booking.scheduledAt)} · гостей: ${thread.booking.partySize ?? '—'} · ${thread.booking.status ?? ''}`
+        ? `${guestDisplay(thread)} · ${formatDateTime(thread.booking.scheduledAt)} · гостей: ${thread.booking.partySize ?? '—'} · ${thread.booking.status ?? ''}`
         : thread.title
     })
     let currentMessages = messages
@@ -228,7 +289,18 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     })
   }
 
+  const setFilter = (filter: SupportThreadFilter) => {
+    if (currentFilter === filter) return
+    currentFilter = filter
+    selectedThreadId = null
+    refs.detail.replaceChildren()
+    void loadThreads()
+  }
+
+  updateFilterButtons()
   disposables.push(on(refs.refreshButton, 'click', () => void loadThreads()))
+  disposables.push(on(refs.activeButton, 'click', () => setFilter('active')))
+  disposables.push(on(refs.resolvedButton, 'click', () => setFilter('resolved')))
   void loadThreads()
 
   return () => {

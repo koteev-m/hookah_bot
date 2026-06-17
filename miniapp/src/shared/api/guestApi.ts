@@ -36,6 +36,7 @@ import type {
   SupportMessageCreateRequest,
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
+  SupportThreadFilter,
   SupportThreadListResponse
 } from './supportDtos'
 import { ApiErrorCodes, type ApiResult } from './types'
@@ -197,9 +198,15 @@ export async function guestConfirmBooking(
 export async function guestGetSupportThreads(
   backendUrl: string,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { filter?: SupportThreadFilter }
 ): Promise<ApiResult<SupportThreadListResponse>> {
-  return requestApi<SupportThreadListResponse>(backendUrl, '/api/guest/support/threads', { signal }, deps)
+  const search = new URLSearchParams()
+  if (options?.filter) {
+    search.set('filter', options.filter)
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return requestApi<SupportThreadListResponse>(backendUrl, `/api/guest/support/threads${suffix}`, { signal }, deps)
 }
 
 export async function guestGetSupportThread(

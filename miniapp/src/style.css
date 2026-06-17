@@ -948,6 +948,28 @@ input[type="number"] {
   color: #ffffff;
 }
 
+.message-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.message-filter-tabs button[data-active="true"] {
+  background: #1f2a44;
+  color: #ffffff;
+}
+
+.venue-message-thread-card[data-selected="true"] {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.18);
+}
+
+.message-preview {
+  margin: 0.35rem 0;
+  color: #334155;
+}
+
 .venue-stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

@@ -152,6 +152,24 @@ class VenueBookingRoutesTest {
                     .content,
             )
             assertEquals(
+                "Бронь №1",
+                messageResponseBody
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("contextLabel")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(
+                "На 19:00 все столы заняты. Можем предложить 20:30?",
+                messageResponseBody
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("lastMessagePreview")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(
                 "На 19:00 все столы заняты. Можем предложить 20:30?",
                 messageResponseBody.getValue("message").jsonObject.getValue("text").jsonPrimitive.content,
             )
@@ -180,19 +198,56 @@ class VenueBookingRoutesTest {
             )
 
             val guestThreadsResponse =
-                client.get("/api/guest/support/threads") {
+                client.get("/api/guest/support/threads?filter=active") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                 }
             assertEquals(HttpStatusCode.OK, guestThreadsResponse.status)
-            assertEquals(
-                threadId.toString(),
+            val guestThreadItem =
                 json.parseToJsonElement(guestThreadsResponse.bodyAsText())
                     .jsonObject
                     .getValue("items")
                     .jsonArray
                     .single()
                     .jsonObject
-                    .getValue("threadId")
+            assertEquals(threadId.toString(), guestThreadItem.getValue("threadId").jsonPrimitive.content)
+            assertEquals("Booking Venue", guestThreadItem.getValue("venueName").jsonPrimitive.content)
+            assertEquals("Бронь №1", guestThreadItem.getValue("contextLabel").jsonPrimitive.content)
+            assertEquals(
+                "Можем забронировать на 20:30.",
+                guestThreadItem.getValue("lastMessagePreview").jsonPrimitive.content,
+            )
+            assertEquals("2", guestThreadItem.getValue("unreadCount").jsonPrimitive.content)
+
+            val guestThreadDetailResponse =
+                client.get("/api/guest/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, guestThreadDetailResponse.status)
+            assertEquals(
+                "0",
+                json.parseToJsonElement(guestThreadDetailResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("unreadCount")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            val guestThreadsAfterReadResponse =
+                client.get("/api/guest/support/threads?filter=active") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, guestThreadsAfterReadResponse.status)
+            assertEquals(
+                "0",
+                json.parseToJsonElement(guestThreadsAfterReadResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+                    .getValue("unreadCount")
                     .jsonPrimitive
                     .content,
             )
@@ -213,6 +268,69 @@ class VenueBookingRoutesTest {
                     "Да, 20:30 подходит.",
                 ),
                 supportMessageTexts(jdbcUrl, threadId),
+            )
+
+            val venueThreadsAfterGuestReplyResponse =
+                client.get("/api/venue/$venueId/support/threads?filter=active") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, venueThreadsAfterGuestReplyResponse.status)
+            val venueThreadItem =
+                json.parseToJsonElement(venueThreadsAfterGuestReplyResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            assertEquals("Name", venueThreadItem.getValue("guestDisplayName").jsonPrimitive.content)
+            assertEquals("Да, 20:30 подходит.", venueThreadItem.getValue("lastMessagePreview").jsonPrimitive.content)
+            assertEquals("1", venueThreadItem.getValue("unreadCount").jsonPrimitive.content)
+
+            val venueThreadDetailResponse =
+                client.get("/api/venue/$venueId/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, venueThreadDetailResponse.status)
+            assertEquals(
+                "0",
+                json.parseToJsonElement(venueThreadDetailResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("unreadCount")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            markSupportThreadResolved(jdbcUrl, threadId)
+            val activeThreadsAfterResolveResponse =
+                client.get("/api/venue/$venueId/support/threads?filter=active") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, activeThreadsAfterResolveResponse.status)
+            assertTrue(
+                json.parseToJsonElement(activeThreadsAfterResolveResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .isEmpty(),
+            )
+            val resolvedThreadsResponse =
+                client.get("/api/venue/$venueId/support/threads?filter=resolved") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, resolvedThreadsResponse.status)
+            assertEquals(
+                threadId.toString(),
+                json.parseToJsonElement(resolvedThreadsResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content,
             )
 
             val confirmedListResponse =
@@ -739,6 +857,24 @@ class VenueBookingRoutesTest {
                 }
             }
         }
+
+    private fun markSupportThreadResolved(
+        jdbcUrl: String,
+        threadId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE support_threads
+                SET status = 'RESOLVED'
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     companion object {
         private const val GUEST_ID = 424242L

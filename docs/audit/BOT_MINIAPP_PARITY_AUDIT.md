@@ -105,7 +105,7 @@ Mini App frontend:
 | History / repeat order | Bot has visit history/detail/repeat flow | Backend visit routes exist; no Mini App history screen found | Missing in Mini App | Guest cannot review past visits/orders in Mini App | P1 | Add history list/detail using existing `GuestVisitRoutes`; repeat order can remain bot-only initially. |
 | Favorites | Bot favorite venues/items flows exist | Backend favorites routes exist; no Mini App favorite screen found | Missing in Mini App | Favorites button/function is bot-only | P1 | Add favorites view or keep bot-only until account hub block. |
 | Bookings | Bot booking flow exists | Mini App bookings route shows safe unavailable message | Safe fallback | Not parity, but not half-working | P1 if bookings launch scope | Keep hidden/safe unless bookings are in pilot scope; otherwise implement minimal screens later. |
-| Support | Bot chat remains support/fallback path; M4A Guest Bot booking replies persist to support threads | Guest Mini App M4A `Сообщения` shows booking threads and allows replies | Partial / M4A done | M4B unified inbox cards are still needed for many threads across venues: venue/context/status/last message/unread and active/resolved filters; general tickets remain later | P1/P2 | Build M4B inbox UX before broader support/ticket promises. |
+| Support | Bot chat remains support/fallback path; M4A Guest Bot booking replies persist to support threads | Guest Mini App M4B `Сообщения` shows thread cards with venue/context/status/last message/unread and active/resolved filters | Partial / M4B local | General tickets and platform support remain later; staging smoke must verify many threads across venues | P1/P2 | Stage-smoke M4B inbox UX before broader support/ticket promises. |
 
 ## 4. Venue / Staff / Manager Parity Matrix
 
@@ -143,7 +143,7 @@ Mini App frontend:
 | Loyalty setup | Bot owner/manager controls loyalty program, targets, status | Mini App does not expose loyalty setup | Bot-only | No Mini App parity | P2 | Keep bot canonical for launch. |
 | Reviews / review link | Bot supports reviews and public review link flows | No Mini App review cockpit found | Bot-only | Not launch-critical for order pilot | P2 | Add when venue cockpit expands. |
 | Statistics | Bot stats exist | No Venue Mini App stats screen found | Bot-only | Manager/owner analytics not in Mini App | P2 | Add read-only stats dashboard later. |
-| Support | Bot remains operational support path; staff chat is a notification mirror for booking replies | Venue Mini App M4A `Сообщения` shows venue booking threads and allows MANAGER/OWNER replies where permitted | Partial / M4A done | M4B venue inbox cards need guest display, context, status, last message, unread badge and strict current-venue scoping; generic tickets remain later | P1/P2 | Build M4B venue inbox UX; keep STAFF permissions explicit and tested. |
+| Support | Bot remains operational support path; staff chat is a notification mirror for booking replies | Venue Mini App M4B `Сообщения` shows current-venue thread cards with guest display, context, status, last message and unread badge | Partial / M4B local | Generic tickets remain later; staging smoke must verify strict current-venue scoping and STAFF visibility/reply behavior | P1/P2 | Stage-smoke M4B venue inbox UX; keep STAFF permissions explicit and tested. |
 
 ## 6. Platform Owner Parity Matrix
 

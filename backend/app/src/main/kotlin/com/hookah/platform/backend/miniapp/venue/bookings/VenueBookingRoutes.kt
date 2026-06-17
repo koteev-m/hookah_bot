@@ -237,6 +237,12 @@ fun Route.venueBookingRoutes(
                     source = SupportMessageSource.VENUE_MINIAPP,
                     text = messageText,
                 )
+            supportThreadRepository.markThreadRead(threadId = thread.id, userId = userId)
+            val responseThread =
+                supportThreadRepository.getVenueThread(
+                    venueId = booking.venueId,
+                    threadId = thread.id,
+                )?.thread ?: thread
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
                 text = buildBookingGuestContactMessage(booking, venueName, messageText),
@@ -246,7 +252,7 @@ fun Route.venueBookingRoutes(
                 VenueBookingMessageResponse(
                     bookingId = booking.id,
                     queued = true,
-                    thread = thread.toDto(),
+                    thread = responseThread.toDto(unreadCountOverride = 0),
                     message = message.toDto(),
                 ),
             )

@@ -58,6 +58,7 @@ import type {
   SupportMessageCreateRequest,
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
+  SupportThreadFilter,
   SupportThreadListResponse
 } from './supportDtos'
 
@@ -221,13 +222,16 @@ export async function venueMessageBookingGuest(
 
 export async function venueGetSupportThreads(
   backendUrl: string,
-  params: { venueId: number; bookingId?: number | null },
+  params: { venueId: number; bookingId?: number | null; filter?: SupportThreadFilter },
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
   const search = new URLSearchParams()
   if (params.bookingId != null) {
     search.set('bookingId', String(params.bookingId))
+  }
+  if (params.filter) {
+    search.set('filter', params.filter)
   }
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadListResponse>(

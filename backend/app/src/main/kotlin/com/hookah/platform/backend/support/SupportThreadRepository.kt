@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.ResultSet
+import java.sql.SQLException
 import java.sql.Statement
 import java.time.Instant
 import javax.sql.DataSource
@@ -21,6 +22,11 @@ enum class SupportThreadStatus {
     OPEN,
     RESOLVED,
     CLOSED,
+}
+
+enum class SupportInboxFilter {
+    ACTIVE,
+    RESOLVED,
 }
 
 enum class SupportMessageAuthorRole {
@@ -50,6 +56,7 @@ data class SupportThreadRecord(
     val id: Long,
     val venueId: Long,
     val venueName: String?,
+    val guestDisplayName: String? = null,
     val guestUserId: Long,
     val category: SupportThreadCategory,
     val status: SupportThreadStatus,
@@ -57,7 +64,9 @@ data class SupportThreadRecord(
     val orderId: Long?,
     val tableSessionId: Long?,
     val title: String,
+    val lastMessagePreview: String? = null,
     val lastMessageAt: Instant?,
+    val unreadCount: Int = 0,
     val createdAt: Instant,
     val updatedAt: Instant,
     val booking: SupportBookingContextRecord?,
@@ -165,24 +174,30 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
 
     open suspend fun listVenueThreads(
         venueId: Long,
+        viewerUserId: Long,
         bookingId: Long? = null,
+        filter: SupportInboxFilter? = null,
     ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val bookingFilter = if (bookingId == null) "" else "AND st.booking_id = ?"
+                val statusFilter = statusFilterCondition(filter)
                 connection.prepareStatement(
                     """
-                    $THREAD_SELECT
+                    ${threadSelect(unreadCountExpression())}
                     WHERE st.venue_id = ?
                       $bookingFilter
+                      $statusFilter
                     ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
                     LIMIT 100
                     """.trimIndent(),
                 ).use { statement ->
-                    statement.setLong(1, venueId)
+                    statement.setLong(1, viewerUserId)
+                    statement.setLong(2, viewerUserId)
+                    statement.setLong(3, venueId)
                     if (bookingId != null) {
-                        statement.setLong(2, bookingId)
+                        statement.setLong(4, bookingId)
                     }
                     statement.executeQuery().use { rs ->
                         buildList {
@@ -210,24 +225,85 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
     }
 
     open suspend fun listGuestThreads(userId: Long): List<SupportThreadRecord> {
+        return listGuestThreads(userId = userId, filter = null)
+    }
+
+    open suspend fun listGuestThreads(
+        userId: Long,
+        filter: SupportInboxFilter?,
+    ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
+                val statusFilter = statusFilterCondition(filter)
                 connection.prepareStatement(
                     """
-                    $THREAD_SELECT
+                    ${threadSelect(unreadCountExpression())}
                     WHERE st.guest_user_id = ?
+                      $statusFilter
                     ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
                     LIMIT 100
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, userId)
+                    statement.setLong(2, userId)
+                    statement.setLong(3, userId)
                     statement.executeQuery().use { rs ->
                         buildList {
                             while (rs.next()) {
                                 add(rs.toThreadRecord())
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    open suspend fun markThreadRead(
+        threadId: Long,
+        userId: Long,
+    ) {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val updated =
+                    connection.prepareStatement(
+                        """
+                        UPDATE support_thread_reads
+                        SET last_read_at = CURRENT_TIMESTAMP
+                        WHERE thread_id = ?
+                          AND user_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, threadId)
+                        statement.setLong(2, userId)
+                        statement.executeUpdate()
+                    }
+                if (updated > 0) return@use
+                try {
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO support_thread_reads (thread_id, user_id, last_read_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, threadId)
+                        statement.setLong(2, userId)
+                        statement.executeUpdate()
+                    }
+                } catch (_: SQLException) {
+                    connection.prepareStatement(
+                        """
+                        UPDATE support_thread_reads
+                        SET last_read_at = CURRENT_TIMESTAMP
+                        WHERE thread_id = ?
+                          AND user_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, threadId)
+                        statement.setLong(2, userId)
+                        statement.executeUpdate()
                     }
                 }
             }
@@ -254,7 +330,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
     ): SupportThreadRecord? =
         connection.prepareStatement(
             """
-            $THREAD_SELECT
+            ${threadSelect()}
             WHERE st.venue_id = ?
               AND st.booking_id = ?
               AND st.category = 'BOOKING'
@@ -308,7 +384,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
     ): SupportThreadRecord? =
         connection.prepareStatement(
             """
-            $THREAD_SELECT
+            ${threadSelect()}
             WHERE st.venue_id = ?
               AND st.id = ?
             """.trimIndent(),
@@ -325,7 +401,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
     ): SupportThreadRecord? =
         connection.prepareStatement(
             """
-            $THREAD_SELECT
+            ${threadSelect()}
             WHERE st.guest_user_id = ?
               AND st.id = ?
             """.trimIndent(),
@@ -396,6 +472,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             id = getLong("thread_id"),
             venueId = getLong("venue_id"),
             venueName = getString("venue_name"),
+            guestDisplayName = buildGuestDisplayName(),
             guestUserId = getLong("guest_user_id"),
             category = SupportThreadCategory.valueOf(getString("category")),
             status = SupportThreadStatus.valueOf(getString("status")),
@@ -403,7 +480,9 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             orderId = getLong("order_id").takeUnless { wasNull() },
             tableSessionId = getLong("table_session_id").takeUnless { wasNull() },
             title = getString("title"),
+            lastMessagePreview = getString("last_message_preview"),
             lastMessageAt = getTimestamp("last_message_at")?.toInstant(),
+            unreadCount = getInt("unread_count").coerceAtLeast(0),
             createdAt = getTimestamp("created_at").toInstant(),
             updatedAt = getTimestamp("updated_at").toInstant(),
             booking =
@@ -419,6 +498,16 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         )
     }
 
+    private fun ResultSet.buildGuestDisplayName(): String? {
+        val displayName = getString("guest_display_name")?.trim()?.takeIf { it.isNotBlank() }
+        if (displayName != null) return displayName
+        val firstName = getString("guest_first_name")?.trim()?.takeIf { it.isNotBlank() }
+        val lastName = getString("guest_last_name")?.trim()?.takeIf { it.isNotBlank() }
+        val fullName = listOfNotNull(firstName, lastName).joinToString(" ").takeIf { it.isNotBlank() }
+        if (fullName != null) return fullName
+        return getString("guest_username")?.trim()?.takeIf { it.isNotBlank() }?.let { "@${it.removePrefix("@")}" }
+    }
+
     private fun ResultSet.toMessageRecord(): SupportMessageRecord =
         SupportMessageRecord(
             id = getLong("id"),
@@ -432,11 +521,36 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         )
 
     private companion object {
-        private const val THREAD_SELECT =
+        private fun statusFilterCondition(filter: SupportInboxFilter?): String =
+            when (filter) {
+                SupportInboxFilter.ACTIVE -> "AND st.status = 'OPEN'"
+                SupportInboxFilter.RESOLVED -> "AND st.status IN ('RESOLVED', 'CLOSED')"
+                null -> ""
+            }
+
+        private fun unreadCountExpression(): String =
+            """
+            (
+                SELECT COUNT(*)
+                FROM support_messages sm_unread
+                LEFT JOIN support_thread_reads sr
+                    ON sr.thread_id = st.id
+                   AND sr.user_id = ?
+                WHERE sm_unread.thread_id = st.id
+                  AND (sm_unread.author_user_id IS NULL OR sm_unread.author_user_id <> ?)
+                  AND (sr.last_read_at IS NULL OR sm_unread.created_at > sr.last_read_at)
+            )
+            """.trimIndent()
+
+        private fun threadSelect(unreadExpression: String = "0"): String =
             """
             SELECT st.id AS thread_id,
                    st.venue_id AS venue_id,
                    v.name AS venue_name,
+                   u.guest_display_name AS guest_display_name,
+                   u.username AS guest_username,
+                   u.first_name AS guest_first_name,
+                   u.last_name AS guest_last_name,
                    st.guest_user_id AS guest_user_id,
                    st.category AS category,
                    st.status AS status,
@@ -445,6 +559,14 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                    st.table_session_id AS table_session_id,
                    st.title AS title,
                    st.last_message_at AS last_message_at,
+                   (
+                       SELECT sm_last.text
+                       FROM support_messages sm_last
+                       WHERE sm_last.thread_id = st.id
+                       ORDER BY sm_last.created_at DESC, sm_last.id DESC
+                       LIMIT 1
+                   ) AS last_message_preview,
+                   $unreadExpression AS unread_count,
                    st.created_at AS created_at,
                    st.updated_at AS updated_at,
                    b.display_number AS booking_display_number,
@@ -453,6 +575,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                    b.status AS booking_status
             FROM support_threads st
             JOIN venues v ON v.id = st.venue_id
+            LEFT JOIN users u ON u.telegram_user_id = st.guest_user_id
             LEFT JOIN bookings b ON b.id = st.booking_id
             """
     }

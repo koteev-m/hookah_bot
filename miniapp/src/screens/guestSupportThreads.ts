@@ -2,7 +2,7 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestGetSupportThread, guestGetSupportThreads, guestSendSupportThreadMessage } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { SupportMessageDto, SupportThreadDto } from '../shared/api/supportDtos'
+import type { SupportMessageDto, SupportThreadDto, SupportThreadFilter } from '../shared/api/supportDtos'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -21,6 +21,8 @@ type GuestSupportThreadsOptions = {
 type GuestSupportRefs = {
   status: HTMLParagraphElement
   refreshButton: HTMLButtonElement
+  activeButton: HTMLButtonElement
+  resolvedButton: HTMLButtonElement
   list: HTMLDivElement
   detail: HTMLDivElement
   botMessage: HTMLParagraphElement
@@ -59,10 +61,39 @@ function formatDateTime(value?: string | null): string {
 }
 
 function threadTitle(thread: SupportThreadDto): string {
+  if (thread.contextLabel) return thread.contextLabel
   const displayNumber = thread.booking?.displayNumber
   if (displayNumber) return `Бронь №${displayNumber}`
   if (thread.bookingId) return `Бронь #${thread.bookingId}`
   return thread.title
+}
+
+function statusLabel(status: string): string {
+  switch (status.toUpperCase()) {
+    case 'NEW':
+      return 'Новое'
+    case 'OPEN':
+      return 'В работе'
+    case 'WAITING_GUEST':
+      return 'Ждём вас'
+    case 'RESOLVED':
+      return 'Решено'
+    case 'CLOSED':
+      return 'Закрыто'
+    default:
+      return status
+  }
+}
+
+function previewText(thread: SupportThreadDto): string {
+  const value = thread.lastMessagePreview?.trim()
+  if (!value) return 'Сообщений пока нет.'
+  return value.length > 120 ? `${value.slice(0, 117)}...` : value
+}
+
+function unreadCount(thread: SupportThreadDto): number {
+  const value = thread.unreadCount ?? 0
+  return Number.isFinite(value) && value > 0 ? value : 0
 }
 
 function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
@@ -96,7 +127,11 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean): GuestSupportR
   })
   const status = el('p', { className: 'status', text: '' })
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
-  append(header, title, body, tableHint, status, refreshButton)
+  const filterActions = el('div', { className: 'message-filter-tabs' })
+  const activeButton = el('button', { className: 'button-small', text: 'Активные' }) as HTMLButtonElement
+  const resolvedButton = el('button', { className: 'button-small button-secondary', text: 'Завершённые' }) as HTMLButtonElement
+  append(filterActions, activeButton, resolvedButton)
+  append(header, title, body, tableHint, status, filterActions, refreshButton)
 
   const list = el('div', { className: 'venue-messages-list' })
   const detail = el('div', { className: 'venue-messages-detail' })
@@ -104,7 +139,7 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean): GuestSupportR
   botMessage.hidden = true
   append(wrapper, header, list, detail, botMessage)
   root.replaceChildren(wrapper)
-  return { status, refreshButton, list, detail, botMessage }
+  return { status, refreshButton, activeButton, resolvedButton, list, detail, botMessage }
 }
 
 export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOptions) {
@@ -116,6 +151,13 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   let disposed = false
   let abortController: AbortController | null = null
   let threads: SupportThreadDto[] = []
+  let currentFilter: SupportThreadFilter = 'active'
+  let selectedThreadId: number | null = null
+
+  const updateFilterButtons = () => {
+    refs.activeButton.dataset.active = String(currentFilter === 'active')
+    refs.resolvedButton.dataset.active = String(currentFilter === 'resolved')
+  }
 
   const renderFallbackActions = (container: HTMLElement) => {
     const actions = el('div', { className: 'venue-inline-actions' })
@@ -144,15 +186,21 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     }
     threads.forEach((thread) => {
       const card = el('section', { className: 'card venue-message-thread-card' })
+      card.dataset.selected = String(thread.threadId === selectedThreadId)
       const title = el('h3', { text: threadTitle(thread) })
       const venue = el('p', { className: 'venue-order-sub', text: thread.venueName || 'Заведение' })
       const meta = el('p', {
         className: 'venue-order-sub',
-        text: formatDateTime(thread.lastMessageAt || thread.createdAt)
+        text: `${statusLabel(thread.status)} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
       })
+      const preview = el('p', { className: 'message-preview', text: previewText(thread) })
+      const unread = unreadCount(thread)
+      if (unread > 0) {
+        card.appendChild(el('span', { className: 'menu-item-badge', text: `Новых: ${unread}` }))
+      }
       const openButton = el('button', { className: 'button-small', text: 'Открыть' }) as HTMLButtonElement
       openButton.addEventListener('click', () => void loadThread(thread.threadId))
-      append(card, title, venue, meta, openButton)
+      append(card, title, venue, meta, preview, openButton)
       refs.list.appendChild(card)
     })
   }
@@ -163,7 +211,8 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     abortController = controller
     refs.refreshButton.disabled = true
     refs.refreshButton.textContent = 'Обновляем…'
-    const result = await guestGetSupportThreads(backendUrl, deps, controller.signal)
+    updateFilterButtons()
+    const result = await guestGetSupportThreads(backendUrl, deps, controller.signal, { filter: currentFilter })
     if (disposed || abortController !== controller) return
     abortController = null
     refs.refreshButton.disabled = false
@@ -175,9 +224,11 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     refs.status.textContent = ''
     threads = result.data.items
     renderThreadList()
-    if (threads.length && refs.detail.childElementCount === 0) {
+    const selectedStillVisible = selectedThreadId && threads.some((thread) => thread.threadId === selectedThreadId)
+    if (threads.length && (!selectedStillVisible || refs.detail.childElementCount === 0)) {
       void loadThread(threads[0].threadId)
     } else if (!threads.length) {
+      selectedThreadId = null
       refs.detail.replaceChildren()
     }
   }
@@ -193,6 +244,11 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       renderApiError(refs.status, result.error, isDebug)
       return
     }
+    selectedThreadId = result.data.thread.threadId
+    threads = threads.map((thread) =>
+      thread.threadId === selectedThreadId ? { ...thread, unreadCount: 0, lastMessagePreview: result.data.thread.lastMessagePreview } : thread
+    )
+    renderThreadList()
     renderThreadDetail(result.data.thread, result.data.messages)
   }
 
@@ -242,7 +298,18 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     })
   }
 
+  const setFilter = (filter: SupportThreadFilter) => {
+    if (currentFilter === filter) return
+    currentFilter = filter
+    selectedThreadId = null
+    refs.detail.replaceChildren()
+    void loadThreads()
+  }
+
+  updateFilterButtons()
   disposables.push(on(refs.refreshButton, 'click', () => void loadThreads()))
+  disposables.push(on(refs.activeButton, 'click', () => setFilter('active')))
+  disposables.push(on(refs.resolvedButton, 'click', () => setFilter('resolved')))
   void loadThreads()
 
   return () => {

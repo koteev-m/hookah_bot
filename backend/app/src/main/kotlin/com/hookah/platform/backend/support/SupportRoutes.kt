@@ -35,11 +35,17 @@ data class SupportThreadDto(
     val threadId: Long,
     val venueId: Long,
     val venueName: String? = null,
+    val guestDisplayName: String? = null,
     val category: String,
+    val contextLabel: String,
     val status: String,
     val bookingId: Long? = null,
+    val orderId: Long? = null,
+    val tableSessionId: Long? = null,
     val title: String,
+    val lastMessagePreview: String? = null,
     val lastMessageAt: String? = null,
+    val unreadCount: Int,
     val createdAt: String,
     val updatedAt: String,
     val booking: SupportBookingContextDto? = null,
@@ -86,7 +92,8 @@ fun Route.guestSupportRoutes(
     route("/support/threads") {
         get {
             val userId = call.requireUserId()
-            val threads = supportThreadRepository.listGuestThreads(userId)
+            val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
+            val threads = supportThreadRepository.listGuestThreads(userId = userId, filter = filter)
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
 
@@ -96,7 +103,8 @@ fun Route.guestSupportRoutes(
                 call.parameters["threadId"]?.toLongOrNull()
                     ?: throw InvalidInputException("threadId must be a number")
             val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
-            call.respond(detail.toResponse())
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
         post("{threadId}/messages") {
@@ -115,6 +123,9 @@ fun Route.guestSupportRoutes(
                     source = SupportMessageSource.GUEST_MINIAPP,
                     text = messageText,
                 )
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            val refreshedThread =
+                supportThreadRepository.getGuestThread(userId, detail.thread.id)?.thread ?: detail.thread
             val staffChatQueued =
                 notifyStaffChatAboutGuestSupportMessage(
                     venueRepository = venueRepository,
@@ -124,7 +135,7 @@ fun Route.guestSupportRoutes(
                 )
             call.respond(
                 SupportMessageCreateResponse(
-                    thread = detail.thread.toDto(),
+                    thread = refreshedThread.toDto(unreadCountOverride = 0),
                     message = message.toDto(),
                     queued = staffChatQueued,
                 ),
@@ -144,7 +155,14 @@ fun Route.venueSupportRoutes(
             val venueId = call.requireVenueId()
             requireBookingManage(venueAccessRepository, userId, venueId)
             val bookingId = call.request.queryParameters["bookingId"]?.toLongOrNull()
-            val threads = supportThreadRepository.listVenueThreads(venueId = venueId, bookingId = bookingId)
+            val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
+            val threads =
+                supportThreadRepository.listVenueThreads(
+                    venueId = venueId,
+                    viewerUserId = userId,
+                    bookingId = bookingId,
+                    filter = filter,
+                )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
 
@@ -156,7 +174,8 @@ fun Route.venueSupportRoutes(
                 call.parameters["threadId"]?.toLongOrNull()
                     ?: throw InvalidInputException("threadId must be a number")
             val detail = supportThreadRepository.getVenueThread(venueId, threadId) ?: throw NotFoundException()
-            call.respond(detail.toResponse())
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
         post("{threadId}/messages") {
@@ -177,6 +196,9 @@ fun Route.venueSupportRoutes(
                     source = SupportMessageSource.VENUE_MINIAPP,
                     text = messageText,
                 )
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            val refreshedThread =
+                supportThreadRepository.getVenueThread(venueId, detail.thread.id)?.thread ?: detail.thread
             outboxEnqueuer.enqueueSendMessage(
                 chatId = detail.thread.guestUserId,
                 text = buildVenueSupportMessageForGuest(detail.thread, messageText),
@@ -187,7 +209,7 @@ fun Route.venueSupportRoutes(
             )
             call.respond(
                 SupportMessageCreateResponse(
-                    thread = detail.thread.toDto(),
+                    thread = refreshedThread.toDto(unreadCountOverride = 0),
                     message = message.toDto(),
                     queued = true,
                 ),
@@ -208,16 +230,22 @@ private suspend fun requireBookingManage(
     }
 }
 
-fun SupportThreadRecord.toDto(): SupportThreadDto =
+fun SupportThreadRecord.toDto(unreadCountOverride: Int? = null): SupportThreadDto =
     SupportThreadDto(
         threadId = id,
         venueId = venueId,
         venueName = venueName,
+        guestDisplayName = guestDisplayName,
         category = category.name,
+        contextLabel = formatSupportThreadLabel(),
         status = status.name,
         bookingId = bookingId,
+        orderId = orderId,
+        tableSessionId = tableSessionId,
         title = title,
+        lastMessagePreview = lastMessagePreview,
         lastMessageAt = lastMessageAt?.toString(),
+        unreadCount = unreadCountOverride ?: unreadCount,
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
         booking =
@@ -242,9 +270,9 @@ fun SupportMessageRecord.toDto(): SupportMessageDto =
         createdAt = createdAt.toString(),
     )
 
-fun SupportThreadDetailRecord.toResponse(): SupportThreadDetailResponse =
+fun SupportThreadDetailRecord.toResponse(unreadCountOverride: Int? = null): SupportThreadDetailResponse =
     SupportThreadDetailResponse(
-        thread = thread.toDto(),
+        thread = thread.toDto(unreadCountOverride = unreadCountOverride),
         messages = messages.map { it.toDto() },
     )
 
@@ -288,13 +316,28 @@ private suspend fun notifyStaffChatAboutGuestSupportMessage(
 }
 
 private fun SupportThreadRecord.formatSupportThreadLabel(): String =
-    booking?.displayNumber?.let { "Бронь №$it" }
-        ?: bookingId?.let { "бронь #$it" }
-        ?: title
+    when (category) {
+        SupportThreadCategory.BOOKING ->
+            booking?.displayNumber?.let { "Бронь №$it" }
+                ?: bookingId?.let { "Бронь #$it" }
+                ?: title
+        SupportThreadCategory.ORDER -> orderId?.let { "Заказ №$it" } ?: title
+        SupportThreadCategory.TABLE -> tableSessionId?.let { "Стол №$it" } ?: title
+        SupportThreadCategory.GENERAL -> "Общий вопрос"
+        SupportThreadCategory.PLATFORM -> "Проблема"
+    }
 
 private fun SupportThreadRecord.formatSupportThreadLabelGenitive(): String =
     booking?.displayNumber?.let { "брони №$it" }
         ?: bookingId?.let { "брони" }
         ?: title
+
+private fun parseSupportInboxFilter(value: String?): SupportInboxFilter? =
+    when (value?.trim()?.lowercase()) {
+        null, "", "all" -> null
+        "active" -> SupportInboxFilter.ACTIVE
+        "resolved", "finished", "closed" -> SupportInboxFilter.RESOLVED
+        else -> throw InvalidInputException("filter must be active or resolved")
+    }
 
 private const val MAX_SUPPORT_MESSAGE_LENGTH = 1000

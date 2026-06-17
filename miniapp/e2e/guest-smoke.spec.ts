@@ -176,11 +176,17 @@ type SupportThreadFixture = {
   threadId: number
   venueId: number
   venueName?: string | null
+  guestDisplayName?: string | null
   category: string
+  contextLabel?: string | null
   status: string
   bookingId?: number | null
+  orderId?: number | null
+  tableSessionId?: number | null
   title: string
+  lastMessagePreview?: string | null
   lastMessageAt?: string | null
+  unreadCount?: number | null
   createdAt: string
   updatedAt: string
   booking?: {
@@ -1062,11 +1068,15 @@ async function mockVenueBookingsApi(
         threadId: nextThreadId++,
         venueId: 1,
         venueName: 'Микс',
+        guestDisplayName: booking.guestDisplayName ?? 'Алексей',
         category: 'BOOKING',
+        contextLabel: booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`,
         status: 'OPEN',
         bookingId: booking.bookingId,
         title: booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`,
+        lastMessagePreview: null,
         lastMessageAt: null,
+        unreadCount: 0,
         createdAt: '2030-01-10T18:00:00Z',
         updatedAt: '2030-01-10T18:00:00Z',
         booking: {
@@ -1096,8 +1106,10 @@ async function mockVenueBookingsApi(
       createdAt: `2030-01-10T18:${String(nextMessageId % 60).padStart(2, '0')}:00Z`
     }
     supportMessages = [...supportMessages, message]
+    thread.lastMessagePreview = text
     thread.lastMessageAt = message.createdAt
     thread.updatedAt = message.createdAt
+    thread.unreadCount = authorRole === 'GUEST' ? 1 : 0
     return message
   }
 
@@ -1147,10 +1159,16 @@ async function mockVenueBookingsApi(
     const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)(?:\/messages)?$/)
     if (!threadMatch && request.method() === 'GET') {
       const bookingIdParam = url.searchParams.get('bookingId')
+      const filter = url.searchParams.get('filter')
       const bookingId = bookingIdParam == null ? null : Number(bookingIdParam)
-      const items = bookingId != null && Number.isFinite(bookingId)
+      let items = bookingId != null && Number.isFinite(bookingId)
         ? supportThreads.filter((thread) => thread.bookingId === bookingId)
         : supportThreads
+      if (filter === 'active') {
+        items = items.filter((thread) => thread.status === 'OPEN')
+      } else if (filter === 'resolved') {
+        items = items.filter((thread) => thread.status === 'RESOLVED' || thread.status === 'CLOSED')
+      }
       await route.fulfill(jsonResponse({ items }))
       return
     }
@@ -1171,6 +1189,7 @@ async function mockVenueBookingsApi(
       return
     }
     if (request.method() === 'GET') {
+      thread.unreadCount = 0
       await route.fulfill(
         jsonResponse({
           thread,
@@ -1928,8 +1947,13 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Открыть переписку' }).click()
   await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
-  await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })).toBeVisible()
-  await expect(page.getByText(/На 19:00 все столы заняты/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Активные' })).toBeVisible()
+  const venueThreadCard = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })
+  await expect(venueThreadCard).toBeVisible()
+  await expect(venueThreadCard).toContainText('Гость: Алексей')
+  await expect(venueThreadCard).toContainText('В работе')
+  await expect(venueThreadCard).toContainText('На 19:00 все столы заняты')
+  await expect(page.locator('.venue-messages-detail').getByText(/На 19:00 все столы заняты/)).toBeVisible()
   await page.getByPlaceholder('Напишите ответ гостю.').fill('Можем забронировать на 20:30.')
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(page.locator('.venue-messages-detail .status').filter({ hasText: 'Сообщение отправлено гостю.' })).toBeVisible()
@@ -1996,10 +2020,13 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
     venueId: 1,
     venueName: 'Микс',
     category: 'BOOKING',
+    contextLabel: 'Бронь №12',
     status: 'OPEN',
     bookingId: 701,
     title: 'Бронь №12',
+    lastMessagePreview: 'На 19:00 все столы заняты. Можем предложить 20:30?',
     lastMessageAt: '2030-01-10T18:01:00Z',
+    unreadCount: 1,
     createdAt: '2030-01-10T18:00:00Z',
     updatedAt: '2030-01-10T18:01:00Z',
     booking: {
@@ -2027,7 +2054,9 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
     const url = new URL(request.url())
     const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)(?:\/messages)?$/)
     if (!threadMatch && request.method() === 'GET') {
-      await route.fulfill(jsonResponse({ items: [thread] }))
+      const filter = url.searchParams.get('filter')
+      const items = filter === 'resolved' ? [] : [thread]
+      await route.fulfill(jsonResponse({ items }))
       return
     }
     if (!threadMatch) {
@@ -2050,10 +2079,15 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
         createdAt: '2030-01-10T18:05:00Z'
       }
       messages = [...messages, message]
+      thread.lastMessagePreview = message.text
+      thread.lastMessageAt = message.createdAt
+      thread.updatedAt = message.createdAt
+      thread.unreadCount = 0
       await route.fulfill(jsonResponse({ thread, message, queued: true }))
       return
     }
     if (request.method() === 'GET') {
+      thread.unreadCount = 0
       await route.fulfill(jsonResponse({ thread, messages }))
       return
     }
@@ -2064,8 +2098,19 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
 
   await page.getByRole('button', { name: 'Сообщения' }).click()
   await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
-  await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })).toBeVisible()
-  await expect(page.getByText(/На 19:00 все столы заняты/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Активные' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Завершённые' })).toBeVisible()
+  const guestThreadCard = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })
+  await expect(guestThreadCard).toBeVisible()
+  await expect(guestThreadCard).toContainText('Микс')
+  await expect(guestThreadCard).toContainText('В работе')
+  await expect(guestThreadCard).toContainText('На 19:00 все столы заняты')
+  await expect(guestThreadCard.locator('.menu-item-badge')).toHaveCount(0)
+  await expect(page.locator('.venue-messages-detail').getByText(/На 19:00 все столы заняты/)).toBeVisible()
+  await page.getByRole('button', { name: 'Завершённые' }).click()
+  await expect(page.getByText('Сообщений пока нет.')).toBeVisible()
+  await page.getByRole('button', { name: 'Активные' }).click()
+  await expect(guestThreadCard).toBeVisible()
   await page.getByPlaceholder('Напишите ответ заведению.').fill('Да, 20:30 подходит.')
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(

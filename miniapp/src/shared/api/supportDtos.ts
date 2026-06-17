@@ -10,15 +10,23 @@ export type SupportThreadDto = {
   threadId: number
   venueId: number
   venueName?: string | null
+  guestDisplayName?: string | null
   category: 'BOOKING' | 'GENERAL' | 'ORDER' | 'TABLE' | 'PLATFORM' | string
+  contextLabel?: string | null
   status: 'OPEN' | 'RESOLVED' | 'CLOSED' | string
   bookingId?: number | null
+  orderId?: number | null
+  tableSessionId?: number | null
   title: string
+  lastMessagePreview?: string | null
   lastMessageAt?: string | null
+  unreadCount?: number | null
   createdAt: string
   updatedAt: string
   booking?: SupportBookingContextDto | null
 }
+
+export type SupportThreadFilter = 'active' | 'resolved'
 
 export type SupportMessageDto = {
   messageId: number
