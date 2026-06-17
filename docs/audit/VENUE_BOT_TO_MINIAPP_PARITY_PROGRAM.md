@@ -4,9 +4,9 @@
 
 ## Executive Summary
 
-Telegram Bot остаётся самой широкой venue-management поверхностью: selected venue hub уже разделён на `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`. Venue Mini App уже покрывает operational core, M1 сгруппировал работающие экраны, M2 добавил backend-backed read-only `Статистика` и прошёл staging smoke, M3 реализовал bookings queue/lifecycle MVP, а M4A добавляет persisted booking conversation threads между гостем и заведением. Главное правило программы: Mini App показывает только работающие backend-backed экраны; `Продвижение` и `Предпросмотр для гостя` не должны появляться как основные кнопки до появления реальных Mini App routes/screens.
+Telegram Bot остаётся самой широкой venue-management поверхностью: selected venue hub уже разделён на `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`. Venue Mini App уже покрывает operational core, M1 сгруппировал работающие экраны, M2 добавил backend-backed read-only `Статистика` и прошёл staging smoke, M3 реализовал bookings queue/lifecycle MVP, а M4A закрыл persisted booking conversation threads между гостем и заведением. Главное правило программы: Mini App показывает только работающие backend-backed экраны; `Продвижение` и `Предпросмотр для гостя` не должны появляться как основные кнопки до появления реальных Mini App routes/screens.
 
-M1 безопасно привёл Venue Mini App shell к bot-like information architecture и сделал видимым уже реализованный экран `Продления` для ролей с `SHIFT_EXTENSION_VIEW`. M2 закрыт как первый новый Mini App parity slice: read-only статистика для OWNER/MANAGER на существующем `VenueStatsRepository`, без новой аналитической модели и без миграций. M3 закрывает Mini App booking operations MVP: active queue, venue-local display fields, confirm/change/cancel for MANAGER/OWNER and arrival/no-show for STAFF. M4A ограниченно закрывает communication gap для броней: booking messages now persist in support threads and are visible from Guest Bot, Guest Mini App and Venue Mini App.
+M1 безопасно привёл Venue Mini App shell к bot-like information architecture и сделал видимым уже реализованный экран `Продления` для ролей с `SHIFT_EXTENSION_VIEW`. M2 закрыт как первый новый Mini App parity slice: read-only статистика для OWNER/MANAGER на существующем `VenueStatsRepository`, без новой аналитической модели и без миграций. M3 закрывает Mini App booking operations MVP: active queue, venue-local display fields, confirm/change/cancel for MANAGER/OWNER and arrival/no-show for STAFF. M4A закрывает communication gap для броней: booking messages persist in support threads and are visible from Guest Bot, Guest Mini App and Venue Mini App. M4B должен превратить `Сообщения` в нормальный inbox тредов для нескольких заведений и контекстов, а не в один общий чат.
 
 ## Current Source of Truth
 
@@ -27,7 +27,7 @@ M1 безопасно привёл Venue Mini App shell к bot-like information 
 | A. Work shift / orders | Implemented. Bot shift hub has `📦 Заказы`; callbacks include `staff_venue_orders_root:*`, order detail/status/bill callbacks. | Implemented: queue/detail/audit/status/reject/close/item bill adjustment routes. | Implemented: order queue/detail, full bill, status actions, bill controls where allowed. | `ORDER_QUEUE_VIEW`, `ORDER_STATUS_UPDATE`; STAFF can operate order status/close but not manager-only bill edits. | `TelegramBotRouter.kt`, `TelegramKeyboards.kt`, `VenueOrderRoutes.kt`, `VenueOrdersRepository.kt`, `venueOrders.ts`, `venueOrderDetail.ts` | Medium: large queues and route parity need smoke; UI ignores `nextCursor`. | M1 IA shell; later order audit/pagination slice. | Mini App build/e2e; backend route tests if pagination/audit added. |
 | A. Work shift / staff calls | Implemented/partial in bot. Shift hub has `🛎 Вызовы`; staff chat callbacks `sc_call_ack:*`, `sc_call_done:*`. | Implemented: `GET /api/venue/{venueId}/staff-calls`, ack/done routes. | Implemented: calls list, accept/close. | Uses `ORDER_QUEUE_VIEW` to view and `ORDER_STATUS_UPDATE` to act. | `VenueStaffCallRoutes.kt`, `StaffCallRepository.kt`, `venueCalls.ts`, `venueApi.ts` | Low/Medium: owner bot calls entry historically less direct; Mini App route is real. | M1 keep under `Работа смены`; no new logic. | E2E smoke for accept/done. |
 | A. Work shift / bookings | Implemented/partial. Bot has booking list, confirm/cancel/change/message, seated/no-show, hold settings. | Implemented: booking list/status/message routes, reminder/expiry workers in backend. | Implemented: booking list, confirm/cancel/change, `Написать гостю`, seated/no-show, venue-local display, hold deadline display. | `BOOKING_VIEW`; `BOOKING_ARRIVAL_UPDATE`; `BOOKING_MANAGE` for management/message actions. | `VenueBookingRoutes.kt`, `GuestBookingRepository.kt`, `venueBookings.ts`, `TelegramBotRouter.kt` | Medium: booking settings/reminder controls are not Mini App parity yet. | M3 closed; keep in regression smoke. | Booking route/RBAC tests, Mini App booking e2e, Telegram runtime smoke. |
-| A. Work shift / booking conversations | Partial in bot before M4A: booking reply callback existed, but staff chat was the only reliable inbox for replies. | Implemented in M4A: `support_threads` / `support_messages`, booking message thread create/reuse, guest/venue list/detail/reply APIs. | Implemented in M4A: booking card opens thread history, Venue `Сообщения` lists booking threads, Guest `Сообщения` lists and replies. | `BOOKING_MANAGE` for venue replies in M4A; STAFF remains denied for booking messages unless product policy changes later. Guest access is user-scoped. | `SupportThreadRepository.kt`, `SupportRoutes.kt`, `VenueBookingRoutes.kt`, `TelegramBotRouter.kt`, `venueBookings.ts`, `venueMessages.ts`, `guestSupportThreads.ts` | Medium: no DB-level unique thread constraint yet; venue/admin bot full inbox is deferred. | M4A implemented locally / staging smoke target. | Support/booking route tests, Guest Bot reply test, Mini App booking/messages e2e, Telegram runtime smoke. |
+| A. Work shift / booking conversations | Partial in bot before M4A: booking reply callback existed, but staff chat was the only reliable inbox for replies. | Implemented in M4A: `support_threads` / `support_messages`, booking message thread create/reuse, guest/venue list/detail/reply APIs. M4B still needs richer inbox metadata/status/unread if not already complete. | Implemented in M4A: booking card opens thread history, Venue `Сообщения` lists booking threads, Guest `Сообщения` lists and replies. M4B target: thread cards with venue/context/status/last message/unread and active/resolved filters. | `BOOKING_MANAGE` for venue replies in M4A; STAFF remains denied for booking messages unless product policy changes later. Guest access is user-scoped; Venue inbox must stay venue-scoped; Platform inbox must be backend-backed before exposure. | `SupportThreadRepository.kt`, `SupportRoutes.kt`, `VenueBookingRoutes.kt`, `TelegramBotRouter.kt`, `venueBookings.ts`, `venueMessages.ts`, `guestSupportThreads.ts` | Medium: no DB-level unique thread constraint yet; M4B unread/status/thread-card UX is not implemented; venue/admin bot full inbox is deferred. | M4A CLOSED / smoke passed; M4B next support inbox slice. | Support/booking route tests, Guest Bot reply test, Mini App booking/messages e2e, Telegram runtime smoke; for M4B add inbox filters/unread/status smoke. |
 | A. Work shift / stop-list | Implemented. Bot shift hub has `🚫 Стоп-лист`; menu item and option availability flows exist. | Implemented via Venue Menu item/option availability routes. | Implemented/smoke-passed inside menu constructor: item-level and option/flavor stop-list. | `MENU_VIEW` + `MENU_AVAILABILITY_MANAGE` allow STAFF/MANAGER/OWNER operational stop-list. `MENU_MANAGE` remains MANAGER/OWNER-only for content. | `VenueMenuRoutes.kt`, `HookahFlavorProfileService.kt`, `venueMenu.ts` | Low: options/flavors parity closed; keep stop-list in regression. | M1 show menu under `Настройки`; STAFF availability parity is implemented as a focused follow-up. | Regression smoke for item/option availability and hidden STAFF content controls. |
 | A. Work shift / staff chat alerts | Implemented. Bot can link staff chat and staff chat notifier sends order/call messages. | Implemented: staff chat status/link-code/unlink backend; outbox/notifier. | Implemented: chat status/link-code screen; unlink wrapper exists but screen does not expose unlink. | `STAFF_CHAT_LINK`; unlink backend owner-only. | `VenueRoutes.kt`, `StaffChatNotifier.kt`, `venueChatLink.ts`, `venueApi.ts` | Medium: runtime Telegram group binding must be smoke-tested. | M1 group under `Настройки`; later M7 unlink/status diagnostics. | Manual Telegram group smoke. |
 | B. Settings / venue profile-card | Implemented in bot: profile/card fields, address, contacts, description/info sections, hours. | Partial: guest venue/info section routes exist; no broad Venue Mini App settings API for all fields. | Partial: current `settings` screen only manages paid shift extension settings. | `VENUE_SETTINGS` exists but has no matching broad route; `SHIFT_EXTENSION_SETTINGS` works. | `VenueRepository.kt`, `VenueInfoSectionsRepository.kt`, `VenueBookingHoursRepository.kt`, `VenueSettingsRepository.kt`, `venueSettings.ts` | High: exposing generic settings would create dead ends or partial writes. | M6 design small settings APIs by field; keep bot canonical meanwhile. | Route/RBAC tests per setting slice. |
@@ -143,7 +143,7 @@ Follow-ups:
 
 ### M4A — Booking Conversation Threads MVP
 
-Status: implemented locally / staging smoke target.
+Status: CLOSED / staging smoke passed after UX polish.
 
 Scope:
 
@@ -175,11 +175,57 @@ Implemented notes:
 
 Follow-ups:
 
+- M4B Unified Messages Inbox UX for multi-venue, multi-context thread lists.
 - Structured `Предложить другое время` flow with guest accept / choose another / cancel buttons.
 - Venue/admin bot full inbox for open booking threads if operators need bot-side reply management.
 - General guest `Сообщить о проблеме` tickets and full Platform Support Center.
+- Thread statuses and unread tracking if not already complete.
 - Audit events for support messages.
+- SLA/escalation and search by venue/guest/context.
 - DB-level duplicate/race protection for concurrent booking thread creation if staging shows duplicate threads.
+
+### M4B — Unified Messages Inbox UX
+
+Status: planned next support parity slice. Do not implement a full Platform Support Center in this milestone.
+
+Product decision:
+
+- M4A is only the booking conversation MVP.
+- Guest Mini App `Сообщения` / `Мои обращения` must be a thread list, not one messy global chat.
+- Venue Mini App `Сообщения` must show only threads for the selected/current `venue_id`.
+- Platform support later sees all support/ticket threads only through a backend-backed cockpit; no fake Platform Support Center entries.
+- Do not merge all messages with one venue into one endless chat. One booking = one booking thread; one order issue = one order thread; one general question = one general thread; one technical/platform problem = one platform/support ticket thread.
+
+Guest Mini App target UX:
+
+- Thread card fields: venue name, context label (`Бронь №...`, `Заказ №...`, `Стол №...`, `Общий вопрос`, `Проблема`), status, last message preview, last message time and unread count/badge.
+- Status labels should map project states such as `NEW`, `OPEN`, `WAITING_GUEST`, `RESOLVED`, `CLOSED` to clear Russian labels.
+- Filters: `Активные` and `Завершённые`.
+- Empty state: `Сообщений пока нет.`
+- Resolved/closed threads should not clutter the active inbox.
+
+Venue Mini App target UX:
+
+- `Сообщения` shows only current venue threads.
+- Thread card fields: guest display, context label, status, last message preview, last message time and unread badge.
+- Booking card links to the booking thread; future order/table/support context cards reuse the same pattern.
+- STAFF permissions must be explicit and tested; do not silently broaden STAFF reply/view rights.
+
+Likely implementation scope:
+
+- Add or complete thread statuses and unread tracking if current `support_threads` / `support_messages` data is insufficient.
+- Improve Guest Mini App and Venue Mini App inbox cards and active/resolved filters.
+- Add context DTOs/cards for booking first; order/table/general contexts can follow only when backend-backed.
+- Add guest `Новый вопрос` from venue card only if the backend can create a general venue thread safely.
+- Keep structured `Предложить другое время`, generic problem tickets, Platform Support Center, audit events, SLA/escalation and search as follow-ups unless this milestone explicitly scopes one of them.
+
+Definition of Done:
+
+- Guest with threads across multiple venues sees a scannable inbox list and can open the correct thread by venue/context.
+- Venue user sees only selected venue threads and cannot access foreign venue threads.
+- Thread cards show status, last message preview/time and unread state from backend data, not frontend guesses.
+- Active/resolved filters work and old closed threads do not dominate the active inbox.
+- Platform support/tickets are not exposed unless backed by real routes and permissions.
 
 ### M5 — Promotions Read-Only Summary
 
@@ -255,7 +301,7 @@ Definition of Done:
 - Hidden implemented features: `Продления` route exists but was not reachable from nav.
 - Settings mismatch: `VENUE_SETTINGS` can imply a broad settings screen while current Mini App settings only controls shift extension settings.
 - Stats advanced gap: Mini App now has read-only per-venue stats, but no custom date range picker, AI summaries, advanced analytics, platform dashboards or consolidated network stats.
-- Booking conversation gap: M4A persists booking threads in backend and Mini Apps, but venue/admin bot full inbox, structured reschedule proposals, generic tickets and platform support routing are still follow-ups.
+- Messages inbox gap: M4A persists booking threads in backend and Mini Apps, but M4B unified inbox UX is still pending. Current next risk is a messy guest/venue message experience when many threads exist across venues unless cards show venue/context/status/last message/unread and active/resolved filters. Structured reschedule proposals, generic tickets, Platform Support Center and venue/admin bot full inbox remain follow-ups.
 - Promotions gap: bot marketing hub is broad and callback-heavy; Mini App should start read-only.
 - Queue scale: Venue Mini App order queue currently uses a fixed limit and does not expose pagination.
 - Runtime Telegram dependencies still need manual smoke: WebApp `initData`, staff chat group binding, QR export/download.

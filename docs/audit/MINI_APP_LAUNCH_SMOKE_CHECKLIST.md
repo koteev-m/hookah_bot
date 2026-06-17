@@ -17,7 +17,7 @@
 - Venue Owner/Manager/Staff Mini App entry must be opened through inline `web_app` buttons.
 - STAFF can close bill/order and manage operational stop-list for menu items/options, but cannot edit discounts, exclusions, menu content/structure, tables, staff, settings or staff chat link.
 - STAFF booking actions are operational only: view bookings and mark `Гость пришёл` / `Не пришёл`; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
-- Booking guest communication now has an M4A persisted thread layer: `Написать гостю`, Guest Bot replies, Guest Mini App replies and Venue Mini App replies must share one booking thread; staff chat is a notification mirror.
+- Booking guest communication has an M4A persisted thread layer and passed staging smoke after UX polish: `Написать гостю`, Guest Bot replies, Guest Mini App replies and Venue Mini App replies share one booking thread; staff chat is a notification mirror.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -49,7 +49,7 @@ Confirmed:
 - CI release validation passed for the current release snapshot: backend ktlint, backend compile, release-critical routes, venue booking/RBAC, Telegram lightweight tests, migration sanity, compose, Mini App build, backend Docker build and aggregate.
 - Guest table session restore passed on staging on 2026-06-08: returning guest opens the active table context without rescanning QR, `Мой заказ` and adjacent guest screens keep `tableSessionId`/`tabId` context, and Telegram BackButton does not loop between screens.
 - Venue Mini App M2 stats passed staging smoke on 2026-06-16: OWNER/MANAGER see `Статистика`, periods `Сегодня` / `7 дней` / `30 дней` work, stats cards and top items render, STAFF does not see stats, and empty state works safely.
-- Venue Mini App M4A booking conversation threads are implemented locally and need staging smoke: booking message creates/reuses a thread, Guest Bot and Guest Mini App replies persist in the same thread, Venue Mini App shows history, and staff chat receives notification mirror messages.
+- Venue Mini App M4A booking conversation threads passed staging smoke after UX polish: booking message creates/reuses a thread, quick compose closes after send, booking card shows `Открыть переписку`, Guest Bot and Guest Mini App replies persist in the same thread, Venue Mini App shows history, and staff chat receives notification mirror messages.
 
 Remaining:
 
@@ -57,7 +57,7 @@ Remaining:
 - P1 follow-up: paid venue/shift extension is implemented in backend and Guest/Venue Mini App, but Venue approve/reject is still a standalone `Продления` island; next target is order/table detail integration, staff-chat live message actions, Guest Bot entry and Owner/Manager Bot settings parity;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
-- P1 current parity smoke target: M4A booking conversation threads. Keep booking lifecycle actions unchanged and verify conversation history independently from confirm/change/cancel.
+- P1 next parity target: M4B Unified Messages Inbox UX. Keep M4A booking conversation behavior in regression, then verify multi-venue thread cards, context labels, active/resolved filters and unread/status state.
 - P2 stats follow-up: custom date range picker (`from`/`to`), arbitrary period stats and future AI-generated summaries/insights.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -300,7 +300,7 @@ Expected:
 - STAFF can close bill/order and mutate only menu item/option availability for operational stop-list; STAFF cannot mutate bill discounts/exclusions, menu content/structure, tables, staff, settings or staff chat link.
 - STAFF booking management paths are denied while arrival/no-show remains allowed.
 - MANAGER/OWNER booking management remains unchanged.
-- venue `Сообщения` is real only for booking conversation threads; venue `Поддержка` remains a launch-safe informational path, not a half-working ticket UI.
+- venue `Сообщения` is real for M4A booking conversation threads; M4B must turn it into a proper venue-scoped inbox with context/status/unread cards before exposing broader support/ticket UX. Venue `Поддержка` remains a launch-safe informational path, not a half-working ticket UI.
 
 ### M2 Venue Mini App statistics smoke status
 
@@ -406,7 +406,7 @@ Expected:
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
-- M4A booking conversation threads are implemented locally but not yet staging-closed: venue/admin bot full inbox, structured reschedule proposals, general tickets, Platform Support Center, audit events and DB-level duplicate/race protection are follow-ups.
+- M4A booking conversation threads are staging-closed after UX polish. M4B unified inbox UX is not implemented yet: Guest/Venue inbox cards still need multi-venue/context clarity, status/unread state and active/resolved filters. Venue/admin bot full inbox, structured reschedule proposals, general tickets, Platform Support Center, audit events and DB-level duplicate/race protection are follow-ups.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
 ## 10. Recommended Next Test Investment
@@ -425,25 +425,22 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next parity smoke block: M4A booking conversation threads. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Recommended next parity smoke block: M4B Unified Messages Inbox UX. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
-Manual booking conversation smoke after M4A deploy:
+Manual M4B inbox smoke after implementation:
 
-1. Open Venue Mini App as MANAGER/OWNER and open `Брони`.
-2. Click `Написать гостю` on a booking.
-3. Confirm the modal shows booking context, helper copy `Сообщение придёт гостю в Telegram и появится в переписке.`, textarea placeholder example and no template buttons.
-4. Send a message and confirm the modal closes, the manager stays on `Брони`, and the booking card changes to `Открыть переписку`.
-5. Confirm the guest receives the Telegram message with a reply button.
-6. Click `Открыть переписку` and confirm the sent message appears in the Venue Mini App `Сообщения` thread.
-7. Reply from Guest Bot and confirm the reply appears in the same Venue Mini App thread.
-8. Open Guest Mini App `Сообщения`, open the same booking thread and send a reply.
-9. Confirm the Venue Mini App thread shows the Guest Mini App reply.
-10. Confirm staff chat receives notification mirror messages for guest replies with booking context.
-11. Open Venue Mini App `Сообщения` and confirm the booking thread is listed and can be opened.
-12. Open as STAFF and confirm `Сообщения` / reply action are hidden unless a future RBAC decision changes this.
-13. Confirm direct foreign venue, blank message and over-limit message attempts are denied.
-14. Confirm booking confirm/change/cancel/arrived/no-show actions still behave as in M3.
-15. Confirm venue/admin bot full inbox is not exposed as a fake feature.
+1. Create or seed multiple booking/general-like threads for one guest across at least two venues.
+2. Open Guest Mini App `Сообщения` / `Мои обращения` and confirm it shows a list of thread cards, not one merged chat.
+3. Confirm every guest thread card shows venue name, context label (`Бронь №...`, `Заказ №...`, `Стол №...`, `Общий вопрос` or `Проблема`), status, last message preview, last message time and unread badge/count when applicable.
+4. Confirm `Активные` hides resolved/closed threads and `Завершённые` shows old resolved/closed threads.
+5. Open one thread and confirm M4A booking conversation behavior still works: message history, Guest Bot reply persistence, Guest Mini App reply and Venue Mini App reply.
+6. Open Venue Mini App `Сообщения` for venue A and confirm only venue A threads are visible.
+7. Switch/select venue B and confirm venue A threads are not visible.
+8. Confirm venue thread cards show guest display, context label, status, last message preview/time and unread badge.
+9. Confirm booking cards still link to the booking thread through `Открыть переписку`.
+10. Open as STAFF and confirm view/reply permissions match the explicit RBAC decision; do not silently broaden STAFF access.
+11. Confirm Platform Support Center is not exposed unless routes and permissions are backend-backed.
+12. Keep M4A regression: quick compose closes after send, manager stays on `Брони`, staff chat remains a notification mirror, and booking confirm/change/cancel/arrived/no-show actions are unchanged.
 
 Manual paid extension smoke after full parity:
 

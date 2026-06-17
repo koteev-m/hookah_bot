@@ -329,6 +329,9 @@ MUST:
 - Venue handles operational tickets; platform handles technical/billing.
 - Escalation if venue doesn’t respond in SLA.
 - MVP foundation: booking-related guest↔venue conversation threads persist messages with venue, guest and booking context; staff chat is a notification mirror, not the only source of truth. Full platform support/ticket routing remains a later layer.
+- M4B inbox target: guest `Сообщения` / `Мои обращения` is a list of threads, not one endless global chat. Each thread card shows venue, context label (`Бронь №...`, `Заказ №...`, `Стол №...`, `Общий вопрос`, `Проблема`), status, last message preview/time and unread badge.
+- Venue `Сообщения` is scoped to the selected venue and shows guest display, context, status, last message and unread badge. Platform support later sees all support/ticket threads only through a backend-backed cockpit.
+- Product model: one booking maps to one booking thread; one order issue maps to one order thread; one general question maps to one general thread; one technical/platform problem maps to one platform/support ticket thread. Do not merge all messages with one venue into one endless chat.
 SHOULD:
 - Diagnostic report from Mini App; CSAT.
 

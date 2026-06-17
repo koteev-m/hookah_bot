@@ -105,7 +105,7 @@ Mini App frontend:
 | History / repeat order | Bot has visit history/detail/repeat flow | Backend visit routes exist; no Mini App history screen found | Missing in Mini App | Guest cannot review past visits/orders in Mini App | P1 | Add history list/detail using existing `GuestVisitRoutes`; repeat order can remain bot-only initially. |
 | Favorites | Bot favorite venues/items flows exist | Backend favorites routes exist; no Mini App favorite screen found | Missing in Mini App | Favorites button/function is bot-only | P1 | Add favorites view or keep bot-only until account hub block. |
 | Bookings | Bot booking flow exists | Mini App bookings route shows safe unavailable message | Safe fallback | Not parity, but not half-working | P1 if bookings launch scope | Keep hidden/safe unless bookings are in pilot scope; otherwise implement minimal screens later. |
-| Support | Bot chat remains support/fallback path | Guest support screen is informational and points to staff call/bot | Launch-safe | No ticket automation | P2 | Accept for pilot; design tickets later. |
+| Support | Bot chat remains support/fallback path; M4A Guest Bot booking replies persist to support threads | Guest Mini App M4A `Сообщения` shows booking threads and allows replies | Partial / M4A done | M4B unified inbox cards are still needed for many threads across venues: venue/context/status/last message/unread and active/resolved filters; general tickets remain later | P1/P2 | Build M4B inbox UX before broader support/ticket promises. |
 
 ## 4. Venue / Staff / Manager Parity Matrix
 
@@ -143,7 +143,7 @@ Mini App frontend:
 | Loyalty setup | Bot owner/manager controls loyalty program, targets, status | Mini App does not expose loyalty setup | Bot-only | No Mini App parity | P2 | Keep bot canonical for launch. |
 | Reviews / review link | Bot supports reviews and public review link flows | No Mini App review cockpit found | Bot-only | Not launch-critical for order pilot | P2 | Add when venue cockpit expands. |
 | Statistics | Bot stats exist | No Venue Mini App stats screen found | Bot-only | Manager/owner analytics not in Mini App | P2 | Add read-only stats dashboard later. |
-| Support | Bot remains operational support path | Mini App support screen is safe/informational | Launch-safe | No ticket automation | P2 | Accept for pilot. |
+| Support | Bot remains operational support path; staff chat is a notification mirror for booking replies | Venue Mini App M4A `Сообщения` shows venue booking threads and allows MANAGER/OWNER replies where permitted | Partial / M4A done | M4B venue inbox cards need guest display, context, status, last message, unread badge and strict current-venue scoping; generic tickets remain later | P1/P2 | Build M4B venue inbox UX; keep STAFF permissions explicit and tested. |
 
 ## 6. Platform Owner Parity Matrix
 
@@ -156,7 +156,7 @@ Mini App frontend:
 | Subscriptions/pricing | Bot subscription menus may be limited | Mini App supports subscription and price schedule basics | Partial | No full billing/invoice cockpit in Mini App | P1/P2 | Add invoice/payment cockpit if required for launch operations. |
 | Onboarding requests | Bot handles connection requests | Mini App safe section says requests remain in bot | Safe fallback | Platform operator must switch surfaces | P1 | Add onboarding request list if platform pilot depends on Mini App. |
 | Placements | Bot supports banner/top placements management | Mini App safe section says placements remain in bot | Safe fallback | Not parity | P1 | Add read-only pending/active placements summary before market launch. |
-| Support | No full ticket system | Mini App safe support section, no fake tickets | Launch-safe | Manual support only | P2 | Accept for pilot; build tickets later. |
+| Support | No full Platform Support Center | Mini App must not expose fake platform tickets; M4B documents future platform-wide thread view only when backend-backed | Launch-safe / planned later | Manual support only; platform all-thread cockpit, SLA and escalation are not implemented | P2/P3 | Keep hidden/safe until real routes, permissions and moderation workflow exist. |
 | Analytics | Bot/platform reports partial | Mini App safe analytics section, no fake numbers | Launch-safe | No platform analytics dashboard | P2 | Add real read model later. |
 
 ## 7. Promotions / Loyalty Parity
