@@ -1,6 +1,12 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestGetSupportThread, guestGetSupportThreads, guestSendSupportThreadMessage } from '../shared/api/guestApi'
+import {
+  guestGetSupportThread,
+  guestGetSupportThreads,
+  guestReopenSupportThread,
+  guestResolveSupportThread,
+  guestSendSupportThreadMessage
+} from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type { SupportMessageDto, SupportThreadDto, SupportThreadFilter } from '../shared/api/supportDtos'
 import { append, el, on } from '../shared/ui/dom'
@@ -94,6 +100,14 @@ function previewText(thread: SupportThreadDto): string {
 function unreadCount(thread: SupportThreadDto): number {
   const value = thread.unreadCount ?? 0
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function isResolvedThread(thread: SupportThreadDto): boolean {
+  return thread.status.toUpperCase() === 'RESOLVED'
+}
+
+function isClosedThread(thread: SupportThreadDto): boolean {
+  return thread.status.toUpperCase() === 'CLOSED'
 }
 
 function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
@@ -254,6 +268,8 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
 
   const renderThreadDetail = (thread: SupportThreadDto, messages: SupportMessageDto[]) => {
     let currentMessages = messages
+    const resolved = isResolvedThread(thread)
+    const closed = isClosedThread(thread)
     const card = el('section', { className: 'card' })
     const title = el('h3', { text: threadTitle(thread) })
     const meta = el('p', {
@@ -264,6 +280,13 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     })
     const messagesList = el('div', { className: 'venue-support-messages' })
     renderMessages(messagesList, currentMessages)
+    const lifecycleBanner =
+      resolved || closed
+        ? el('p', {
+            className: 'message-thread-banner',
+            text: closed ? 'Переписка закрыта.' : 'Переписка завершена.'
+          })
+        : null
     const textarea = document.createElement('textarea')
     textarea.className = 'venue-textarea'
     textarea.placeholder = 'Напишите ответ заведению.'
@@ -272,9 +295,41 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     const status = el('p', { className: 'status', text: '' })
     const actions = el('div', { className: 'order-actions' })
     const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
-    append(actions, submitButton)
-    append(card, title, meta, messagesList, textarea, status, actions)
+    const resolveButton = el('button', { className: 'button-small button-secondary', text: 'Завершить переписку' }) as HTMLButtonElement
+    const reopenButton = el('button', { className: 'button-small', text: 'Возобновить переписку' }) as HTMLButtonElement
+    if (!resolved && !closed) {
+      append(actions, submitButton, resolveButton)
+    } else if (resolved) {
+      append(actions, reopenButton)
+    }
+    append(card, title, meta, messagesList, lifecycleBanner, textarea, status, actions)
     refs.detail.replaceChildren(card)
+    textarea.hidden = resolved || closed
+    submitButton.hidden = resolved || closed
+
+    const applyStatusChange = async (action: 'resolve' | 'reopen', button: HTMLButtonElement) => {
+      button.disabled = true
+      const result =
+        action === 'resolve'
+          ? await guestResolveSupportThread(backendUrl, thread.threadId, deps)
+          : await guestReopenSupportThread(backendUrl, thread.threadId, deps)
+      button.disabled = false
+      if (!result.ok) {
+        renderApiError(status, result.error, isDebug)
+        return
+      }
+      currentFilter = action === 'resolve' ? 'resolved' : 'active'
+      selectedThreadId = result.data.thread.threadId
+      renderThreadDetail(result.data.thread, result.data.messages)
+      refs.status.textContent =
+        action === 'resolve' ? 'Переписка завершена.' : 'Переписка возобновлена.'
+      showToast(action === 'resolve' ? 'Переписка завершена.' : 'Переписка возобновлена.')
+      void loadThreads()
+    }
+
+    resolveButton.addEventListener('click', () => void applyStatusChange('resolve', resolveButton))
+    reopenButton.addEventListener('click', () => void applyStatusChange('reopen', reopenButton))
+
     submitButton.addEventListener('click', async () => {
       const text = textarea.value.trim()
       if (!text) {

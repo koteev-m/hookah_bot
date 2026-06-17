@@ -310,6 +310,29 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         }
     }
 
+    open suspend fun updateThreadStatus(
+        threadId: Long,
+        status: SupportThreadStatus,
+    ) {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    UPDATE support_threads
+                    SET status = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, status.name)
+                    statement.setLong(2, threadId)
+                    statement.executeUpdate()
+                }
+            }
+        }
+    }
+
     open suspend fun getGuestThread(
         userId: Long,
         threadId: Long,

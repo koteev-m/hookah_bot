@@ -970,6 +970,15 @@ input[type="number"] {
   color: #334155;
 }
 
+.message-thread-banner {
+  background: #f8fafc;
+  border: 1px solid #e5e7f2;
+  border-radius: 8px;
+  color: #52617d;
+  margin: 0.75rem 0;
+  padding: 0.65rem 0.75rem;
+}
+
 .venue-stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

@@ -275,6 +275,34 @@ export async function venueSendSupportThreadMessage(
   )
 }
 
+export async function venueResolveSupportThread(
+  backendUrl: string,
+  params: { venueId: number; threadId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/threads/${params.threadId}/resolve`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueReopenSupportThread(
+  backendUrl: string,
+  params: { venueId: number; threadId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/threads/${params.threadId}/reopen`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
 export async function venueCreateCategory(
   backendUrl: string,
   params: { venueId: number; body: VenueCreateCategoryRequest },

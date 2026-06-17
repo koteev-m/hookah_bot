@@ -107,6 +107,38 @@ fun Route.guestSupportRoutes(
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
+        post("{threadId}/resolve") {
+            val userId = call.requireUserId()
+            val threadId =
+                call.parameters["threadId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("threadId must be a number")
+            val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
+            requireThreadStatusChangeAllowed(detail.thread)
+            supportThreadRepository.updateThreadStatus(
+                threadId = detail.thread.id,
+                status = SupportThreadStatus.RESOLVED,
+            )
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            val updated = supportThreadRepository.getGuestThread(userId, detail.thread.id) ?: throw NotFoundException()
+            call.respond(updated.toResponse(unreadCountOverride = 0))
+        }
+
+        post("{threadId}/reopen") {
+            val userId = call.requireUserId()
+            val threadId =
+                call.parameters["threadId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("threadId must be a number")
+            val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
+            requireThreadStatusChangeAllowed(detail.thread)
+            supportThreadRepository.updateThreadStatus(
+                threadId = detail.thread.id,
+                status = SupportThreadStatus.OPEN,
+            )
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            val updated = supportThreadRepository.getGuestThread(userId, detail.thread.id) ?: throw NotFoundException()
+            call.respond(updated.toResponse(unreadCountOverride = 0))
+        }
+
         post("{threadId}/messages") {
             val userId = call.requireUserId()
             val threadId =
@@ -178,6 +210,42 @@ fun Route.venueSupportRoutes(
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
+        post("{threadId}/resolve") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireBookingManage(venueAccessRepository, userId, venueId)
+            val threadId =
+                call.parameters["threadId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("threadId must be a number")
+            val detail = supportThreadRepository.getVenueThread(venueId, threadId) ?: throw NotFoundException()
+            requireThreadStatusChangeAllowed(detail.thread)
+            supportThreadRepository.updateThreadStatus(
+                threadId = detail.thread.id,
+                status = SupportThreadStatus.RESOLVED,
+            )
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
+            call.respond(updated.toResponse(unreadCountOverride = 0))
+        }
+
+        post("{threadId}/reopen") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireBookingManage(venueAccessRepository, userId, venueId)
+            val threadId =
+                call.parameters["threadId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("threadId must be a number")
+            val detail = supportThreadRepository.getVenueThread(venueId, threadId) ?: throw NotFoundException()
+            requireThreadStatusChangeAllowed(detail.thread)
+            supportThreadRepository.updateThreadStatus(
+                threadId = detail.thread.id,
+                status = SupportThreadStatus.OPEN,
+            )
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
+            call.respond(updated.toResponse(unreadCountOverride = 0))
+        }
+
         post("{threadId}/messages") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
@@ -215,6 +283,12 @@ fun Route.venueSupportRoutes(
                 ),
             )
         }
+    }
+}
+
+private fun requireThreadStatusChangeAllowed(thread: SupportThreadRecord) {
+    if (thread.status == SupportThreadStatus.CLOSED) {
+        throw InvalidInputException("closed thread cannot be changed")
     }
 }
 

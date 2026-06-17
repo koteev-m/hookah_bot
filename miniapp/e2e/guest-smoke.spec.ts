@@ -1109,6 +1109,7 @@ async function mockVenueBookingsApi(
     thread.lastMessagePreview = text
     thread.lastMessageAt = message.createdAt
     thread.updatedAt = message.createdAt
+    thread.status = 'OPEN'
     thread.unreadCount = authorRole === 'GUEST' ? 1 : 0
     return message
   }
@@ -1156,7 +1157,7 @@ async function mockVenueBookingsApi(
   await page.route('**/api/venue/1/support/threads**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
-    const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)(?:\/messages)?$/)
+    const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)(?:\/(messages|resolve|reopen))?$/)
     if (!threadMatch && request.method() === 'GET') {
       const bookingIdParam = url.searchParams.get('bookingId')
       const filter = url.searchParams.get('filter')
@@ -1182,7 +1183,32 @@ async function mockVenueBookingsApi(
       await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
       return
     }
-    if (url.pathname.endsWith('/messages') && request.method() === 'POST') {
+    const threadAction = threadMatch[2]
+    if (threadAction === 'resolve' && request.method() === 'POST') {
+      thread.status = 'RESOLVED'
+      thread.updatedAt = '2030-01-10T18:50:00Z'
+      thread.unreadCount = 0
+      await route.fulfill(
+        jsonResponse({
+          thread,
+          messages: supportMessages.filter((message) => message.threadId === thread.threadId)
+        })
+      )
+      return
+    }
+    if (threadAction === 'reopen' && request.method() === 'POST') {
+      thread.status = 'OPEN'
+      thread.updatedAt = '2030-01-10T18:51:00Z'
+      thread.unreadCount = 0
+      await route.fulfill(
+        jsonResponse({
+          thread,
+          messages: supportMessages.filter((message) => message.threadId === thread.threadId)
+        })
+      )
+      return
+    }
+    if (threadAction === 'messages' && request.method() === 'POST') {
       const body = (await request.postDataJSON()) as { message?: string | null }
       const message = addSupportMessage(thread, 'VENUE', 'VENUE_MINIAPP', body.message ?? '')
       await route.fulfill(jsonResponse({ thread, message, queued: true }))
@@ -1958,6 +1984,17 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(page.locator('.venue-messages-detail .status').filter({ hasText: 'Сообщение отправлено гостю.' })).toBeVisible()
   expect(api.getSupportMessages().map((message) => message.text)).toContain('Можем забронировать на 20:30.')
+  await page.getByRole('button', { name: 'Завершить переписку' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText('Переписка завершена.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Возобновить переписку' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Завершённые' })).toHaveAttribute('data-active', 'true')
+  await page.getByRole('button', { name: 'Активные' }).click()
+  await expect(page.getByText('Сообщений пока нет.')).toBeVisible()
+  await page.getByRole('button', { name: 'Завершённые' }).click()
+  await expect(venueThreadCard).toBeVisible()
+  await page.getByRole('button', { name: 'Возобновить переписку' }).click()
+  await expect(page.getByRole('button', { name: 'Завершить переписку' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Активные' })).toHaveAttribute('data-active', 'true')
   await page.getByRole('button', { name: 'Брони', exact: true }).click()
 
   await page.getByRole('button', { name: 'Подтвердить' }).click()
@@ -2052,10 +2089,17 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
   await page.route('**/api/guest/support/threads**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
-    const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)(?:\/messages)?$/)
+    const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)(?:\/(messages|resolve|reopen))?$/)
     if (!threadMatch && request.method() === 'GET') {
       const filter = url.searchParams.get('filter')
-      const items = filter === 'resolved' ? [] : [thread]
+      const items =
+        filter === 'resolved'
+          ? thread.status === 'RESOLVED' || thread.status === 'CLOSED'
+            ? [thread]
+            : []
+          : thread.status === 'OPEN'
+            ? [thread]
+            : []
       await route.fulfill(jsonResponse({ items }))
       return
     }
@@ -2068,7 +2112,22 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
       await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
       return
     }
-    if (url.pathname.endsWith('/messages') && request.method() === 'POST') {
+    const threadAction = threadMatch[2]
+    if (threadAction === 'resolve' && request.method() === 'POST') {
+      thread.status = 'RESOLVED'
+      thread.updatedAt = '2030-01-10T18:06:00Z'
+      thread.unreadCount = 0
+      await route.fulfill(jsonResponse({ thread, messages }))
+      return
+    }
+    if (threadAction === 'reopen' && request.method() === 'POST') {
+      thread.status = 'OPEN'
+      thread.updatedAt = '2030-01-10T18:07:00Z'
+      thread.unreadCount = 0
+      await route.fulfill(jsonResponse({ thread, messages }))
+      return
+    }
+    if (threadAction === 'messages' && request.method() === 'POST') {
       const body = (await request.postDataJSON()) as { message?: string | null }
       const message: SupportMessageFixture = {
         messageId: nextMessageId++,
@@ -2082,6 +2141,7 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
       thread.lastMessagePreview = message.text
       thread.lastMessageAt = message.createdAt
       thread.updatedAt = message.createdAt
+      thread.status = 'OPEN'
       thread.unreadCount = 0
       await route.fulfill(jsonResponse({ thread, message, queued: true }))
       return
@@ -2111,6 +2171,17 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
   await expect(page.getByText('Сообщений пока нет.')).toBeVisible()
   await page.getByRole('button', { name: 'Активные' }).click()
   await expect(guestThreadCard).toBeVisible()
+  await page.getByRole('button', { name: 'Завершить переписку' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText('Переписка завершена.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Возобновить переписку' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Завершённые' })).toHaveAttribute('data-active', 'true')
+  await page.getByRole('button', { name: 'Активные' }).click()
+  await expect(page.getByText('Сообщений пока нет.')).toBeVisible()
+  await page.getByRole('button', { name: 'Завершённые' }).click()
+  await expect(guestThreadCard).toBeVisible()
+  await page.getByRole('button', { name: 'Возобновить переписку' }).click()
+  await expect(page.getByRole('button', { name: 'Завершить переписку' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Активные' })).toHaveAttribute('data-active', 'true')
   await page.getByPlaceholder('Напишите ответ заведению.').fill('Да, 20:30 подходит.')
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(

@@ -249,6 +249,40 @@ export async function guestSendSupportThreadMessage(
   )
 }
 
+export async function guestResolveSupportThread(
+  backendUrl: string,
+  threadId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportThreadDetailResponse>> {
+  if (!Number.isFinite(threadId) || !Number.isInteger(threadId) || threadId <= 0) {
+    return invalidPositiveIdResult('threadId')
+  }
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/guest/support/threads/${threadId}/resolve`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function guestReopenSupportThread(
+  backendUrl: string,
+  threadId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportThreadDetailResponse>> {
+  if (!Number.isFinite(threadId) || !Number.isInteger(threadId) || threadId <= 0) {
+    return invalidPositiveIdResult('threadId')
+  }
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/guest/support/threads/${threadId}/reopen`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
 export async function guestResolveTable(
   backendUrl: string,
   tableToken: string,
