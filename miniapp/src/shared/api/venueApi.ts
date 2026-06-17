@@ -54,6 +54,12 @@ import type {
   VenueStaffListResponse,
   VenueStaffUpdateRoleRequest
 } from './venueDtos'
+import type {
+  SupportMessageCreateRequest,
+  SupportMessageCreateResponse,
+  SupportThreadDetailResponse,
+  SupportThreadListResponse
+} from './supportDtos'
 
 export async function venueGetMe(
   backendUrl: string,
@@ -203,6 +209,58 @@ export async function venueMessageBookingGuest(
   return requestApi<VenueBookingMessageResponse>(
     backendUrl,
     `/api/venue/bookings/${params.bookingId}/message?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueGetSupportThreads(
+  backendUrl: string,
+  params: { venueId: number; bookingId?: number | null },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams()
+  if (params.bookingId != null) {
+    search.set('bookingId', String(params.bookingId))
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return requestApi<SupportThreadListResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/threads${suffix}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueGetSupportThread(
+  backendUrl: string,
+  params: { venueId: number; threadId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/threads/${params.threadId}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueSendSupportThreadMessage(
+  backendUrl: string,
+  params: { venueId: number; threadId: number; body: SupportMessageCreateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportMessageCreateResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/threads/${params.threadId}/messages`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

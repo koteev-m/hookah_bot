@@ -5,11 +5,15 @@ import {
   venueChangeBooking,
   venueConfirmBooking,
   venueGetBookings,
+  venueGetSupportThread,
+  venueGetSupportThreads,
   venueMessageBookingGuest,
   venueNoShowBooking,
-  venueSeatBooking
+  venueSeatBooking,
+  venueSendSupportThreadMessage
 } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
+import type { SupportMessageDto, SupportThreadDto } from '../shared/api/supportDtos'
 import type { VenueAccessDto, VenueBookingDto } from '../shared/api/venueDtos'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
@@ -176,7 +180,30 @@ function bookingTitle(booking: VenueBookingDto): string {
   return booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`
 }
 
-function openBookingMessageModal(booking: VenueBookingDto): Promise<string | null> {
+function renderSupportMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
+  list.replaceChildren()
+  if (!messages.length) {
+    list.appendChild(el('p', { className: 'venue-empty', text: 'Истории сообщений пока нет.' }))
+    return
+  }
+  messages.forEach((message) => {
+    const row = el('div', {
+      className: message.authorRole === 'GUEST' ? 'venue-order-sub' : 'venue-order-meta'
+    })
+    const author = message.authorRole === 'GUEST' ? 'Гость' : message.authorRole === 'VENUE' ? 'Заведение' : 'Система'
+    row.textContent = `${author}, ${formatDateTime(message.createdAt)}: ${message.text}`
+    list.appendChild(row)
+  })
+}
+
+function openBookingMessageModal(
+  booking: VenueBookingDto,
+  options: {
+    backendUrl: string
+    venueId: number
+    deps: ReturnType<typeof buildApiDeps>
+  }
+): Promise<boolean> {
   return new Promise((resolve) => {
     const overlay = el('div', { className: 'venue-modal-overlay' })
     const dialog = el('section', { className: 'venue-modal card' })
@@ -188,6 +215,8 @@ function openBookingMessageModal(booking: VenueBookingDto): Promise<string | nul
     const helper = el('p', { className: 'venue-order-sub', text: 'Сообщение придёт гостю в Telegram.' })
     const bookingMeta = el('p', { className: 'venue-order-sub', text: bookingTitle(booking) })
     const error = el('p', { className: 'status', text: '' })
+    const messagesTitle = el('h4', { text: 'История' })
+    const messagesList = el('div', { className: 'venue-booking-thread-messages' })
     const textarea = document.createElement('textarea')
     textarea.className = 'venue-textarea venue-booking-message-textarea'
     textarea.placeholder = 'Например: На 19:00 все столы заняты. Можем предложить 20:30?'
@@ -197,8 +226,7 @@ function openBookingMessageModal(booking: VenueBookingDto): Promise<string | nul
     const templateActions = el('div', { className: 'order-actions' })
     const templates = [
       'На это время все столы заняты. Можем предложить другое время?',
-      'Уточните, пожалуйста, детали брони.',
-      'Подтверждаем бронь вручную, ждём вас.'
+      'Уточните, пожалуйста, детали брони.'
     ]
     templates.forEach((text) => {
       const templateButton = el('button', { className: 'button-small button-secondary', text }) as HTMLButtonElement
@@ -213,13 +241,64 @@ function openBookingMessageModal(booking: VenueBookingDto): Promise<string | nul
     const actions = el('div', { className: 'order-actions' })
     const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
     const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
+    let thread: SupportThreadDto | null = null
+    let messages: SupportMessageDto[] = []
+    let sentAny = false
+    let requestController: AbortController | null = null
 
-    const close = (value: string | null) => {
-      overlay.remove()
-      resolve(value)
+    const setBusy = (busy: boolean) => {
+      submitButton.disabled = busy
+      cancelButton.disabled = busy
+      submitButton.textContent = busy ? 'Отправляем…' : 'Отправить'
     }
 
-    submitButton.addEventListener('click', () => {
+    const close = () => {
+      requestController?.abort()
+      overlay.remove()
+      resolve(sentAny)
+    }
+
+    const loadThread = async () => {
+      requestController?.abort()
+      const controller = new AbortController()
+      requestController = controller
+      error.textContent = 'Загружаем историю…'
+      const listResult = await venueGetSupportThreads(
+        options.backendUrl,
+        { venueId: options.venueId, bookingId: booking.bookingId },
+        options.deps,
+        controller.signal
+      )
+      if (requestController !== controller) return
+      if (!listResult.ok) {
+        error.textContent = listResult.error.message || 'Не удалось загрузить историю.'
+        return
+      }
+      thread = listResult.data.items[0] ?? null
+      if (!thread) {
+        messages = []
+        renderSupportMessages(messagesList, messages)
+        error.textContent = ''
+        return
+      }
+      const detailResult = await venueGetSupportThread(
+        options.backendUrl,
+        { venueId: options.venueId, threadId: thread.threadId },
+        options.deps,
+        controller.signal
+      )
+      if (requestController !== controller) return
+      if (!detailResult.ok) {
+        error.textContent = detailResult.error.message || 'Не удалось загрузить историю.'
+        return
+      }
+      thread = detailResult.data.thread
+      messages = detailResult.data.messages
+      renderSupportMessages(messagesList, messages)
+      error.textContent = ''
+    }
+
+    submitButton.addEventListener('click', async () => {
       const message = textarea.value.trim()
       if (!message) {
         error.textContent = 'Введите сообщение гостю.'
@@ -231,19 +310,50 @@ function openBookingMessageModal(booking: VenueBookingDto): Promise<string | nul
         textarea.focus()
         return
       }
-      close(message)
+      setBusy(true)
+      requestController?.abort()
+      const controller = new AbortController()
+      requestController = controller
+      const result =
+        thread == null
+          ? await venueMessageBookingGuest(
+              options.backendUrl,
+              { venueId: options.venueId, bookingId: booking.bookingId, body: { message } },
+              options.deps,
+              controller.signal
+            )
+          : await venueSendSupportThreadMessage(
+              options.backendUrl,
+              { venueId: options.venueId, threadId: thread.threadId, body: { message } },
+              options.deps,
+              controller.signal
+            )
+      if (requestController !== controller) return
+      setBusy(false)
+      if (!result.ok) {
+        error.textContent = result.error.message || 'Не удалось отправить сообщение.'
+        return
+      }
+      thread = result.data.thread
+      messages = [...messages, result.data.message]
+      renderSupportMessages(messagesList, messages)
+      textarea.value = ''
+      error.textContent = 'Сообщение отправлено гостю.'
+      sentAny = true
     })
-    cancelButton.addEventListener('click', () => close(null))
+    cancelButton.addEventListener('click', close)
     overlay.addEventListener('click', (event) => {
       if (event.target === overlay) {
-        close(null)
+        close()
       }
     })
 
     append(actions, submitButton, cancelButton)
-    append(dialog, title, helper, bookingMeta, textarea, templateActions, error, actions)
+    append(dialog, title, helper, bookingMeta, messagesTitle, messagesList, textarea, templateActions, error, actions)
     overlay.appendChild(dialog)
     document.body.appendChild(overlay)
+    renderSupportMessages(messagesList, messages)
+    void loadThread()
     window.setTimeout(() => textarea.focus(), 0)
   })
 }
@@ -457,25 +567,8 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
 
   const messageBookingGuest = async (booking: VenueBookingDto) => {
     if (isLoading || !canManage) return
-    const message = await openBookingMessageModal(booking)
-    if (!message || disposed) return
-    abortController?.abort()
-    const controller = new AbortController()
-    abortController = controller
-    setLoading(true)
-    const result = await venueMessageBookingGuest(
-      backendUrl,
-      { venueId, bookingId: booking.bookingId, body: { message } },
-      deps,
-      controller.signal
-    )
-    if (disposed || abortController !== controller) return
-    abortController = null
-    setLoading(false)
-    if (!result.ok) {
-      renderApiError(refs.status, result.error, isDebug)
-      return
-    }
+    const sent = await openBookingMessageModal(booking, { backendUrl, venueId, deps })
+    if (!sent || disposed) return
     refs.status.textContent = ''
     showToast('Сообщение отправлено гостю.')
   }

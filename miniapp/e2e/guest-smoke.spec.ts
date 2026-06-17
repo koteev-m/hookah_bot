@@ -172,6 +172,35 @@ type VenueBookingFixture = {
   lastGuestConfirmationAt?: string | null
 }
 
+type SupportThreadFixture = {
+  threadId: number
+  venueId: number
+  venueName?: string | null
+  category: string
+  status: string
+  bookingId?: number | null
+  title: string
+  lastMessageAt?: string | null
+  createdAt: string
+  updatedAt: string
+  booking?: {
+    bookingId: number
+    displayNumber?: number | null
+    scheduledAt?: string | null
+    partySize?: number | null
+    status?: string | null
+  } | null
+}
+
+type SupportMessageFixture = {
+  messageId: number
+  threadId: number
+  authorRole: string
+  source: string
+  text: string
+  createdAt: string
+}
+
 type AddBatchItemPayload = {
   itemId: number
   qty: number
@@ -1019,9 +1048,58 @@ async function mockVenueBookingsApi(
   const changeRequests: unknown[] = []
   const cancelReasons: Array<string | null> = []
   const bookingMessages: string[] = []
+  let nextThreadId = 4000
+  let nextMessageId = 5000
+  let supportThreads: SupportThreadFixture[] = []
+  let supportMessages: SupportMessageFixture[] = []
 
   const activeBookings = () => bookings.filter((booking) => ['pending', 'confirmed', 'changed'].includes(booking.status))
   const findBooking = (bookingId: number) => bookings.find((booking) => booking.bookingId === bookingId) ?? null
+  const findOrCreateBookingThread = (booking: VenueBookingFixture) => {
+    let thread = supportThreads.find((item) => item.bookingId === booking.bookingId)
+    if (!thread) {
+      thread = {
+        threadId: nextThreadId++,
+        venueId: 1,
+        venueName: 'Микс',
+        category: 'BOOKING',
+        status: 'OPEN',
+        bookingId: booking.bookingId,
+        title: booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`,
+        lastMessageAt: null,
+        createdAt: '2030-01-10T18:00:00Z',
+        updatedAt: '2030-01-10T18:00:00Z',
+        booking: {
+          bookingId: booking.bookingId,
+          displayNumber: booking.displayNumber,
+          scheduledAt: booking.scheduledAt,
+          partySize: booking.partySize,
+          status: booking.status
+        }
+      }
+      supportThreads = [...supportThreads, thread]
+    }
+    return thread
+  }
+  const addSupportMessage = (
+    thread: SupportThreadFixture,
+    authorRole: 'GUEST' | 'VENUE',
+    source: string,
+    text: string
+  ): SupportMessageFixture => {
+    const message = {
+      messageId: nextMessageId++,
+      threadId: thread.threadId,
+      authorRole,
+      source,
+      text,
+      createdAt: `2030-01-10T18:${String(nextMessageId % 60).padStart(2, '0')}:00Z`
+    }
+    supportMessages = [...supportMessages, message]
+    thread.lastMessageAt = message.createdAt
+    thread.updatedAt = message.createdAt
+    return message
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -1061,6 +1139,47 @@ async function mockVenueBookingsApi(
 
   await page.route('**/api/venue/1/staff-calls**', async (route) => {
     await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/support/threads**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)(?:\/messages)?$/)
+    if (!threadMatch && request.method() === 'GET') {
+      const bookingIdParam = url.searchParams.get('bookingId')
+      const bookingId = bookingIdParam == null ? null : Number(bookingIdParam)
+      const items = bookingId != null && Number.isFinite(bookingId)
+        ? supportThreads.filter((thread) => thread.bookingId === bookingId)
+        : supportThreads
+      await route.fulfill(jsonResponse({ items }))
+      return
+    }
+    if (!threadMatch) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    const threadId = Number(threadMatch[1])
+    const thread = supportThreads.find((item) => item.threadId === threadId)
+    if (!thread) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    if (url.pathname.endsWith('/messages') && request.method() === 'POST') {
+      const body = (await request.postDataJSON()) as { message?: string | null }
+      const message = addSupportMessage(thread, 'VENUE', 'VENUE_MINIAPP', body.message ?? '')
+      await route.fulfill(jsonResponse({ thread, message, queued: true }))
+      return
+    }
+    if (request.method() === 'GET') {
+      await route.fulfill(
+        jsonResponse({
+          thread,
+          messages: supportMessages.filter((message) => message.threadId === thread.threadId)
+        })
+      )
+      return
+    }
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
   })
 
   await page.route('**/api/venue/bookings**', async (route) => {
@@ -1114,7 +1233,9 @@ async function mockVenueBookingsApi(
       messageCalls += 1
       const body = (await request.postDataJSON()) as { message?: string | null }
       bookingMessages.push(body.message ?? '')
-      await route.fulfill(jsonResponse({ bookingId: booking.bookingId, queued: true }))
+      const thread = findOrCreateBookingThread(booking)
+      const message = addSupportMessage(thread, 'VENUE', 'VENUE_MINIAPP', body.message ?? '')
+      await route.fulfill(jsonResponse({ bookingId: booking.bookingId, queued: true, thread, message }))
       return
     }
 
@@ -1128,6 +1249,7 @@ async function mockVenueBookingsApi(
     getSeatCalls: () => seatCalls,
     getNoShowCalls: () => noShowCalls,
     getMessageCalls: () => messageCalls,
+    getSupportMessages: () => supportMessages,
     getChangeRequests: () => changeRequests,
     getCancelReasons: () => cancelReasons,
     getBookingMessages: () => bookingMessages,
@@ -1474,6 +1596,7 @@ async function mockVenueMenuApi(
 }
 
 test('pre-QR guest card shows info/photo menu and hides structured order menu', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page)
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -1795,8 +1918,21 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   )
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(page.getByText('Сообщение отправлено гостю.')).toBeVisible()
+  await expect(page.getByText(/Заведение, .*На 19:00 все столы заняты/)).toBeVisible()
   expect(api.getMessageCalls()).toBe(1)
   expect(api.getBookingMessages()).toEqual(['На 19:00 все столы заняты. Можем предложить 20:30?'])
+  await page.getByRole('button', { name: 'Отмена' }).click()
+
+  await expect(page.getByRole('button', { name: 'Сообщения', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Сообщения', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })).toBeVisible()
+  await expect(page.getByText(/На 19:00 все столы заняты/)).toBeVisible()
+  await page.getByPlaceholder('Напишите ответ гостю.').fill('Можем забронировать на 20:30.')
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(page.locator('.venue-messages-detail .status').filter({ hasText: 'Сообщение отправлено гостю.' })).toBeVisible()
+  expect(api.getSupportMessages().map((message) => message.text)).toContain('Можем забронировать на 20:30.')
+  await page.getByRole('button', { name: 'Брони', exact: true }).click()
 
   await page.getByRole('button', { name: 'Подтвердить' }).click()
   await expect(page.locator('.venue-booking-card .venue-order-meta').filter({ hasText: 'подтверждена' })).toBeVisible()
@@ -1835,6 +1971,7 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Подтвердить' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Отменить' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Написать гостю' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Сообщения', exact: true })).toHaveCount(0)
   await expect(page.getByText('Перенести бронь')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Гость пришёл' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Не пришёл' })).toBeVisible()
@@ -1846,6 +1983,93 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
   await expect(page.getByText('Активных броней пока нет.')).toBeVisible()
   expect(api.getSeatCalls()).toBe(1)
   expect(api.getNoShowCalls()).toBe(0)
+})
+
+test('guest replies to booking thread from Mini App messages', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: null })
+
+  const thread: SupportThreadFixture = {
+    threadId: 4100,
+    venueId: 1,
+    venueName: 'Микс',
+    category: 'BOOKING',
+    status: 'OPEN',
+    bookingId: 701,
+    title: 'Бронь №12',
+    lastMessageAt: '2030-01-10T18:01:00Z',
+    createdAt: '2030-01-10T18:00:00Z',
+    updatedAt: '2030-01-10T18:01:00Z',
+    booking: {
+      bookingId: 701,
+      displayNumber: 12,
+      scheduledAt: '2030-01-10T18:30:00Z',
+      partySize: 4,
+      status: 'confirmed'
+    }
+  }
+  let nextMessageId = 6100
+  let messages: SupportMessageFixture[] = [
+    {
+      messageId: nextMessageId++,
+      threadId: thread.threadId,
+      authorRole: 'VENUE',
+      source: 'VENUE_MINIAPP',
+      text: 'На 19:00 все столы заняты. Можем предложить 20:30?',
+      createdAt: '2030-01-10T18:01:00Z'
+    }
+  ]
+
+  await page.route('**/api/guest/support/threads**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)(?:\/messages)?$/)
+    if (!threadMatch && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ items: [thread] }))
+      return
+    }
+    if (!threadMatch) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    const threadId = Number(threadMatch[1])
+    if (threadId !== thread.threadId) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    if (url.pathname.endsWith('/messages') && request.method() === 'POST') {
+      const body = (await request.postDataJSON()) as { message?: string | null }
+      const message: SupportMessageFixture = {
+        messageId: nextMessageId++,
+        threadId,
+        authorRole: 'GUEST',
+        source: 'GUEST_MINIAPP',
+        text: body.message ?? '',
+        createdAt: '2030-01-10T18:05:00Z'
+      }
+      messages = [...messages, message]
+      await route.fulfill(jsonResponse({ thread, message, queued: true }))
+      return
+    }
+    if (request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ thread, messages }))
+      return
+    }
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Сообщения' }).click()
+  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })).toBeVisible()
+  await expect(page.getByText(/На 19:00 все столы заняты/)).toBeVisible()
+  await page.getByPlaceholder('Напишите ответ заведению.').fill('Да, 20:30 подходит.')
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(
+    page.locator('.venue-messages-detail .status').filter({ hasText: 'Сообщение отправлено заведению.' })
+  ).toBeVisible()
+  expect(messages.map((message) => message.text)).toContain('Да, 20:30 подходит.')
 })
 
 test('venue manager sees read-only statistics and switches period', async ({ page }) => {

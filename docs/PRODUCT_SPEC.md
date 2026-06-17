@@ -328,6 +328,7 @@ MUST:
 - Tickets with context (venue/table/order) and statuses new/in_progress/waiting_user/resolved.
 - Venue handles operational tickets; platform handles technical/billing.
 - Escalation if venue doesn’t respond in SLA.
+- MVP foundation: booking-related guest↔venue conversation threads persist messages with venue, guest and booking context; staff chat is a notification mirror, not the only source of truth. Full platform support/ticket routing remains a later layer.
 SHOULD:
 - Diagnostic report from Mini App; CSAT.
 

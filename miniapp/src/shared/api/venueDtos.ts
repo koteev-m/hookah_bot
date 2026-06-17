@@ -1,3 +1,5 @@
+import type { SupportMessageDto, SupportThreadDto } from './supportDtos'
+
 export type VenueAccessDto = {
   venueId: number
   venueName?: string | null
@@ -152,6 +154,8 @@ export type VenueBookingStatusResponse = {
 export type VenueBookingMessageResponse = {
   bookingId: number
   queued: boolean
+  thread: SupportThreadDto
+  message: SupportMessageDto
 }
 
 export type VenueTableDto = {

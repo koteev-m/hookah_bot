@@ -94,6 +94,9 @@ import com.hookah.platform.backend.promotions.PromotionRuleCartItem
 import com.hookah.platform.backend.promotions.PromotionRuleEngine
 import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
 import com.hookah.platform.backend.promotions.PromotionRulePreviewResult
+import com.hookah.platform.backend.support.SupportMessageAuthorRole
+import com.hookah.platform.backend.support.SupportMessageSource
+import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.telegram.ai.AiTelegramHandler
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
@@ -255,6 +258,7 @@ class TelegramBotRouter(
     private val staffChatNotifier: StaffChatNotifier? = null,
     private val auditLogRepository: AuditLogRepository = AuditLogRepository(null),
     private val shiftExtensionRepository: ShiftExtensionRepository = ShiftExtensionRepository(null),
+    private val supportThreadRepository: SupportThreadRepository? = null,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val aiTelegramHandler =
@@ -4772,6 +4776,27 @@ class TelegramBotRouter(
                 .getOrNull()
                 ?.takeIf { it.isNotBlank() }
                 ?: "заведении"
+        supportThreadRepository?.let { repository ->
+            try {
+                val thread =
+                    repository.createOrFindBookingThread(
+                        venueId = booking.venueId,
+                        bookingId = booking.id,
+                        guestUserId = booking.userId,
+                        title = formatBookingDisplayLabel(booking),
+                    )
+                repository.addMessage(
+                    threadId = thread.id,
+                    authorUserId = userId,
+                    authorRole = SupportMessageAuthorRole.VENUE,
+                    source = SupportMessageSource.STAFF_CHAT,
+                    text = messageText,
+                )
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            }
+        }
         enqueueMessage(
             booking.userId,
             "Сообщение по вашей ${formatBookingDisplayLabelGenitive(booking)} в «$venueName»:\n\n$messageText",
@@ -4895,13 +4920,34 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Бронь не найдена или уже неактуальна.")
             return
         }
+        supportThreadRepository?.let { repository ->
+            try {
+                val thread =
+                    repository.createOrFindBookingThread(
+                        venueId = booking.venueId,
+                        bookingId = booking.id,
+                        guestUserId = booking.userId,
+                        title = formatBookingDisplayLabel(booking),
+                    )
+                repository.addMessage(
+                    threadId = thread.id,
+                    authorUserId = userId,
+                    authorRole = SupportMessageAuthorRole.GUEST,
+                    source = SupportMessageSource.GUEST_BOT,
+                    text = replyText,
+                )
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            }
+        }
         val venue =
             runCatching { venueRepository.findVenueById(venueId) }
                 .getOrNull()
         val staffChatId = venue?.staffChatId
         if (staffChatId == null) {
             dialogStateRepository.clear(chatId)
-            enqueueMessage(chatId, "Чат персонала пока не подключён. Попробуйте написать заведению позже.")
+            enqueueMessage(chatId, "✅ Ответ отправлен заведению.")
             return
         }
         val venueName = venue.name.takeIf { it.isNotBlank() } ?: "Заведение"

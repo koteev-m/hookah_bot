@@ -32,6 +32,12 @@ import type {
   VenueInfoSectionsResponse,
   VenueResponse
 } from './guestDtos'
+import type {
+  SupportMessageCreateRequest,
+  SupportMessageCreateResponse,
+  SupportThreadDetailResponse,
+  SupportThreadListResponse
+} from './supportDtos'
 import { ApiErrorCodes, type ApiResult } from './types'
 import { normalizeTableToken } from '../validation/tableToken'
 
@@ -178,6 +184,54 @@ export async function guestConfirmBooking(
   return requestApi<GuestBookingResponse>(
     backendUrl,
     `/api/guest/booking/confirm?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestGetSupportThreads(
+  backendUrl: string,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportThreadListResponse>> {
+  return requestApi<SupportThreadListResponse>(backendUrl, '/api/guest/support/threads', { signal }, deps)
+}
+
+export async function guestGetSupportThread(
+  backendUrl: string,
+  threadId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportThreadDetailResponse>> {
+  if (!Number.isFinite(threadId) || !Number.isInteger(threadId) || threadId <= 0) {
+    return invalidPositiveIdResult('threadId')
+  }
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/guest/support/threads/${threadId}`,
+    { signal },
+    deps
+  )
+}
+
+export async function guestSendSupportThreadMessage(
+  backendUrl: string,
+  threadId: number,
+  payload: SupportMessageCreateRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportMessageCreateResponse>> {
+  if (!Number.isFinite(threadId) || !Number.isInteger(threadId) || threadId <= 0) {
+    return invalidPositiveIdResult('threadId')
+  }
+  return requestApi<SupportMessageCreateResponse>(
+    backendUrl,
+    `/api/guest/support/threads/${threadId}/messages`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

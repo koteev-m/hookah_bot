@@ -133,6 +133,87 @@ class VenueBookingRoutesTest {
             assertFalse(guestMessage.contains("u$MANAGER_ID"), guestMessage)
             assertFalse(guestMessage.contains("@"), guestMessage)
             assertTrue(guestMessagePayload.contains("guest_booking_reply:$venueId:$bookingId"), guestMessagePayload)
+            val messageResponseBody = json.parseToJsonElement(messageResponse.bodyAsText()).jsonObject
+            val threadId =
+                messageResponseBody
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+            assertEquals(
+                "BOOKING",
+                messageResponseBody
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("category")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(
+                "На 19:00 все столы заняты. Можем предложить 20:30?",
+                messageResponseBody.getValue("message").jsonObject.getValue("text").jsonPrimitive.content,
+            )
+            assertEquals(1, supportThreadCount(jdbcUrl, venueId, bookingId))
+            assertEquals(
+                listOf("На 19:00 все столы заняты. Можем предложить 20:30?"),
+                supportMessageTexts(jdbcUrl, threadId),
+            )
+
+            val secondThreadMessageResponse =
+                client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Можем забронировать на 20:30."}""")
+                }
+            assertEquals(HttpStatusCode.OK, secondThreadMessageResponse.status)
+            assertEquals(1, supportThreadCount(jdbcUrl, venueId, bookingId))
+            assertEquals(
+                listOf(
+                    "На 19:00 все столы заняты. Можем предложить 20:30?",
+                    "Можем забронировать на 20:30.",
+                ),
+                supportMessageTexts(jdbcUrl, threadId),
+            )
+
+            val guestThreadsResponse =
+                client.get("/api/guest/support/threads") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, guestThreadsResponse.status)
+            assertEquals(
+                threadId.toString(),
+                json.parseToJsonElement(guestThreadsResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            val guestReplyResponse =
+                client.post("/api/guest/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Да, 20:30 подходит."}""")
+                }
+            assertEquals(HttpStatusCode.OK, guestReplyResponse.status)
+            assertEquals(
+                listOf(
+                    "На 19:00 все столы заняты. Можем предложить 20:30?",
+                    "Можем забронировать на 20:30.",
+                    "Да, 20:30 подходит.",
+                ),
+                supportMessageTexts(jdbcUrl, threadId),
+            )
 
             val confirmedListResponse =
                 client.get("/api/venue/bookings?venueId=$venueId") {
@@ -605,6 +686,54 @@ class VenueBookingRoutesTest {
                     val result = mutableListOf<String>()
                     while (rs.next()) {
                         result.add(rs.getString("payload_json"))
+                    }
+                    result
+                }
+            }
+        }
+
+    private fun supportThreadCount(
+        jdbcUrl: String,
+        venueId: Long,
+        bookingId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM support_threads
+                WHERE venue_id = ?
+                  AND booking_id = ?
+                  AND category = 'BOOKING'
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, bookingId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun supportMessageTexts(
+        jdbcUrl: String,
+        threadId: Long,
+    ): List<String> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT text
+                FROM support_messages
+                WHERE thread_id = ?
+                ORDER BY created_at, id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeQuery().use { rs ->
+                    val result = mutableListOf<String>()
+                    while (rs.next()) {
+                        result.add(rs.getString("text"))
                     }
                     result
                 }

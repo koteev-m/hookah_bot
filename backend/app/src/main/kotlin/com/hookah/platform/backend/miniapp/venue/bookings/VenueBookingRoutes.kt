@@ -11,6 +11,13 @@ import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.support.SupportMessageAuthorRole
+import com.hookah.platform.backend.support.SupportMessageDto
+import com.hookah.platform.backend.support.SupportMessageSource
+import com.hookah.platform.backend.support.SupportThreadDto
+import com.hookah.platform.backend.support.SupportThreadRepository
+import com.hookah.platform.backend.support.normalizeSupportMessage
+import com.hookah.platform.backend.support.toDto
 import com.hookah.platform.backend.telegram.TelegramKeyboards
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
@@ -61,6 +68,8 @@ private data class VenueBookingStatusResponse(
 private data class VenueBookingMessageResponse(
     val bookingId: Long,
     val queued: Boolean,
+    val thread: SupportThreadDto,
+    val message: SupportMessageDto,
 )
 
 @Serializable
@@ -90,6 +99,7 @@ fun Route.venueBookingRoutes(
     venueAccessRepository: VenueAccessRepository,
     guestBookingRepository: GuestBookingRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
+    supportThreadRepository: SupportThreadRepository = SupportThreadRepository(null),
     venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
 ) {
     route("/venue/bookings") {
@@ -207,17 +217,39 @@ fun Route.venueBookingRoutes(
                 call.parameters["bookingId"]?.toLongOrNull()
                     ?: throw InvalidInputException("bookingId must be a number")
             val request = call.receive<VenueBookingMessageRequest>()
-            val messageText = normalizeBookingGuestMessage(request.message)
+            val messageText = normalizeSupportMessage(request.message)
             val booking =
                 guestBookingRepository.findByVenue(bookingId = bookingId, venueId = venueId)
                     ?: throw NotFoundException()
             val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
+            val thread =
+                supportThreadRepository.createOrFindBookingThread(
+                    venueId = booking.venueId,
+                    bookingId = booking.id,
+                    guestUserId = booking.userId,
+                    title = formatBookingDisplayLabel(booking),
+                )
+            val message =
+                supportThreadRepository.addMessage(
+                    threadId = thread.id,
+                    authorUserId = userId,
+                    authorRole = SupportMessageAuthorRole.VENUE,
+                    source = SupportMessageSource.VENUE_MINIAPP,
+                    text = messageText,
+                )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
                 text = buildBookingGuestContactMessage(booking, venueName, messageText),
                 replyMarkup = TelegramKeyboards.inlineGuestBookingReplyActions(booking.venueId, booking.id),
             )
-            call.respond(VenueBookingMessageResponse(bookingId = booking.id, queued = true))
+            call.respond(
+                VenueBookingMessageResponse(
+                    bookingId = booking.id,
+                    queued = true,
+                    thread = thread.toDto(),
+                    message = message.toDto(),
+                ),
+            )
         }
 
         post("{bookingId}/seat") {
@@ -400,18 +432,7 @@ private fun normalizeBookingReason(value: String?): String? {
     return trimmed
 }
 
-private fun normalizeBookingGuestMessage(value: String?): String {
-    val trimmed =
-        value?.trim()?.takeIf { it.isNotEmpty() }
-            ?: throw InvalidInputException("message must not be blank")
-    if (trimmed.length > MAX_BOOKING_GUEST_MESSAGE_LENGTH) {
-        throw InvalidInputException("message must be at most $MAX_BOOKING_GUEST_MESSAGE_LENGTH characters")
-    }
-    return trimmed
-}
-
 private const val MAX_CANCEL_REASON_LENGTH = 500
-private const val MAX_BOOKING_GUEST_MESSAGE_LENGTH = 1000
 
 private val BOOKING_NOTIFICATION_TIME_FORMAT: DateTimeFormatter =
     DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm", Locale.forLanguageTag("ru-RU"))

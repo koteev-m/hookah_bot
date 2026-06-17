@@ -17,6 +17,7 @@ import { renderVenueCallsScreen } from './venueCalls'
 import { renderVenueBookingsScreen } from './venueBookings'
 import { renderVenueDashboardScreen } from './venueDashboard'
 import { renderVenueMenuScreen } from './venueMenu'
+import { renderVenueMessagesScreen } from './venueMessages'
 import { renderVenueOrderDetailScreen } from './venueOrderDetail'
 import { renderVenueOrdersScreen } from './venueOrders'
 import { renderVenueSettingsScreen } from './venueSettings'
@@ -37,6 +38,7 @@ type RouteName =
   | 'order'
   | 'calls'
   | 'extensions'
+  | 'messages'
   | 'menu'
   | 'tables'
   | 'staff'
@@ -95,6 +97,7 @@ function resolveRoute(): Route {
       'order',
       'calls',
       'extensions',
+      'messages',
       'menu',
       'tables',
       'staff',
@@ -149,6 +152,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
     extensions: el('button', { className: 'nav-button', text: 'Запросы продления' }) as HTMLButtonElement,
+    messages: el('button', { className: 'nav-button', text: 'Сообщения' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
@@ -161,7 +165,14 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
   const navSections = [
     {
       title: 'Работа смены',
-      buttons: [navButtons.dashboard, navButtons.orders, navButtons.bookings, navButtons.calls, navButtons.extensions]
+      buttons: [
+        navButtons.dashboard,
+        navButtons.orders,
+        navButtons.bookings,
+        navButtons.messages,
+        navButtons.calls,
+        navButtons.extensions
+      ]
     },
     {
       title: 'Настройки',
@@ -378,6 +389,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   const updateNavVisibility = () => {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
+    refs.navButtons.messages.hidden = !hasPermission('BOOKING_MANAGE')
     refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.extensions.hidden = !hasPermission('SHIFT_EXTENSION_VIEW')
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
@@ -401,6 +413,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         return hasPermission('SHIFT_EXTENSION_VIEW')
       case 'bookings':
         return hasPermission('BOOKING_VIEW')
+      case 'messages':
+        return hasPermission('BOOKING_MANAGE')
       case 'menu':
         return hasPermission('MENU_VIEW')
       case 'tables':
@@ -474,6 +488,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         })
       case 'bookings':
         return renderVenueBookingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+      case 'messages':
+        return renderVenueMessagesScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'menu':
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'tables':
@@ -526,6 +542,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.dashboard, 'click', () => navigate('#/dashboard')))
   disposables.push(on(refs.navButtons.orders, 'click', () => navigate('#/orders')))
   disposables.push(on(refs.navButtons.bookings, 'click', () => navigate('#/bookings')))
+  disposables.push(on(refs.navButtons.messages, 'click', () => navigate('#/messages')))
   disposables.push(on(refs.navButtons.calls, 'click', () => navigate('#/calls')))
   disposables.push(on(refs.navButtons.extensions, 'click', () => navigate('#/extensions')))
   disposables.push(on(refs.navButtons.menu, 'click', () => navigate('#/menu')))

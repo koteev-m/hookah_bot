@@ -96,6 +96,13 @@ import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
 import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
+import com.hookah.platform.backend.support.SupportMessageAuthorRole
+import com.hookah.platform.backend.support.SupportMessageRecord
+import com.hookah.platform.backend.support.SupportMessageSource
+import com.hookah.platform.backend.support.SupportThreadCategory
+import com.hookah.platform.backend.support.SupportThreadRecord
+import com.hookah.platform.backend.support.SupportThreadRepository
+import com.hookah.platform.backend.support.SupportThreadStatus
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
@@ -236,6 +243,7 @@ class TelegramBotRouterTableTokenTest {
     private val venueTableRepository: VenueTableRepository = mockk(relaxed = true)
     private val venueStaffRepository: VenueStaffRepository = mockk(relaxed = true)
     private val staffInviteRepositoryForRouter: StaffInviteRepository = mockk(relaxed = true)
+    private val supportThreadRepository: SupportThreadRepository = mockk()
     private val router = routerWithWebAppPublicUrl(null)
 
     private fun routerWithWebAppPublicUrl(webAppPublicUrl: String?): TelegramBotRouter =
@@ -302,6 +310,7 @@ class TelegramBotRouterTableTokenTest {
             venueStaffRepository = venueStaffRepository,
             staffInviteRepository = staffInviteRepositoryForRouter,
             shiftExtensionRepository = shiftExtensionRepository,
+            supportThreadRepository = supportThreadRepository,
         )
 
     @BeforeEach
@@ -316,6 +325,40 @@ class TelegramBotRouterTableTokenTest {
         coEvery { chatContextRepository.get(any()) } returns null
         coEvery { chatContextRepository.clear(any()) } returns Unit
         coEvery { venueMenuSectionImagesRepository.ensureBotTestVenueMenuSectionImages() } returns Unit
+        coEvery {
+            supportThreadRepository.createOrFindBookingThread(any(), any(), any(), any())
+        } answers {
+            SupportThreadRecord(
+                id = 9000L,
+                venueId = invocation.args[0] as Long,
+                venueName = "Mix",
+                guestUserId = invocation.args[2] as Long,
+                category = SupportThreadCategory.BOOKING,
+                status = SupportThreadStatus.OPEN,
+                bookingId = invocation.args[1] as Long,
+                orderId = null,
+                tableSessionId = null,
+                title = invocation.args[3] as String,
+                lastMessageAt = null,
+                createdAt = Instant.parse("2026-04-03T18:00:00Z"),
+                updatedAt = Instant.parse("2026-04-03T18:00:00Z"),
+                booking = null,
+            )
+        }
+        coEvery {
+            supportThreadRepository.addMessage(any(), any(), any(), any(), any(), any())
+        } answers {
+            SupportMessageRecord(
+                id = 9001L,
+                threadId = invocation.args[0] as Long,
+                authorUserId = invocation.args[1] as Long?,
+                authorRole = invocation.args[2] as SupportMessageAuthorRole,
+                source = invocation.args[3] as SupportMessageSource,
+                text = invocation.args[4] as String,
+                telegramMessageId = invocation.args[5] as Long?,
+                createdAt = Instant.parse("2026-04-03T18:01:00Z"),
+            )
+        }
         coEvery { venueMenuRepository.getMenu(any()) } returns emptyList()
         coEvery { venueMenuRepository.createCategory(any(), any()) } answers
             {
@@ -11586,6 +11629,24 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
+            coVerify {
+                supportThreadRepository.createOrFindBookingThread(
+                    venueId = 10L,
+                    bookingId = 77L,
+                    guestUserId = 555L,
+                    title = "Бронь №7",
+                )
+            }
+            coVerify {
+                supportThreadRepository.addMessage(
+                    threadId = 9000L,
+                    authorUserId = 200L,
+                    authorRole = SupportMessageAuthorRole.VENUE,
+                    source = SupportMessageSource.STAFF_CHAT,
+                    text = "Подтвердите, пожалуйста, время на 18:00.",
+                    telegramMessageId = null,
+                )
+            }
             coVerify { dialogStateRepository.clear(100) }
             coVerify { outboxEnqueuer.enqueueSendMessage(100, "✅ Сообщение гостю отправлено.", any()) }
         }
@@ -11843,6 +11904,24 @@ class TelegramBotRouterTableTokenTest {
                             !text.contains("@guest")
                     },
                     match { it is ReplyKeyboardRemove },
+                )
+            }
+            coVerify {
+                supportThreadRepository.createOrFindBookingThread(
+                    venueId = 10L,
+                    bookingId = 77L,
+                    guestUserId = 555L,
+                    title = "Бронь №7",
+                )
+            }
+            coVerify {
+                supportThreadRepository.addMessage(
+                    threadId = 9000L,
+                    authorUserId = 555L,
+                    authorRole = SupportMessageAuthorRole.GUEST,
+                    source = SupportMessageSource.GUEST_BOT,
+                    text = "Будем на 10 минут позже.",
+                    telegramMessageId = null,
                 )
             }
             coVerify { dialogStateRepository.clear(555L) }

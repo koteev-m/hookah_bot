@@ -18,9 +18,9 @@ import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
 import { renderGuestAccountScreen } from './guestAccount'
 import { renderGuestBookingsScreen } from './guestBookings'
+import { renderGuestSupportThreadsScreen } from './guestSupportThreads'
 import { renderGuestVenueScreen } from './guestVenue'
 import { renderOrderScreen } from './order'
-import { renderGuestSupportScreen } from './supportScreens'
 
 type GuestAppOptions = {
   root: HTMLDivElement | null
@@ -233,8 +233,10 @@ function renderRouteContent(
         onOpenBot: onOpenSupportBot
       })
     case 'support':
-      return renderGuestSupportScreen({
+      return renderGuestSupportThreadsScreen({
         root: screenRoot,
+        backendUrl,
+        isDebug,
         hasTableContext,
         onBack: onNavigateSupportBack,
         onOpenVenueStaffCall,
@@ -293,7 +295,7 @@ function formatActionLabel(action: GuestActionId, cartQty: number, mode: GuestTa
     case 'account':
       return variant === 'nav' ? 'Профиль' : '👤 Профиль'
     case 'support':
-      return variant === 'nav' ? 'Поддержка' : '🆘 Поддержка'
+      return variant === 'nav' ? 'Сообщения' : '💬 Сообщения'
     case 'refresh':
       return '🔄 Обновить'
     default:

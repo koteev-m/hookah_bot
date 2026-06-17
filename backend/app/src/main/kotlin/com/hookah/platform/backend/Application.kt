@@ -92,6 +92,9 @@ import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.platform.platformRoutes
 import com.hookah.platform.backend.security.constantTimeEquals
+import com.hookah.platform.backend.support.SupportThreadRepository
+import com.hookah.platform.backend.support.guestSupportRoutes
+import com.hookah.platform.backend.support.venueSupportRoutes
 import com.hookah.platform.backend.telegram.InMemoryTelegramRateLimiter
 import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffChatNotifier
@@ -332,6 +335,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val visitRepository = VisitRepository(dataSource)
     val visitFeedbackRepository = VisitFeedbackRepository(dataSource)
     val guestBookingRepository = GuestBookingRepository(dataSource, visitRepository)
+    val supportThreadRepository = SupportThreadRepository(dataSource)
     val guestMenuRepository = GuestMenuRepository(dataSource)
     val guestTabsRepository = GuestTabsRepository(dataSource)
     val analyticsEventRepository = AnalyticsEventRepository(dataSource)
@@ -645,6 +649,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 staffChatNotifier = staffChatNotifier,
                 auditLogRepository = auditLogRepository,
                 shiftExtensionRepository = shiftExtensionRepository,
+                supportThreadRepository = supportThreadRepository,
             )
 
         if (dataSource != null) {
@@ -1097,6 +1102,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         userRepository = userRepository,
                         venueSettingsRepository = venueSettingsRepository,
                     )
+                    guestSupportRoutes(
+                        supportThreadRepository = supportThreadRepository,
+                        venueRepository = venueRepository,
+                        outboxEnqueuer = telegramOutboxEnqueuer,
+                    )
                     guestVisitRoutes(visitRepository = visitRepository)
                     guestStaffCallRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,
@@ -1163,7 +1173,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     guestBookingRepository = guestBookingRepository,
                     outboxEnqueuer = telegramOutboxEnqueuer,
+                    supportThreadRepository = supportThreadRepository,
                     venueSettingsRepository = venueSettingsRepository,
+                )
+                venueSupportRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    supportThreadRepository = supportThreadRepository,
+                    outboxEnqueuer = telegramOutboxEnqueuer,
                 )
                 venueStatsRoutes(
                     venueAccessRepository = venueAccessRepository,
