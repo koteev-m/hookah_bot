@@ -36,6 +36,7 @@ private data class VenueBookingChangeRequest(
     val scheduledAt: String? = null,
     val scheduledLocalDate: String? = null,
     val scheduledLocalTime: String? = null,
+    val reasonText: String? = null,
 )
 
 @Serializable
@@ -112,10 +113,7 @@ fun Route.venueBookingRoutes(
             val zoneId = venueSettingsRepository.resolveZoneId(booking.venueId)
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
-                text =
-                    "✅ ${formatBookingDisplayLabel(booking)} в " +
-                        "${formatBookingVenueName(guestBookingRepository, booking.venueId)} " +
-                        "подтверждена на ${formatBookingNotificationTime(booking.scheduledAt, zoneId)}",
+                text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, zoneId),
             )
             guestBookingRepository.scheduleRemindersForBooking(
                 bookingId = booking.id,
@@ -139,6 +137,7 @@ fun Route.venueBookingRoutes(
             val request = call.receive<VenueBookingChangeRequest>()
             val zoneId = venueSettingsRepository.resolveZoneId(venueId)
             val scheduledAt = parseBookingInstant(request, zoneId)
+            val changeReason = normalizeBookingReason(request.reasonText)
             val updated =
                 guestBookingRepository.updateByVenue(
                     bookingId = bookingId,
@@ -149,10 +148,7 @@ fun Route.venueBookingRoutes(
                 ) ?: throw NotFoundException()
             outboxEnqueuer.enqueueSendMessage(
                 chatId = updated.userId,
-                text =
-                    "🕒 ${formatBookingDisplayLabel(updated)} в " +
-                        "${formatBookingVenueName(guestBookingRepository, updated.venueId)} " +
-                        "перенесена. Новое время: ${formatBookingNotificationTime(updated.scheduledAt, zoneId)}",
+                text = buildBookingChangedGuestNotification(updated, guestBookingRepository, zoneId, changeReason),
             )
             guestBookingRepository.scheduleRemindersForBooking(
                 bookingId = updated.id,
@@ -170,7 +166,7 @@ fun Route.venueBookingRoutes(
 
         post("{bookingId}/cancel") {
             val request = runCatching { call.receive<VenueBookingCancelRequest>() }.getOrNull()
-            val cancelReason = normalizeCancelReason(request?.reasonText)
+            val cancelReason = normalizeBookingReason(request?.reasonText)
             val booking =
                 call.performVenueStatusUpdate(
                     venueAccessRepository = venueAccessRepository,
@@ -182,11 +178,7 @@ fun Route.venueBookingRoutes(
             val zoneId = venueSettingsRepository.resolveZoneId(booking.venueId)
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
-                text =
-                    "❌ ${formatBookingDisplayLabel(booking)} в " +
-                        "${formatBookingVenueName(guestBookingRepository, booking.venueId)} " +
-                        "на ${formatBookingNotificationTime(booking.scheduledAt, zoneId)} отменена заведением.\n" +
-                        "Причина: ${cancelReason ?: "не указана"}",
+                text = buildBookingCanceledGuestNotification(booking, guestBookingRepository, zoneId, cancelReason),
             )
             call.respond(VenueBookingStatusResponse(bookingId = booking.id, status = booking.status.toApi()))
         }
@@ -281,19 +273,80 @@ private fun BookingRecord.toVenueBookingDto(
 }
 
 private fun formatBookingDisplayLabel(booking: BookingRecord): String =
-    booking.displayNumber?.let { "Бронь №$it" } ?: "Бронь"
+    booking.displayNumber?.let { "Бронь №$it" } ?: "Бронь #${booking.id}"
 
-private suspend fun formatBookingVenueName(
+private suspend fun resolveBookingVenueName(
     guestBookingRepository: GuestBookingRepository,
     venueId: Long,
-): String = guestBookingRepository.findVenueName(venueId)?.takeIf { it.isNotBlank() } ?: "заведении"
+): String = guestBookingRepository.findVenueName(venueId)?.takeIf { it.isNotBlank() } ?: "заведение"
+
+private suspend fun buildBookingConfirmedGuestNotification(
+    booking: BookingRecord,
+    guestBookingRepository: GuestBookingRepository,
+    zoneId: ZoneId,
+): String {
+    val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
+    return buildString {
+        append("✅ ${formatBookingDisplayLabel(booking)} подтверждена")
+        appendBookingGuestDetails(booking, venueName, zoneId, timeLabel = "Время")
+        append("\n\nЖдём вас!")
+    }
+}
+
+private suspend fun buildBookingChangedGuestNotification(
+    booking: BookingRecord,
+    guestBookingRepository: GuestBookingRepository,
+    zoneId: ZoneId,
+    reasonText: String?,
+): String {
+    val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
+    return buildString {
+        append("🕒 ${formatBookingDisplayLabel(booking)} перенесена")
+        appendBookingGuestDetails(booking, venueName, zoneId, timeLabel = "Новое время")
+        reasonText?.let { append("\nКомментарий: $it") }
+    }
+}
+
+private suspend fun buildBookingCanceledGuestNotification(
+    booking: BookingRecord,
+    guestBookingRepository: GuestBookingRepository,
+    zoneId: ZoneId,
+    reasonText: String?,
+): String {
+    val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
+    return buildString {
+        append("❌ ${formatBookingDisplayLabel(booking)} отменена")
+        append("\n\nЗаведение: $venueName")
+        append("\nВремя брони: ${formatBookingNotificationTime(booking.scheduledAt, zoneId)}")
+        reasonText?.let { append("\nПричина: $it") }
+    }
+}
+
+private fun StringBuilder.appendBookingGuestDetails(
+    booking: BookingRecord,
+    venueName: String,
+    zoneId: ZoneId,
+    timeLabel: String,
+) {
+    append("\n\nЗаведение: $venueName")
+    append("\n$timeLabel: ${formatBookingNotificationTime(booking.scheduledAt, zoneId)}")
+    append("\nГостей: ${booking.partySize ?: "не указано"}")
+    booking.arrivalDeadlineAt?.let { deadline ->
+        append("\nДержим до ${formatBookingDeadlineTime(deadline, zoneId)}")
+    }
+}
 
 private fun formatBookingNotificationTime(
     scheduledAt: Instant,
     venueZoneId: ZoneId,
 ): String = BOOKING_NOTIFICATION_TIME_FORMAT.format(scheduledAt.atZone(venueZoneId))
 
-private fun normalizeCancelReason(value: String?): String? {
+private fun formatBookingDeadlineTime(
+    deadlineAt: Instant,
+    venueZoneId: ZoneId,
+): String = BOOKING_DEADLINE_TIME_FORMAT.format(deadlineAt.atZone(venueZoneId))
+
+private fun normalizeBookingReason(value: String?): String? {
     val trimmed = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     if (trimmed.length > MAX_CANCEL_REASON_LENGTH) {
         throw InvalidInputException("reasonText must be at most $MAX_CANCEL_REASON_LENGTH characters")
@@ -305,6 +358,9 @@ private const val MAX_CANCEL_REASON_LENGTH = 500
 
 private val BOOKING_NOTIFICATION_TIME_FORMAT: DateTimeFormatter =
     DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm", Locale.forLanguageTag("ru-RU"))
+
+private val BOOKING_DEADLINE_TIME_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("HH:mm", Locale.forLanguageTag("ru-RU"))
 
 private fun parseBookingInstant(
     request: VenueBookingChangeRequest,
