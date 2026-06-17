@@ -1015,8 +1015,10 @@ async function mockVenueBookingsApi(
   let changeCalls = 0
   let seatCalls = 0
   let noShowCalls = 0
+  let messageCalls = 0
   const changeRequests: unknown[] = []
   const cancelReasons: Array<string | null> = []
+  const bookingMessages: string[] = []
 
   const activeBookings = () => bookings.filter((booking) => ['pending', 'confirmed', 'changed'].includes(booking.status))
   const findBooking = (bookingId: number) => bookings.find((booking) => booking.bookingId === bookingId) ?? null
@@ -1108,6 +1110,12 @@ async function mockVenueBookingsApi(
     } else if (action === 'no-show') {
       noShowCalls += 1
       booking.status = 'no_show'
+    } else if (action === 'message') {
+      messageCalls += 1
+      const body = (await request.postDataJSON()) as { message?: string | null }
+      bookingMessages.push(body.message ?? '')
+      await route.fulfill(jsonResponse({ bookingId: booking.bookingId, queued: true }))
+      return
     }
 
     await route.fulfill(jsonResponse({ bookingId: booking.bookingId, status: booking.status, scheduledAt: booking.scheduledAt }))
@@ -1119,8 +1127,10 @@ async function mockVenueBookingsApi(
     getChangeCalls: () => changeCalls,
     getSeatCalls: () => seatCalls,
     getNoShowCalls: () => noShowCalls,
+    getMessageCalls: () => messageCalls,
     getChangeRequests: () => changeRequests,
     getCancelReasons: () => cancelReasons,
+    getBookingMessages: () => bookingMessages,
     setBookings: (nextBookings: VenueBookingFixture[]) => {
       bookings = nextBookings
     }
@@ -1777,6 +1787,17 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await expect(page.getByText('Держим до: 10.01.2030, 22:00')).toBeVisible()
   await expect(page.getByText('у окна')).toBeVisible()
 
+  await page.getByRole('button', { name: 'Написать гостю' }).click()
+  await expect(page.getByRole('heading', { name: 'Сообщение гостю' })).toBeVisible()
+  await expect(page.getByText('Сообщение придёт гостю в Telegram.')).toBeVisible()
+  await page.getByPlaceholder('Например: На 19:00 все столы заняты. Можем предложить 20:30?').fill(
+    'На 19:00 все столы заняты. Можем предложить 20:30?'
+  )
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(page.getByText('Сообщение отправлено гостю.')).toBeVisible()
+  expect(api.getMessageCalls()).toBe(1)
+  expect(api.getBookingMessages()).toEqual(['На 19:00 все столы заняты. Можем предложить 20:30?'])
+
   await page.getByRole('button', { name: 'Подтвердить' }).click()
   await expect(page.locator('.venue-booking-card .venue-order-meta').filter({ hasText: 'подтверждена' })).toBeVisible()
   expect(api.getConfirmCalls()).toBe(1)
@@ -1813,6 +1834,7 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
   await expect(page.getByText('Бронь №12')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Подтвердить' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Отменить' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Написать гостю' })).toHaveCount(0)
   await expect(page.getByText('Перенести бронь')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Гость пришёл' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Не пришёл' })).toBeVisible()

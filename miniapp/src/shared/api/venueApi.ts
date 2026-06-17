@@ -5,6 +5,8 @@ import type {
   VenueBookingChangeRequest,
   VenueBookingCancelRequest,
   VenueBookingListResponse,
+  VenueBookingMessageRequest,
+  VenueBookingMessageResponse,
   VenueBookingStatusResponse,
   VenueCreateCategoryRequest,
   VenueCreateItemRequest,
@@ -181,6 +183,26 @@ export async function venueChangeBooking(
   return requestApi<VenueBookingStatusResponse>(
     backendUrl,
     `/api/venue/bookings/${params.bookingId}/change?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueMessageBookingGuest(
+  backendUrl: string,
+  params: { venueId: number; bookingId: number; body: VenueBookingMessageRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueBookingMessageResponse>(
+    backendUrl,
+    `/api/venue/bookings/${params.bookingId}/message?${search.toString()}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

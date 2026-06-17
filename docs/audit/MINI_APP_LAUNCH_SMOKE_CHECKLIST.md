@@ -258,7 +258,7 @@ Steps:
 16. As STAFF, confirm bill edit controls are hidden.
 17. As STAFF, close delivered bill/order.
 18. Open `Вызовы`, accept and close a staff call.
-19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel as allowed.
+19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel and `Написать гостю` as allowed.
 20. Open `Поддержка`.
 21. Confirm the screen explains manual platform support and has no fake ticket controls.
 
@@ -275,11 +275,12 @@ Local dev via `dev.hookahtootah.club` - PASSED on 2026-06-04:
 5. Confirm STAFF sees booking list/details.
 6. Confirm STAFF sees only `Гость пришёл` and `Не пришёл`.
 7. Confirm STAFF does not see `Подтвердить`, `Отменить`, `Предложить другое время` or `Написать гостю`.
-8. Call direct STAFF backend/API attempts for confirm/cancel/change endpoints and any available message-guest path.
-9. Confirm direct STAFF manage attempts are denied.
-10. Trigger old Telegram staff booking confirm/cancel/message callbacks if reachable from old staff-chat messages.
-11. Confirm old STAFF callbacks answer safely with no booking mutation.
-12. Open as MANAGER/OWNER and confirm booking confirm/cancel/change still work.
+8. Open as MANAGER/OWNER, click `Написать гостю`, send a short text and confirm the guest receives a Telegram message without staff contacts.
+9. Call direct STAFF backend/API attempts for confirm/cancel/change endpoints and the message-guest path.
+10. Confirm direct STAFF manage attempts are denied.
+11. Trigger old Telegram staff booking confirm/cancel/message callbacks if reachable from old staff-chat messages.
+12. Confirm old STAFF callbacks answer safely with no booking mutation.
+13. Open as MANAGER/OWNER and confirm booking confirm/cancel/change still work.
 
 Staging after deploy - PASSED on 2026-06-04:
 

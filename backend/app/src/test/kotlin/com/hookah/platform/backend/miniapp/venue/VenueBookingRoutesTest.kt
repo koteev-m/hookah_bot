@@ -112,6 +112,28 @@ class VenueBookingRoutesTest {
             assertTrue(confirmMessage.contains("Держим до 22:00"), confirmMessage)
             assertFalse(confirmMessage.contains("UTC"), confirmMessage)
 
+            val messageResponse =
+                client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"На 19:00 все столы заняты. Можем предложить 20:30?"}""")
+                }
+            assertEquals(HttpStatusCode.OK, messageResponse.status)
+            val guestMessagePayload = outboxPayloadJson(jdbcUrl, GUEST_ID).last()
+            val guestMessage =
+                json.parseToJsonElement(guestMessagePayload)
+                    .jsonObject
+                    .getValue("text")
+                    .jsonPrimitive
+                    .content
+            assertTrue(guestMessage.contains("Сообщение по вашей брони №1 в «Booking Venue»"), guestMessage)
+            assertTrue(guestMessage.contains("На 19:00 все столы заняты. Можем предложить 20:30?"), guestMessage)
+            assertFalse(guestMessage.contains("u$MANAGER_ID"), guestMessage)
+            assertFalse(guestMessage.contains("@"), guestMessage)
+            assertTrue(guestMessagePayload.contains("guest_booking_reply:$venueId:$bookingId"), guestMessagePayload)
+
             val confirmedListResponse =
                 client.get("/api/venue/bookings?venueId=$venueId") {
                     headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
@@ -302,6 +324,16 @@ class VenueBookingRoutesTest {
                 }
             assertEquals(HttpStatusCode.Forbidden, changeResponse.status)
 
+            val messageResponse =
+                client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Можно уточнить время?"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, messageResponse.status)
+
             val seatedId = createBooking("2030-01-11T18:30:00Z")
             val seatResponse =
                 client.post("/api/venue/bookings/$seatedId/seat?venueId=$venueId") {
@@ -399,6 +431,37 @@ class VenueBookingRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
                 }
             assertEquals(HttpStatusCode.Forbidden, foreignUpdateResponse.status)
+
+            val foreignMessageResponse =
+                client.post("/api/venue/bookings/$bookingId/message?venueId=$foreignVenueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Проверка"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignMessageResponse.status)
+
+            val blankMessageResponse =
+                client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"   "}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, blankMessageResponse.status)
+
+            val longMessage = "x".repeat(1001)
+            val longMessageResponse =
+                client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"$longMessage"}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, longMessageResponse.status)
         }
 
     private fun issueToken(
@@ -518,6 +581,30 @@ class VenueBookingRoutesTest {
                     while (rs.next()) {
                         val payload = json.parseToJsonElement(rs.getString("payload_json")).jsonObject
                         result.add(payload.getValue("text").jsonPrimitive.content)
+                    }
+                    result
+                }
+            }
+        }
+
+    private fun outboxPayloadJson(
+        jdbcUrl: String,
+        chatId: Long,
+    ): List<String> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT payload_json
+                FROM telegram_outbox
+                WHERE chat_id = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.executeQuery().use { rs ->
+                    val result = mutableListOf<String>()
+                    while (rs.next()) {
+                        result.add(rs.getString("payload_json"))
                     }
                     result
                 }

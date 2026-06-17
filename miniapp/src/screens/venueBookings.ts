@@ -5,6 +5,7 @@ import {
   venueChangeBooking,
   venueConfirmBooking,
   venueGetBookings,
+  venueMessageBookingGuest,
   venueNoShowBooking,
   venueSeatBooking
 } from '../shared/api/venueApi'
@@ -171,6 +172,82 @@ function renderChangeForm(
   return details
 }
 
+function bookingTitle(booking: VenueBookingDto): string {
+  return booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`
+}
+
+function openBookingMessageModal(booking: VenueBookingDto): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = el('div', { className: 'venue-modal-overlay' })
+    const dialog = el('section', { className: 'venue-modal card' })
+    dialog.setAttribute('role', 'dialog')
+    dialog.setAttribute('aria-modal', 'true')
+    dialog.setAttribute('aria-labelledby', 'venue-booking-message-title')
+
+    const title = el('h3', { id: 'venue-booking-message-title', text: 'Сообщение гостю' })
+    const helper = el('p', { className: 'venue-order-sub', text: 'Сообщение придёт гостю в Telegram.' })
+    const bookingMeta = el('p', { className: 'venue-order-sub', text: bookingTitle(booking) })
+    const error = el('p', { className: 'status', text: '' })
+    const textarea = document.createElement('textarea')
+    textarea.className = 'venue-textarea venue-booking-message-textarea'
+    textarea.placeholder = 'Например: На 19:00 все столы заняты. Можем предложить 20:30?'
+    textarea.maxLength = 1000
+    textarea.rows = 5
+
+    const templateActions = el('div', { className: 'order-actions' })
+    const templates = [
+      'На это время все столы заняты. Можем предложить другое время?',
+      'Уточните, пожалуйста, детали брони.',
+      'Подтверждаем бронь вручную, ждём вас.'
+    ]
+    templates.forEach((text) => {
+      const templateButton = el('button', { className: 'button-small button-secondary', text }) as HTMLButtonElement
+      templateButton.type = 'button'
+      templateButton.addEventListener('click', () => {
+        textarea.value = text
+        textarea.focus()
+      })
+      templateActions.appendChild(templateButton)
+    })
+
+    const actions = el('div', { className: 'order-actions' })
+    const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
+    const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
+
+    const close = (value: string | null) => {
+      overlay.remove()
+      resolve(value)
+    }
+
+    submitButton.addEventListener('click', () => {
+      const message = textarea.value.trim()
+      if (!message) {
+        error.textContent = 'Введите сообщение гостю.'
+        textarea.focus()
+        return
+      }
+      if (message.length > 1000) {
+        error.textContent = 'Сообщение должно быть не длиннее 1000 символов.'
+        textarea.focus()
+        return
+      }
+      close(message)
+    })
+    cancelButton.addEventListener('click', () => close(null))
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        close(null)
+      }
+    })
+
+    append(actions, submitButton, cancelButton)
+    append(dialog, title, helper, bookingMeta, textarea, templateActions, error, actions)
+    overlay.appendChild(dialog)
+    document.body.appendChild(overlay)
+    window.setTimeout(() => textarea.focus(), 0)
+  })
+}
+
 function renderBookings(
   list: HTMLDivElement,
   bookings: VenueBookingDto[],
@@ -179,6 +256,7 @@ function renderBookings(
   onConfirm: (booking: VenueBookingDto) => void,
   onCancel: (booking: VenueBookingDto) => void,
   onChange: (booking: VenueBookingDto, dateValue: string, timeValue: string) => void,
+  onMessage: (booking: VenueBookingDto) => void,
   onSeat: (booking: VenueBookingDto) => void,
   onNoShow: (booking: VenueBookingDto) => void
 ) {
@@ -191,8 +269,7 @@ function renderBookings(
   }
   bookings.forEach((booking) => {
     const row = el('section', { className: 'card venue-booking-card' })
-    const title = booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`
-    row.appendChild(el('h3', { text: title }))
+    row.appendChild(el('h3', { text: bookingTitle(booking) }))
     row.appendChild(
       el('p', {
         className: 'venue-order-meta',
@@ -230,6 +307,11 @@ function renderBookings(
       const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отменить' }) as HTMLButtonElement
       cancelButton.addEventListener('click', () => onCancel(booking))
       actions.appendChild(cancelButton)
+    }
+    if (canManage) {
+      const messageButton = el('button', { className: 'button-small button-secondary', text: 'Написать гостю' }) as HTMLButtonElement
+      messageButton.addEventListener('click', () => onMessage(booking))
+      actions.appendChild(messageButton)
     }
     if (canMarkArrivalStatus && canMarkArrival(booking)) {
       const seatButton = el('button', { className: 'button-small', text: 'Гость пришёл' }) as HTMLButtonElement
@@ -291,6 +373,7 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
       (booking) => void confirmBooking(booking),
       (booking) => void cancelBooking(booking),
       (booking, dateValue, timeValue) => void changeBooking(booking, dateValue, timeValue),
+      (booking) => void messageBookingGuest(booking),
       (booking) => void seatBooking(booking),
       (booking) => void noShowBooking(booking)
     )
@@ -370,6 +453,31 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     }
     showToast('Бронь перенесена')
     await loadBookings()
+  }
+
+  const messageBookingGuest = async (booking: VenueBookingDto) => {
+    if (isLoading || !canManage) return
+    const message = await openBookingMessageModal(booking)
+    if (!message || disposed) return
+    abortController?.abort()
+    const controller = new AbortController()
+    abortController = controller
+    setLoading(true)
+    const result = await venueMessageBookingGuest(
+      backendUrl,
+      { venueId, bookingId: booking.bookingId, body: { message } },
+      deps,
+      controller.signal
+    )
+    if (disposed || abortController !== controller) return
+    abortController = null
+    setLoading(false)
+    if (!result.ok) {
+      renderApiError(refs.status, result.error, isDebug)
+      return
+    }
+    refs.status.textContent = ''
+    showToast('Сообщение отправлено гостю.')
   }
 
   const seatBooking = async (booking: VenueBookingDto) => {

@@ -139,10 +139,19 @@ export type VenueBookingCancelRequest = {
   reasonText?: string | null
 }
 
+export type VenueBookingMessageRequest = {
+  message: string
+}
+
 export type VenueBookingStatusResponse = {
   bookingId: number
   status: string
   scheduledAt?: string | null
+}
+
+export type VenueBookingMessageResponse = {
+  bookingId: number
+  queued: boolean
 }
 
 export type VenueTableDto = {

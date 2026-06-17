@@ -32,6 +32,7 @@
 - Venue Owner/Manager/Staff входят в Venue Mini App через inline `web_app` button, чтобы Telegram WebView передавал `initData`.
 - STAFF может закрывать счёт/заказ и управлять операционным stop-list по позициям/вкусам, но не может управлять скидками, исключениями, структурой/контентом меню, столами, персоналом или настройками.
 - STAFF booking policy разделён: STAFF видит брони и отмечает `Гость пришёл` / `Не пришёл`, а confirm/cancel/change/message/settings остаются MANAGER/OWNER.
+- Venue Mini App booking card supports MANAGER/OWNER `Написать гостю` through the same Telegram outbox/no-contact semantics as bot staff-chat booking messages; structured reschedule proposal buttons remain a follow-up.
 - Platform Owner определяется через `PLATFORM_OWNER_TELEGRAM_ID`; legacy aliases остаются совместимостью.
 - Platform onboarding поддерживает `trial=0`, commercial terms, subscription sync and create/link venue.
 - Venue lifecycle поддерживает suspend/archive/delete; `DELETED` hidden from normal lists.
