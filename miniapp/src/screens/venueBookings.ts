@@ -5,15 +5,13 @@ import {
   venueChangeBooking,
   venueConfirmBooking,
   venueGetBookings,
-  venueGetSupportThread,
   venueGetSupportThreads,
   venueMessageBookingGuest,
   venueNoShowBooking,
-  venueSeatBooking,
-  venueSendSupportThreadMessage
+  venueSeatBooking
 } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { SupportMessageDto, SupportThreadDto } from '../shared/api/supportDtos'
+import type { SupportThreadDto } from '../shared/api/supportDtos'
 import type { VenueAccessDto, VenueBookingDto } from '../shared/api/venueDtos'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
@@ -180,22 +178,6 @@ function bookingTitle(booking: VenueBookingDto): string {
   return booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`
 }
 
-function renderSupportMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
-  list.replaceChildren()
-  if (!messages.length) {
-    list.appendChild(el('p', { className: 'venue-empty', text: 'Истории сообщений пока нет.' }))
-    return
-  }
-  messages.forEach((message) => {
-    const row = el('div', {
-      className: message.authorRole === 'GUEST' ? 'venue-order-sub' : 'venue-order-meta'
-    })
-    const author = message.authorRole === 'GUEST' ? 'Гость' : message.authorRole === 'VENUE' ? 'Заведение' : 'Система'
-    row.textContent = `${author}, ${formatDateTime(message.createdAt)}: ${message.text}`
-    list.appendChild(row)
-  })
-}
-
 function openBookingMessageModal(
   booking: VenueBookingDto,
   options: {
@@ -203,7 +185,7 @@ function openBookingMessageModal(
     venueId: number
     deps: ReturnType<typeof buildApiDeps>
   }
-): Promise<boolean> {
+): Promise<SupportThreadDto | null> {
   return new Promise((resolve) => {
     const overlay = el('div', { className: 'venue-modal-overlay' })
     const dialog = el('section', { className: 'venue-modal card' })
@@ -212,38 +194,21 @@ function openBookingMessageModal(
     dialog.setAttribute('aria-labelledby', 'venue-booking-message-title')
 
     const title = el('h3', { id: 'venue-booking-message-title', text: 'Сообщение гостю' })
-    const helper = el('p', { className: 'venue-order-sub', text: 'Сообщение придёт гостю в Telegram.' })
+    const helper = el('p', {
+      className: 'venue-order-sub',
+      text: 'Сообщение придёт гостю в Telegram и появится в переписке.'
+    })
     const bookingMeta = el('p', { className: 'venue-order-sub', text: bookingTitle(booking) })
     const error = el('p', { className: 'status', text: '' })
-    const messagesTitle = el('h4', { text: 'История' })
-    const messagesList = el('div', { className: 'venue-booking-thread-messages' })
     const textarea = document.createElement('textarea')
     textarea.className = 'venue-textarea venue-booking-message-textarea'
     textarea.placeholder = 'Например: На 19:00 все столы заняты. Можем предложить 20:30?'
     textarea.maxLength = 1000
     textarea.rows = 5
 
-    const templateActions = el('div', { className: 'order-actions' })
-    const templates = [
-      'На это время все столы заняты. Можем предложить другое время?',
-      'Уточните, пожалуйста, детали брони.'
-    ]
-    templates.forEach((text) => {
-      const templateButton = el('button', { className: 'button-small button-secondary', text }) as HTMLButtonElement
-      templateButton.type = 'button'
-      templateButton.addEventListener('click', () => {
-        textarea.value = text
-        textarea.focus()
-      })
-      templateActions.appendChild(templateButton)
-    })
-
     const actions = el('div', { className: 'order-actions' })
     const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
     const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
-    let thread: SupportThreadDto | null = null
-    let messages: SupportMessageDto[] = []
-    let sentAny = false
     let requestController: AbortController | null = null
 
     const setBusy = (busy: boolean) => {
@@ -255,47 +220,7 @@ function openBookingMessageModal(
     const close = () => {
       requestController?.abort()
       overlay.remove()
-      resolve(sentAny)
-    }
-
-    const loadThread = async () => {
-      requestController?.abort()
-      const controller = new AbortController()
-      requestController = controller
-      error.textContent = 'Загружаем историю…'
-      const listResult = await venueGetSupportThreads(
-        options.backendUrl,
-        { venueId: options.venueId, bookingId: booking.bookingId },
-        options.deps,
-        controller.signal
-      )
-      if (requestController !== controller) return
-      if (!listResult.ok) {
-        error.textContent = listResult.error.message || 'Не удалось загрузить историю.'
-        return
-      }
-      thread = listResult.data.items[0] ?? null
-      if (!thread) {
-        messages = []
-        renderSupportMessages(messagesList, messages)
-        error.textContent = ''
-        return
-      }
-      const detailResult = await venueGetSupportThread(
-        options.backendUrl,
-        { venueId: options.venueId, threadId: thread.threadId },
-        options.deps,
-        controller.signal
-      )
-      if (requestController !== controller) return
-      if (!detailResult.ok) {
-        error.textContent = detailResult.error.message || 'Не удалось загрузить историю.'
-        return
-      }
-      thread = detailResult.data.thread
-      messages = detailResult.data.messages
-      renderSupportMessages(messagesList, messages)
-      error.textContent = ''
+      resolve(null)
     }
 
     submitButton.addEventListener('click', async () => {
@@ -314,32 +239,21 @@ function openBookingMessageModal(
       requestController?.abort()
       const controller = new AbortController()
       requestController = controller
-      const result =
-        thread == null
-          ? await venueMessageBookingGuest(
-              options.backendUrl,
-              { venueId: options.venueId, bookingId: booking.bookingId, body: { message } },
-              options.deps,
-              controller.signal
-            )
-          : await venueSendSupportThreadMessage(
-              options.backendUrl,
-              { venueId: options.venueId, threadId: thread.threadId, body: { message } },
-              options.deps,
-              controller.signal
-            )
+      const result = await venueMessageBookingGuest(
+        options.backendUrl,
+        { venueId: options.venueId, bookingId: booking.bookingId, body: { message } },
+        options.deps,
+        controller.signal
+      )
       if (requestController !== controller) return
       setBusy(false)
       if (!result.ok) {
         error.textContent = result.error.message || 'Не удалось отправить сообщение.'
         return
       }
-      thread = result.data.thread
-      messages = [...messages, result.data.message]
-      renderSupportMessages(messagesList, messages)
       textarea.value = ''
-      error.textContent = 'Сообщение отправлено гостю.'
-      sentAny = true
+      overlay.remove()
+      resolve(result.data.thread)
     })
     cancelButton.addEventListener('click', close)
     overlay.addEventListener('click', (event) => {
@@ -349,11 +263,9 @@ function openBookingMessageModal(
     })
 
     append(actions, submitButton, cancelButton)
-    append(dialog, title, helper, bookingMeta, messagesTitle, messagesList, textarea, templateActions, error, actions)
+    append(dialog, title, helper, bookingMeta, textarea, error, actions)
     overlay.appendChild(dialog)
     document.body.appendChild(overlay)
-    renderSupportMessages(messagesList, messages)
-    void loadThread()
     window.setTimeout(() => textarea.focus(), 0)
   })
 }
@@ -361,12 +273,14 @@ function openBookingMessageModal(
 function renderBookings(
   list: HTMLDivElement,
   bookings: VenueBookingDto[],
+  bookingThreads: Map<number, SupportThreadDto>,
   canManage: boolean,
   canMarkArrivalStatus: boolean,
   onConfirm: (booking: VenueBookingDto) => void,
   onCancel: (booking: VenueBookingDto) => void,
   onChange: (booking: VenueBookingDto, dateValue: string, timeValue: string) => void,
   onMessage: (booking: VenueBookingDto) => void,
+  onOpenThread: (thread: SupportThreadDto) => void,
   onSeat: (booking: VenueBookingDto) => void,
   onNoShow: (booking: VenueBookingDto) => void
 ) {
@@ -378,6 +292,7 @@ function renderBookings(
     return
   }
   bookings.forEach((booking) => {
+    const thread = bookingThreads.get(booking.bookingId) ?? null
     const row = el('section', { className: 'card venue-booking-card' })
     row.appendChild(el('h3', { text: bookingTitle(booking) }))
     row.appendChild(
@@ -407,6 +322,9 @@ function renderBookings(
         })
       )
     }
+    if (thread) {
+      row.appendChild(el('p', { className: 'venue-order-sub', text: 'Есть переписка с гостем.' }))
+    }
     const actions = el('div', { className: 'order-actions' })
     if (canManage && canConfirm(booking)) {
       const confirmButton = el('button', { className: 'button-small', text: 'Подтвердить' }) as HTMLButtonElement
@@ -419,8 +337,17 @@ function renderBookings(
       actions.appendChild(cancelButton)
     }
     if (canManage) {
-      const messageButton = el('button', { className: 'button-small button-secondary', text: 'Написать гостю' }) as HTMLButtonElement
-      messageButton.addEventListener('click', () => onMessage(booking))
+      const messageButton = el('button', {
+        className: 'button-small button-secondary',
+        text: thread ? 'Открыть переписку' : 'Написать гостю'
+      }) as HTMLButtonElement
+      messageButton.addEventListener('click', () => {
+        if (thread) {
+          onOpenThread(thread)
+        } else {
+          onMessage(booking)
+        }
+      })
       actions.appendChild(messageButton)
     }
     if (canMarkArrivalStatus && canMarkArrival(booking)) {
@@ -451,6 +378,8 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
   let disposed = false
   let isLoading = false
   let abortController: AbortController | null = null
+  let currentBookings: VenueBookingDto[] = []
+  let bookingThreads = new Map<number, SupportThreadDto>()
   const canManage = access.permissions.includes('BOOKING_MANAGE')
   const canMarkArrivalStatus = access.permissions.includes('BOOKING_ARRIVAL_UPDATE')
 
@@ -458,6 +387,23 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     isLoading = loading
     refs.refreshButton.disabled = loading
     refs.refreshButton.textContent = loading ? 'Обновляем…' : '🔄 Обновить'
+  }
+
+  const renderCurrentBookings = () => {
+    renderBookings(
+      refs.list,
+      currentBookings,
+      bookingThreads,
+      canManage,
+      canMarkArrivalStatus,
+      (booking) => void confirmBooking(booking),
+      (booking) => void cancelBooking(booking),
+      (booking, dateValue, timeValue) => void changeBooking(booking, dateValue, timeValue),
+      (booking) => void messageBookingGuest(booking),
+      (thread) => openThread(thread),
+      (booking) => void seatBooking(booking),
+      (booking) => void noShowBooking(booking)
+    )
   }
 
   const loadBookings = async () => {
@@ -468,25 +414,29 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     setLoading(true)
     const result = await venueGetBookings(backendUrl, { venueId }, deps, controller.signal)
     if (disposed || abortController !== controller) return
-    abortController = null
-    setLoading(false)
     if (!result.ok) {
+      abortController = null
+      setLoading(false)
       renderApiError(refs.status, result.error, isDebug)
       return
     }
+    currentBookings = result.data.items
+    if (canManage) {
+      const threadsResult = await venueGetSupportThreads(backendUrl, { venueId }, deps, controller.signal)
+      if (disposed || abortController !== controller) return
+      if (threadsResult.ok) {
+        bookingThreads = new Map()
+        threadsResult.data.items.forEach((thread) => {
+          if (thread.bookingId) {
+            bookingThreads.set(thread.bookingId, thread)
+          }
+        })
+      }
+    }
+    abortController = null
+    setLoading(false)
     refs.status.textContent = ''
-    renderBookings(
-      refs.list,
-      result.data.items,
-      canManage,
-      canMarkArrivalStatus,
-      (booking) => void confirmBooking(booking),
-      (booking) => void cancelBooking(booking),
-      (booking, dateValue, timeValue) => void changeBooking(booking, dateValue, timeValue),
-      (booking) => void messageBookingGuest(booking),
-      (booking) => void seatBooking(booking),
-      (booking) => void noShowBooking(booking)
-    )
+    renderCurrentBookings()
   }
 
   const confirmBooking = async (booking: VenueBookingDto) => {
@@ -567,10 +517,16 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
 
   const messageBookingGuest = async (booking: VenueBookingDto) => {
     if (isLoading || !canManage) return
-    const sent = await openBookingMessageModal(booking, { backendUrl, venueId, deps })
-    if (!sent || disposed) return
-    refs.status.textContent = ''
+    const thread = await openBookingMessageModal(booking, { backendUrl, venueId, deps })
+    if (!thread || disposed) return
+    bookingThreads.set(booking.bookingId, thread)
+    refs.status.textContent = 'Сообщение отправлено гостю.'
+    renderCurrentBookings()
     showToast('Сообщение отправлено гостю.')
+  }
+
+  const openThread = (thread: SupportThreadDto) => {
+    window.location.hash = `#/messages?threadId=${thread.threadId}`
   }
 
   const seatBooking = async (booking: VenueBookingDto) => {

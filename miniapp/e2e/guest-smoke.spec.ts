@@ -1912,19 +1912,21 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Написать гостю' }).click()
   await expect(page.getByRole('heading', { name: 'Сообщение гостю' })).toBeVisible()
-  await expect(page.getByText('Сообщение придёт гостю в Telegram.')).toBeVisible()
+  await expect(page.getByText('Сообщение придёт гостю в Telegram и появится в переписке.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'На это время все столы заняты. Можем предложить другое время?' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Уточните, пожалуйста, детали брони.' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Подтверждаем бронь вручную, ждём вас' })).toHaveCount(0)
   await page.getByPlaceholder('Например: На 19:00 все столы заняты. Можем предложить 20:30?').fill(
     'На 19:00 все столы заняты. Можем предложить 20:30?'
   )
   await page.getByRole('button', { name: 'Отправить' }).click()
-  await expect(page.getByText('Сообщение отправлено гостю.')).toBeVisible()
-  await expect(page.getByText(/Заведение, .*На 19:00 все столы заняты/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Сообщение гостю' })).toHaveCount(0)
+  await expect(page.locator('.venue-bookings-screen .status').filter({ hasText: 'Сообщение отправлено гостю.' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Открыть переписку' })).toBeVisible()
   expect(api.getMessageCalls()).toBe(1)
   expect(api.getBookingMessages()).toEqual(['На 19:00 все столы заняты. Можем предложить 20:30?'])
-  await page.getByRole('button', { name: 'Отмена' }).click()
 
-  await expect(page.getByRole('button', { name: 'Сообщения', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Сообщения', exact: true }).click()
+  await page.getByRole('button', { name: 'Открыть переписку' }).click()
   await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
   await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })).toBeVisible()
   await expect(page.getByText(/На 19:00 все столы заняты/)).toBeVisible()

@@ -261,7 +261,7 @@ Steps:
 17. As STAFF, close delivered bill/order.
 18. Open `Вызовы`, accept and close a staff call.
 19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel and `Написать гостю` as allowed.
-20. As MANAGER/OWNER, click `Написать гостю`, send a message and confirm the booking thread history shows the venue message.
+20. As MANAGER/OWNER, click `Написать гостю`, confirm there are no template buttons, send a message, and confirm the modal closes with `Сообщение отправлено гостю.`
 21. Open `Сообщения` and confirm the same booking thread is listed.
 22. Open `Поддержка`.
 23. Confirm the screen explains manual platform support and has no fake ticket controls.
@@ -431,18 +431,19 @@ Manual booking conversation smoke after M4A deploy:
 
 1. Open Venue Mini App as MANAGER/OWNER and open `Брони`.
 2. Click `Написать гостю` on a booking.
-3. Confirm the modal shows booking context, existing history if any, textarea and only non-lifecycle text templates.
-4. Send a message and confirm it appears in the thread without changing booking status.
+3. Confirm the modal shows booking context, helper copy `Сообщение придёт гостю в Telegram и появится в переписке.`, textarea placeholder example and no template buttons.
+4. Send a message and confirm the modal closes, the manager stays on `Брони`, and the booking card changes to `Открыть переписку`.
 5. Confirm the guest receives the Telegram message with a reply button.
-6. Reply from Guest Bot and confirm the reply appears in the same Venue Mini App thread.
-7. Open Guest Mini App `Сообщения`, open the same booking thread and send a reply.
-8. Confirm the Venue Mini App thread shows the Guest Mini App reply.
-9. Confirm staff chat receives notification mirror messages for guest replies with booking context.
-10. Open Venue Mini App `Сообщения` and confirm the booking thread is listed and can be opened.
-11. Open as STAFF and confirm `Сообщения` / reply action are hidden unless a future RBAC decision changes this.
-12. Confirm direct foreign venue, blank message and over-limit message attempts are denied.
-13. Confirm booking confirm/change/cancel/arrived/no-show actions still behave as in M3.
-14. Confirm venue/admin bot full inbox is not exposed as a fake feature.
+6. Click `Открыть переписку` and confirm the sent message appears in the Venue Mini App `Сообщения` thread.
+7. Reply from Guest Bot and confirm the reply appears in the same Venue Mini App thread.
+8. Open Guest Mini App `Сообщения`, open the same booking thread and send a reply.
+9. Confirm the Venue Mini App thread shows the Guest Mini App reply.
+10. Confirm staff chat receives notification mirror messages for guest replies with booking context.
+11. Open Venue Mini App `Сообщения` and confirm the booking thread is listed and can be opened.
+12. Open as STAFF and confirm `Сообщения` / reply action are hidden unless a future RBAC decision changes this.
+13. Confirm direct foreign venue, blank message and over-limit message attempts are denied.
+14. Confirm booking confirm/change/cancel/arrived/no-show actions still behave as in M3.
+15. Confirm venue/admin bot full inbox is not exposed as a fake feature.
 
 Manual paid extension smoke after full parity:
 

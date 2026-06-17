@@ -13,6 +13,7 @@ type VenueMessagesOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
+  initialThreadId?: number | null
 }
 
 type VenueMessagesRefs = {
@@ -93,7 +94,7 @@ function buildDom(root: HTMLDivElement): VenueMessagesRefs {
 }
 
 export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
-  const { root, backendUrl, isDebug, venueId, access } = options
+  const { root, backendUrl, isDebug, venueId, access, initialThreadId } = options
   if (!root) return () => undefined
   const refs = buildDom(root)
   const deps = buildApiDeps(isDebug)
@@ -147,7 +148,11 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     threads = result.data.items
     renderThreadList()
     if (threads.length && refs.detail.childElementCount === 0) {
-      void loadThread(threads[0].threadId)
+      const preferredThreadId =
+        initialThreadId && threads.some((thread) => thread.threadId === initialThreadId)
+          ? initialThreadId
+          : threads[0].threadId
+      void loadThread(preferredThreadId)
     } else if (!threads.length) {
       refs.detail.replaceChildren()
     }

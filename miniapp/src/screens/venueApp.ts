@@ -51,6 +51,7 @@ type RouteName =
 type Route = {
   name: RouteName
   orderId: number | null
+  threadId: number | null
 }
 
 type NavRouteName = Exclude<RouteName, 'order'>
@@ -84,9 +85,9 @@ function resolveRoute(): Route {
   const rawHash = window.location.hash.replace(/^#/, '')
   const cleaned = rawHash.startsWith('/') ? rawHash.slice(1) : rawHash
   if (!cleaned) {
-    return { name: 'dashboard', orderId: null }
+    return { name: 'dashboard', orderId: null, threadId: null }
   }
-  const [pathPart] = cleaned.split('?')
+  const [pathPart, queryPart = ''] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
   if (
@@ -108,13 +109,14 @@ function resolveRoute(): Route {
       'support'
     ].includes(route)
   ) {
-    return { name: 'dashboard', orderId: null }
+    return { name: 'dashboard', orderId: null, threadId: null }
   }
+  const query = new URLSearchParams(queryPart)
   if (route === 'order') {
     const orderId = parsePositiveInt(segments[1])
-    return { name: 'order', orderId: orderId ?? null }
+    return { name: 'order', orderId: orderId ?? null, threadId: null }
   }
-  return { name: route, orderId: null }
+  return { name: route, orderId: null, threadId: parsePositiveInt(query.get('threadId')) ?? null }
 }
 
 function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
@@ -489,7 +491,14 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'bookings':
         return renderVenueBookingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'messages':
-        return renderVenueMessagesScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+        return renderVenueMessagesScreen({
+          root: screenRoot,
+          backendUrl,
+          isDebug,
+          venueId,
+          access,
+          initialThreadId: route.threadId
+        })
       case 'menu':
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'tables':

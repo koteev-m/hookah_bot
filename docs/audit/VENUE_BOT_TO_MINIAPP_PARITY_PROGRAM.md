@@ -160,7 +160,8 @@ Definition of Done:
 - Guest Bot reply and Guest Mini App reply save into the same booking thread.
 - Venue and guest thread lists are tenant/user scoped.
 - STAFF cannot send booking thread messages unless a later product/RBAC decision changes this.
-- Bad lifecycle-conflicting template `Подтверждаем бронь вручную, ждём вас` is absent; remaining templates only prefill text.
+- Booking-card quick compose closes after successful send, keeps the manager on `Брони`, and updates the card to `Открыть переписку`.
+- Booking-card quick compose has no template buttons; the textarea placeholder keeps one neutral example. Structured propose-time actions stay a follow-up.
 
 Implemented notes:
 
@@ -168,7 +169,8 @@ Implemented notes:
 - New route groups: guest support thread list/detail/reply and venue support thread list/detail/reply.
 - Existing booking `Написать гостю` route now persists a venue message before sending Telegram outbox.
 - Existing Guest Bot reply callback now persists guest replies even if staff chat is not linked.
-- Venue Mini App booking card opens thread history; top-level `Сообщения` under `Работа смены` lists booking conversations for `BOOKING_MANAGE` users.
+- Venue Mini App booking card uses `Написать гостю` only before a thread exists; after first send or initial thread load it shows `Открыть переписку`.
+- Top-level `Сообщения` under `Работа смены` lists booking conversations for `BOOKING_MANAGE` users and remains the canonical ongoing dialogue screen.
 - Guest Mini App support entry is now `Сообщения` with real booking thread list and reply form.
 
 Follow-ups:
