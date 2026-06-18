@@ -1,9 +1,13 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
+import com.hookah.platform.backend.telegram.StaffChatNotificationResult
+import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -13,6 +17,9 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.sql.DriverManager
@@ -168,6 +175,204 @@ class VenueRbacRoutesTest {
 
             assertEquals(HttpStatusCode.Forbidden, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `owner sees staff chat status with masked chat id`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-owner-chat-status")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            linkStaffChat(jdbcUrl, venueId, chatId = -1001234567890L, userId = TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/venue/$venueId/staff-chat") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(StaffChatStatusResponse.serializer(), response.bodyAsText())
+            assertTrue(payload.isLinked)
+            assertEquals(null, payload.chatId)
+            assertEquals("-100...7890", payload.maskedChatId)
+            assertTrue(payload.testCommand?.startsWith("/link_test") == true)
+        }
+
+    @Test
+    fun `staff cannot read staff chat status or send test message`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-staff-chat-denied")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
+            val token = issueToken(config)
+
+            val statusResponse =
+                client.get("/api/venue/$venueId/staff-chat") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, statusResponse.status)
+            assertApiErrorEnvelope(statusResponse, ApiErrorCodes.FORBIDDEN)
+
+            val testResponse =
+                client.post("/api/venue/$venueId/staff-chat/test") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, testResponse.status)
+            assertApiErrorEnvelope(testResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `owner can unlink linked staff chat and repeated unlink is safe`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-owner-unlink")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            linkStaffChat(jdbcUrl, venueId, chatId = -1001234567890L, userId = TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            val first =
+                client.post("/api/venue/$venueId/staff-chat/unlink") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, first.status)
+
+            val statusAfterUnlink =
+                client.get("/api/venue/$venueId/staff-chat") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, statusAfterUnlink.status)
+            val payload =
+                json.decodeFromString(StaffChatStatusResponse.serializer(), statusAfterUnlink.bodyAsText())
+            assertFalse(payload.isLinked)
+            assertEquals(null, payload.maskedChatId)
+
+            val second =
+                client.post("/api/venue/$venueId/staff-chat/unlink") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, second.status)
+        }
+
+    @Test
+    fun `owner can queue staff chat test message through notifier`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-owner-test-chat")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier = mockk<StaffChatNotifier>()
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val token = issueToken(config)
+            coEvery { staffChatNotifier.notifyTestMessageNow(venueId) } returns
+                StaffChatNotificationResult.SENT_OR_QUEUED
+
+            val response =
+                client.post("/api/venue/$venueId/staff-chat/test") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(StaffChatTestResponse.serializer(), response.bodyAsText())
+            assertEquals("QUEUED", payload.result)
+            assertTrue(payload.queued)
+            assertEquals("Тестовое сообщение поставлено в отправку.", payload.message)
+            coVerify(exactly = 1) { staffChatNotifier.notifyTestMessageNow(venueId) }
+        }
+
+    @Test
+    fun `manager test message behavior follows staff chat link permission`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-manager-test-chat")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier = mockk<StaffChatNotifier>()
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val token = issueToken(config)
+            coEvery { staffChatNotifier.notifyTestMessageNow(venueId) } returns
+                StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
+
+            val response =
+                client.post("/api/venue/$venueId/staff-chat/test") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(StaffChatTestResponse.serializer(), response.bodyAsText())
+            assertEquals("NO_STAFF_CHAT", payload.result)
+            assertFalse(payload.queued)
+            assertEquals("Чат не подключён.", payload.message)
+            coVerify(exactly = 1) { staffChatNotifier.notifyTestMessageNow(venueId) }
+        }
+
+    @Test
+    fun `foreign venue cannot send staff chat test message`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-test-chat-foreign")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier = mockk<StaffChatNotifier>(relaxed = true)
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val foreignVenueId = seedVenueMembership(jdbcUrl, 777L, "OWNER")
+            val token = issueToken(config)
+
+            val response =
+                client.post("/api/venue/$foreignVenueId/staff-chat/test") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            coVerify(exactly = 0) { staffChatNotifier.notifyTestMessageNow(any()) }
         }
 
     @Test
@@ -652,11 +857,51 @@ class VenueRbacRoutesTest {
         }
     }
 
+    private fun linkStaffChat(
+        jdbcUrl: String,
+        venueId: Long,
+        chatId: Long,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE venues
+                SET staff_chat_id = ?,
+                    staff_chat_linked_at = CURRENT_TIMESTAMP,
+                    staff_chat_linked_by_user_id = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.setLong(2, userId)
+                statement.setLong(3, venueId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     @Serializable
     private data class StaffChatLinkCodeResponse(
         val code: String,
         val expiresAt: String,
         val ttlSeconds: Long,
+    )
+
+    @Serializable
+    private data class StaffChatStatusResponse(
+        val venueId: Long,
+        val isLinked: Boolean,
+        val chatId: Long? = null,
+        val maskedChatId: String? = null,
+        val testCommand: String? = null,
+    )
+
+    @Serializable
+    private data class StaffChatTestResponse(
+        val result: String,
+        val queued: Boolean,
+        val message: String,
     )
 
     @Serializable

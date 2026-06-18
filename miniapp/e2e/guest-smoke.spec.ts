@@ -1180,6 +1180,128 @@ async function mockVenueStaffCallsApi(
   }
 }
 
+async function mockVenueStaffChatApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+    linked?: boolean
+  } = {}
+) {
+  const role = options.role ?? 'OWNER'
+  const permissions = options.permissions ?? (role === 'STAFF' ? [] : ['STAFF_CHAT_LINK'])
+  let linked = options.linked ?? true
+  let generated = 0
+  let testMessages = 0
+  let unlinks = 0
+  let activeCodeHint: string | null = null
+  let activeCodeExpiresAt: string | null = null
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role,
+            permissions
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/guest/venue/1', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 1,
+          name: 'Микс',
+          city: 'Москва',
+          address: 'Пилотная, 1',
+          status: 'PUBLISHED'
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/staff-chat**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    if (request.method() === 'GET' && path === '/api/venue/1/staff-chat') {
+      await route.fulfill(
+        jsonResponse({
+          venueId: 1,
+          isLinked: linked,
+          chatId: null,
+          maskedChatId: linked ? '-100...7890' : null,
+          activeCodeHint,
+          activeCodeExpiresAt,
+          testCommand: '/link_test@TestHookahBot'
+        })
+      )
+      return
+    }
+    if (request.method() === 'POST' && path === '/api/venue/1/staff-chat/link-code') {
+      generated += 1
+      activeCodeHint = 'ABC'
+      activeCodeExpiresAt = '2030-01-10T19:00:00Z'
+      await route.fulfill(
+        jsonResponse({
+          code: 'ABC123',
+          expiresAt: activeCodeExpiresAt,
+          ttlSeconds: 600,
+          linkCommand: '/link@TestHookahBot ABC123',
+          testCommand: '/link_test@TestHookahBot'
+        })
+      )
+      return
+    }
+    if (request.method() === 'POST' && path === '/api/venue/1/staff-chat/test') {
+      testMessages += 1
+      await route.fulfill(
+        jsonResponse(
+          linked
+            ? { result: 'QUEUED', queued: true, message: 'Тестовое сообщение поставлено в отправку.' }
+            : { result: 'NO_STAFF_CHAT', queued: false, message: 'Чат не подключён.' }
+        )
+      )
+      return
+    }
+    if (request.method() === 'POST' && path === '/api/venue/1/staff-chat/unlink') {
+      unlinks += 1
+      linked = false
+      activeCodeHint = null
+      activeCodeExpiresAt = null
+      await route.fulfill(jsonResponse({ ok: true }))
+      return
+    }
+    await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+  })
+
+  return {
+    getGeneratedCalls: () => generated,
+    getTestMessages: () => testMessages,
+    getUnlinks: () => unlinks,
+    setLinked: (next: boolean) => {
+      linked = next
+    }
+  }
+}
+
 function buildVenueBooking(overrides: Partial<VenueBookingFixture> = {}): VenueBookingFixture {
   return {
     bookingId: 701,
@@ -2165,6 +2287,69 @@ test('venue staff accepts and closes staff calls queue', async ({ page }) => {
   await page.locator('.venue-call-card').filter({ hasText: 'Стол №4' }).getByRole('button', { name: 'Закрыть' }).click()
   await expect(page.getByText('Активных вызовов пока нет.')).toBeVisible()
   expect(api.getDoneCalls()).toBe(1)
+})
+
+test('venue owner links tests and unlinks staff chat from mini app', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: false })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Чат персонала', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Чат персонала', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Чат персонала' })).toBeVisible()
+  await expect(page.getByText('Чат персонала не подключён')).toBeVisible()
+  await page.getByRole('button', { name: 'Сгенерировать код привязки' }).click()
+  await expect(page.getByText('ABC123')).toBeVisible()
+  await expect(page.getByLabel('Команда для привязки чата')).toHaveValue('/link@TestHookahBot ABC123')
+  expect(api.getGeneratedCalls()).toBe(1)
+
+  api.setLinked(true)
+  await page.getByRole('button', { name: 'Проверить подключение' }).click()
+  await expect(page.getByText('Чат персонала подключён')).toBeVisible()
+  await expect(page.getByText('Чат: -100...7890')).toBeVisible()
+  await page.getByRole('button', { name: 'Отправить тестовое сообщение' }).click()
+  await expect(
+    page.locator('.venue-chat-link > .status').filter({ hasText: 'Тестовое сообщение поставлено в отправку.' })
+  ).toBeVisible()
+  expect(api.getTestMessages()).toBe(1)
+
+  await page.getByRole('button', { name: 'Отвязать чат' }).click()
+  await expect(page.getByRole('heading', { name: 'Отвязать чат персонала?' })).toBeVisible()
+  await page.getByRole('button', { name: 'Отмена' }).click()
+  await expect(page.getByText('Чат персонала подключён')).toBeVisible()
+  expect(api.getUnlinks()).toBe(0)
+
+  await page.getByRole('button', { name: 'Отвязать чат' }).click()
+  await page.getByRole('button', { name: 'Отвязать', exact: true }).click()
+  await expect(page.getByText('Чат персонала не подключён')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Отправить тестовое сообщение' })).toHaveCount(0)
+  expect(api.getUnlinks()).toBe(1)
+})
+
+test('venue manager can test staff chat but cannot unlink', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Чат персонала', exact: true }).click()
+  await expect(page.getByText('Чат персонала подключён')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Отправить тестовое сообщение' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Отвязать чат' })).toHaveCount(0)
+})
+
+test('venue staff does not see staff chat management', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffChatApi(page, { role: 'STAFF', permissions: [], linked: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Чат персонала', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/chat'
+  })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
 })
 
 test('venue manager configures paid shift extension settings', async ({ page }) => {

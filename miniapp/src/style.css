@@ -177,6 +177,19 @@ button:disabled {
   background-color: #e2e8f0;
 }
 
+.button-danger {
+  background-color: #dc2626;
+}
+
+.button-danger:hover {
+  background-color: #b91c1c;
+}
+
+.button-danger:disabled {
+  background-color: #fecaca;
+  color: #7f1d1d;
+}
+
 .button-small {
   padding: 0.35rem 0.6rem;
   font-size: 0.85rem;
@@ -1322,6 +1335,30 @@ input[type="number"] {
 .venue-link-code {
   display: grid;
   gap: 0.25rem;
+}
+
+.venue-link-code input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.6rem;
+  border: 1px solid #dfe3eb;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.venue-link-code-value,
+.venue-chat-status-title {
+  font-weight: 700;
+}
+
+.venue-chat-status-description {
+  color: #475569;
+}
+
+.venue-chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .venue-flags {

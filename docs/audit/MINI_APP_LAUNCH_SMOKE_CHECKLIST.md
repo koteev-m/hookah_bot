@@ -20,6 +20,7 @@
 - Booking guest communication has an M4A persisted thread layer and passed staging smoke after UX polish: `Написать гостю`, Guest Bot replies, Guest Mini App replies and Venue Mini App replies share one booking thread; staff chat is a notification mirror.
 - M4B/M4C message inbox lifecycle is code/test-backed: Guest and Venue Mini App show thread cards, context labels, unread state, active/resolved filters and resolve/reopen actions. Staging multi-venue/runtime smoke remains required.
 - M5 staff calls lifecycle is code/e2e-backed: Guest Mini App uses a transient compose modal and compact NEW/ACK/DONE status, Venue Mini App `Вызовы` supports accept/close, and backend/staff-chat callbacks share the lifecycle. Manual Telegram group notification smoke remains required.
+- M6 staff chat diagnostics/unlink polish is code/e2e-backed: Venue Mini App shows linked/unlinked state, masked chat id, link-code command, outbox-backed test-message result and OWNER-only unlink confirmation. Manual Telegram group link/test/unlink smoke remains required.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -60,7 +61,7 @@ Remaining:
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
 - P1 current parity smoke target: M4B/M4C Unified Messages Inbox UX and lifecycle is code/test-backed. Keep M4A booking conversation behavior in regression, then verify multi-venue thread cards, context labels, active/resolved filters, unread/status state and resolve/reopen actions in Telegram runtime/staging.
-- P1 next implementation target: M6 staff chat diagnostics/unlink polish in Venue Mini App, using existing status/link-code/unlink backend semantics.
+- P1 current manual smoke target: M6 staff chat diagnostics/unlink polish in Venue Mini App, using existing status/link-code/test/unlink backend semantics and a real Telegram group.
 - P2 stats follow-up: custom date range picker (`from`/`to`), arbitrary period stats and future AI-generated summaries/insights.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -326,18 +327,35 @@ Expected:
 
 ### M6 staff chat diagnostics/unlink smoke target
 
-Status: next implementation target.
+Status: code/e2e-backed; manual Telegram group smoke required before staging closure.
 
 Checks after implementation:
 
 1. OWNER opens Venue Mini App `Чат персонала`.
-2. Screen shows linked/unlinked state, masked chat id if linked, active link code if present and clear `/link <код>` instructions.
-3. OWNER can generate a new link code.
-4. OWNER can unlink an incorrectly linked staff chat only after explicit confirmation.
-5. MANAGER can use only the status/link-code actions allowed by backend RBAC and cannot unlink.
-6. STAFF does not see `Чат персонала`; direct staff-chat management API calls remain denied.
-7. Linked Telegram staff group receives runtime notifications for order, booking, staff call and shift-extension events.
-8. Existing order/booking/call/extension notifier behavior is unchanged.
+2. Screen shows linked/unlinked state, masked chat id if linked, active link-code hint if present and clear `/link@BotUsername <код>` instructions after code generation.
+3. OWNER can generate a new link code and copy the backend-built command.
+4. OWNER can send a test message; Mini App says `Тестовое сообщение поставлено в отправку` when the outbox accepts it, not `доставлено`.
+5. OWNER can unlink an incorrectly linked staff chat only after explicit confirmation.
+6. MANAGER can use only the status/link-code/test actions allowed by backend RBAC and cannot unlink.
+7. STAFF does not see `Чат персонала`; direct staff-chat management API calls remain denied.
+8. Linked Telegram staff group receives the diagnostic test message.
+9. Linked Telegram staff group receives runtime notifications for order, booking, staff call and shift-extension events.
+10. Existing order/booking/call/extension notifier behavior is unchanged.
+
+Automated coverage:
+
+- Backend route/RBAC tests cover OWNER status/link/test/unlink, MANAGER status/link/test but no unlink, STAFF denial, foreign venue denial and safe repeated unlink.
+- `StaffChatNotifierTest` covers diagnostic test-message payload and verifies it does not include guest/contact data.
+- Mini App e2e covers OWNER linked/unlinked UI, link-code command, test-message queued copy, unlink confirmation, MANAGER no-unlink UI and STAFF hidden route/nav.
+
+Follow-ups:
+
+- Last successful operational notification diagnostics.
+- Notification event history and delivery failure surfacing from outbox/Telegram worker.
+- Per-event notification controls.
+- Personal staff subscriptions.
+- Telegram forum-topic routing.
+- SLA alerts.
 
 ### M2 Venue Mini App statistics smoke status
 
@@ -462,7 +480,7 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block: M6 staff chat diagnostics/unlink polish. Recommended next parity smoke block remains M4B/M4C Unified Messages Inbox UX and lifecycle plus M5 staff-call Telegram group notification runtime smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Recommended next implementation block after M6 validation: run a fresh checkpoint and choose one bounded M7 settings/profile or notification diagnostics slice. Recommended next parity smoke block remains M4B/M4C Unified Messages Inbox UX and lifecycle plus M5/M6 staff-chat Telegram group runtime smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
 Manual M4B/M4C inbox smoke after deployment:
 

@@ -284,6 +284,19 @@ class StaffChatNotifier(
                 },
         )
 
+    suspend fun notifyTestMessageNow(venueId: Long): StaffChatNotificationResult =
+        notifyTextWithoutClaimNow(
+            venueId = venueId,
+            setting = null,
+            messageBuilder = { venue ->
+                """
+                ✅ Тестовое сообщение
+
+                Чат персонала для «${venue.name}» подключён и получает сообщения.
+                """.trimIndent()
+            },
+        )
+
     override suspend fun notifyBillUpdatedNow(event: StaffBillUpdatedNotification): StaffChatNotificationResult =
         notifyLiveOrderMessageNow(
             event =

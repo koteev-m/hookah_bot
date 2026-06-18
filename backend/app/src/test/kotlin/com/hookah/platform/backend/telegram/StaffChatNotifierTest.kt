@@ -209,6 +209,29 @@ class StaffChatNotifierTest {
         }
 
     @Test
+    fun `notifyTestMessage queues diagnostic text without guest data`() =
+        runBlocking {
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(
+                    id = 1L,
+                    name = "Mix",
+                    staffChatId = 777L,
+                )
+            val payloadSlot = slot<String>()
+            coEvery { notificationRepository.enqueue(777L, "sendMessage", capture(payloadSlot)) } returns true
+
+            val result = notifier.notifyTestMessageNow(1L)
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("Тестовое сообщение"), payload)
+            assertTrue(payload.contains("Чат персонала для «Mix» подключён и получает сообщения."), payload)
+            assertFalse(payload.contains("Гость:"), payload)
+            assertFalse(payload.contains("username"), payload)
+            coVerify(exactly = 1) { notificationRepository.enqueue(777L, "sendMessage", any()) }
+        }
+
+    @Test
     fun `order notification text can render accepted and delivered state`() {
         val accepted =
             buildNewBatchNotificationText(

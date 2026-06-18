@@ -43,6 +43,7 @@ import type {
   ShiftExtensionSettingsResponse,
   ShiftExtensionSettingsUpdateRequest,
   StaffChatLinkCodeResponse,
+  StaffChatTestResponse,
   VenueStaffCallActionResponse,
   VenueStaffCallsResponse,
   VenueMeResponse,
@@ -668,6 +669,20 @@ export async function venueUnlinkStaffChat(
   return requestApi<{ ok: boolean }>(
     backendUrl,
     `/api/venue/${venueId}/staff-chat/unlink`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueSendStaffChatTestMessage(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<StaffChatTestResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/staff-chat/test`,
     { method: 'POST', signal },
     deps
   )

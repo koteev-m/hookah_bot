@@ -39,6 +39,8 @@ export type StaffChatLinkCodeResponse = {
   code: string
   expiresAt: string
   ttlSeconds: number
+  linkCommand?: string | null
+  testCommand?: string | null
 }
 
 export type VenueStaffMemberDto = {
@@ -82,10 +84,18 @@ export type VenueStaffChatStatusResponse = {
   venueId: number
   isLinked: boolean
   chatId?: number | null
+  maskedChatId?: string | null
   linkedAt?: string | null
   linkedByUserId?: number | null
   activeCodeHint?: string | null
   activeCodeExpiresAt?: string | null
+  testCommand?: string | null
+}
+
+export type StaffChatTestResponse = {
+  result: 'QUEUED' | 'NO_STAFF_CHAT' | 'TELEGRAM_INACTIVE' | 'FAILED' | string
+  queued: boolean
+  message: string
 }
 
 export type VenueStaffCallDto = {

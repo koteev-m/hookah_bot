@@ -3,6 +3,8 @@ package com.hookah.platform.backend.miniapp.venue
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.telegram.StaffChatNotificationResult
+import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
@@ -37,6 +39,8 @@ data class StaffChatLinkCodeResponse(
     val code: String,
     val expiresAt: String,
     val ttlSeconds: Long,
+    val linkCommand: String? = null,
+    val testCommand: String? = null,
 )
 
 @Serializable
@@ -44,16 +48,27 @@ data class StaffChatStatusResponse(
     val venueId: Long,
     val isLinked: Boolean,
     val chatId: Long? = null,
+    val maskedChatId: String? = null,
     val linkedAt: String? = null,
     val linkedByUserId: Long? = null,
     val activeCodeHint: String? = null,
     val activeCodeExpiresAt: String? = null,
+    val testCommand: String? = null,
+)
+
+@Serializable
+data class StaffChatTestResponse(
+    val result: String,
+    val queued: Boolean,
+    val message: String,
 )
 
 fun Route.venueRoutes(
     venueAccessRepository: VenueAccessRepository,
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
     venueRepository: VenueRepository,
+    staffChatNotifier: StaffChatNotifier? = null,
+    telegramBotUsername: String? = null,
 ) {
     route("/venue") {
         get("/me") {
@@ -118,6 +133,8 @@ fun Route.venueRoutes(
                     code = created.code,
                     expiresAt = created.expiresAt.toString(),
                     ttlSeconds = created.ttlSeconds,
+                    linkCommand = buildStaffChatTelegramCommand(telegramBotUsername, "link", created.code),
+                    testCommand = buildStaffChatTelegramCommand(telegramBotUsername, "link_test"),
                 ),
             )
         }
@@ -141,13 +158,33 @@ fun Route.venueRoutes(
                 StaffChatStatusResponse(
                     venueId = status.venueId,
                     isLinked = status.staffChatId != null,
-                    chatId = status.staffChatId,
+                    chatId = null,
+                    maskedChatId = maskStaffChatId(status.staffChatId),
                     linkedAt = status.linkedAt?.toString(),
                     linkedByUserId = status.linkedByUserId,
                     activeCodeHint = activeCode?.codeHint,
                     activeCodeExpiresAt = activeCode?.expiresAt?.toString(),
+                    testCommand = buildStaffChatTelegramCommand(telegramBotUsername, "link_test"),
                 ),
             )
+        }
+
+        post("/{venueId}/staff-chat/test") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role =
+                resolveVenueRole(
+                    venueAccessRepository = venueAccessRepository,
+                    userId = userId,
+                    venueId = venueId,
+                )
+            val permissions = VenuePermissions.forRole(role)
+            if (!permissions.contains(VenuePermission.STAFF_CHAT_LINK)) {
+                throw ForbiddenException()
+            }
+            val notifier = staffChatNotifier ?: throw DatabaseUnavailableException()
+            val result = notifier.notifyTestMessageNow(venueId)
+            call.respond(result.toStaffChatTestResponse())
         }
 
         post("/{venueId}/staff-chat/unlink") {
@@ -180,3 +217,67 @@ fun Route.venueRoutes(
         }
     }
 }
+
+private fun buildStaffChatTelegramCommand(
+    botUsername: String?,
+    command: String,
+    argument: String? = null,
+): String {
+    val username = botUsername?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
+    return buildString {
+        append('/').append(command)
+        if (username != null) {
+            append('@').append(username)
+        }
+        if (!argument.isNullOrBlank()) {
+            append(' ').append(argument)
+        }
+    }
+}
+
+private fun maskStaffChatId(chatId: Long?): String? {
+    if (chatId == null) return null
+    val text = chatId.toString()
+    val tail = text.takeLast(4)
+    return if (text.startsWith("-100") && text.length > 8) {
+        "-100...$tail"
+    } else {
+        "...$tail"
+    }
+}
+
+private fun StaffChatNotificationResult.toStaffChatTestResponse(): StaffChatTestResponse =
+    when (this) {
+        StaffChatNotificationResult.SENT_OR_QUEUED ->
+            StaffChatTestResponse(
+                result = "QUEUED",
+                queued = true,
+                message = "Тестовое сообщение поставлено в отправку.",
+            )
+        StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT ->
+            StaffChatTestResponse(
+                result = "NO_STAFF_CHAT",
+                queued = false,
+                message = "Чат не подключён.",
+            )
+        StaffChatNotificationResult.SKIPPED_INACTIVE ->
+            StaffChatTestResponse(
+                result = "TELEGRAM_INACTIVE",
+                queued = false,
+                message = "Telegram-бот не активен, тестовое сообщение не отправлено.",
+            )
+        StaffChatNotificationResult.FAILED_ENQUEUE ->
+            StaffChatTestResponse(
+                result = "FAILED",
+                queued = false,
+                message = "Не удалось поставить тестовое сообщение в отправку.",
+            )
+        StaffChatNotificationResult.SKIPPED_DISABLED,
+        StaffChatNotificationResult.SKIPPED_DUPLICATE,
+        ->
+            StaffChatTestResponse(
+                result = name,
+                queued = false,
+                message = "Тестовое сообщение не было поставлено в отправку.",
+            )
+    }
