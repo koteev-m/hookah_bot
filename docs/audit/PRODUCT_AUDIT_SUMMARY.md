@@ -5,6 +5,8 @@
 > Historical audit snapshot. The P0/P1 list in this file is not the current backlog.
 >
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
+>
+> Current checkpoint as of 2026-06-18: M1-M5 Venue Bot-to-Mini-App parity slices are code-backed through IA shell, stats, bookings, support inbox lifecycle and staff calls. M4A is staging-smoke closed; M4B/M4C and M5 have code/test/e2e evidence but still require staging/runtime smoke where noted. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for staff-chat diagnostics/unlink, broad venue settings slices, platform money/onboarding, promotions/preview and runtime smoke priorities.
 
 # Краткое резюме
 

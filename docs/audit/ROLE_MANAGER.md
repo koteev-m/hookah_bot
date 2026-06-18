@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-06-03.
+Дата актуализации: 2026-06-18.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -11,7 +11,7 @@ Manager - операционная management-роль venue. Manager ведёт
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
 - DB `ADMIN` -> `VenueRole.MANAGER` as legacy alias;
-- Manager permissions включают order queue/status, menu view/manage/availability, table view/manage/QR export, staff chat link.
+- Manager permissions включают order queue/status, booking view/manage, shift-extension view/confirm/settings, menu view/manage/availability, table view/manage/QR export, staff chat link and read-only stats access.
 
 ## Telegram bot
 
@@ -20,6 +20,7 @@ Manager bot flow покрывает:
 - staff calls;
 - stop-list / availability;
 - bookings list/actions where supported;
+- booking guest messages/support threads where supported;
 - structured menu operations;
 - venue card/info through role-aware paths;
 - tables/QR operations;
@@ -41,10 +42,13 @@ Manager Mini App areas:
 - bill controls: manual discount, exclude/restore item;
 - close bill/order;
 - bookings;
+- messages/support threads for booking conversations;
 - staff calls;
+- shift-extension requests/settings;
 - menu and availability management;
 - tables management and QR export where backend permission allows;
 - staff chat link/status;
+- stats;
 - staff list/invite only where current conservative route policy allows.
 
 ## Allowed actions
@@ -57,6 +61,9 @@ Manager Mini App areas:
 - Exclude/restore bill item.
 - View and manage staff calls.
 - Manage bookings: confirm, cancel, change/propose time, message guest, mark arrived/no-show and booking settings.
+- Read/reply/resolve booking conversation threads where `BOOKING_MANAGE` allows it.
+- View statistics.
+- Manage paid shift-extension settings and confirm requests.
 - Manage structured menu/categories/items and stop-list/availability.
 - Manage tables and QR export according to current permissions.
 - Link/test staff chat if current role permission allows.
@@ -69,6 +76,7 @@ Manager Mini App areas:
 - Owner-only venue settings if backend requires owner permission.
 - Promote users to owner/platform owner or bypass last-owner protection.
 - Rotate all table tokens or other owner-only QR actions if backend permission does not allow it.
+- Unlink staff chat if backend keeps unlink owner-only.
 - Hard delete venue data.
 
 ## Known gaps / needs smoke
@@ -77,6 +85,7 @@ Manager Mini App areas:
 - Manager staff management scope is conservative and should be smoke-tested before pilot.
 - Some Telegram manager flows may still be richer than Mini App equivalents.
 - Menu options/photos/descriptions/top-list parity may still be partial.
+- Staff chat unlink/diagnostics are the next Mini App polish target; manager must stay denied for owner-only unlink.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 
 ## Smoke-critical checks
@@ -85,6 +94,8 @@ Manager Mini App areas:
 2. Manager can accept/deliver/close orders.
 3. Manager can use bill controls and final total reloads from backend.
 4. Manager can confirm/cancel/propose booking where supported.
-5. Manager can manage menu/availability and tables according to permissions.
-6. Manager cannot enter platform owner mode.
-7. Manager cannot perform owner/platform-only role escalation.
+5. Manager can open `Сообщения`, reply to booking threads and use active/resolved filters where backend allows.
+6. Manager can open `Статистика`.
+7. Manager can manage menu/availability and tables according to permissions.
+8. Manager cannot enter platform owner mode.
+9. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.

@@ -1,12 +1,12 @@
 # Venue Bot-to-Mini-App Parity Program
 
-Дата: 2026-06-17. Режим: audit + bounded parity milestones. Цель: переносить уже реализованную Telegram Bot venue-management логику в Venue Mini App без нового продуктового моделирования и без одного большого небезопасного diff.
+Дата: 2026-06-18. Режим: audit + bounded parity milestones. Цель: переносить уже реализованную Telegram Bot venue-management логику в Venue Mini App без нового продуктового моделирования и без одного большого небезопасного diff.
 
 ## Executive Summary
 
-Telegram Bot остаётся самой широкой venue-management поверхностью: selected venue hub уже разделён на `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`. Venue Mini App уже покрывает operational core, M1 сгруппировал работающие экраны, M2 добавил backend-backed read-only `Статистика` и прошёл staging smoke, M3 реализовал bookings queue/lifecycle MVP, а M4A закрыл persisted booking conversation threads между гостем и заведением. M4B/M4C локально доводят `Сообщения` до inbox lifecycle: треды имеют карточки, фильтры, unread и явные действия resolve/reopen. Главное правило программы: Mini App показывает только работающие backend-backed экраны; `Продвижение` и `Предпросмотр для гостя` не должны появляться как основные кнопки до появления реальных Mini App routes/screens.
+Telegram Bot остаётся самой широкой venue-management поверхностью: selected venue hub уже разделён на `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`. Venue Mini App уже покрывает operational core, M1 сгруппировал работающие экраны, M2 добавил backend-backed read-only `Статистика` и прошёл staging smoke, M3 реализовал bookings queue/lifecycle MVP, а M4A закрыл persisted booking conversation threads между гостем и заведением. M4B/M4C теперь code/test-backed доводят `Сообщения` до inbox lifecycle: треды имеют карточки, фильтры, unread и явные действия resolve/reopen. M5 code/e2e-backed закрывает staff calls lifecycle and compact Guest Mini App staff-call UX, но manual Telegram staff-chat runtime smoke остаётся обязательным для каждого pilot venue. Главное правило программы: Mini App показывает только работающие backend-backed экраны; `Продвижение` и `Предпросмотр для гостя` не должны появляться как основные кнопки до появления реальных Mini App routes/screens.
 
-M1 безопасно привёл Venue Mini App shell к bot-like information architecture и сделал видимым уже реализованный экран `Продления` для ролей с `SHIFT_EXTENSION_VIEW`. M2 закрыт как первый новый Mini App parity slice: read-only статистика для OWNER/MANAGER на существующем `VenueStatsRepository`, без новой аналитической модели и без миграций. M3 закрывает Mini App booking operations MVP: active queue, venue-local display fields, confirm/change/cancel for MANAGER/OWNER and arrival/no-show for STAFF. M4A закрывает communication gap для броней: booking messages persist in support threads and are visible from Guest Bot, Guest Mini App and Venue Mini App. M4B implemented locally превращает `Сообщения` в inbox тредов для нескольких заведений и контекстов, а не в один общий чат. M4C implemented locally добавляет отдельный от booking lifecycle статус переписки: active/resolved filters теперь управляются явными действиями `Завершить переписку` и `Возобновить переписку`.
+M1 безопасно привёл Venue Mini App shell к bot-like information architecture и сделал видимым уже реализованный экран `Продления` для ролей с `SHIFT_EXTENSION_VIEW`. M2 закрыт как первый новый Mini App parity slice: read-only статистика для OWNER/MANAGER на существующем `VenueStatsRepository`, без новой аналитической модели и без миграций. M3 закрывает Mini App booking operations MVP: active queue, venue-local display fields, confirm/change/cancel for MANAGER/OWNER and arrival/no-show for STAFF. M4A закрывает communication gap для броней: booking messages persist in support threads and are visible from Guest Bot, Guest Mini App and Venue Mini App. M4B/M4C превращают `Сообщения` в inbox тредов для нескольких заведений и контекстов, а не в один общий чат, и добавляют отдельный от booking lifecycle статус переписки: active/resolved filters управляются явными действиями `Завершить переписку` и `Возобновить переписку`. M6 выбран как следующий bounded milestone: staff chat diagnostics/unlink polish, потому что backend/bot уже умеют status/link/unlink, а Mini App пока не показывает безопасный owner-only unlink.
 
 ## Current Source of Truth
 
@@ -25,25 +25,25 @@ M1 безопасно привёл Venue Mini App shell к bot-like information 
 | Domain | Bot feature/status | Backend support | Mini App support | RBAC/permission notes | Files involved | Risk | Recommended milestone | Validation needed |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A. Work shift / orders | Implemented. Bot shift hub has `📦 Заказы`; callbacks include `staff_venue_orders_root:*`, order detail/status/bill callbacks. | Implemented: queue/detail/audit/status/reject/close/item bill adjustment routes. | Implemented: order queue/detail, full bill, status actions, bill controls where allowed. | `ORDER_QUEUE_VIEW`, `ORDER_STATUS_UPDATE`; STAFF can operate order status/close but not manager-only bill edits. | `TelegramBotRouter.kt`, `TelegramKeyboards.kt`, `VenueOrderRoutes.kt`, `VenueOrdersRepository.kt`, `venueOrders.ts`, `venueOrderDetail.ts` | Medium: large queues and route parity need smoke; UI ignores `nextCursor`. | M1 IA shell; later order audit/pagination slice. | Mini App build/e2e; backend route tests if pagination/audit added. |
-| A. Work shift / staff calls | Implemented in bot/table context and staff chat. Shift hub has `🛎 Вызовы`; staff chat callbacks `sc_call_ack:*`, `sc_call_done:*`. | Implemented: guest create with `tableSessionId`, guest status endpoint, `GET /api/venue/{venueId}/staff-calls`, ack/done routes, staff chat notification on Mini App-created calls. | Implemented: Guest Mini App sends scoped staff calls and shows simple lifecycle status; Venue Mini App calls list supports accept/close. | Uses `ORDER_QUEUE_VIEW` to view and `ORDER_STATUS_UPDATE` to act. STAFF/MANAGER/OWNER can operate calls; guest status remains table-session scoped. | `GuestStaffCallRoutes.kt`, `VenueStaffCallRoutes.kt`, `StaffCallRepository.kt`, `guestVenue.ts`, `venueCalls.ts`, `guestApi.ts`, `venueApi.ts` | Low/Medium: no cancel route and no SLA/escalation yet; staff chat runtime binding still requires pilot smoke. | M5 closed locally / staging smoke target. | Backend StaffCall/RBAC tests, Mini App smoke for guest create/status and venue accept/done, manual staff chat notification smoke. |
+| A. Work shift / staff calls | Implemented in bot/table context and staff chat. Shift hub has `🛎 Вызовы`; staff chat callbacks `sc_call_ack:*`, `sc_call_done:*`. | Implemented: guest create with `tableSessionId`, guest status endpoint, `GET /api/venue/{venueId}/staff-calls`, ack/done routes, staff chat notification on Mini App-created calls. | Implemented: Guest Mini App sends scoped staff calls through a transient compose modal, shows compact NEW/ACK/DONE status and prevents duplicate active submissions; Venue Mini App calls list supports accept/close. | Uses `ORDER_QUEUE_VIEW` to view and `ORDER_STATUS_UPDATE` to act. STAFF/MANAGER/OWNER can operate calls; guest status remains table-session scoped. | `GuestStaffCallRoutes.kt`, `VenueStaffCallRoutes.kt`, `StaffCallRepository.kt`, `guestVenue.ts`, `guestApp.ts`, `venueCalls.ts`, `guestApi.ts`, `venueApi.ts` | Low/Medium: no cancel route and no SLA/escalation yet; staff chat runtime binding still requires pilot smoke. | M5 code/e2e-backed; manual Telegram staff-chat smoke remains. | Backend StaffCall/RBAC tests, Mini App smoke for guest create/status and venue accept/done, manual staff chat notification smoke. |
 | A. Work shift / bookings | Implemented/partial. Bot has booking list, confirm/cancel/change/message, seated/no-show, hold settings. | Implemented: booking list/status/message routes, reminder/expiry workers in backend. | Implemented: booking list, confirm/cancel/change, `Написать гостю`, seated/no-show, venue-local display, hold deadline display. | `BOOKING_VIEW`; `BOOKING_ARRIVAL_UPDATE`; `BOOKING_MANAGE` for management/message actions. | `VenueBookingRoutes.kt`, `GuestBookingRepository.kt`, `venueBookings.ts`, `TelegramBotRouter.kt` | Medium: booking settings/reminder controls are not Mini App parity yet. | M3 closed; keep in regression smoke. | Booking route/RBAC tests, Mini App booking e2e, Telegram runtime smoke. |
-| A. Work shift / booking conversations | Partial in bot before M4A: booking reply callback existed, but staff chat was the only reliable inbox for replies. | Implemented in M4A/M4B/M4C: `support_threads` / `support_messages`, booking message thread create/reuse, guest/venue list/detail/reply APIs, `support_thread_reads`, `filter=active\|resolved`, context labels, last message preview, unread counts and resolve/reopen status routes. | Implemented locally in M4B/M4C: booking card opens thread history, Venue `Сообщения` lists current-venue thread cards, Guest `Сообщения` lists venue/context thread cards, both have active/resolved filters, unread badges and resolve/reopen detail actions. | `BOOKING_MANAGE` for venue replies/status changes; STAFF remains denied for booking messages unless product policy changes later. Guest access is user-scoped; Venue inbox stays venue-scoped; Platform inbox must be backend-backed before exposure. Conversation status is separate from booking status. | `SupportThreadRepository.kt`, `SupportRoutes.kt`, `VenueBookingRoutes.kt`, `TelegramBotRouter.kt`, `venueBookings.ts`, `venueMessages.ts`, `guestSupportThreads.ts`, `supportDtos.ts`, `V108__support_thread_reads.sql` | Medium: no DB-level unique thread constraint yet; M4B/M4C need staging smoke with multiple venues/threads; venue/admin bot full inbox is deferred. | M4C implemented locally / smoke target. | Support/booking route tests, Guest Bot reply test, Mini App booking/messages e2e, Telegram runtime smoke; for M4C smoke resolve/reopen and no booking lifecycle side effects. |
+| A. Work shift / booking conversations | Partial in bot before M4A: booking reply callback existed, but staff chat was the only reliable inbox for replies. | Implemented in M4A/M4B/M4C: `support_threads` / `support_messages`, booking message thread create/reuse, guest/venue list/detail/reply APIs, `support_thread_reads`, `filter=active\|resolved`, context labels, last message preview, unread counts and resolve/reopen status routes. | Implemented and code/test-backed in M4B/M4C: booking card opens thread history, Venue `Сообщения` lists current-venue thread cards, Guest `Сообщения` lists venue/context thread cards, both have active/resolved filters, unread badges and resolve/reopen detail actions. | `BOOKING_MANAGE` for venue replies/status changes; STAFF remains denied for booking messages unless product policy changes later. Guest access is user-scoped; Venue inbox stays venue-scoped; Platform inbox must be backend-backed before exposure. Conversation status is separate from booking status. | `SupportThreadRepository.kt`, `SupportRoutes.kt`, `VenueBookingRoutes.kt`, `TelegramBotRouter.kt`, `venueBookings.ts`, `venueMessages.ts`, `guestSupportThreads.ts`, `supportDtos.ts`, `V108__support_thread_reads.sql` | Medium: no DB-level unique thread constraint yet; staging smoke with multiple venues/threads still needed; venue/admin bot full inbox is deferred. | M4B/M4C code/test-backed; staging multi-venue smoke remains. | Support/booking route tests, Guest Bot reply test, Mini App booking/messages e2e, Telegram runtime smoke; for M4C smoke resolve/reopen and no booking lifecycle side effects. |
 | A. Work shift / stop-list | Implemented. Bot shift hub has `🚫 Стоп-лист`; menu item and option availability flows exist. | Implemented via Venue Menu item/option availability routes. | Implemented/smoke-passed inside menu constructor: item-level and option/flavor stop-list. | `MENU_VIEW` + `MENU_AVAILABILITY_MANAGE` allow STAFF/MANAGER/OWNER operational stop-list. `MENU_MANAGE` remains MANAGER/OWNER-only for content. | `VenueMenuRoutes.kt`, `HookahFlavorProfileService.kt`, `venueMenu.ts` | Low: options/flavors parity closed; keep stop-list in regression. | M1 show menu under `Настройки`; STAFF availability parity is implemented as a focused follow-up. | Regression smoke for item/option availability and hidden STAFF content controls. |
-| A. Work shift / staff chat alerts | Implemented. Bot can link staff chat and staff chat notifier sends order/call messages. | Implemented: staff chat status/link-code/unlink backend; outbox/notifier. | Implemented: chat status/link-code screen; unlink wrapper exists but screen does not expose unlink. | `STAFF_CHAT_LINK`; unlink backend owner-only. | `VenueRoutes.kt`, `StaffChatNotifier.kt`, `venueChatLink.ts`, `venueApi.ts` | Medium: runtime Telegram group binding must be smoke-tested. | M1 group under `Настройки`; later M7 unlink/status diagnostics. | Manual Telegram group smoke. |
-| B. Settings / venue profile-card | Implemented in bot: profile/card fields, address, contacts, description/info sections, hours. | Partial: guest venue/info section routes exist; no broad Venue Mini App settings API for all fields. | Partial: current `settings` screen only manages paid shift extension settings. | `VENUE_SETTINGS` exists but has no matching broad route; `SHIFT_EXTENSION_SETTINGS` works. | `VenueRepository.kt`, `VenueInfoSectionsRepository.kt`, `VenueBookingHoursRepository.kt`, `VenueSettingsRepository.kt`, `venueSettings.ts` | High: exposing generic settings would create dead ends or partial writes. | M6 design small settings APIs by field; keep bot canonical meanwhile. | Route/RBAC tests per setting slice. |
+| A. Work shift / staff chat alerts | Implemented. Bot can link staff chat, show status/test commands and unlink from the linked chat; staff chat notifier sends order/booking/call/extension messages. | Implemented: staff chat status/link-code/unlink backend; outbox/notifier. | Partial: chat status/link-code screen exists; `venueUnlinkStaffChat` wrapper exists but screen does not expose owner-only unlink or diagnostics copy. | `STAFF_CHAT_LINK`; unlink backend owner-only. STAFF has no chat-link access. | `VenueRoutes.kt`, `StaffChatNotifier.kt`, `TelegramBotRouter.kt`, `venueChatLink.ts`, `venueApi.ts` | Medium: wrong or stale group binding can break all venue operations notifications; runtime Telegram group smoke remains external. | M6 staff chat diagnostics/unlink polish. | Owner/manager/staff RBAC tests, Mini App e2e for status/link/unlink visibility, manual Telegram group smoke. |
+| B. Settings / venue profile-card | Implemented in bot: profile/card fields, address, contacts, description/info sections, hours. | Partial: guest venue/info section routes exist; no broad Venue Mini App settings API for all fields. | Partial: current `settings` screen only manages paid shift extension settings. | `VENUE_SETTINGS` exists but has no matching broad route; `SHIFT_EXTENSION_SETTINGS` works. | `VenueRepository.kt`, `VenueInfoSectionsRepository.kt`, `VenueBookingHoursRepository.kt`, `VenueSettingsRepository.kt`, `venueSettings.ts` | High: exposing generic settings would create dead ends or partial writes. | M7 design small settings APIs by field; keep bot canonical meanwhile. | Route/RBAC tests per setting slice. |
 | B. Paid shift extension settings | Implemented in Mini App and backend; bot ordering entry exists, Owner/Manager Bot settings parity is still active roadmap item. | Implemented: settings and pending request routes. | Implemented: settings screen; pending requests screen exists but was hidden before M1. | `SHIFT_EXTENSION_VIEW`, `SHIFT_EXTENSION_CONFIRM`, `SHIFT_EXTENSION_SETTINGS`; STAFF has view/confirm but no settings. | `ShiftExtensionRoutes.kt`, `venueSettings.ts`, `venueShiftExtensions.ts`, `venueApp.ts` | Low for surfacing existing screen; Medium for bot settings parity. | M1 make requests discoverable; separate paid-extension bot settings closure remains. | Mini App build/e2e; shift extension route tests if changed. |
 | C. Menu constructor | Implemented. Bot supports categories/items/prices/stop-list/flavors/base profiles and photo-menu split. | Implemented: categories/items/options/base profiles/reorder/availability. | Implemented/smoke-passed for item/flavor scoping, base profiles, price edit, stop-list. | `MENU_VIEW`, `MENU_MANAGE`, `MENU_AVAILABILITY_MANAGE`. | `VenueMenuRoutes.kt`, `VenueMenuRepository.kt`, `HookahFlavorProfileService.kt`, `venueMenu.ts` | Medium: category/item semantic type selection in Mini App can drift. | M1 group under `Настройки`; later M8 semantic type UI/photos/descriptions. | Existing menu route tests + Mini App smoke. |
 | D. Tables / QR | Implemented in bot: tables root/list/add/toggle/QR/rotate. | Implemented: list, batch-create, rotate, rotate-all, QR package. | Implemented: tables/QR screen. | `TABLE_VIEW`, `TABLE_MANAGE`, `TABLE_TOKEN_ROTATE`, `TABLE_TOKEN_ROTATE_ALL`, `TABLE_QR_EXPORT`. | `VenueTableRoutes.kt`, `VenueTableRepository.kt`, `venueTables.ts` | Medium: QR export/download must be runtime-smoked. | M1 group under `Настройки`; later QR diagnostics if needed. | `VenueTableRoutesTest`, manual QR export smoke. |
 | E. Staff/personnel | Implemented/partial in bot: invites, role changes, remove access. | Implemented: staff list/invites/accept/update/remove with safety checks. | Implemented: staff screen. | STAFF hidden; managers conservative; owner safety applies backend-side. | `VenueStaffRoutes.kt`, `VenueStaffRepository.kt`, `StaffInviteRepository.kt`, `venueStaff.ts` | Medium: identity labels can be ID-heavy; owner transfer not here. | M1 group under `Настройки`; later identity polish. | `VenueStaffRoutesTest`, invite smoke. |
 | F. Statistics | Implemented per venue in bot; aggregate `owner_stats_all` is placeholder/limited. | Implemented for Mini App: read-only `GET /api/venue/{venueId}/stats?period=today\|7d\|30d` reuses `VenueStatsRepository`. | Implemented: read-only `Статистика` screen for OWNER/MANAGER with period selector, cards and top items. | OWNER/MANAGER only, matching bot; STAFF denied and does not see nav. | `VenueStatsRepository.kt`, `VenueStatsRoutes.kt`, `TelegramBotRouter.kt`, `venueStats.ts`, `venueApp.ts` | Medium: custom date range, AI summaries and advanced dashboards remain out of scope. | M2 CLOSED / staging smoke passed; keep in regression. | `VenueStatsRoutesTest`, Mini App e2e stats smoke, build. |
-| G. Promotions/growth | Implemented in bot marketing hub: promotions, rules, placements/top, loyalty/reviews; broad callback surface. | Backend repositories/services exist for promotions/placements/loyalty/feedback. | Missing in Venue Mini App; no fake screen should be added. | Likely OWNER/MANAGER only; exact Mini App permissions not defined. | `VenuePromotionRepository.kt`, `VenuePromotionRuleRepository.kt`, `PromotionPlacementRepository.kt`, `LoyaltyRepository.kt`, `TelegramBotRouter.kt` | High: broad workflow and money/marketing side effects. | M5 read-only summary first; builders later. | Promotion/loyalty regression tests and smoke. |
-| H. Guest preview | Implemented in bot: publish readiness and guest preview callbacks. | Partial support through existing guest catalog/venue/menu APIs. | Missing as Venue Mini App owner preview entry. | OWNER/MANAGER only. | `GuestVenueRoutes.kt`, `GuestMenuRepository.kt`, `TelegramBotRouter.kt`, `venueApp.ts` | Medium: must not leak unpublished/private state incorrectly. | M5 preview deep link/read-only preview after route policy is decided. | Guest visibility tests + manual preview smoke. |
+| G. Promotions/growth | Implemented in bot marketing hub: promotions, rules, placements/top, loyalty/reviews; broad callback surface. | Backend repositories/services exist for promotions/placements/loyalty/feedback. | Missing in Venue Mini App; no fake screen should be added. | Likely OWNER/MANAGER only; exact Mini App permissions not defined. | `VenuePromotionRepository.kt`, `VenuePromotionRuleRepository.kt`, `PromotionPlacementRepository.kt`, `LoyaltyRepository.kt`, `TelegramBotRouter.kt` | High: broad workflow and money/marketing side effects. | M8 read-only summary first; builders later. | Promotion/loyalty regression tests and smoke. |
+| H. Guest preview | Implemented in bot: publish readiness and guest preview callbacks. | Partial support through existing guest catalog/venue/menu APIs. | Missing as Venue Mini App owner preview entry. | OWNER/MANAGER only. | `GuestVenueRoutes.kt`, `GuestMenuRepository.kt`, `TelegramBotRouter.kt`, `venueApp.ts` | Medium: must not leak unpublished/private state incorrectly. | M9 preview deep link/read-only preview after route policy is decided. | Guest visibility tests + manual preview smoke. |
 
 ## Milestone Plan
 
 ### M1 — Venue Mini App IA Shell And Existing Shift Extension Requests
 
-Status: selected first implementation milestone.
+Status: CLOSED / implemented.
 
 Scope:
 
@@ -52,7 +52,7 @@ Scope:
   - `Настройки`: `Заказное меню`, `Столы и QR`, `Персонал`, `Чат персонала`, `Настройки`.
 - Show only routes backed by current screens and current permissions.
 - Make `Продления` visible for users with `SHIFT_EXTENSION_VIEW`.
-- Do not show `Статистика`, `Продвижение`, `Предпросмотр для гостя` until real screens/routes exist.
+- Do not show `Продвижение` / `Предпросмотр для гостя` until real screens/routes exist. `Статистика` is now real after M2 and is visible only to OWNER/MANAGER.
 
 Definition of Done:
 
@@ -179,14 +179,14 @@ Follow-ups:
 - Structured `Предложить другое время` flow with guest accept / choose another / cancel buttons.
 - Venue/admin bot full inbox for open booking threads if operators need bot-side reply management.
 - General guest `Сообщить о проблеме` tickets and full Platform Support Center.
-- Thread statuses and unread tracking if not already complete.
+- Advanced thread statuses beyond `OPEN` / `RESOLVED` / future `CLOSED` and unread polish beyond current read receipts.
 - Audit events for support messages.
 - SLA/escalation and search by venue/guest/context.
 - DB-level duplicate/race protection for concurrent booking thread creation if staging shows duplicate threads.
 
 ### M4B — Unified Messages Inbox UX
 
-Status: implemented locally / smoke target. Full Platform Support Center remains out of scope.
+Status: code/test-backed; staging multi-venue smoke remains required. Full Platform Support Center remains out of scope.
 
 Product decision:
 
@@ -235,7 +235,7 @@ Definition of Done:
 
 ### M4C — Support Thread Resolve/Reopen Lifecycle
 
-Status: implemented locally / smoke target. Full Platform Support Center remains out of scope.
+Status: code/test-backed; staging lifecycle smoke remains required. Full Platform Support Center remains out of scope.
 
 Product decision:
 
@@ -267,7 +267,7 @@ Definition of Done:
 
 ### M5 — Staff Calls Lifecycle And Notification Parity
 
-Status: implemented locally / staging smoke target.
+Status: code/e2e-backed; manual Telegram staff-chat runtime smoke remains required per pilot venue.
 
 Scope:
 
@@ -293,7 +293,40 @@ Definition of Done:
 - Mini App smoke covers guest modal create/status UX, active-call CTA, DONE restore and venue accept/close.
 - Manual pilot smoke confirms linked staff chat receives the new-call notification and inline ACK/DONE still work.
 
-### M6 — Promotions Read-Only Summary
+### M6 — Staff Chat Diagnostics And Unlink
+
+Status: NEXT RECOMMENDED MILESTONE.
+
+Scope:
+
+- Reuse existing backend/bot staff-chat semantics: status, link-code, test/runbook copy and owner-only unlink.
+- Venue Mini App `Чат персонала` must show linked/unlinked state, masked chat id, active link code when present, and clear Telegram group instructions.
+- Expose unlink only for OWNER with explicit confirmation.
+- Keep MANAGER link/status permissions but preserve backend denial for unlink.
+- STAFF must not see or access staff-chat management.
+- Do not rewrite notification policy, notifier delivery, Telegram outbox or staff-chat callbacks in this slice.
+
+Definition of Done:
+
+- Owner can see status, generate link code, and unlink an incorrectly linked chat from Venue Mini App.
+- Manager can see status/generate code where current RBAC allows, but cannot unlink.
+- STAFF cannot access the screen or direct API.
+- Existing order/booking/call/extension staff-chat notification behavior is unchanged.
+- Manual pilot smoke still verifies a real Telegram group receives order, booking, call and extension messages.
+
+### M7 — Venue Settings Slices
+
+Scope:
+
+- Add only small settings slices with existing bot semantics: profile/card, hours/exceptions, booking hold settings, notification toggles.
+- Do not create one bulk settings endpoint.
+
+Definition of Done:
+
+- Each settings slice has backend route, RBAC test, UI, smoke checklist.
+- `VENUE_SETTINGS` no longer leads to a screen that only supports shift extension settings.
+
+### M8 — Promotions Read-Only Summary
 
 Scope:
 
@@ -306,7 +339,7 @@ Definition of Done:
 - Mini App does not expose placeholder marketing actions.
 - OWNER/MANAGER can inspect active/paused/archived status safely.
 
-### M7 — Guest Preview Entry
+### M9 — Guest Preview Entry
 
 Scope:
 
@@ -317,30 +350,6 @@ Definition of Done:
 
 - Preview matches Guest Mini App visibility rules.
 - No private staff/order/billing data leaks.
-
-### M8 — Venue Settings Slices
-
-Scope:
-
-- Add only small settings slices with existing bot semantics: profile/card, hours/exceptions, booking hold settings, notification toggles.
-- Do not create one bulk settings endpoint.
-
-Definition of Done:
-
-- Each settings slice has backend route, RBAC test, UI, smoke checklist.
-- `VENUE_SETTINGS` no longer leads to a screen that only supports shift extension settings.
-
-### M9 — Staff Chat Diagnostics And Unlink
-
-Scope:
-
-- Expose existing unlink action safely for OWNER.
-- Show last linked status and operational diagnostics if backend supports it.
-
-Definition of Done:
-
-- Owner-only unlink is visible and tested.
-- Link-code flow remains unchanged.
 
 ### M10 — Menu Semantic And Media Polish
 
@@ -364,10 +373,10 @@ Definition of Done:
 
 ## Immediate Risks
 
-- Hidden implemented features: `Продления` route exists but was not reachable from nav.
+- Regression risk: `Продления` route is now reachable from nav for `SHIFT_EXTENSION_VIEW`; keep visibility and STAFF no-settings boundaries in smoke.
 - Settings mismatch: `VENUE_SETTINGS` can imply a broad settings screen while current Mini App settings only controls shift extension settings.
 - Stats advanced gap: Mini App now has read-only per-venue stats, but no custom date range picker, AI summaries, advanced analytics, platform dashboards or consolidated network stats.
-- Messages inbox smoke risk: M4B/M4C unified inbox UX is implemented locally, but still needs staging smoke with multiple venues/threads to verify cards, active/resolved filters, unread clearing, resolve/reopen lifecycle and venue scoping. Structured reschedule proposals, generic tickets, Platform Support Center and venue/admin bot full inbox remain follow-ups.
+- Messages inbox smoke risk: M4B/M4C unified inbox UX is code/test-backed, but still needs staging smoke with multiple venues/threads to verify cards, active/resolved filters, unread clearing, resolve/reopen lifecycle and venue scoping. Structured reschedule proposals, generic tickets, Platform Support Center and venue/admin bot full inbox remain follow-ups.
 - Promotions gap: bot marketing hub is broad and callback-heavy; Mini App should start read-only.
 - Queue scale: Venue Mini App order queue currently uses a fixed limit and does not expose pagination.
 - Runtime Telegram dependencies still need manual smoke: WebApp `initData`, staff chat group binding, QR export/download.
