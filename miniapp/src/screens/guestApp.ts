@@ -275,7 +275,13 @@ function dedupeActions(actions: GuestActionId[]): GuestActionId[] {
   return actions.filter((action, index) => actions.indexOf(action) === index)
 }
 
-function formatActionLabel(action: GuestActionId, cartQty: number, mode: GuestTableMode, variant: 'primary' | 'nav'): string {
+function formatActionLabel(
+  action: GuestActionId,
+  cartQty: number,
+  mode: GuestTableMode,
+  variant: 'primary' | 'nav',
+  staffCallActive: boolean
+): string {
   switch (action) {
     case 'catalog':
       if (variant === 'nav') {
@@ -291,6 +297,9 @@ function formatActionLabel(action: GuestActionId, cartQty: number, mode: GuestTa
     case 'order':
       return variant === 'nav' ? 'Мой заказ' : '📄 Мой заказ'
     case 'staff':
+      if (mode === 'active-table' && staffCallActive) {
+        return 'Вызов активен'
+      }
       return '🛎 Вызвать персонал'
     case 'account':
       return variant === 'nav' ? 'Профиль' : '👤 Профиль'
@@ -330,12 +339,13 @@ function renderActionSet(
   route: Route,
   mode: GuestTableMode,
   variant: 'primary' | 'nav',
+  staffCallActive: boolean,
   onAction: (action: GuestActionId) => void
 ) {
   const buttons = dedupeActions(actions).map((action) => {
     const button = el('button', {
       className: buttonClassName,
-      text: formatActionLabel(action, cartQty, mode, variant)
+      text: formatActionLabel(action, cartQty, mode, variant, staffCallActive)
     }) as HTMLButtonElement
     button.dataset.action = action
     button.dataset.active = String(isActionActive(action, route, mode))
@@ -350,10 +360,21 @@ function updateGuestShellActions(
   mode: GuestTableMode,
   route: Route,
   cartQty: number,
+  staffCallActive: boolean,
   onAction: (action: GuestActionId) => void
 ) {
-  renderActionSet(refs.primaryActions, primaryActionsByMode[mode], 'button-secondary', cartQty, route, mode, 'primary', onAction)
-  renderActionSet(refs.nav, navActionsByMode[mode], 'nav-button', cartQty, route, mode, 'nav', onAction)
+  renderActionSet(
+    refs.primaryActions,
+    primaryActionsByMode[mode],
+    'button-secondary',
+    cartQty,
+    route,
+    mode,
+    'primary',
+    staffCallActive,
+    onAction
+  )
+  renderActionSet(refs.nav, navActionsByMode[mode], 'nav-button', cartQty, route, mode, 'nav', staffCallActive, onAction)
 }
 
 export function mountGuestApp(options: GuestAppOptions) {
@@ -367,6 +388,7 @@ export function mountGuestApp(options: GuestAppOptions) {
   const refs = buildGuestShell(root)
   let tableSnapshot = getTableContext()
   let currentRoute: Route = resolveRoute()
+  let staffCallActive = false
   let handleGuestAction: (action: GuestActionId) => void = () => undefined
   const renderShellActions = () => {
     updateGuestShellActions(
@@ -374,6 +396,7 @@ export function mountGuestApp(options: GuestAppOptions) {
       resolveTableMode(tableSnapshot),
       currentRoute,
       getCartSnapshot().totalQty,
+      staffCallActive,
       (action) => handleGuestAction(action)
     )
   }
@@ -391,6 +414,9 @@ export function mountGuestApp(options: GuestAppOptions) {
     refs.statusTitle.textContent = presentation.title
     refs.statusDetails.textContent = presentation.details ?? ''
     refs.app.dataset.tableSeverity = presentation.severity
+    if (nextMode !== 'active-table') {
+      staffCallActive = false
+    }
     renderShellActions()
     const routeName = resolveRoute().name
     if (
@@ -402,10 +428,24 @@ export function mountGuestApp(options: GuestAppOptions) {
     }
   })
 
+  const disposables: Array<() => void> = []
   const cartSubscription = subscribeCart(() => {
     renderShellActions()
   })
   renderShellActions()
+
+  const handleStaffCallState = (event: Event) => {
+    const detail = (event as CustomEvent<{ active?: boolean; venueId?: number | null }>).detail
+    const nextActive =
+      detail?.active === true &&
+      resolveTableMode(tableSnapshot) === 'active-table' &&
+      (!detail.venueId || detail.venueId === tableSnapshot.venueId)
+    if (staffCallActive === nextActive) return
+    staffCallActive = nextActive
+    renderShellActions()
+  }
+  window.addEventListener('hookah:guest-staff-call-state', handleStaffCallState)
+  disposables.push(() => window.removeEventListener('hookah:guest-staff-call-state', handleStaffCallState))
 
   const historyStack: string[] = []
   let replaceNextHistoryEntry = false
@@ -507,7 +547,6 @@ export function mountGuestApp(options: GuestAppOptions) {
     historyStack.push(hash)
   }
 
-  const disposables: Array<() => void> = []
   const openQrScanner = () => {
     const telegramContext = getTelegramContext()
     const webApp = telegramContext.webApp

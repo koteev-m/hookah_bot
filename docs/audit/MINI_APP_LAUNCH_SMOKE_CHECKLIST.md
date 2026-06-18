@@ -273,9 +273,12 @@ Status: implemented locally / staging smoke target.
 Automated smoke target:
 
 1. Guest opens active table context and sends `Вызвать персонал` with `tableToken`, `tableSessionId`, reason and optional comment.
-2. Guest sees status labels `Вызов отправлен`, `Персонал принял вызов`, `Вызов закрыт` from the backend status endpoint.
-3. STAFF opens Venue Mini App `Вызовы`, sees table/reason/comment/guest, clicks `Принять`, then clicks `Закрыть`.
-4. DONE calls leave the active queue.
+2. Staff-call compose opens as a transient modal; successful send closes it and leaves the guest on the venue/menu screen.
+3. Guest sees a compact status card with `Вызов отправлен`, then `Персонал принял вызов`, then `Вызов выполнен`; ACK is success-styled, not red/error-styled.
+4. While NEW/ACK exists, the table-context action is `Вызов активен` and does not open a duplicate compose form.
+5. DONE restores the normal `Вызвать персонал` action.
+6. STAFF opens Venue Mini App `Вызовы`, sees table/reason/comment/guest, clicks `Принять`, then clicks `Закрыть`.
+7. DONE calls leave the active queue.
 
 Manual staging smoke still required:
 

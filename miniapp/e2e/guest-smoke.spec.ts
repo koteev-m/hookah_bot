@@ -432,6 +432,9 @@ async function mockGuestApi(
     status: string
     statusLabel: string
     createdAtEpochSeconds: number
+    reason: string
+    reasonLabel: string
+    comment?: string | null
   }> = []
 
   const findMenuItem = (itemId: number) =>
@@ -670,7 +673,10 @@ async function mockGuestApi(
         staffCallId: 901,
         status: 'NEW',
         statusLabel: 'Вызов отправлен',
-        createdAtEpochSeconds: 1894302000
+        createdAtEpochSeconds: 1894302000,
+        reason: body.reason,
+        reasonLabel: body.reason === 'COALS' ? 'Заменить угли' : 'Вызов персонала',
+        comment: body.comment ?? null
       }
     ]
     await route.fulfill(
@@ -1840,13 +1846,25 @@ test('guest creates staff call from active table and sees lifecycle status', asy
 
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await expect(page.getByRole('button', { name: '🛎 Вызвать персонал' })).toBeVisible()
+  await expect(page.locator('.staff-call-overlay')).toBeHidden()
+  await expect(page.locator('.staff-call-status')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+
   await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
   await expect(page.getByText('Причина')).toBeVisible()
   await page.locator('select.staff-select').selectOption('COALS')
   await page.locator('textarea.staff-comment').fill('Нужны угли')
   await page.getByRole('button', { name: 'Вызвать персонал к столу №4' }).click()
 
-  await expect(page.getByText(/Вызов отправлен/)).toBeVisible()
+  await expect(page.locator('.staff-call-overlay')).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Вызвать персонал к столу №4' })).toHaveCount(0)
+  await expect(page.locator('.staff-call-status[data-tone="pending"]')).toContainText('Вызов отправлен')
+  await expect(page.locator('.staff-call-status')).toContainText('Заменить угли')
+  await expect(page.locator('.staff-call-status')).toContainText('Ожидаем подтверждения персонала.')
+  await expect(page.locator('.staff-call-status').getByRole('button', { name: 'Обновить' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Вызов активен' })).toBeVisible()
   expect(api.getStaffCallRequests()).toEqual([
     {
       tableToken,
@@ -1856,29 +1874,41 @@ test('guest creates staff call from active table and sees lifecycle status', asy
     }
   ])
 
-  await page.getByRole('button', { name: '← К меню' }).click()
+  await page.getByRole('button', { name: 'Вызов активен' }).click()
+  await expect(page.locator('.staff-call-status')).toContainText('Вызов отправлен')
+  await expect(page.getByText('Причина')).toBeHidden()
+
   api.setStaffCallStatuses([
     {
       staffCallId: 901,
       status: 'ACK',
       statusLabel: 'Персонал принял вызов',
-      createdAtEpochSeconds: 1894302000
+      createdAtEpochSeconds: 1894302000,
+      reason: 'COALS',
+      reasonLabel: 'Заменить угли',
+      comment: 'Нужны угли'
     }
   ])
-  await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
-  await expect(page.getByText('Персонал принял вызов')).toBeVisible()
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.locator('.staff-call-status[data-tone="success"]')).toContainText('Персонал принял вызов')
+  await expect(page.locator('.staff-call-status')).toContainText('Сотрудник скоро подойдёт к столу №4.')
+  await expect(page.getByText('Персонал принял вызов')).not.toHaveCSS('color', 'rgb(220, 38, 38)')
 
-  await page.getByRole('button', { name: '← К меню' }).click()
   api.setStaffCallStatuses([
     {
       staffCallId: 901,
       status: 'DONE',
       statusLabel: 'Вызов закрыт',
-      createdAtEpochSeconds: 1894302000
+      createdAtEpochSeconds: 1894302000,
+      reason: 'COALS',
+      reasonLabel: 'Заменить угли',
+      comment: 'Нужны угли'
     }
   ])
-  await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
-  await expect(page.getByText('Вызов закрыт')).toBeVisible()
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.locator('.staff-call-status[data-tone="done"]')).toContainText('Вызов выполнен')
+  await expect(page.getByRole('button', { name: '🛎 Вызвать персонал' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Вызов активен' })).toHaveCount(0)
 })
 
 test('guest mini app selects item flavor and submits structured selected option', async ({ page }) => {

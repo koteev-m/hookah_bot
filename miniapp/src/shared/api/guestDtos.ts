@@ -297,6 +297,9 @@ export type StaffCallStatusDto = {
   status: 'NEW' | 'ACK' | 'DONE' | 'CANCELLED' | string
   statusLabel: string
   createdAtEpochSeconds: number
+  reason: string
+  reasonLabel: string
+  comment?: string | null
 }
 
 export type GuestShiftExtensionOptionsResponse = {

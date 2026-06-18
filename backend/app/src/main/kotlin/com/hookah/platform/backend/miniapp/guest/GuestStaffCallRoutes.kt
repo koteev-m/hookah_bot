@@ -11,12 +11,14 @@ import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.StaffCallNotification
+import com.hookah.platform.backend.telegram.StaffCallReason
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.UserRepository
+import com.hookah.platform.backend.telegram.staffCallReasonLabel
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -131,11 +133,15 @@ fun Route.guestStaffCallRoutes(
 
 private fun StaffCallQueueItem.toGuestStatusDto(): StaffCallStatusDto {
     val parsedStatus = StaffCallStatus.fromDb(status)
+    val parsedReason = runCatching { StaffCallReason.valueOf(reason) }.getOrDefault(StaffCallReason.OTHER)
     return StaffCallStatusDto(
         staffCallId = id,
         status = parsedStatus?.dbValue ?: status,
         statusLabel = guestStaffCallStatusLabel(parsedStatus),
         createdAtEpochSeconds = createdAt.epochSecond,
+        reason = parsedReason.name,
+        reasonLabel = staffCallReasonLabel(parsedReason),
+        comment = comment,
     )
 }
 

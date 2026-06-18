@@ -272,7 +272,8 @@ Status: implemented locally / staging smoke target.
 Scope:
 
 - Guest Mini App creates staff calls from active table context with `tableToken`, `tableSessionId`, reason and optional comment.
-- Guest Mini App shows simple call status labels: `Вызов отправлен`, `Персонал принял вызов`, `Вызов закрыт`.
+- Guest Mini App uses a transient compose modal for `Вызвать персонал`; after success the modal closes and a compact status card keeps the menu usable.
+- Guest Mini App shows simple call status labels: `Вызов отправлен`, `Персонал принял вызов`, `Вызов выполнен`; ACK uses success styling, not error styling.
 - Venue Mini App `Вызовы` queue lists active calls and lets STAFF/MANAGER/OWNER accept and close calls.
 - Backend keeps staff-call status model `NEW -> ACK -> DONE`; stale transitions return `applied=false` and do not mutate state.
 - Staff chat receives Mini App-created call notifications through the existing notifier path and remains a quick-action mirror.
@@ -289,7 +290,7 @@ Definition of Done:
 
 - Guest create/status route tests pass.
 - Venue route/RBAC tests cover STAFF/MANAGER/OWNER actions and invalid transition no-op.
-- Mini App smoke covers guest create/status and venue accept/close.
+- Mini App smoke covers guest modal create/status UX, active-call CTA, DONE restore and venue accept/close.
 - Manual pilot smoke confirms linked staff chat receives the new-call notification and inline ACK/DONE still work.
 
 ### M6 — Promotions Read-Only Summary

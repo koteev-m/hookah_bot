@@ -69,6 +69,12 @@ type VenueRefs = {
   message: HTMLParagraphElement
   retryButton: HTMLButtonElement
   staffSlot: HTMLDivElement
+  staffStatusCard: HTMLElement
+  staffStatusTitle: HTMLElement
+  staffStatusReason: HTMLParagraphElement
+  staffStatusMeta: HTMLParagraphElement
+  staffStatusDetail: HTMLParagraphElement
+  staffModalOverlay: HTMLDivElement
   staffCard: HTMLDivElement
   staffReason: HTMLSelectElement
   staffComment: HTMLTextAreaElement
@@ -83,6 +89,8 @@ type VenueRefs = {
   staffErrorDetails: HTMLDivElement
   staffDisabledReason: HTMLParagraphElement
 }
+
+type StaffCallTone = 'pending' | 'success' | 'done' | 'error'
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
@@ -148,9 +156,21 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
   const staffSlot = el('div', { className: 'staff-call-slot' }) as HTMLDivElement
-  const staffCard = el('div', { className: 'card staff-call' }) as HTMLDivElement
-  const staffTitle = el('p', { className: 'field-label', text: 'Вызвать персонал' })
-  const staffCloseButton = el('button', { className: 'button-secondary button-small', text: '← К меню' }) as HTMLButtonElement
+  const staffStatusCard = el('section', { className: 'card staff-call-status' })
+  const staffStatusTitle = el('h4', { text: '' })
+  const staffStatusReason = el('p', { className: 'staff-call-status-reason', text: '' })
+  const staffStatusMeta = el('p', { className: 'staff-call-status-meta', text: '' })
+  const staffStatusDetail = el('p', { className: 'staff-call-status-detail', text: '' })
+  append(staffStatusCard, staffStatusTitle, staffStatusReason, staffStatusMeta, staffStatusDetail)
+  const staffModalOverlay = el('div', { className: 'venue-modal-overlay staff-call-overlay' }) as HTMLDivElement
+  staffModalOverlay.hidden = true
+  const staffCard = el('div', { className: 'card venue-modal staff-call' }) as HTMLDivElement
+  const staffTitle = el('h3', { text: 'Вызвать персонал' })
+  const staffHelper = el('p', {
+    className: 'staff-call-helper',
+    text: 'Выберите причину и при необходимости добавьте комментарий.'
+  })
+  const staffCloseButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
   const staffReasonLabel = el('p', { className: 'field-label', text: 'Причина' })
   const staffReason = document.createElement('select')
   staffReason.className = 'staff-select'
@@ -177,25 +197,15 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   append(staffError, staffErrorTitle, staffErrorMessage, staffErrorActions, staffErrorDetails)
   const staffDisabledReason = el('p', { className: 'disabled-reason', text: '' })
   staffDisabledReason.hidden = true
-  append(
-    staffCard,
-    staffTitle,
-    staffCloseButton,
-    staffReasonLabel,
-    staffReason,
-    staffCommentLabel,
-    staffComment,
-    staffCounter,
-    staffMessage,
-    staffError,
-    staffButton,
-    staffDisabledReason
-  )
+  const staffActions = el('div', { className: 'staff-call-actions' })
+  append(staffActions, staffButton, staffCloseButton)
+  append(staffCard, staffTitle, staffHelper, staffReasonLabel, staffReason, staffCommentLabel, staffComment, staffCounter, staffMessage, staffError, staffActions, staffDisabledReason)
+  staffModalOverlay.appendChild(staffCard)
 
   const menuBody = el('div', { className: 'menu-body' })
   const extensionSlot = el('div', { className: 'shift-extension-slot' }) as HTMLDivElement
 
-  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody)
+  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody, staffModalOverlay)
   root.replaceChildren(wrapper)
 
   return {
@@ -213,6 +223,12 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     message,
     retryButton,
     staffSlot,
+    staffStatusCard,
+    staffStatusTitle,
+    staffStatusReason,
+    staffStatusMeta,
+    staffStatusDetail,
+    staffModalOverlay,
     staffCard,
     staffReason,
     staffComment,
@@ -311,6 +327,43 @@ function formatOptionButtonText(option: MenuItemOptionDto, currency: string): st
     return `${option.name} ${formatPrice(option.priceDeltaMinor, currency)}`
   }
   return `${option.name} · Без доплаты`
+}
+
+function isActiveStaffCallStatus(status: string | null | undefined) {
+  return status === 'NEW' || status === 'ACK'
+}
+
+function staffCallStatusTone(status: string | null | undefined): StaffCallTone {
+  if (status === 'NEW') return 'pending'
+  if (status === 'ACK') return 'success'
+  if (status === 'DONE') return 'done'
+  return 'error'
+}
+
+function staffCallStatusTitle(status: string | null | undefined, fallback: string) {
+  if (status === 'NEW') return '🟡 Вызов отправлен'
+  if (status === 'ACK') return '🟢 Персонал принял вызов'
+  if (status === 'DONE') return '✅ Вызов выполнен'
+  if (status === 'CANCELLED') return 'Вызов отменён'
+  return fallback
+}
+
+function staffCallStatusDetail(status: string | null | undefined, tableNumber: string | null | undefined) {
+  if (status === 'NEW') return 'Ожидаем подтверждения персонала.'
+  if (status === 'ACK') {
+    return tableNumber ? `Сотрудник скоро подойдёт к столу №${tableNumber}.` : 'Сотрудник скоро подойдёт.'
+  }
+  if (status === 'DONE') return 'Можно снова вызвать персонал, если потребуется.'
+  if (status === 'CANCELLED') return 'Если помощь всё ещё нужна, отправьте новый вызов.'
+  return ''
+}
+
+function formatStaffCallTime(epochSeconds: number | null | undefined) {
+  if (typeof epochSeconds !== 'number' || !Number.isFinite(epochSeconds)) return ''
+  return new Date(epochSeconds * 1000).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 }
 
 function resolveInfoMediaUrl(backendUrl: string, mediaUrl: string) {
@@ -458,7 +511,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let staffStatusTimer: number | null = null
   let staffStatusLoadedForKey: string | null = null
   let isStaffCalling = false
-  let staffFormOpen = options.openStaffCall === true
+  let staffComposeOpen = false
+  let staffOpenRequested = options.openStaffCall === true
+  let latestStaffCall: StaffCallStatusDto | null = null
   let messageTimer: number | null = null
   const itemRefs = new Map<number, MenuItemRefs>()
   let itemDisposables: Array<() => void> = []
@@ -583,6 +638,25 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
   }
 
+  const clearStaffRouteFlag = () => {
+    if (typeof window === 'undefined' || !venueId) return
+    const nextUrl = new URL(window.location.href)
+    nextUrl.hash = `#/venue/${venueId}`
+    window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+  }
+
+  const dispatchStaffActionState = () => {
+    if (typeof window === 'undefined') return
+    window.dispatchEvent(
+      new CustomEvent('hookah:guest-staff-call-state', {
+        detail: {
+          venueId,
+          active: canCallStaff() && isActiveStaffCallStatus(latestStaffCall?.status)
+        }
+      })
+    )
+  }
+
   const stopStaffStatusPolling = () => {
     if (staffStatusTimer != null) {
       window.clearInterval(staffStatusTimer)
@@ -590,15 +664,72 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
   }
 
-  const renderLatestStaffCallStatus = (items: StaffCallStatusDto[]) => {
-    if (!items.length) return
-    const latest = items[0]
-    setStaffMessage(latest.statusLabel, latest.status === 'DONE' ? 'success' : 'default')
+  const renderStaffStatusCard = () => {
+    const latest = latestStaffCall
+    if (!latest || !canCallStaff()) {
+      refs.staffStatusCard.remove()
+      dispatchStaffActionState()
+      return
+    }
+
+    const timeLabel = formatStaffCallTime(latest.createdAtEpochSeconds)
+    refs.staffStatusCard.dataset.tone = staffCallStatusTone(latest.status)
+    refs.staffStatusTitle.textContent = staffCallStatusTitle(latest.status, latest.statusLabel)
+    refs.staffStatusReason.textContent = latest.reasonLabel || 'Вызов персонала'
+    refs.staffStatusMeta.textContent = timeLabel ? `Создан в ${timeLabel}` : ''
+    refs.staffStatusDetail.textContent = staffCallStatusDetail(latest.status, tableSnapshot.tableNumber)
+    if (!refs.staffStatusCard.isConnected) {
+      refs.staffSlot.replaceChildren(refs.staffStatusCard)
+    }
+    dispatchStaffActionState()
+  }
+
+  const closeStaffCompose = (clearDraft = false) => {
+    staffComposeOpen = false
+    refs.staffModalOverlay.hidden = true
+    hideStaffError()
+    setStaffMessage('', 'default')
+    if (clearDraft) {
+      refs.staffReason.value = 'COALS'
+      refs.staffComment.value = ''
+      refs.staffCounter.textContent = `0/${MAX_STAFF_COMMENT_LENGTH}`
+    }
+    clearStaffRouteFlag()
+  }
+
+  const openStaffCompose = () => {
+    if (!canCallStaff()) {
+      setMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
+      return
+    }
+    if (isActiveStaffCallStatus(latestStaffCall?.status)) {
+      staffComposeOpen = false
+      refs.staffModalOverlay.hidden = true
+      renderStaffStatusCard()
+      refs.staffStatusCard.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      clearStaffRouteFlag()
+      return
+    }
+    staffComposeOpen = true
+    refs.staffModalOverlay.hidden = false
+    hideStaffError()
+    setStaffMessage('', 'default')
+    refs.staffReason.focus()
+  }
+
+  const handlePendingStaffOpenRequest = () => {
+    if (!staffOpenRequested) return
+    staffOpenRequested = false
+    openStaffCompose()
   }
 
   const loadStaffCallStatus = async (silent = true) => {
     const params = currentStaffStatusParams()
-    if (!params) return
+    if (!params) {
+      latestStaffCall = null
+      renderStaffStatusCard()
+      return
+    }
     staffStatusAbort?.abort()
     const controller = new AbortController()
     staffStatusAbort = controller
@@ -613,17 +744,22 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     staffStatusAbort = null
     if (!result.ok) {
       if (!silent && result.error.code !== REQUEST_ABORTED_CODE) {
-        setStaffMessage('Не удалось обновить статус вызова.')
+        setMessage('Не удалось обновить статус вызова.')
       }
+      handlePendingStaffOpenRequest()
       return
     }
-    renderLatestStaffCallStatus(result.data.items)
+    latestStaffCall = result.data.items[0] ?? null
+    renderStaffStatusCard()
+    handlePendingStaffOpenRequest()
   }
 
   const syncStaffStatusPolling = () => {
     const params = currentStaffStatusParams()
-    if (!staffFormOpen || !params) {
+    if (!params) {
       stopStaffStatusPolling()
+      latestStaffCall = null
+      renderStaffStatusCard()
       return
     }
     if (staffStatusLoadedForKey !== params.key) {
@@ -645,14 +781,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     updateBookingButtonVisibility()
     const canStaff = canCallStaff()
     if (!canStaff) {
-      staffFormOpen = false
-    }
-    if (canStaff && staffFormOpen) {
-      if (!refs.staffCard.isConnected) {
-        refs.staffSlot.replaceChildren(refs.staffCard)
-      }
-    } else {
-      refs.staffCard.remove()
+      staffComposeOpen = false
+      staffOpenRequested = false
+      latestStaffCall = null
+      refs.staffModalOverlay.hidden = true
     }
     const staffDisabledReason = canStaff ? null : resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR'
     refs.staffButton.textContent = tableSnapshot.tableNumber
@@ -660,7 +792,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       : 'Вызвать персонал'
     refs.staffDisabledReason.textContent = staffDisabledReason ?? ''
     refs.staffDisabledReason.hidden = !staffDisabledReason
-    refs.staffButton.disabled = isStaffCalling || !canStaff
+    refs.staffButton.disabled = isStaffCalling || !canStaff || isActiveStaffCallStatus(latestStaffCall?.status)
+    refs.staffModalOverlay.hidden = !staffComposeOpen
+    renderStaffStatusCard()
     syncStaffStatusPolling()
   }
 
@@ -1017,6 +1151,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (isStaffCalling) return
     setStaffMessage('', 'default')
     hideStaffError()
+    if (isActiveStaffCallStatus(latestStaffCall?.status)) {
+      closeStaffCompose(false)
+      renderStaffStatusCard()
+      return
+    }
     if (!canCallStaff()) {
       setStaffMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
       return
@@ -1042,6 +1181,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       reason: refs.staffReason.value,
       comment: commentValue ? commentValue : null
     }
+    const reasonLabel = refs.staffReason.selectedOptions[0]?.textContent?.trim() || 'Вызов персонала'
     isStaffCalling = true
     updateStaffState()
     if (staffAbort) {
@@ -1077,17 +1217,20 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       updateStaffState()
       return
     }
-    const timeLabel = new Date(result.data.createdAtEpochSeconds * 1000).toLocaleTimeString('ru-RU', {
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-    setStaffMessage(`${result.data.statusLabel} (${timeLabel})`, 'success')
-    refs.staffComment.value = ''
-    refs.staffCounter.textContent = `0/${MAX_STAFF_COMMENT_LENGTH}`
+    latestStaffCall = {
+      staffCallId: result.data.staffCallId,
+      status: result.data.status,
+      statusLabel: result.data.statusLabel,
+      createdAtEpochSeconds: result.data.createdAtEpochSeconds,
+      reason: payload.reason,
+      reasonLabel,
+      comment: payload.comment
+    }
+    closeStaffCompose(true)
     staffStatusLoadedForKey = null
     updateStaffState()
     void loadStaffCallStatus(true)
-    showToast('Вызов персонала отправлен')
+    showToast('Вызов отправлен')
   }
 
   async function loadVenue() {
@@ -1237,16 +1380,13 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }),
     on(refs.staffButton, 'click', () => void handleStaffCall()),
     on(refs.staffCloseButton, 'click', () => {
-      staffFormOpen = false
-      hideStaffError()
-      setStaffMessage('', 'default')
-      stopStaffStatusPolling()
-      staffStatusLoadedForKey = null
+      closeStaffCompose(false)
       updateStaffState()
-      if (typeof window !== 'undefined' && venueId) {
-        const nextUrl = new URL(window.location.href)
-        nextUrl.hash = `#/venue/${venueId}`
-        window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+    }),
+    on(refs.staffModalOverlay, 'click', (event) => {
+      if (event.target === refs.staffModalOverlay) {
+        closeStaffCompose(false)
+        updateStaffState()
       }
     }),
     on(refs.staffComment, 'input', () => {
@@ -1257,11 +1397,14 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     })
   )
 
+  updateStaffState()
   void getAccessToken()
   void loadVenue()
 
   return () => {
     disposed = true
+    latestStaffCall = null
+    dispatchStaffActionState()
     menuAbort?.abort()
     staffAbort?.abort()
     staffStatusAbort?.abort()

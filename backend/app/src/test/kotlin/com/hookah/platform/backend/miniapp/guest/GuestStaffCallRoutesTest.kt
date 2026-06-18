@@ -189,6 +189,9 @@ class GuestStaffCallRoutesTest {
             assertEquals(payload.staffCallId.toString(), statusPayload.getValue("staffCallId").jsonPrimitive.content)
             assertEquals("NEW", statusPayload.getValue("status").jsonPrimitive.content)
             assertEquals("Вызов отправлен", statusPayload.getValue("statusLabel").jsonPrimitive.content)
+            assertEquals("BILL", statusPayload.getValue("reason").jsonPrimitive.content)
+            assertEquals("Принести счёт", statusPayload.getValue("reasonLabel").jsonPrimitive.content)
+            assertEquals("Нужны угли", statusPayload.getValue("comment").jsonPrimitive.content)
 
             updateStaffCallStatus(jdbcUrl, payload.staffCallId, "ACK")
             val ackStatusResponse =

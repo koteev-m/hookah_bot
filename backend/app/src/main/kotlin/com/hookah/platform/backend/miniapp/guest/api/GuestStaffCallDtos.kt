@@ -29,4 +29,7 @@ data class StaffCallStatusDto(
     val status: String,
     val statusLabel: String,
     val createdAtEpochSeconds: Long,
+    val reason: String,
+    val reasonLabel: String,
+    val comment: String?,
 )
