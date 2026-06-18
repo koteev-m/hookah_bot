@@ -1,12 +1,19 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestGetVenue, guestGetVenueInfoSections, guestGetVenueMenu, guestStaffCall } from '../shared/api/guestApi'
+import {
+  guestGetStaffCallStatus,
+  guestGetVenue,
+  guestGetVenueInfoSections,
+  guestGetVenueMenu,
+  guestStaffCall
+} from '../shared/api/guestApi'
 import type {
   MenuCategoryDto,
   MenuItemDto,
   MenuItemOptionDto,
   MenuResponse,
+  StaffCallStatusDto,
   VenueDto,
   VenueInfoSectionDto,
   VenueInfoSectionsResponse
@@ -25,6 +32,7 @@ import { renderGuestShiftExtensionCard, type GuestShiftExtensionAvailability } f
 const MAX_ITEM_QTY = 50
 const MAX_STAFF_COMMENT_LENGTH = 500
 const MAX_ITEM_PREFERENCE_NOTE_LENGTH = 200
+const STAFF_CALL_STATUS_POLL_MS = 10000
 
 type VenueScreenOptions = {
   root: HTMLDivElement | null
@@ -446,6 +454,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let disposed = false
   let menuAbort: AbortController | null = null
   let staffAbort: AbortController | null = null
+  let staffStatusAbort: AbortController | null = null
+  let staffStatusTimer: number | null = null
+  let staffStatusLoadedForKey: string | null = null
   let isStaffCalling = false
   let staffFormOpen = options.openStaffCall === true
   let messageTimer: number | null = null
@@ -558,6 +569,72 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     tableSnapshot.orderAllowed
   const shouldShowOrderMenu = () => canPlaceOrders()
 
+  const currentStaffStatusParams = () => {
+    if (!canCallStaff()) return null
+    const tableToken = tableSnapshot.tableToken
+    const tableSessionId = tableSnapshot.tableSessionId
+    if (!tableToken || typeof tableSessionId !== 'number' || !Number.isFinite(tableSessionId)) {
+      return null
+    }
+    return {
+      tableToken,
+      tableSessionId,
+      key: `${tableToken}:${tableSessionId}`
+    }
+  }
+
+  const stopStaffStatusPolling = () => {
+    if (staffStatusTimer != null) {
+      window.clearInterval(staffStatusTimer)
+      staffStatusTimer = null
+    }
+  }
+
+  const renderLatestStaffCallStatus = (items: StaffCallStatusDto[]) => {
+    if (!items.length) return
+    const latest = items[0]
+    setStaffMessage(latest.statusLabel, latest.status === 'DONE' ? 'success' : 'default')
+  }
+
+  const loadStaffCallStatus = async (silent = true) => {
+    const params = currentStaffStatusParams()
+    if (!params) return
+    staffStatusAbort?.abort()
+    const controller = new AbortController()
+    staffStatusAbort = controller
+    const deps = buildApiDeps(isDebug)
+    const result = await guestGetStaffCallStatus(
+      backendUrl,
+      { tableToken: params.tableToken, tableSessionId: params.tableSessionId },
+      deps,
+      controller.signal
+    )
+    if (disposed || controller.signal.aborted || staffStatusAbort !== controller) return
+    staffStatusAbort = null
+    if (!result.ok) {
+      if (!silent && result.error.code !== REQUEST_ABORTED_CODE) {
+        setStaffMessage('Не удалось обновить статус вызова.')
+      }
+      return
+    }
+    renderLatestStaffCallStatus(result.data.items)
+  }
+
+  const syncStaffStatusPolling = () => {
+    const params = currentStaffStatusParams()
+    if (!staffFormOpen || !params) {
+      stopStaffStatusPolling()
+      return
+    }
+    if (staffStatusLoadedForKey !== params.key) {
+      staffStatusLoadedForKey = params.key
+      void loadStaffCallStatus(true)
+    }
+    if (staffStatusTimer == null) {
+      staffStatusTimer = window.setInterval(() => void loadStaffCallStatus(true), STAFF_CALL_STATUS_POLL_MS)
+    }
+  }
+
   const updateBookingButtonVisibility = () => {
     const inTableContext = tableSnapshot.status === 'resolved' && tableSnapshot.venueId === venueId
     refs.bookingButton.hidden = inTableContext || !onBookVenue
@@ -584,6 +661,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.staffDisabledReason.textContent = staffDisabledReason ?? ''
     refs.staffDisabledReason.hidden = !staffDisabledReason
     refs.staffButton.disabled = isStaffCalling || !canStaff
+    syncStaffStatusPolling()
   }
 
   const updateMenuOrderState = (snapshot: ReturnType<typeof getCartSnapshot> = getCartSnapshot()) => {
@@ -1003,10 +1081,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       hour: '2-digit',
       minute: '2-digit'
     })
-    setStaffMessage(`Персонал вызван (${timeLabel})`, 'success')
+    setStaffMessage(`${result.data.statusLabel} (${timeLabel})`, 'success')
     refs.staffComment.value = ''
     refs.staffCounter.textContent = `0/${MAX_STAFF_COMMENT_LENGTH}`
+    staffStatusLoadedForKey = null
     updateStaffState()
+    void loadStaffCallStatus(true)
     showToast('Вызов персонала отправлен')
   }
 
@@ -1160,6 +1240,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       staffFormOpen = false
       hideStaffError()
       setStaffMessage('', 'default')
+      stopStaffStatusPolling()
+      staffStatusLoadedForKey = null
       updateStaffState()
       if (typeof window !== 'undefined' && venueId) {
         const nextUrl = new URL(window.location.href)
@@ -1182,6 +1264,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     disposed = true
     menuAbort?.abort()
     staffAbort?.abort()
+    staffStatusAbort?.abort()
+    stopStaffStatusPolling()
     extensionDispose()
     if (messageTimer) {
       window.clearTimeout(messageTimer)

@@ -284,6 +284,19 @@ export type StaffCallRequest = {
 export type StaffCallResponse = {
   staffCallId: number
   createdAtEpochSeconds: number
+  status: string
+  statusLabel: string
+}
+
+export type StaffCallStatusResponse = {
+  items: StaffCallStatusDto[]
+}
+
+export type StaffCallStatusDto = {
+  staffCallId: number
+  status: 'NEW' | 'ACK' | 'DONE' | 'CANCELLED' | string
+  statusLabel: string
+  createdAtEpochSeconds: number
 }
 
 export type GuestShiftExtensionOptionsResponse = {

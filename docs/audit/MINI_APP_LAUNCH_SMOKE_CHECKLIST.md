@@ -259,12 +259,28 @@ Steps:
 15. Confirm staff Telegram chat updated total matches Venue Mini App and Guest Mini App full bill totals.
 16. As STAFF, confirm bill edit controls are hidden.
 17. As STAFF, close delivered bill/order.
-18. Open `Вызовы`, accept and close a staff call.
+18. Open `Вызовы`, accept and close a staff call. M5 local automated smoke target covers Guest Mini App create/status and Venue Mini App accept/close; staging/manual smoke must also confirm staff chat receives the new-call notification.
 19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel and `Написать гостю` as allowed.
 20. As MANAGER/OWNER, click `Написать гостю`, confirm there are no template buttons, send a message, and confirm the modal closes with `Сообщение отправлено гостю.`
 21. Open `Сообщения` and confirm the same booking thread is listed.
 22. Open `Поддержка`.
 23. Confirm the screen explains manual platform support and has no fake ticket controls.
+
+### M5 staff calls lifecycle smoke status
+
+Status: implemented locally / staging smoke target.
+
+Automated smoke target:
+
+1. Guest opens active table context and sends `Вызвать персонал` with `tableToken`, `tableSessionId`, reason and optional comment.
+2. Guest sees status labels `Вызов отправлен`, `Персонал принял вызов`, `Вызов закрыт` from the backend status endpoint.
+3. STAFF opens Venue Mini App `Вызовы`, sees table/reason/comment/guest, clicks `Принять`, then clicks `Закрыть`.
+4. DONE calls leave the active queue.
+
+Manual staging smoke still required:
+
+1. Linked staff Telegram chat receives Mini App-created staff call notification.
+2. Staff chat inline `Принять` / `Выполнено` callbacks still edit the group message and do not diverge from Venue Mini App queue state.
 
 ### STAFF booking RBAC split smoke status
 

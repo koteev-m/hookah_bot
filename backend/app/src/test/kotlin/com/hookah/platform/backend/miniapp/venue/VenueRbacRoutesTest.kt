@@ -22,6 +22,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VenueRbacRoutesTest {
@@ -405,6 +406,49 @@ class VenueRbacRoutesTest {
         }
 
     @Test
+    fun `owner can acknowledge and close staff calls`() =
+        assertVenueRoleCanAcknowledgeAndCloseStaffCall("OWNER", "venue-owner-staff-calls")
+
+    @Test
+    fun `manager can acknowledge and close staff calls`() =
+        assertVenueRoleCanAcknowledgeAndCloseStaffCall("MANAGER", "venue-manager-staff-calls")
+
+    @Test
+    fun `done from new staff call is not applied`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-staff-call-invalid-transition")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
+            val staffCallId = seedStaffCall(jdbcUrl, venueId, status = "NEW")
+            val token = issueToken(config)
+
+            val doneResponse =
+                client.post("/api/venue/$venueId/staff-calls/$staffCallId/done") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, doneResponse.status)
+            val payload =
+                json.decodeFromString(VenueStaffCallActionResponse.serializer(), doneResponse.bodyAsText())
+            assertFalse(payload.applied)
+            assertEquals("NEW", payload.call.status)
+
+            val listResponse =
+                client.get("/api/venue/$venueId/staff-calls") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val listPayload = json.decodeFromString(VenueStaffCallsResponse.serializer(), listResponse.bodyAsText())
+            assertEquals(listOf(staffCallId), listPayload.items.map { it.id })
+        }
+
+    @Test
     fun `staff cannot access staff calls from another venue`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-staff-calls-forbidden")
@@ -457,6 +501,42 @@ class VenueRbacRoutesTest {
                 payload.items.map { it.reasonLabel }.toSet(),
             )
         }
+
+    private fun assertVenueRoleCanAcknowledgeAndCloseStaffCall(
+        role: String,
+        prefix: String,
+    ) = testApplication {
+        val jdbcUrl = buildJdbcUrl(prefix)
+        val config = buildConfig(jdbcUrl)
+
+        environment { this.config = config }
+        application { module() }
+
+        client.get("/health")
+
+        val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, role)
+        val staffCallId = seedStaffCall(jdbcUrl, venueId, status = "NEW")
+        val token = issueToken(config)
+
+        val ackResponse =
+            client.post("/api/venue/$venueId/staff-calls/$staffCallId/ack") {
+                headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            }
+        assertEquals(HttpStatusCode.OK, ackResponse.status)
+        val ackPayload = json.decodeFromString(VenueStaffCallActionResponse.serializer(), ackResponse.bodyAsText())
+        assertTrue(ackPayload.applied)
+        assertEquals("ACK", ackPayload.call.status)
+
+        val doneResponse =
+            client.post("/api/venue/$venueId/staff-calls/$staffCallId/done") {
+                headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            }
+        assertEquals(HttpStatusCode.OK, doneResponse.status)
+        val donePayload =
+            json.decodeFromString(VenueStaffCallActionResponse.serializer(), doneResponse.bodyAsText())
+        assertTrue(donePayload.applied)
+        assertEquals("DONE", donePayload.call.status)
+    }
 
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"

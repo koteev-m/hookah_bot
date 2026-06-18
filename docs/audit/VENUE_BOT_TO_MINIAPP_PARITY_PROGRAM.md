@@ -25,7 +25,7 @@ M1 безопасно привёл Venue Mini App shell к bot-like information 
 | Domain | Bot feature/status | Backend support | Mini App support | RBAC/permission notes | Files involved | Risk | Recommended milestone | Validation needed |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A. Work shift / orders | Implemented. Bot shift hub has `📦 Заказы`; callbacks include `staff_venue_orders_root:*`, order detail/status/bill callbacks. | Implemented: queue/detail/audit/status/reject/close/item bill adjustment routes. | Implemented: order queue/detail, full bill, status actions, bill controls where allowed. | `ORDER_QUEUE_VIEW`, `ORDER_STATUS_UPDATE`; STAFF can operate order status/close but not manager-only bill edits. | `TelegramBotRouter.kt`, `TelegramKeyboards.kt`, `VenueOrderRoutes.kt`, `VenueOrdersRepository.kt`, `venueOrders.ts`, `venueOrderDetail.ts` | Medium: large queues and route parity need smoke; UI ignores `nextCursor`. | M1 IA shell; later order audit/pagination slice. | Mini App build/e2e; backend route tests if pagination/audit added. |
-| A. Work shift / staff calls | Implemented/partial in bot. Shift hub has `🛎 Вызовы`; staff chat callbacks `sc_call_ack:*`, `sc_call_done:*`. | Implemented: `GET /api/venue/{venueId}/staff-calls`, ack/done routes. | Implemented: calls list, accept/close. | Uses `ORDER_QUEUE_VIEW` to view and `ORDER_STATUS_UPDATE` to act. | `VenueStaffCallRoutes.kt`, `StaffCallRepository.kt`, `venueCalls.ts`, `venueApi.ts` | Low/Medium: owner bot calls entry historically less direct; Mini App route is real. | M1 keep under `Работа смены`; no new logic. | E2E smoke for accept/done. |
+| A. Work shift / staff calls | Implemented in bot/table context and staff chat. Shift hub has `🛎 Вызовы`; staff chat callbacks `sc_call_ack:*`, `sc_call_done:*`. | Implemented: guest create with `tableSessionId`, guest status endpoint, `GET /api/venue/{venueId}/staff-calls`, ack/done routes, staff chat notification on Mini App-created calls. | Implemented: Guest Mini App sends scoped staff calls and shows simple lifecycle status; Venue Mini App calls list supports accept/close. | Uses `ORDER_QUEUE_VIEW` to view and `ORDER_STATUS_UPDATE` to act. STAFF/MANAGER/OWNER can operate calls; guest status remains table-session scoped. | `GuestStaffCallRoutes.kt`, `VenueStaffCallRoutes.kt`, `StaffCallRepository.kt`, `guestVenue.ts`, `venueCalls.ts`, `guestApi.ts`, `venueApi.ts` | Low/Medium: no cancel route and no SLA/escalation yet; staff chat runtime binding still requires pilot smoke. | M5 closed locally / staging smoke target. | Backend StaffCall/RBAC tests, Mini App smoke for guest create/status and venue accept/done, manual staff chat notification smoke. |
 | A. Work shift / bookings | Implemented/partial. Bot has booking list, confirm/cancel/change/message, seated/no-show, hold settings. | Implemented: booking list/status/message routes, reminder/expiry workers in backend. | Implemented: booking list, confirm/cancel/change, `Написать гостю`, seated/no-show, venue-local display, hold deadline display. | `BOOKING_VIEW`; `BOOKING_ARRIVAL_UPDATE`; `BOOKING_MANAGE` for management/message actions. | `VenueBookingRoutes.kt`, `GuestBookingRepository.kt`, `venueBookings.ts`, `TelegramBotRouter.kt` | Medium: booking settings/reminder controls are not Mini App parity yet. | M3 closed; keep in regression smoke. | Booking route/RBAC tests, Mini App booking e2e, Telegram runtime smoke. |
 | A. Work shift / booking conversations | Partial in bot before M4A: booking reply callback existed, but staff chat was the only reliable inbox for replies. | Implemented in M4A/M4B/M4C: `support_threads` / `support_messages`, booking message thread create/reuse, guest/venue list/detail/reply APIs, `support_thread_reads`, `filter=active\|resolved`, context labels, last message preview, unread counts and resolve/reopen status routes. | Implemented locally in M4B/M4C: booking card opens thread history, Venue `Сообщения` lists current-venue thread cards, Guest `Сообщения` lists venue/context thread cards, both have active/resolved filters, unread badges and resolve/reopen detail actions. | `BOOKING_MANAGE` for venue replies/status changes; STAFF remains denied for booking messages unless product policy changes later. Guest access is user-scoped; Venue inbox stays venue-scoped; Platform inbox must be backend-backed before exposure. Conversation status is separate from booking status. | `SupportThreadRepository.kt`, `SupportRoutes.kt`, `VenueBookingRoutes.kt`, `TelegramBotRouter.kt`, `venueBookings.ts`, `venueMessages.ts`, `guestSupportThreads.ts`, `supportDtos.ts`, `V108__support_thread_reads.sql` | Medium: no DB-level unique thread constraint yet; M4B/M4C need staging smoke with multiple venues/threads; venue/admin bot full inbox is deferred. | M4C implemented locally / smoke target. | Support/booking route tests, Guest Bot reply test, Mini App booking/messages e2e, Telegram runtime smoke; for M4C smoke resolve/reopen and no booking lifecycle side effects. |
 | A. Work shift / stop-list | Implemented. Bot shift hub has `🚫 Стоп-лист`; menu item and option availability flows exist. | Implemented via Venue Menu item/option availability routes. | Implemented/smoke-passed inside menu constructor: item-level and option/flavor stop-list. | `MENU_VIEW` + `MENU_AVAILABILITY_MANAGE` allow STAFF/MANAGER/OWNER operational stop-list. `MENU_MANAGE` remains MANAGER/OWNER-only for content. | `VenueMenuRoutes.kt`, `HookahFlavorProfileService.kt`, `venueMenu.ts` | Low: options/flavors parity closed; keep stop-list in regression. | M1 show menu under `Настройки`; STAFF availability parity is implemented as a focused follow-up. | Regression smoke for item/option availability and hidden STAFF content controls. |
@@ -265,7 +265,34 @@ Definition of Done:
 - Booking card keeps opening resolved conversation history.
 - STAFF does not gain new message/status permissions.
 
-### M5 — Promotions Read-Only Summary
+### M5 — Staff Calls Lifecycle And Notification Parity
+
+Status: implemented locally / staging smoke target.
+
+Scope:
+
+- Guest Mini App creates staff calls from active table context with `tableToken`, `tableSessionId`, reason and optional comment.
+- Guest Mini App shows simple call status labels: `Вызов отправлен`, `Персонал принял вызов`, `Вызов закрыт`.
+- Venue Mini App `Вызовы` queue lists active calls and lets STAFF/MANAGER/OWNER accept and close calls.
+- Backend keeps staff-call status model `NEW -> ACK -> DONE`; stale transitions return `applied=false` and do not mutate state.
+- Staff chat receives Mini App-created call notifications through the existing notifier path and remains a quick-action mirror.
+
+Deferred scope:
+
+- Configurable call categories.
+- Cancel route.
+- SLA timers/escalation.
+- Personal staff subscriptions.
+- Audit events for ack/done actors and timestamps.
+
+Definition of Done:
+
+- Guest create/status route tests pass.
+- Venue route/RBAC tests cover STAFF/MANAGER/OWNER actions and invalid transition no-op.
+- Mini App smoke covers guest create/status and venue accept/close.
+- Manual pilot smoke confirms linked staff chat receives the new-call notification and inline ACK/DONE still work.
+
+### M6 — Promotions Read-Only Summary
 
 Scope:
 
@@ -278,7 +305,7 @@ Definition of Done:
 - Mini App does not expose placeholder marketing actions.
 - OWNER/MANAGER can inspect active/paused/archived status safely.
 
-### M6 — Guest Preview Entry
+### M7 — Guest Preview Entry
 
 Scope:
 
@@ -290,7 +317,7 @@ Definition of Done:
 - Preview matches Guest Mini App visibility rules.
 - No private staff/order/billing data leaks.
 
-### M7 — Venue Settings Slices
+### M8 — Venue Settings Slices
 
 Scope:
 
@@ -302,7 +329,7 @@ Definition of Done:
 - Each settings slice has backend route, RBAC test, UI, smoke checklist.
 - `VENUE_SETTINGS` no longer leads to a screen that only supports shift extension settings.
 
-### M8 — Staff Chat Diagnostics And Unlink
+### M9 — Staff Chat Diagnostics And Unlink
 
 Scope:
 
@@ -314,7 +341,7 @@ Definition of Done:
 - Owner-only unlink is visible and tested.
 - Link-code flow remains unchanged.
 
-### M9 — Menu Semantic And Media Polish
+### M10 — Menu Semantic And Media Polish
 
 Scope:
 

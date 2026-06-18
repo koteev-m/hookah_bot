@@ -90,6 +90,28 @@ class StaffCallRepositoryTest {
             assertEquals("Максим", createdCall.guestDisplayName)
         }
 
+    @Test
+    fun `listByGuestTableSession returns current guest call statuses only`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-guest-status")
+            val fixture = seedStaffCall(jdbcUrl, status = "DONE")
+            val repository = StaffCallRepository(dataSource(jdbcUrl))
+
+            val calls =
+                repository.listByGuestTableSession(
+                    venueId = fixture.venueId,
+                    tableId = fixture.tableId,
+                    tableSessionId = fixture.tableSessionId,
+                    userId = GUEST_USER_ID,
+                    limit = 20,
+                )
+
+            assertEquals(1, calls.size)
+            assertEquals(fixture.staffCallId, calls.single().id)
+            assertEquals("DONE", calls.single().status)
+            assertEquals(fixture.tableId, calls.single().tableId)
+        }
+
     private fun migratedJdbcUrl(prefix: String): String {
         val jdbcUrl =
             "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;" +
@@ -184,19 +206,20 @@ class StaffCallRepositoryTest {
                 connection.prepareStatement(
                     """
                     INSERT INTO staff_calls (
-                        venue_id, table_id, created_by_user_id, reason, comment, status, created_at
+                        venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """.trimIndent(),
                     Statement.RETURN_GENERATED_KEYS,
                 ).use { statement ->
                     statement.setLong(1, venueId)
                     statement.setLong(2, tableId)
-                    statement.setLong(3, GUEST_USER_ID)
-                    statement.setString(4, StaffCallReason.COME.name)
-                    statement.setString(5, "Нужна помощь")
-                    statement.setString(6, status)
-                    statement.setTimestamp(7, Timestamp.from(Instant.now()))
+                    statement.setLong(3, tableSessionId)
+                    statement.setLong(4, GUEST_USER_ID)
+                    statement.setString(5, StaffCallReason.COME.name)
+                    statement.setString(6, "Нужна помощь")
+                    statement.setString(7, status)
+                    statement.setTimestamp(8, Timestamp.from(Instant.now()))
                     statement.executeUpdate()
                     statement.generatedKeys.use { rs ->
                         if (rs.next()) rs.getLong(1) else error("Failed to insert staff call")

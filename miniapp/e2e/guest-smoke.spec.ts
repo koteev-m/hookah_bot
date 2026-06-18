@@ -426,6 +426,13 @@ async function mockGuestApi(
   const previewRequests: Array<{ items: AddBatchItemPayload[] }> = []
   const addBatchRequests: AddBatchPayload[] = []
   let submittedOrderItems: AddBatchItemPayload[] = []
+  const staffCallRequests: Array<{ tableToken: string; tableSessionId: number; reason: string; comment?: string | null }> = []
+  let staffCallStatuses: Array<{
+    staffCallId: number
+    status: string
+    statusLabel: string
+    createdAtEpochSeconds: number
+  }> = []
 
   const findMenuItem = (itemId: number) =>
     menuCategories.flatMap((category) => category.items).find((item) => item.id === itemId) ?? null
@@ -646,6 +653,36 @@ async function mockGuestApi(
     await route.fulfill(jsonResponse({ orderId: 900, batchId: 444 }))
   })
 
+  await page.route('**/api/guest/staff-call/status?**', async (route) => {
+    await route.fulfill(jsonResponse({ items: staffCallStatuses }))
+  })
+
+  await page.route('**/api/guest/staff-call', async (route) => {
+    const body = (await route.request().postDataJSON()) as {
+      tableToken: string
+      tableSessionId: number
+      reason: string
+      comment?: string | null
+    }
+    staffCallRequests.push(body)
+    staffCallStatuses = [
+      {
+        staffCallId: 901,
+        status: 'NEW',
+        statusLabel: 'Вызов отправлен',
+        createdAtEpochSeconds: 1894302000
+      }
+    ]
+    await route.fulfill(
+      jsonResponse({
+        staffCallId: 901,
+        createdAtEpochSeconds: 1894302000,
+        status: 'NEW',
+        statusLabel: 'Вызов отправлен'
+      })
+    )
+  })
+
   await page.route('**/api/guest/table/extension-options?**', async (route) => {
     await route.fulfill(jsonResponse(extensionOptions))
   })
@@ -670,6 +707,10 @@ async function mockGuestApi(
     getCreateExtensionRequestCalls: () => createExtensionRequestCalls,
     getPreviewRequests: () => previewRequests,
     getAddBatchRequests: () => addBatchRequests,
+    getStaffCallRequests: () => staffCallRequests,
+    setStaffCallStatuses: (items: typeof staffCallStatuses) => {
+      staffCallStatuses = items
+    },
     setRestoreContext: (context: RestoreContext | null) => {
       restoreContext = context
     },
@@ -1011,6 +1052,125 @@ async function mockVenueStatsApi(
 
   return {
     getPeriods: () => periods
+  }
+}
+
+async function mockVenueStaffCallsApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+  } = {}
+) {
+  const role = options.role ?? 'STAFF'
+  const permissions = options.permissions ?? ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE']
+  let ackCalls = 0
+  let doneCalls = 0
+  const calls: Array<{
+    id: number
+    tableId: number
+    tableNumber: number
+    reason: string
+    reasonLabel: string
+    comment: string | null
+    status: string
+    statusLabel: string
+    createdAt: string
+    guestDisplayName: string | null
+  }> = [
+    {
+      id: 901,
+      tableId: 7,
+      tableNumber: 4,
+      reason: 'COALS',
+      reasonLabel: 'Заменить угли',
+      comment: 'Нужны угли',
+      status: 'NEW',
+      statusLabel: 'Новый',
+      createdAt: '2030-01-10T18:30:00Z',
+      guestDisplayName: 'Алексей'
+    }
+  ]
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role,
+            permissions
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff-chat', async (route) => {
+    await route.fulfill(jsonResponse({ venueId: 1, isLinked: true, chatId: -100 }))
+  })
+
+  await page.route('**/api/guest/venue/1', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 1,
+          name: 'Микс',
+          city: 'Москва',
+          address: 'Пилотная, 1',
+          status: 'PUBLISHED'
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const actionMatch = url.pathname.match(/\/api\/venue\/1\/staff-calls\/(\d+)\/(ack|done)$/)
+    if (request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ items: calls.filter((call) => call.status === 'NEW' || call.status === 'ACK') }))
+      return
+    }
+    if (!actionMatch || request.method() !== 'POST') {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+
+    const staffCallId = Number(actionMatch[1])
+    const action = actionMatch[2]
+    const call = calls.find((item) => item.id === staffCallId)
+    if (!call) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+
+    let applied = false
+    if (action === 'ack' && call.status === 'NEW') {
+      ackCalls += 1
+      call.status = 'ACK'
+      call.statusLabel = 'В работе'
+      applied = true
+    } else if (action === 'done' && call.status === 'ACK') {
+      doneCalls += 1
+      call.status = 'DONE'
+      call.statusLabel = 'Выполнен'
+      applied = true
+    }
+    await route.fulfill(jsonResponse({ call, applied }))
+  })
+
+  return {
+    getAckCalls: () => ackCalls,
+    getDoneCalls: () => doneCalls
   }
 }
 
@@ -1675,6 +1835,52 @@ test('table context opens category-first order menu and cart action', async ({ p
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
 })
 
+test('guest creates staff call from active table and sees lifecycle status', async ({ page }) => {
+  const api = await mockGuestApi(page)
+
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
+  await expect(page.getByText('Причина')).toBeVisible()
+  await page.locator('select.staff-select').selectOption('COALS')
+  await page.locator('textarea.staff-comment').fill('Нужны угли')
+  await page.getByRole('button', { name: 'Вызвать персонал к столу №4' }).click()
+
+  await expect(page.getByText(/Вызов отправлен/)).toBeVisible()
+  expect(api.getStaffCallRequests()).toEqual([
+    {
+      tableToken,
+      tableSessionId: 77,
+      reason: 'COALS',
+      comment: 'Нужны угли'
+    }
+  ])
+
+  await page.getByRole('button', { name: '← К меню' }).click()
+  api.setStaffCallStatuses([
+    {
+      staffCallId: 901,
+      status: 'ACK',
+      statusLabel: 'Персонал принял вызов',
+      createdAtEpochSeconds: 1894302000
+    }
+  ])
+  await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
+  await expect(page.getByText('Персонал принял вызов')).toBeVisible()
+
+  await page.getByRole('button', { name: '← К меню' }).click()
+  api.setStaffCallStatuses([
+    {
+      staffCallId: 901,
+      status: 'DONE',
+      statusLabel: 'Вызов закрыт',
+      createdAtEpochSeconds: 1894302000
+    }
+  ])
+  await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
+  await expect(page.getByText('Вызов закрыт')).toBeVisible()
+})
+
 test('guest mini app selects item flavor and submits structured selected option', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, {
@@ -1904,6 +2110,31 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await expect(page.getByRole('heading', { name: 'Запрос на продление работы заведения' })).toHaveCount(0)
   expect(api.getRejectCalls()).toBe(1)
   expect(api.getRejectedReasons()).toEqual(['Нет свободного времени'])
+})
+
+test('venue staff accepts and closes staff calls queue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffCallsApi(page)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Вызовы', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Вызовы', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Вызовы персонала' })).toBeVisible()
+
+  const callCard = page.locator('.venue-call-card').filter({ hasText: 'Стол №4' })
+  await expect(callCard).toBeVisible()
+  await expect(callCard).toContainText('Причина: Заменить угли')
+  await expect(callCard).toContainText('Комментарий: Нужны угли')
+  await expect(callCard).toContainText('Гость: Алексей')
+
+  await callCard.getByRole('button', { name: 'Принять' }).click()
+  await expect(page.locator('.venue-call-card').filter({ hasText: 'В работе' })).toBeVisible()
+  expect(api.getAckCalls()).toBe(1)
+
+  await page.locator('.venue-call-card').filter({ hasText: 'Стол №4' }).getByRole('button', { name: 'Закрыть' }).click()
+  await expect(page.getByText('Активных вызовов пока нет.')).toBeVisible()
+  expect(api.getDoneCalls()).toBe(1)
 })
 
 test('venue manager configures paid shift extension settings', async ({ page }) => {

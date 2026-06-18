@@ -14,4 +14,19 @@ data class StaffCallRequest(
 data class StaffCallResponse(
     val staffCallId: Long,
     val createdAtEpochSeconds: Long,
+    val status: String,
+    val statusLabel: String,
+)
+
+@Serializable
+data class StaffCallStatusResponse(
+    val items: List<StaffCallStatusDto>,
+)
+
+@Serializable
+data class StaffCallStatusDto(
+    val staffCallId: Long,
+    val status: String,
+    val statusLabel: String,
+    val createdAtEpochSeconds: Long,
 )

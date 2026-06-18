@@ -71,6 +71,73 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun listByGuestTableSession(
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        limit: Int,
+    ): List<StaffCallQueueItem> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val activeSince = Instant.now().minus(ACTIVE_STAFF_CALL_WINDOW)
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT sc.id,
+                               sc.table_id,
+                               vt.table_number,
+                               sc.reason,
+                               sc.comment,
+                               sc.status,
+                               sc.created_at,
+                               u.guest_display_name
+                        FROM staff_calls sc
+                        JOIN venue_tables vt ON vt.id = sc.table_id
+                        LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
+                        WHERE sc.venue_id = ?
+                          AND sc.table_id = ?
+                          AND sc.table_session_id = ?
+                          AND sc.created_by_user_id = ?
+                          AND sc.status IN ('NEW', 'ACK', 'DONE')
+                          AND sc.created_at >= ?
+                        ORDER BY sc.created_at DESC, sc.id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, tableId)
+                        statement.setLong(3, tableSessionId)
+                        statement.setLong(4, userId)
+                        statement.setTimestamp(5, Timestamp.from(activeSince))
+                        statement.setInt(6, limit)
+                        statement.executeQuery().use { rs ->
+                            val result = mutableListOf<StaffCallQueueItem>()
+                            while (rs.next()) {
+                                result.add(
+                                    StaffCallQueueItem(
+                                        id = rs.getLong("id"),
+                                        tableId = rs.getLong("table_id"),
+                                        tableNumber = rs.getInt("table_number"),
+                                        reason = rs.getString("reason"),
+                                        comment = rs.getString("comment"),
+                                        status = rs.getString("status"),
+                                        createdAt = rs.getTimestamp("created_at").toInstant(),
+                                        guestDisplayName = rs.getString("guest_display_name"),
+                                    ),
+                                )
+                            }
+                            result
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun createStaffCall(
         venueId: Long,
         tableId: Long,

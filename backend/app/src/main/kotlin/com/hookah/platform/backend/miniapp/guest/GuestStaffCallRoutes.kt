@@ -1,8 +1,11 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallRequest
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallResponse
+import com.hookah.platform.backend.miniapp.guest.api.StaffCallStatusDto
+import com.hookah.platform.backend.miniapp.guest.api.StaffCallStatusResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -10,14 +13,19 @@ import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.StaffCallNotification
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
+import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.UserRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+
+private const val GUEST_STAFF_CALL_STATUS_LIMIT = 5
 
 fun Route.guestStaffCallRoutes(
     guestRateLimitConfig: GuestRateLimitConfig,
@@ -86,8 +94,56 @@ fun Route.guestStaffCallRoutes(
                 StaffCallResponse(
                     staffCallId = created.id,
                     createdAtEpochSeconds = created.createdAt.epochSecond,
+                    status = StaffCallStatus.NEW.dbValue,
+                    statusLabel = guestStaffCallStatusLabel(StaffCallStatus.NEW),
                 ),
             )
         }
+
+        get("/status") {
+            val rawToken = call.request.queryParameters["tableToken"]
+            val token = validateTableToken(rawToken)
+            val tableSessionId =
+                call.request.queryParameters["tableSessionId"]?.toLongOrNull()?.takeIf { it > 0 }
+                    ?: throw InvalidInputException("tableSessionId must be a positive number")
+            val table = tableTokenResolver(token) ?: throw NotFoundException()
+            val tableSession =
+                tableSessionRepository.touchActiveSession(
+                    tableSessionId = tableSessionId,
+                    venueId = table.venueId,
+                    tableId = table.tableId,
+                    ttl = tableSessionConfig.ttl,
+                ) ?: throw NotFoundException()
+            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+            val userId = call.requireUserId()
+            val calls =
+                staffCallRepository.listByGuestTableSession(
+                    venueId = table.venueId,
+                    tableId = table.tableId,
+                    tableSessionId = tableSession.id,
+                    userId = userId,
+                    limit = GUEST_STAFF_CALL_STATUS_LIMIT,
+                )
+            call.respond(StaffCallStatusResponse(items = calls.map { it.toGuestStatusDto() }))
+        }
     }
 }
+
+private fun StaffCallQueueItem.toGuestStatusDto(): StaffCallStatusDto {
+    val parsedStatus = StaffCallStatus.fromDb(status)
+    return StaffCallStatusDto(
+        staffCallId = id,
+        status = parsedStatus?.dbValue ?: status,
+        statusLabel = guestStaffCallStatusLabel(parsedStatus),
+        createdAtEpochSeconds = createdAt.epochSecond,
+    )
+}
+
+private fun guestStaffCallStatusLabel(status: StaffCallStatus?): String =
+    when (status) {
+        StaffCallStatus.NEW -> "Вызов отправлен"
+        StaffCallStatus.ACK -> "Персонал принял вызов"
+        StaffCallStatus.DONE -> "Вызов закрыт"
+        StaffCallStatus.CANCELLED -> "Вызов отменён"
+        null -> "Статус вызова обновлён"
+    }

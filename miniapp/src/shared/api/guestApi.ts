@@ -27,6 +27,7 @@ import type {
   ShiftExtensionRequestResponse,
   StaffCallRequest,
   StaffCallResponse,
+  StaffCallStatusResponse,
   TableResolveResponse,
   TableRestoreResponse,
   VenueInfoSectionsResponse,
@@ -430,6 +431,35 @@ export async function guestStaffCall(
       body: JSON.stringify(requestPayload),
       signal
     },
+    deps
+  )
+}
+
+export async function guestGetStaffCallStatus(
+  backendUrl: string,
+  params: { tableToken: string; tableSessionId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<StaffCallStatusResponse>> {
+  const normalizedToken = normalizeTableToken(params.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  if (
+    !Number.isFinite(params.tableSessionId) ||
+    !Number.isInteger(params.tableSessionId) ||
+    params.tableSessionId <= 0
+  ) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  const search = new URLSearchParams({
+    tableToken: normalizedToken,
+    tableSessionId: String(params.tableSessionId)
+  })
+  return requestApi<StaffCallStatusResponse>(
+    backendUrl,
+    `/api/guest/staff-call/status?${search.toString()}`,
+    { signal },
     deps
   )
 }

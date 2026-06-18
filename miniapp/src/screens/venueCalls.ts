@@ -170,7 +170,7 @@ export function renderVenueCallsScreen(options: VenueCallsOptions) {
   const renderCalls = (items: VenueStaffCallDto[]) => {
     refs.list.replaceChildren()
     if (!items.length) {
-      refs.list.appendChild(el('p', { className: 'venue-empty', text: 'Активных вызовов нет.' }))
+      refs.list.appendChild(el('p', { className: 'venue-empty', text: 'Активных вызовов пока нет.' }))
       return
     }
     items.forEach((call) => {

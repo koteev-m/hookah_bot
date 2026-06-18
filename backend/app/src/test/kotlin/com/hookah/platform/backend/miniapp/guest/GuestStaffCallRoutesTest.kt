@@ -47,6 +47,9 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
@@ -161,12 +164,63 @@ class GuestStaffCallRoutesTest {
             val payload = json.decodeFromString(StaffCallResponse.serializer(), response.bodyAsText())
             assertTrue(payload.staffCallId > 0)
             assertTrue(payload.createdAtEpochSeconds > 0)
+            assertEquals("NEW", payload.status)
+            assertEquals("Вызов отправлен", payload.statusLabel)
 
             val stored = fetchStaffCall(jdbcUrl, payload.staffCallId)
             assertNotNull(stored)
             assertEquals("BILL", stored.reason)
             assertEquals("Нужны угли", stored.comment)
             assertEquals(TELEGRAM_USER_ID, stored.createdByUserId)
+
+            val statusResponse =
+                client.get("/api/guest/staff-call/status?tableToken=staff-token&tableSessionId=$tableSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, statusResponse.status)
+            val statusPayload =
+                json.parseToJsonElement(statusResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            assertEquals(payload.staffCallId.toString(), statusPayload.getValue("staffCallId").jsonPrimitive.content)
+            assertEquals("NEW", statusPayload.getValue("status").jsonPrimitive.content)
+            assertEquals("Вызов отправлен", statusPayload.getValue("statusLabel").jsonPrimitive.content)
+
+            updateStaffCallStatus(jdbcUrl, payload.staffCallId, "ACK")
+            val ackStatusResponse =
+                client.get("/api/guest/staff-call/status?tableToken=staff-token&tableSessionId=$tableSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, ackStatusResponse.status)
+            val ackStatusPayload =
+                json.parseToJsonElement(ackStatusResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            assertEquals("ACK", ackStatusPayload.getValue("status").jsonPrimitive.content)
+            assertEquals("Персонал принял вызов", ackStatusPayload.getValue("statusLabel").jsonPrimitive.content)
+
+            updateStaffCallStatus(jdbcUrl, payload.staffCallId, "DONE")
+            val doneStatusResponse =
+                client.get("/api/guest/staff-call/status?tableToken=staff-token&tableSessionId=$tableSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, doneStatusResponse.status)
+            val doneStatusPayload =
+                json.parseToJsonElement(doneStatusResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            assertEquals("DONE", doneStatusPayload.getValue("status").jsonPrimitive.content)
+            assertEquals("Вызов закрыт", doneStatusPayload.getValue("statusLabel").jsonPrimitive.content)
         }
 
     @Test
@@ -726,6 +780,20 @@ class GuestStaffCallRoutesTest {
             }
         }
         return null
+    }
+
+    private fun updateStaffCallStatus(
+        jdbcUrl: String,
+        staffCallId: Long,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("UPDATE staff_calls SET status = ? WHERE id = ?").use { statement ->
+                statement.setString(1, status)
+                statement.setLong(2, staffCallId)
+                statement.executeUpdate()
+            }
+        }
     }
 
     private data class StaffCallRecord(

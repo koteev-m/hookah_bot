@@ -53,7 +53,12 @@ fun Route.venueStaffCallRoutes(
         get("/{venueId}/staff-calls") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            ensureStaffCallAccess(venueAccessRepository, userId, venueId)
+            ensureStaffCallAccess(
+                venueAccessRepository = venueAccessRepository,
+                userId = userId,
+                venueId = venueId,
+                requiredPermission = VenuePermission.ORDER_QUEUE_VIEW,
+            )
             val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: DEFAULT_STAFF_CALL_LIMIT
             if (limit <= 0 || limit > MAX_STAFF_CALL_LIMIT) {
                 throw InvalidInputException("limit must be between 1 and $MAX_STAFF_CALL_LIMIT")
@@ -92,7 +97,12 @@ private suspend fun io.ktor.server.application.ApplicationCall.updateStaffCall(
 ) {
     val actorUserId = requireUserId()
     val venueId = requireVenueId()
-    ensureStaffCallAccess(venueAccessRepository, actorUserId, venueId)
+    ensureStaffCallAccess(
+        venueAccessRepository = venueAccessRepository,
+        userId = actorUserId,
+        venueId = venueId,
+        requiredPermission = VenuePermission.ORDER_STATUS_UPDATE,
+    )
     val staffCallId =
         parameters["staffCallId"]?.toLongOrNull()
             ?: throw InvalidInputException("staffCallId must be a number")
@@ -118,10 +128,11 @@ private suspend fun ensureStaffCallAccess(
     venueAccessRepository: VenueAccessRepository,
     userId: Long,
     venueId: Long,
+    requiredPermission: VenuePermission,
 ) {
     val role = resolveVenueRole(venueAccessRepository, userId, venueId)
     val permissions = VenuePermissions.forRole(role)
-    if (!permissions.contains(VenuePermission.ORDER_QUEUE_VIEW)) {
+    if (!permissions.contains(requiredPermission)) {
         throw ForbiddenException()
     }
 }
