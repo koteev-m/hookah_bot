@@ -177,6 +177,18 @@ button:disabled {
   background-color: #e2e8f0;
 }
 
+.button-tertiary {
+  background: transparent;
+  color: #475569;
+  padding-inline: 0;
+}
+
+.button-tertiary:hover {
+  background: transparent;
+  color: #1e293b;
+  text-decoration: underline;
+}
+
 .button-danger {
   background-color: #dc2626;
 }
@@ -1334,7 +1346,7 @@ input[type="number"] {
 
 .venue-link-code {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.45rem;
 }
 
 .venue-link-code input[type="text"] {
@@ -1344,11 +1356,24 @@ input[type="number"] {
   border: 1px solid #dfe3eb;
   border-radius: 8px;
   font-size: 0.95rem;
+  overflow-x: auto;
 }
 
 .venue-link-code-value,
 .venue-chat-status-title {
   font-weight: 700;
+}
+
+.venue-link-code h3,
+.venue-link-code p {
+  margin: 0;
+}
+
+.venue-link-code-expiry,
+.venue-link-code-raw,
+.venue-link-code-label {
+  color: #475569;
+  font-size: 0.92rem;
 }
 
 .venue-chat-status-description {
@@ -1359,6 +1384,11 @@ input[type="number"] {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.venue-chat-actions button,
+.venue-link-code button {
+  width: 100%;
 }
 
 .venue-flags {

@@ -1186,6 +1186,7 @@ async function mockVenueStaffChatApi(
     role?: 'OWNER' | 'MANAGER' | 'STAFF'
     permissions?: string[]
     linked?: boolean
+    generatedExpiresAt?: string
   } = {}
 ) {
   const role = options.role ?? 'OWNER'
@@ -1196,6 +1197,7 @@ async function mockVenueStaffChatApi(
   let unlinks = 0
   let activeCodeHint: string | null = null
   let activeCodeExpiresAt: string | null = null
+  const generatedCodes = ['ABC123', 'DEF456', 'GHI789']
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -1257,14 +1259,15 @@ async function mockVenueStaffChatApi(
     }
     if (request.method() === 'POST' && path === '/api/venue/1/staff-chat/link-code') {
       generated += 1
-      activeCodeHint = 'ABC'
-      activeCodeExpiresAt = '2030-01-10T19:00:00Z'
+      const code = generatedCodes[generated - 1] ?? `CODE${generated}`
+      activeCodeHint = code.slice(0, 3)
+      activeCodeExpiresAt = options.generatedExpiresAt ?? '2030-01-10T19:00:00Z'
       await route.fulfill(
         jsonResponse({
-          code: 'ABC123',
+          code,
           expiresAt: activeCodeExpiresAt,
           ttlSeconds: 600,
-          linkCommand: '/link@TestHookahBot ABC123',
+          linkCommand: `/link@TestHookahBot ${code}`,
           testCommand: '/link_test@TestHookahBot'
         })
       )
@@ -2290,6 +2293,16 @@ test('venue staff accepts and closes staff calls queue', async ({ page }) => {
 })
 
 test('venue owner links tests and unlinks staff chat from mini app', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          ;(window as Window & { __copiedText?: string }).__copiedText = text
+        }
+      }
+    })
+  })
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: false })
 
@@ -2299,10 +2312,36 @@ test('venue owner links tests and unlinks staff chat from mini app', async ({ pa
   await page.getByRole('button', { name: 'Чат персонала', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Чат персонала' })).toBeVisible()
   await expect(page.getByText('Чат персонала не подключён')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Скопировать команду' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Проверить подключение' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Сгенерировать код привязки' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Код привязки готов' })).toBeVisible()
   await expect(page.getByText('ABC123')).toBeVisible()
   await expect(page.getByLabel('Команда для привязки чата')).toHaveValue('/link@TestHookahBot ABC123')
+  await expect(page.getByRole('button', { name: 'Сгенерировать код привязки' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Скопировать команду' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Проверить подключение' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Создать новый код' })).toBeVisible()
   expect(api.getGeneratedCalls()).toBe(1)
+
+  await page.getByRole('button', { name: 'Скопировать команду' }).click()
+  await expect(page.getByRole('status')).toHaveText('Команда скопирована')
+  await expect.poll(() => page.evaluate(() => (window as Window & { __copiedText?: string }).__copiedText)).toBe(
+    '/link@TestHookahBot ABC123'
+  )
+
+  await page.getByRole('button', { name: 'Создать новый код' }).click()
+  await expect(page.getByRole('heading', { name: 'Создать новый код?' })).toBeVisible()
+  await page.getByRole('button', { name: 'Отмена' }).click()
+  await expect(page.getByLabel('Команда для привязки чата')).toHaveValue('/link@TestHookahBot ABC123')
+  expect(api.getGeneratedCalls()).toBe(1)
+  await page.getByRole('button', { name: 'Создать новый код' }).click()
+  await page.locator('.venue-modal').filter({ hasText: 'Текущий код перестанет работать' }).getByRole('button', {
+    name: 'Создать новый код'
+  }).click()
+  await expect(page.getByLabel('Команда для привязки чата')).toHaveValue('/link@TestHookahBot DEF456')
+  expect(api.getGeneratedCalls()).toBe(2)
 
   api.setLinked(true)
   await page.getByRole('button', { name: 'Проверить подключение' }).click()
@@ -2337,6 +2376,25 @@ test('venue manager can test staff chat but cannot unlink', async ({ page }) => 
   await expect(page.getByText('Чат персонала подключён')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Отправить тестовое сообщение' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Отвязать чат' })).toHaveCount(0)
+})
+
+test('expired staff chat link code is not presented as usable', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffChatApi(page, {
+    role: 'OWNER',
+    linked: false,
+    generatedExpiresAt: '2000-01-10T19:00:00Z'
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Чат персонала', exact: true }).click()
+  await page.getByRole('button', { name: 'Сгенерировать код привязки' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Срок действия кода истёк' })).toBeVisible()
+  await expect(page.getByLabel('Команда для привязки чата')).toHaveValue('Код больше не действует.')
+  await expect(page.getByRole('button', { name: 'Скопировать команду' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Сгенерировать новый код' })).toBeVisible()
 })
 
 test('venue staff does not see staff chat management', async ({ page }) => {

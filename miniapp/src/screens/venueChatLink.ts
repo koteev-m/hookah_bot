@@ -28,10 +28,12 @@ type ChatLinkRefs = {
   chatMeta: HTMLParagraphElement
   instructionsCard: HTMLElement
   codeSection: HTMLElement
+  codeTitle: HTMLHeadingElement
   codeValue: HTMLSpanElement
   codeExpires: HTMLSpanElement
   commandValue: HTMLInputElement
   copyButton: HTMLButtonElement
+  regenerateButton: HTMLButtonElement
   generateButton: HTMLButtonElement
   refreshButton: HTMLButtonElement
   testButton: HTMLButtonElement
@@ -40,6 +42,9 @@ type ChatLinkRefs = {
   confirmOverlay: HTMLDivElement
   confirmCancelButton: HTMLButtonElement
   confirmUnlinkButton: HTMLButtonElement
+  regenerateOverlay: HTMLDivElement
+  regenerateCancelButton: HTMLButtonElement
+  regenerateConfirmButton: HTMLButtonElement
   error: HTMLDivElement
   errorTitle: HTMLHeadingElement
   errorMessage: HTMLParagraphElement
@@ -85,25 +90,30 @@ function buildChatLinkDom(root: HTMLDivElement): ChatLinkRefs {
   append(instructionsCard, instructionsTitle, instructions)
 
   const codeSection = el('section', { className: 'card venue-link-code' })
-  const codeTitle = el('h3', { text: 'Код привязки' })
+  const codeTitle = el('h3', { text: 'Код привязки готов' })
   const codeValue = el('span', { className: 'venue-link-code-value', text: '—' })
-  const codeExpires = el('span', { text: '—' })
+  const codeExpires = el('span', { className: 'venue-link-code-expiry', text: '—' })
   const commandValue = document.createElement('input')
   commandValue.type = 'text'
   commandValue.readOnly = true
   commandValue.value = ''
   commandValue.setAttribute('aria-label', 'Команда для привязки чата')
-  const copyButton = el('button', { className: 'button-secondary', text: 'Скопировать команду' }) as HTMLButtonElement
+  const copyButton = el('button', { text: 'Скопировать команду' }) as HTMLButtonElement
+  const regenerateButton = el('button', {
+    className: 'button-secondary button-tertiary',
+    text: 'Создать новый код'
+  }) as HTMLButtonElement
+  const codeRow = el('p', { className: 'venue-link-code-raw' })
+  append(codeRow, document.createTextNode('Код: '), codeValue)
   append(
     codeSection,
     codeTitle,
-    el('p', { text: 'Код:' }),
-    codeValue,
-    el('p', { text: 'Истекает:' }),
     codeExpires,
-    el('p', { text: 'Команда для группы:' }),
+    el('p', { className: 'venue-link-code-label', text: 'Команда для группы:' }),
     commandValue,
-    copyButton
+    copyButton,
+    codeRow,
+    regenerateButton
   )
 
   const actions = el('div', { className: 'button-row venue-chat-actions' })
@@ -134,6 +144,23 @@ function buildChatLinkDom(root: HTMLDivElement): ChatLinkRefs {
   append(confirmDialog, confirmTitle, confirmBody, confirmActions)
   confirmOverlay.appendChild(confirmDialog)
 
+  const regenerateOverlay = el('div', { className: 'venue-modal-overlay' }) as HTMLDivElement
+  regenerateOverlay.hidden = true
+  const regenerateDialog = el('section', { className: 'venue-modal card' })
+  regenerateDialog.setAttribute('role', 'dialog')
+  regenerateDialog.setAttribute('aria-modal', 'true')
+  regenerateDialog.setAttribute('aria-labelledby', 'venue-chat-regenerate-title')
+  const regenerateTitle = el('h3', { id: 'venue-chat-regenerate-title', text: 'Создать новый код?' })
+  const regenerateBody = el('p', {
+    text: 'Текущий код перестанет работать. Используйте новый код для привязки Telegram-группы.'
+  })
+  const regenerateActions = el('div', { className: 'button-row' })
+  const regenerateConfirmButton = el('button', { text: 'Создать новый код' }) as HTMLButtonElement
+  const regenerateCancelButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
+  append(regenerateActions, regenerateConfirmButton, regenerateCancelButton)
+  append(regenerateDialog, regenerateTitle, regenerateBody, regenerateActions)
+  regenerateOverlay.appendChild(regenerateDialog)
+
   const error = el('div', { className: 'error-card' })
   error.hidden = true
   const errorTitle = el('h3')
@@ -142,7 +169,7 @@ function buildChatLinkDom(root: HTMLDivElement): ChatLinkRefs {
   const errorDetails = el('div')
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
-  append(wrapper, summaryCard, instructionsCard, codeSection, actions, status, error, confirmOverlay)
+  append(wrapper, summaryCard, instructionsCard, codeSection, actions, status, error, confirmOverlay, regenerateOverlay)
   root.replaceChildren(wrapper)
 
   return {
@@ -151,10 +178,12 @@ function buildChatLinkDom(root: HTMLDivElement): ChatLinkRefs {
     chatMeta,
     instructionsCard,
     codeSection,
+    codeTitle,
     codeValue,
     codeExpires,
     commandValue,
     copyButton,
+    regenerateButton,
     generateButton,
     refreshButton,
     testButton,
@@ -163,6 +192,9 @@ function buildChatLinkDom(root: HTMLDivElement): ChatLinkRefs {
     confirmOverlay,
     confirmCancelButton,
     confirmUnlinkButton,
+    regenerateOverlay,
+    regenerateCancelButton,
+    regenerateConfirmButton,
     error,
     errorTitle,
     errorMessage,
@@ -177,9 +209,25 @@ function fallbackMaskChatId(chatId?: number | null) {
   return `...${text.slice(-4)}`
 }
 
-function formatDateTime(value?: string | null) {
+function isExpired(value?: string | null) {
+  if (!value) return false
+  return new Date(value).getTime() <= Date.now()
+}
+
+function formatExpiry(value?: string | null) {
   if (!value) return '—'
-  return new Date(value).toLocaleString()
+  const date = new Date(value)
+  const now = new Date()
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  ) {
+    return `Действует до ${time}`
+  }
+  const day = date.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' })
+  return `Действует до ${day}, ${time}`
 }
 
 async function copyText(value: string) {
@@ -218,6 +266,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   let isGenerating = false
   let isTesting = false
   let isUnlinking = false
+  let isRegenerating = false
 
   const canLink = access.permissions.includes('STAFF_CHAT_LINK')
   const canUnlink = access.role === 'OWNER'
@@ -248,16 +297,22 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   const renderStatus = () => {
     const status = currentStatus
     const linked = Boolean(status?.isLinked)
+    const hasGeneratedCode = Boolean(currentFullCode && currentLinkCommand)
+    const generatedCodeExpired = hasGeneratedCode && isExpired(currentExpiresAt)
+    const hasActiveCodeHint = Boolean(status?.activeCodeHint) && !isExpired(status?.activeCodeExpiresAt)
+    const hasUsableCode = hasGeneratedCode || hasActiveCodeHint
 
     refs.instructionsCard.hidden = linked
     refs.testButton.hidden = !linked
     refs.unlinkButton.hidden = !linked || !canUnlink
-    refs.generateButton.hidden = linked || !canLink
+    refs.generateButton.hidden = linked || !canLink || hasUsableCode || generatedCodeExpired
     refs.refreshButton.hidden = false
     refs.generateButton.disabled = isGenerating || !canLink
     refs.testButton.disabled = isTesting
     refs.unlinkButton.disabled = isUnlinking
     refs.confirmUnlinkButton.disabled = isUnlinking
+    refs.regenerateConfirmButton.disabled = isGenerating || isRegenerating
+    refs.regenerateButton.disabled = isGenerating || isRegenerating
 
     if (!canLink) {
       refs.statusTitle.textContent = 'Нет доступа к управлению чатом персонала'
@@ -265,6 +320,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
       refs.chatMeta.textContent = ''
       refs.codeSection.hidden = true
       refs.refreshButton.hidden = true
+      refs.regenerateOverlay.hidden = true
       return
     }
 
@@ -276,6 +332,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
       currentFullCode = null
       currentLinkCommand = null
       currentExpiresAt = null
+      refs.refreshButton.hidden = true
       return
     }
 
@@ -283,13 +340,31 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
     refs.statusDescription.textContent =
       'Подключите Telegram-группу, чтобы получать уведомления о заказах, бронях, вызовах и продлениях.'
     refs.chatMeta.textContent = ''
+    refs.refreshButton.hidden = !hasUsableCode && !generatedCodeExpired
 
-    const hasGeneratedCode = Boolean(currentFullCode && currentLinkCommand)
-    const hasActiveCodeHint = Boolean(status?.activeCodeHint)
-    refs.codeSection.hidden = !hasGeneratedCode && !hasActiveCodeHint
-    if (hasGeneratedCode) {
+    refs.codeSection.hidden = !hasUsableCode && !generatedCodeExpired
+    refs.regenerateButton.hidden = !hasUsableCode && !generatedCodeExpired
+    refs.copyButton.className = ''
+    refs.regenerateButton.className = 'button-secondary button-tertiary'
+    refs.regenerateButton.textContent = 'Создать новый код'
+
+    if (generatedCodeExpired) {
+      refs.codeTitle.textContent = 'Срок действия кода истёк'
+      refs.codeExpires.textContent = 'Сгенерируйте новый код, чтобы привязать Telegram-группу.'
       refs.codeValue.textContent = currentFullCode ?? '—'
-      refs.codeExpires.textContent = formatDateTime(currentExpiresAt)
+      refs.commandValue.value = 'Код больше не действует.'
+      refs.commandValue.disabled = true
+      refs.copyButton.hidden = true
+      refs.copyButton.disabled = true
+      refs.regenerateButton.className = ''
+      refs.regenerateButton.textContent = 'Сгенерировать новый код'
+      return
+    }
+
+    if (hasGeneratedCode) {
+      refs.codeTitle.textContent = 'Код привязки готов'
+      refs.codeValue.textContent = currentFullCode ?? '—'
+      refs.codeExpires.textContent = formatExpiry(currentExpiresAt)
       refs.commandValue.value = currentLinkCommand ?? ''
       refs.commandValue.disabled = false
       refs.copyButton.hidden = false
@@ -297,8 +372,9 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
       return
     }
     if (hasActiveCodeHint) {
+      refs.codeTitle.textContent = 'Код привязки уже создан'
       refs.codeValue.textContent = `начинается на ${status?.activeCodeHint ?? '—'}`
-      refs.codeExpires.textContent = formatDateTime(status?.activeCodeExpiresAt)
+      refs.codeExpires.textContent = formatExpiry(status?.activeCodeExpiresAt)
       refs.commandValue.value = 'Полный код показывается только при создании. Сгенерируйте новый код, если он потерян.'
       refs.commandValue.disabled = true
       refs.copyButton.hidden = true
@@ -356,7 +432,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
       activeCodeHint: result.data.code.slice(0, 3),
       activeCodeExpiresAt: result.data.expiresAt
     }
-    refs.status.textContent = 'Код создан. Отправьте команду в Telegram-группе персонала.'
+    refs.status.textContent = ''
     showToast('Код создан')
     renderStatus()
   }
@@ -388,6 +464,29 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
     if (!isUnlinking) {
       refs.confirmOverlay.hidden = true
     }
+  }
+
+  const openRegenerateConfirm = () => {
+    if (isExpired(currentExpiresAt)) {
+      void generateCode()
+      return
+    }
+    refs.regenerateOverlay.hidden = false
+  }
+
+  const closeRegenerateConfirm = () => {
+    if (!isGenerating && !isRegenerating) {
+      refs.regenerateOverlay.hidden = true
+    }
+  }
+
+  const regenerateCode = async () => {
+    isRegenerating = true
+    renderStatus()
+    refs.regenerateOverlay.hidden = true
+    await generateCode()
+    isRegenerating = false
+    renderStatus()
   }
 
   const unlinkChat = async () => {
@@ -447,6 +546,9 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   disposables.push(on(refs.confirmCancelButton, 'click', closeUnlinkConfirm))
   disposables.push(on(refs.confirmUnlinkButton, 'click', () => void unlinkChat()))
   disposables.push(on(refs.copyButton, 'click', () => void copyCommand()))
+  disposables.push(on(refs.regenerateButton, 'click', openRegenerateConfirm))
+  disposables.push(on(refs.regenerateCancelButton, 'click', closeRegenerateConfirm))
+  disposables.push(on(refs.regenerateConfirmButton, 'click', () => void regenerateCode()))
 
   renderStatus()
   void loadStatus()
