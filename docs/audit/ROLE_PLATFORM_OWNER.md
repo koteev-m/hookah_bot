@@ -72,6 +72,7 @@ Telegram bot remains the richer platform onboarding surface for connection reque
 - Support/tickets and richer platform analytics remain future work.
 - Billing invoices/payments UI is not a complete platform cockpit yet.
 - `ADMIN` remains a legacy alias to `MANAGER`; product copy should avoid promising separate venue-admin behavior until implemented.
+- Platform Mini App owner assignment UI should not offer `ADMIN` as a separate owner role while backend accepts only the supported owner assignment semantics.
 - Lifecycle and commercial terms fixes need staging smoke after every deploy, including V102 dialog-state migration availability.
 
 ## Smoke-critical checks

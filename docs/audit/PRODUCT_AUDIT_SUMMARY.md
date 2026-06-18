@@ -6,13 +6,13 @@
 >
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
 >
-> Current checkpoint as of 2026-06-18: M1-M5 Venue Bot-to-Mini-App parity slices are code-backed through IA shell, stats, bookings, support inbox lifecycle and staff calls. M4A is staging-smoke closed; M4B/M4C and M5 have code/test/e2e evidence but still require staging/runtime smoke where noted. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for staff-chat diagnostics/unlink, broad venue settings slices, platform money/onboarding, promotions/preview and runtime smoke priorities.
+> Current checkpoint as of 2026-06-18: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M4A-M4C, M5 and M6 are staging-smoke closed for their scoped acceptance criteria. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for M7a booking hold settings, broader venue settings slices, platform money/onboarding, promotions/preview and runtime regression priorities.
 
 # Краткое резюме
 
 Проект уже содержит серьёзный backend-фундамент для Telegram bot + Mini App: auth через Telegram initData, JWT session, venue RBAC, guest catalog, QR/table sessions, cart/order batches, venue order queue, staff chat notifications, staff invites, menu/table management, billing/subscriptions, platform venue management, migrations and tests.
 
-Главный продуктовый риск: core guest order model расходится с концепцией. Спецификация говорит "один active order на table_session", но код создаёт/ищет active order по `table_id`. В связке со split bill это создаёт риск смешивания гостей, смен и вкладок. Второй критичный риск: Mini App и Telegram имеют разные возможности и местами разные permissions.
+Исторический главный риск этого аудита был core guest order model: в апреле active order был связан с `table_id`, а не с `table_session_id`. Этот риск закрыт в текущем кодовом срезе: active order/table-session/tab scoping, CORS mutation methods, staff-call lifecycle and staff stop-list RBAC были исправлены последующими M1-M6 работами. Текущие проверяемые риски: P1 test-fidelity gap between PostgreSQL partial unique active-order constraint and H2 non-unique index, broad Venue Mini App settings still bot-canonical, Platform Mini App cockpit gaps, and per-venue real Telegram runtime smoke.
 
 # Что реально готово
 
@@ -30,60 +30,36 @@
 
 # Что частично готово
 
-- Full bill, discounts, excluded items: backend/Telegram есть, Mini App нет.
-- Split bill: tabs/invites/consent есть, active order endpoint Mini App не scoped.
-- Booking: bot/backend есть, Mini App guest/venue screens отсутствуют.
-- Staff calls: create/list есть, ack/done отсутствуют; Mini App payload broken.
-- Menu constructor: category/item CRUD есть, options backend есть, Mini App options/photos/top-list incomplete.
-- Stop-list: items/options в Telegram, item toggle в Mini App, permissions расходятся.
+- Full bill, discounts, excluded items: backend/Telegram/Mini App management bill path exists; keep money snapshots and role denials in regression.
+- Split bill: tabs/invites/consent and active order scoping by `tableSessionId`/`tabId` exist; H2/PostgreSQL active-order uniqueness parity remains a test-fidelity follow-up.
+- Booking: bot/backend and Guest/Venue Mini App screens exist; reminders/settings/preorder remain later.
+- Staff calls: create/list/ACK/DONE lifecycle exists across Guest/Venue Mini App and bot/staff chat path; cancel/SLA/escalation remain later.
+- Menu constructor: category/item CRUD, structured options/flavors, base profiles and item/option stop-list exist; photos/descriptions/top-list polish remains later.
+- Stop-list: STAFF operational item/option availability is aligned between bot and Mini App; content editing remains MANAGER/OWNER.
 - Table QR: batch create/rotate/export есть, single edit/delete/capacity incomplete.
-- Statistics: Telegram stats есть, Mini App/platform analytics отсутствуют.
-- Settings: Telegram partial/hidden, Mini App placeholder.
+- Statistics: Telegram stats and Venue Mini App read-only stats exist; custom ranges/platform analytics remain later.
+- Settings: broad Telegram setup exists; Mini App settings is still narrow and should be expanded through small slices starting with booking hold settings.
 - Platform mode: venues/status/owners/subscription есть, requests/billing/support/analytics cockpit incomplete.
 
 # Что отсутствует
 
-- Support/tickets product block.
-- Promotions/referrals/reviews/favorites/repeat order/history как продуктовые flows.
+- General support/tickets product block beyond booking threads.
+- Promotions/referrals/reviews/favorites/repeat order/history as full cross-channel product flows; several backend/bot baselines exist, but Mini App parity varies by feature.
 - Venue-facing billing checkout/payment UX.
 - Platform analytics dashboards.
-- Full Mini App booking management.
-- Staff call acknowledgement/completion.
-- Proper menu item modifiers/options persisted in orders.
 - Clear `venue_admin` behavior distinct from `manager`.
-- Frontend tests for Mini App.
+- Wider frontend/browser e2e beyond current smoke harness.
 
-# Топ-10 P0/P1 доработок
+# Current top P0/P1/P2 gaps after post-M6 checkpoint
 
-1. **P0**: перевести active order identity с `table_id` на `table_session_id`.
-   Evidence: `OrdersRepository.findActiveOrderForUpdate`, `OrdersRepository.findActiveOrderDetails`, migration `V9__orders_active_unique_index.sql`.
+No confirmed production P0 was found in the post-M6 checkpoint. Current priorities:
 
-2. **P0**: сделать guest active order endpoint scoped by `tableSessionId` and `tabId`.
-   Evidence: `GuestOrderRoutes.get("/active")` принимает только `tableToken`, `OrdersRepository.findActiveOrderDetails(tableId)`.
-
-3. **P0/P1**: исправить Mini App CORS для `PUT/PATCH/DELETE`.
-   Evidence: `Application.kt` разрешает только `Options`, `Get`, `Post`, while `PlatformVenueRoutes`, `VenueMenuRoutes`, `VenueStaffRoutes` use other methods.
-
-4. **P1**: починить Mini App staff call.
-   Evidence: backend `GuestStaffCallDtos.kt` требует `tableSessionId`, frontend `miniapp/src/shared/api/guestDtos.ts` не содержит его, `guestVenue.ts` не отправляет.
-
-5. **P1**: согласовать fallback chat order payload.
-   Evidence: `cart.ts` sends `type: "CHAT_ORDER"`, `TelegramBotRouter.handleJsonWebAppData` expects `cmd`.
-
-6. **P1**: устранить role confusion `ADMIN == MANAGER`.
-   Evidence: `VenueRoleMapping.fromDb`, `TelegramBotRouter.resolvePrimaryVenueBotAccess`, `PlatformVenueRoutes` owner/admin assignment.
-
-7. **P1**: синхронизировать staff stop-list permissions.
-   Evidence: `VenueRbac.kt` staff lacks `MENU_MANAGE`, but `TelegramBotRouter.setVenueStaffStopListItemAvailability` and option equivalent allow changes.
-
-8. **P1**: добавить staff call lifecycle.
-   Evidence: `staff_calls` create/list found, no ack/done route/callback found.
-
-9. **P1**: вывести display order number, full bill, discounts and excluded items in Mini App.
-   Evidence: `orders.display_number` exists in `OrdersRepository.insertActiveOrder`; `venueOrders.ts` displays `Order #id`; `VenueOrderDtos` lacks bill fields.
-
-10. **P1**: сделать venue settings real or remove placeholder.
-    Evidence: `miniapp/src/screens/venueSettings.ts` disables inputs and shows save unavailable; Telegram settings handler is hidden from owner/manager keyboards.
+1. **P1**: M7a booking hold settings in Venue Mini App. Evidence: bot has `venue_booking_hold_settings` callbacks and booking cards already show hold deadline; Mini App settings is still shift-extension-only.
+2. **P1**: continue small Venue Mini App settings slices: profile/card, hours/exceptions, booking settings and notification toggles, not one bulk endpoint.
+3. **P1**: Platform Mini App hardening: owner invite deep link/copy, remove misleading `ADMIN` owner assignment option, surface quota summary where backend exists.
+4. **P1**: PostgreSQL/H2 test-fidelity gap for active-order uniqueness: PostgreSQL has a partial unique index by `table_session_id`, H2 migration has only non-unique indexes.
+5. **P2**: General guest support ticket creation beyond booking threads.
+6. **P2**: Guest Mini App repeat/favorite mutation parity and promotion/review surfaces.
 
 # Рекомендуемый порядок дальнейшей работы
 

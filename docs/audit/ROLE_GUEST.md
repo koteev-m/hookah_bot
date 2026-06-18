@@ -83,8 +83,8 @@ Account/bookings:
 
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
 - Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
-- M4B/M4C `Сообщения` code/test-backed; staging multi-venue smoke must verify thread scoping, unread and resolve/reopen lifecycle.
-- M5 staff-call compact UX code/e2e-backed; manual Telegram staff-chat runtime notification smoke remains required.
+- M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
+- M5 staff-call compact UX staging smoke passed; linked Telegram staff-chat runtime notification remains per-venue regression.
 - Media proxy требует ручной проверки для image/PDF и скрытых/удалённых sections.
 - QR/table order flow должен smoke-тестироваться отдельно от pre-QR catalog flow.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.

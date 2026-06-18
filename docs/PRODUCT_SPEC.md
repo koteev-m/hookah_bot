@@ -269,6 +269,10 @@ Bill/session rules:
 - `table_sessions.expires_at` is the current orderable-until/session window. Extension logic must not be shortened by normal session touch/restore operations.
 - Closed bills, closed tabs, ended sessions and unavailable/deleted/suspended venues cannot be extended.
 
+Current post-M6 checkpoint:
+- Backend data/API, Guest Mini App request UX, bill service charges, Venue Mini App order integration, staff-chat pending approve/reject actions and Guest Bot table-flow request entry are implemented.
+- Remaining parity gap in this block: Owner/Manager Bot settings closure for enabled/duration/price where still required by the active roadmap.
+
 Implementation slices:
 1. Backend order-scoped read model: pending extension summary/count on order queue/detail, with no DB migration unless the existing request table cannot support the read shape.
 2. Venue Mini App order integration: pending badge in queue, approve/reject block inside order detail, standalone `Продления` nav removed or demoted after parity is complete.
@@ -329,7 +333,7 @@ MUST:
 - Venue handles operational tickets; platform handles technical/billing.
 - Escalation if venue doesn’t respond in SLA.
 - MVP foundation: booking-related guest↔venue conversation threads persist messages with venue, guest and booking context; staff chat is a notification mirror, not the only source of truth. Full platform support/ticket routing remains a later layer.
-- M4B inbox target: guest `Сообщения` / `Мои обращения` is a list of threads, not one endless global chat. Each thread card shows venue, context label (`Бронь №...`, `Заказ №...`, `Стол №...`, `Общий вопрос`, `Проблема`), status, last message preview/time and unread badge.
+- M4B/M4C implemented booking-thread inbox lifecycle: guest `Сообщения` / `Мои обращения` is a list of threads, not one endless global chat. Thread cards show venue, context label (`Бронь №...`, `Заказ №...`, `Стол №...`, `Общий вопрос`, `Проблема`), status, last message preview/time and unread badge; active/resolved filters and resolve/reopen actions are smoke-passed for booking conversations.
 - Venue `Сообщения` is scoped to the selected venue and shows guest display, context, status, last message and unread badge. Platform support later sees all support/ticket threads only through a backend-backed cockpit.
 - Product model: one booking maps to one booking thread; one order issue maps to one order thread; one general question maps to one general thread; one technical/platform problem maps to one platform/support ticket thread. Do not merge all messages with one venue into one endless chat.
 SHOULD:

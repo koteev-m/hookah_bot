@@ -18,9 +18,9 @@
 - STAFF can close bill/order and manage operational stop-list for menu items/options, but cannot edit discounts, exclusions, menu content/structure, tables, staff, settings or staff chat link.
 - STAFF booking actions are operational only: view bookings and mark `Гость пришёл` / `Не пришёл`; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
 - Booking guest communication has an M4A persisted thread layer and passed staging smoke after UX polish: `Написать гостю`, Guest Bot replies, Guest Mini App replies and Venue Mini App replies share one booking thread; staff chat is a notification mirror.
-- M4B/M4C message inbox lifecycle is code/test-backed: Guest and Venue Mini App show thread cards, context labels, unread state, active/resolved filters and resolve/reopen actions. Staging multi-venue/runtime smoke remains required.
-- M5 staff calls lifecycle is code/e2e-backed: Guest Mini App uses a transient compose modal and compact NEW/ACK/DONE status, Venue Mini App `Вызовы` supports accept/close, and backend/staff-chat callbacks share the lifecycle. Manual Telegram group notification smoke remains required.
-- M6 staff chat diagnostics/unlink polish is code/e2e-backed: Venue Mini App shows linked/unlinked state, masked chat id, link-code command, outbox-backed test-message result and OWNER-only unlink confirmation. Manual Telegram group link/test/unlink smoke remains required.
+- M4B/M4C message inbox lifecycle is CLOSED after staging smoke: Guest and Venue Mini App show thread cards, context labels, unread state, active/resolved filters and resolve/reopen actions.
+- M5 staff calls lifecycle is CLOSED after staging smoke: Guest Mini App uses a transient compose modal and compact NEW/ACK/DONE status, Venue Mini App `Вызовы` supports accept/close, and backend/staff-chat callbacks share the lifecycle.
+- M6 staff chat diagnostics/unlink polish is CLOSED after staging smoke: Venue Mini App shows linked/unlinked state, masked chat id, link-code command, copy-first active-code card, regenerate confirmation, outbox-backed test-message result, OWNER-only unlink and relink flow.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -33,7 +33,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE` on 2026-06-04.
+Status: `PASSED FOR CURRENT RELEASE`; baseline smoke passed on 2026-06-04, with later staged parity smokes recorded through M6 on 2026-06-18.
 
 Confirmed:
 
@@ -53,6 +53,9 @@ Confirmed:
 - Guest table session restore passed on staging on 2026-06-08: returning guest opens the active table context without rescanning QR, `Мой заказ` and adjacent guest screens keep `tableSessionId`/`tabId` context, and Telegram BackButton does not loop between screens.
 - Venue Mini App M2 stats passed staging smoke on 2026-06-16: OWNER/MANAGER see `Статистика`, periods `Сегодня` / `7 дней` / `30 дней` work, stats cards and top items render, STAFF does not see stats, and empty state works safely.
 - Venue Mini App M4A booking conversation threads passed staging smoke after UX polish: booking message creates/reuses a thread, quick compose closes after send, booking card shows `Открыть переписку`, Guest Bot and Guest Mini App replies persist in the same thread, Venue Mini App shows history, and staff chat receives notification mirror messages.
+- Venue Mini App M4B/M4C messages inbox lifecycle passed staging smoke: Guest/Venue inbox cards show context, status, last message and unread; `Активные` / `Завершённые` filters work; `Завершить переписку` / `Возобновить переписку` moves threads without changing booking lifecycle.
+- Venue Mini App M5 staff calls lifecycle passed staging smoke: guest call compose is transient and compact after submit; Venue `Вызовы` queue accepts/closes calls; DONE restores the normal guest call action.
+- Venue Mini App M6 staff-chat management passed staging smoke: status/link-code generation, `/link@BotUsername <код>`, masked chat id, test-message queue/delivery path, OWNER-only unlink, relink flow, and polished active-code UI with copy/regenerate confirmation work.
 
 Remaining:
 
@@ -60,8 +63,9 @@ Remaining:
 - P1 follow-up: paid venue/shift extension is implemented in backend, Guest/Venue Mini App, Guest Bot entry and staff-chat action path; remaining parity is Owner/Manager Bot settings smoke/closure where still needed by roadmap;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
-- P1 current parity smoke target: M4B/M4C Unified Messages Inbox UX and lifecycle is code/test-backed. Keep M4A booking conversation behavior in regression, then verify multi-venue thread cards, context labels, active/resolved filters, unread/status state and resolve/reopen actions in Telegram runtime/staging.
-- P1 current manual smoke target: M6 staff chat diagnostics/unlink polish in Venue Mini App, using existing status/link-code/test/unlink backend semantics and a real Telegram group.
+- P1 CLOSED: M4B/M4C Unified Messages Inbox UX and lifecycle staging smoke passed. Keep M4A/M4B/M4C booking conversation behavior, multi-venue scoping, unread/status state and resolve/reopen actions in regression.
+- P1 CLOSED: M5 staff calls lifecycle and compact Guest Mini App UX staging smoke passed. Keep linked Telegram group notification and inline ACK/DONE behavior in per-venue regression.
+- P1 CLOSED: M6 staff chat diagnostics/unlink polish staging smoke passed. Keep real Telegram group link/test/unlink and operational notification delivery in per-venue regression.
 - P2 stats follow-up: custom date range picker (`from`/`to`), arbitrary period stats and future AI-generated summaries/insights.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -263,7 +267,7 @@ Steps:
 15. Confirm staff Telegram chat updated total matches Venue Mini App and Guest Mini App full bill totals.
 16. As STAFF, confirm bill edit controls are hidden.
 17. As STAFF, close delivered bill/order.
-18. Open `Вызовы`, accept and close a staff call. M5 code/e2e-backed coverage includes Guest Mini App create/status and Venue Mini App accept/close; staging/manual smoke must also confirm staff chat receives the new-call notification.
+18. Open `Вызовы`, accept and close a staff call. M5 staging smoke passed for Guest Mini App create/status and Venue Mini App accept/close; per-venue regression must still confirm the linked Telegram staff group receives the new-call notification.
 19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel and `Написать гостю` as allowed.
 20. As MANAGER/OWNER, click `Написать гостю`, confirm there are no template buttons, send a message, and confirm the modal closes with `Сообщение отправлено гостю.`
 21. Open `Сообщения` and confirm the same booking thread is listed.
@@ -272,7 +276,7 @@ Steps:
 
 ### M5 staff calls lifecycle smoke status
 
-Status: code/e2e-backed; manual Telegram staff-chat runtime smoke required.
+Status: CLOSED / staging smoke passed. Manual Telegram staff-chat runtime smoke remains per-venue regression.
 
 Automated smoke target:
 
@@ -284,7 +288,7 @@ Automated smoke target:
 6. STAFF opens Venue Mini App `Вызовы`, sees table/reason/comment/guest, clicks `Принять`, then clicks `Закрыть`.
 7. DONE calls leave the active queue.
 
-Manual staging smoke still required:
+Per-venue regression smoke:
 
 1. Linked staff Telegram chat receives Mini App-created staff call notification.
 2. Staff chat inline `Принять` / `Выполнено` callbacks still edit the group message and do not diverge from Venue Mini App queue state.
@@ -327,13 +331,13 @@ Expected:
 
 ### M6 staff chat diagnostics/unlink smoke target
 
-Status: code/e2e-backed; manual Telegram group smoke required before staging closure.
+Status: CLOSED / staging smoke passed. Manual Telegram group smoke remains per-venue regression.
 
 Checks after implementation:
 
 1. OWNER opens Venue Mini App `Чат персонала`.
 2. Screen shows linked/unlinked state, masked chat id if linked, active link-code hint if present and clear `/link@BotUsername <код>` instructions after code generation.
-3. OWNER can generate a new link code and copy the backend-built command.
+3. OWNER can generate a new link code, sees compact `Код привязки готов` card, copies the backend-built command and regenerates only after confirmation.
 4. OWNER can send a test message; Mini App says `Тестовое сообщение поставлено в отправку` when the outbox accepts it, not `доставлено`.
 5. OWNER can unlink an incorrectly linked staff chat only after explicit confirmation.
 6. MANAGER can use only the status/link-code/test actions allowed by backend RBAC and cannot unlink.
@@ -456,12 +460,12 @@ Expected:
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
 - Guest table session restore and Telegram BackButton navigation passed staging smoke; keep restore, QR priority, account-switch isolation and no-loop BackButton behavior in regression smoke.
-- Paid venue/shift extension is implemented for backend and Mini App as a confirmed service charge/session extension, not as a normal menu/cart/order-batch item. Remaining parity gaps: order-scoped Venue Mini App approve/reject, staff-chat live message pending actions, Guest Bot table menu entry and Owner/Manager Bot settings.
+- Paid venue/shift extension is implemented for backend, Guest/Venue Mini App, Guest Bot table menu entry and staff-chat pending action path as a confirmed service charge/session extension, not as a normal menu/cart/order-batch item. Remaining parity gap: Owner/Manager Bot settings closure where still needed by roadmap.
 - Guest/Menu Options & Flavors parity is CLOSED after staging smoke: owner/manager can create hookah items, apply canonical base flavor profiles only to that item, repeat apply without duplicates, manage flavor CRUD and stop-list, stop-list the whole item, water/kitchen/drink items do not receive hookah flavors, Guest Mini App shows the picker only for the selected hookah item, and `selectedOptionId` / `preferenceNote` still work.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
-- M4A booking conversation threads are staging-closed after UX polish. M4B/M4C unified inbox UX and lifecycle is code/test-backed and needs staging multi-venue smoke: Guest/Venue inbox cards show multi-venue/context clarity, status/unread state, active/resolved filters and explicit `Завершить переписку` / `Возобновить переписку` actions. Venue/admin bot full inbox, structured reschedule proposals, general tickets, Platform Support Center, audit events and DB-level duplicate/race protection are follow-ups.
+- M4A booking conversation threads and M4B/M4C unified inbox lifecycle are staging-closed. Guest/Venue inbox cards show multi-venue/context clarity, status/unread state, active/resolved filters and explicit `Завершить переписку` / `Возобновить переписку` actions. Venue/admin bot full inbox, structured reschedule proposals, general tickets, Platform Support Center, audit events and DB-level duplicate/race protection are follow-ups.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
 ## 10. Recommended Next Test Investment
@@ -480,9 +484,9 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block after M6 validation: run a fresh checkpoint and choose one bounded M7 settings/profile or notification diagnostics slice. Recommended next parity smoke block remains M4B/M4C Unified Messages Inbox UX and lifecycle plus M5/M6 staff-chat Telegram group runtime smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Recommended next implementation block after the post-M6 checkpoint: M7a booking hold settings in Venue Mini App. M4A-M4C messages, M5 staff calls and M6 staff-chat management stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
-Manual M4B/M4C inbox smoke after deployment:
+Manual M4B/M4C inbox regression smoke after deployment:
 
 1. Create or seed multiple booking/general-like threads for one guest across at least two venues.
 2. Open Guest Mini App `Сообщения` / `Мои обращения` and confirm it shows a list of thread cards, not one merged chat.

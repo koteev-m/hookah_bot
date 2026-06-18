@@ -85,7 +85,7 @@ Manager Mini App areas:
 - Manager staff management scope is conservative and should be smoke-tested before pilot.
 - Some Telegram manager flows may still be richer than Mini App equivalents.
 - Menu options/photos/descriptions/top-list parity may still be partial.
-- Staff chat unlink/diagnostics are the next Mini App polish target; manager must stay denied for owner-only unlink.
+- Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 
 ## Smoke-critical checks
