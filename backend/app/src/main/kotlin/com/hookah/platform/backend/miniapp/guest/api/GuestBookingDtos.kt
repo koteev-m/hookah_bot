@@ -37,6 +37,18 @@ data class GuestBookingResponse(
     val partySize: Int?,
     val comment: String?,
     val lastGuestConfirmationAt: String? = null,
+    val displayNumber: Int? = null,
+    val displayLabel: String? = null,
+    val venueName: String? = null,
+    val statusLabel: String? = null,
+    val scheduledAtDisplay: String? = null,
+    val scheduledLocalDate: String? = null,
+    val scheduledLocalTime: String? = null,
+    val arrivalDeadlineAt: String? = null,
+    val arrivalDeadlineAtDisplay: String? = null,
+    val arrivalDeadlineTimeDisplay: String? = null,
+    val canChange: Boolean? = null,
+    val canCancel: Boolean? = null,
 )
 
 @Serializable

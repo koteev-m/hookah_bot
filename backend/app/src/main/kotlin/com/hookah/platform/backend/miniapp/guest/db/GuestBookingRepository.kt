@@ -62,6 +62,7 @@ data class UserBookingSummaryRecord(
     val venueName: String,
     val scheduledAt: Instant,
     val partySize: Int?,
+    val comment: String? = null,
     val status: BookingStatus,
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
@@ -898,6 +899,7 @@ class GuestBookingRepository(
                                v.name AS venue_name,
                                b.scheduled_at,
                                b.party_size,
+                               b.comment,
                                b.status,
                                b.display_number,
                                b.display_date,
@@ -924,6 +926,7 @@ class GuestBookingRepository(
                                             venueName = rs.getString("venue_name"),
                                             scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
                                             partySize = rs.getInt("party_size").let { if (rs.wasNull()) null else it },
+                                            comment = rs.getString("comment"),
                                             status =
                                                 BookingStatus.fromDb(rs.getString("status"))
                                                     ?: BookingStatus.PENDING,

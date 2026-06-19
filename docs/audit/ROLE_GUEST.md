@@ -53,6 +53,7 @@ QR/table Guest Mini App:
 
 Account/bookings:
 - guest booking MVP присутствует: create/list active bookings/status refresh, cancel/accept changed time where supported;
+- M7b Guest Mini App `Мои брони` implemented / staging smoke target: account-level list shows active/upcoming bookings across venues with bot-compatible public `Бронь №...`, venue-local date/time, status, party size, comment and `Держим до HH:mm` when applicable;
 - account baseline включает history/favorites sections;
 - `Сообщения` показывает persisted support/booking threads with context/status/unread and active/resolved filters;
 - profile/promotions/loyalty остаются partial или safe fallback, если backend не отдаёт полноценные данные.
@@ -81,6 +82,7 @@ Account/bookings:
 
 ## Known gaps / needs smoke
 
+- M7b `Мои брони` needs staging smoke against Telegram Bot `/my` for public booking label and deadline parity.
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
 - Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
@@ -99,4 +101,5 @@ Account/bookings:
 6. Выбрать configured flavor/option and optional preference note; confirm active order/bill preserves it.
 7. Вызвать персонал из active table; форма закрывается, status card показывает NEW/ACK/DONE.
 8. Открыть `Сообщения`; проверить список тредов, unread, active/resolved filters and resolve/reopen.
-9. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
+9. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
+10. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.

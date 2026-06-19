@@ -219,7 +219,9 @@ function renderRouteContent(
         backendUrl,
         isDebug,
         venueId: route.venueId,
-        onBack: onNavigateCatalog
+        onBack: route.venueId ? onNavigateCatalog : () => {
+          window.location.hash = '#/account'
+        }
       })
     case 'account':
       return renderGuestAccountScreen({
@@ -229,6 +231,9 @@ function renderRouteContent(
         currentVenueId: tableSnapshot.status === 'resolved' ? tableSnapshot.venueId : route.venueId,
         hasTableContext,
         onBack: onNavigateCatalog,
+        onOpenBookings: () => {
+          window.location.hash = '#/bookings'
+        },
         onOpenVenue,
         onOpenBot: onOpenSupportBot
       })

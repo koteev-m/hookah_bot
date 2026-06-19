@@ -405,6 +405,13 @@ export type GuestBookingCancelRequest = {
   bookingId: number
 }
 
+export type GuestBookingUpdateRequest = {
+  bookingId: number
+  scheduledAt: string
+  partySize?: number | null
+  comment?: string | null
+}
+
 export type GuestBookingConfirmRequest = {
   bookingId: number
 }
@@ -417,6 +424,18 @@ export type GuestBookingResponse = {
   partySize?: number | null
   comment?: string | null
   lastGuestConfirmationAt?: string | null
+  displayNumber?: number | null
+  displayLabel?: string | null
+  venueName?: string | null
+  statusLabel?: string | null
+  scheduledAtDisplay?: string | null
+  scheduledLocalDate?: string | null
+  scheduledLocalTime?: string | null
+  arrivalDeadlineAt?: string | null
+  arrivalDeadlineAtDisplay?: string | null
+  arrivalDeadlineTimeDisplay?: string | null
+  canChange?: boolean | null
+  canCancel?: boolean | null
 }
 
 export type GuestBookingListResponse = {

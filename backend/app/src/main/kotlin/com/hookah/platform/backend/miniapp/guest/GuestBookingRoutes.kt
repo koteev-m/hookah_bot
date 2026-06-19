@@ -8,8 +8,11 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestBookingCreateRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingListResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingUpdateRequest
+import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
+import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
@@ -28,12 +31,21 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 private const val BOOKING_COMMENT_MAX_LENGTH = 500
 private val bookingInstantFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+private val bookingDisplayFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm")
+private val bookingTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+private val guestActionableBookingStatuses =
+    setOf(
+        BookingStatus.PENDING,
+        BookingStatus.CONFIRMED,
+        BookingStatus.CHANGED,
+    )
 
 fun Route.guestBookingRoutes(
     guestVenueRepository: GuestVenueRepository,
@@ -45,6 +57,18 @@ fun Route.guestBookingRoutes(
     userRepository: UserRepository = UserRepository(null),
     venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
 ) {
+    get("/bookings") {
+        val userId = call.requireUserId()
+        val bookings =
+            guestBookingRepository
+                .listActiveByUser(userId = userId, limit = 50)
+                .map { booking ->
+                    val zoneId = venueSettingsRepository.resolveZoneId(booking.venueId)
+                    booking.toResponse(zoneId = zoneId)
+                }
+        call.respond(GuestBookingListResponse(items = bookings))
+    }
+
     route("/booking") {
         post("/create") {
             val request = call.receive<GuestBookingCreateRequest>()
@@ -77,7 +101,12 @@ fun Route.guestBookingRoutes(
                         guestDisplayName = loadGuestDisplayName(userRepository, userId),
                     ),
             )
-            call.respond(created.toResponse())
+            call.respond(
+                created.toResponse(
+                    venueName = guestBookingRepository.findVenueName(venueId),
+                    zoneId = venueZoneId,
+                ),
+            )
         }
 
         post("/update") {
@@ -113,7 +142,12 @@ fun Route.guestBookingRoutes(
                         guestDisplayName = loadGuestDisplayName(userRepository, userId),
                     ),
             )
-            call.respond(updated.toResponse())
+            call.respond(
+                updated.toResponse(
+                    venueName = guestBookingRepository.findVenueName(venueId),
+                    zoneId = venueZoneId,
+                ),
+            )
         }
 
         post("/cancel") {
@@ -144,7 +178,12 @@ fun Route.guestBookingRoutes(
                         guestDisplayName = loadGuestDisplayName(userRepository, userId),
                     ),
             )
-            call.respond(canceled.toResponse())
+            call.respond(
+                canceled.toResponse(
+                    venueName = guestBookingRepository.findVenueName(venueId),
+                    zoneId = venueZoneId,
+                ),
+            )
         }
 
         post("/confirm") {
@@ -163,7 +202,12 @@ fun Route.guestBookingRoutes(
                     bookingId = bookingId,
                     userId = userId,
                 ) ?: throw NotFoundException()
-            call.respond(confirmed.toResponse())
+            call.respond(
+                confirmed.toResponse(
+                    venueName = guestBookingRepository.findVenueName(venueId),
+                    zoneId = venueSettingsRepository.resolveZoneId(venueId),
+                ),
+            )
         }
 
         get {
@@ -175,7 +219,13 @@ fun Route.guestBookingRoutes(
                     venueId = venueId,
                     userId = userId,
                 )
-            call.respond(GuestBookingListResponse(items = bookings.map { it.toResponse() }))
+            val venueName = guestBookingRepository.findVenueName(venueId)
+            val zoneId = venueSettingsRepository.resolveZoneId(venueId)
+            call.respond(
+                GuestBookingListResponse(
+                    items = bookings.map { it.toResponse(venueName, zoneId) },
+                ),
+            )
         }
     }
 }
@@ -262,13 +312,83 @@ private fun formatBookingInstant(
     zoneId: ZoneId = ZoneOffset.UTC,
 ): String = bookingInstantFormatter.format(value.atZone(zoneId))
 
-private fun com.hookah.platform.backend.miniapp.guest.db.BookingRecord.toResponse(): GuestBookingResponse =
+private fun formatBookingDisplayLabel(displayNumber: Int?): String = displayNumber?.let { "Бронь №$it" } ?: "Бронь"
+
+private fun humanizeBookingStatus(status: BookingStatus): String =
+    when (status) {
+        BookingStatus.PENDING -> "Ожидает подтверждения"
+        BookingStatus.CONFIRMED -> "Подтверждена"
+        BookingStatus.CHANGED -> "Время изменено"
+        BookingStatus.CANCELED -> "Отменена"
+        BookingStatus.EXPIRED -> "Истекла"
+        BookingStatus.NO_SHOW -> "Не состоялась"
+        BookingStatus.SEATED -> "Гость пришёл"
+    }
+
+private fun scheduledLocalDate(
+    value: Instant,
+    zoneId: ZoneId,
+): String = LocalDateTime.ofInstant(value, zoneId).toLocalDate().toString()
+
+private fun scheduledLocalTime(
+    value: Instant,
+    zoneId: ZoneId,
+): String = LocalDateTime.ofInstant(value, zoneId).toLocalTime().format(bookingTimeFormatter)
+
+private fun displayDateTime(
+    value: Instant,
+    zoneId: ZoneId,
+): String = LocalDateTime.ofInstant(value, zoneId).format(bookingDisplayFormatter)
+
+private fun displayTime(
+    value: Instant,
+    zoneId: ZoneId,
+): String = LocalDateTime.ofInstant(value, zoneId).format(bookingTimeFormatter)
+
+private fun BookingRecord.toResponse(
+    venueName: String? = null,
+    zoneId: ZoneId = ZoneOffset.UTC,
+): GuestBookingResponse =
     GuestBookingResponse(
         bookingId = id,
         venueId = venueId,
         status = status.toApi(),
-        scheduledAt = formatBookingInstant(scheduledAt),
+        scheduledAt = formatBookingInstant(scheduledAt, zoneId),
         partySize = partySize,
         comment = comment,
-        lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingInstant(it) },
+        lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingInstant(it, zoneId) },
+        displayNumber = displayNumber,
+        displayLabel = formatBookingDisplayLabel(displayNumber),
+        venueName = venueName,
+        statusLabel = humanizeBookingStatus(status),
+        scheduledAtDisplay = displayDateTime(scheduledAt, zoneId),
+        scheduledLocalDate = scheduledLocalDate(scheduledAt, zoneId),
+        scheduledLocalTime = scheduledLocalTime(scheduledAt, zoneId),
+        arrivalDeadlineAt = arrivalDeadlineAt?.let { formatBookingInstant(it, zoneId) },
+        arrivalDeadlineAtDisplay = arrivalDeadlineAt?.let { displayDateTime(it, zoneId) },
+        arrivalDeadlineTimeDisplay = arrivalDeadlineAt?.let { displayTime(it, zoneId) },
+        canChange = status in guestActionableBookingStatuses,
+        canCancel = status in guestActionableBookingStatuses,
+    )
+
+private fun UserBookingSummaryRecord.toResponse(zoneId: ZoneId): GuestBookingResponse =
+    GuestBookingResponse(
+        bookingId = id,
+        venueId = venueId,
+        status = status.toApi(),
+        scheduledAt = formatBookingInstant(scheduledAt, zoneId),
+        partySize = partySize,
+        comment = comment,
+        displayNumber = displayNumber,
+        displayLabel = formatBookingDisplayLabel(displayNumber),
+        venueName = venueName,
+        statusLabel = humanizeBookingStatus(status),
+        scheduledAtDisplay = displayDateTime(scheduledAt, zoneId),
+        scheduledLocalDate = scheduledLocalDate(scheduledAt, zoneId),
+        scheduledLocalTime = scheduledLocalTime(scheduledAt, zoneId),
+        arrivalDeadlineAt = arrivalDeadlineAt?.let { formatBookingInstant(it, zoneId) },
+        arrivalDeadlineAtDisplay = arrivalDeadlineAt?.let { displayDateTime(it, zoneId) },
+        arrivalDeadlineTimeDisplay = arrivalDeadlineAt?.let { displayTime(it, zoneId) },
+        canChange = status in guestActionableBookingStatuses,
+        canCancel = status in guestActionableBookingStatuses,
     )

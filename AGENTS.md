@@ -7,6 +7,7 @@ Maintain this Kotlin Telegram bot with minimal diffs and without breaking curren
 - For multi-file, architectural, or risky tasks: use Plan Mode first
 - For local fixes: edit directly
 - Inspect related handlers, services, config, and tests before editing
+- Bot and Mini App are clients of the same backend. For every core product feature, verify required cross-surface parity. Do not mark a feature complete until required Bot/Mini App surfaces are implemented or an intentional exception is documented in the parity roadmap.
 
 ## Coding rules
 - Idiomatic Kotlin

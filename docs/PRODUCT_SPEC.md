@@ -77,9 +77,11 @@ MUST:
 - List venues with address, description, hours, menu preview and pricing.
 - Booking: user selects venue + date/time; venue confirms/changes/cancels.
 - Booking status notifications (within Telegram constraints).
+- Guest booking parity: Telegram Bot `/my` and Guest Mini App `Мои брони` show the same active/upcoming booking identity, venue-local time, status, party size and `Держим до HH:mm` deadline when applicable.
 SHOULD:
 - Favorites and history (Block 15) integrate with catalog.
 - Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR, and the context resets after bill close.
+- Adaptive booking reminders are a separate transactional milestone: at most one reminder for confirmed/changed bookings in MVP, calculated in venue-local time with 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Reminder worker/runtime is not part of the booking-list MVP.
 
 ## Block 5 — Orders (one active order per table + batches)
 MUST:

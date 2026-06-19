@@ -2,11 +2,13 @@
 
 Дата: 2026-04-28. Режим: read-only audit. Код, миграции и тесты не изменялись.
 
+> Current correction as of 2026-06-19: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, and Guest Mini App `Мои брони` is implemented / staging smoke target. Runtime booking reminders are still not implemented; M7c adaptive reminder policy is documented only.
+
 ## Executive summary
 
-Из нового списка уже частично реализованы: базовые брони, Telegram `/my` для активных броней/заказов, venue-side booking status API, owner venue description sections, простой guest catalog, multi-venue membership в БД и Mini App venue selector, staff chat notifications для новых order batches, order close/table session cleanup как техническая основа visit retention.
+Из нового списка уже частично реализованы: базовые брони, Telegram `/my` для активных броней/заказов, Guest Mini App `Мои брони`, venue-side booking queue/lifecycle API, booking hold settings with persisted `arrival_deadline_at`, owner venue description sections, простой guest catalog, multi-venue membership в БД и Mini App venue selector, staff chat notifications для новых order batches, order close/table session cleanup как техническая основа visit retention.
 
-Частично, но с заметными gap: booking lifecycle без `expired/no_show/seated`, нет arrival deadline и hold setting; уведомления по броням есть только как immediate staff/guest messages при create/update/cancel/confirm/change; каталог без server-side search/filter/map/geo; order history только active orders; discount существует как ручной percent на item в счёте, но не как loyalty/promo system.
+Частично, но с заметными gap: booking lifecycle and Mini App surfaces are now much stronger, but runtime reminders, preorder, automatic expiry/no-show automation and broader retention remain later; каталог без server-side search/filter/map/geo; order history only partially exists; discount существует как ручной percent на item в счёте, но не как loyalty/promo system.
 
 Отсутствует: reminder scheduler для броней, post-visit feedback/reviews, Yandex review link, paid placement, promotions/coupons/campaigns, promotion boosting, favorites/repeat templates, preorder, cashback/points/flexible loyalty rules, hookah master subrole/profile/shift schedule, network/group entity for venue chains.
 
@@ -20,8 +22,8 @@
 
 | Идея | Статус | Evidence из кода | Что уже есть | Чего нет | MVP реализация | Риски | Приоритет |
 |---|---|---|---|---|---|---|---|
-| 1. Брони гостя и жизненный цикл | PARTIAL | `V32__bookings.sql`; `GuestBookingRepository.BookingStatus`; `GuestBookingRoutes`; `VenueBookingRoutes`; `TelegramBotRouter.showMyOrdersAndBookings` | Create/update/cancel/list, venue confirm/change/cancel, Telegram `/my` | `EXPIRED/NO_SHOW/SEATED`, arrival deadline, hold setting 15/30/60, reminders | Add status fields, hold settings, expiry worker, venue Mini App bookings queue | Неверная активность броней после времени визита | P1 |
-| 2. Напоминания о бронях | MISSING | `Application.kt` starts subscription billing, table session cleanup, telegram workers; no booking reminder worker found | Immediate messages on booking create/update/cancel/venue status | Scheduler, reminder table, guest buttons before visit | `booking_reminders`, worker, outbox messages with confirm/cancel/reschedule | Спам, timezone/quiet hours, duplicate sends | P1 |
+| 1. Брони гостя и жизненный цикл | PARTIAL | `V32__bookings.sql`; `GuestBookingRepository.BookingStatus`; `GuestBookingRoutes`; `VenueBookingRoutes`; `VenueSettingsRepository`; `TelegramBotRouter.showMyOrdersAndBookings`; `guestBookings.ts`; `venueBookings.ts` | Create/update/cancel/list, venue confirm/change/cancel/arrival/no-show, Telegram `/my`, Guest Mini App `Мои брони`, Venue Mini App queue, persisted `arrival_deadline_at`, hold setting | Runtime reminders, preorder, broader automatic expiry/no-show policy | Keep M3/M7a/M7b in regression; implement M7c reminders separately | Label/timezone drift across Bot/Mini App if DTO parity regresses | P1 |
+| 2. Напоминания о бронях | MISSING runtime / DOCUMENTED policy | `Application.kt` starts subscription billing, table session cleanup, telegram workers; no booking reminder worker found; M7c policy in roadmap/spec docs | Immediate messages on booking create/update/cancel/venue status; adaptive reminder policy documented | Scheduler, reminder table, callback runtime, exactly-once reminder delivery | M7c: one adaptive transactional reminder for confirmed/changed bookings using outbox and venue-local quiet window | Спам, timezone/quiet hours, duplicate sends | P1 |
 | 3. Поствизитный feedback и отзывы | MISSING | `VenueOrdersRepository` can close orders; `TableSessionRepository` can end sessions; no review/feedback files/tables found | Technical close signals exist | Review/rating tables/routes/screens, post-visit trigger, Yandex review link | Send next-day feedback request after closed visit/order | Wrong timing, ночные сообщения, privacy | P2 |
 | 4. Owner venue description sections | PARTIAL | `VenueInfoSectionsRepository.defaultSections`; `V46__venue_info_sections.sql`; `V48__venue_info_section_media.sql`; Telegram owner description callbacks | Default: about/rules/cork_fee/faq/menu; custom sections; image/pdf media in Telegram | Default hall plan/interior; guest Mini App display | Add templates `hall_plan`, `interior`, expose sections in guest venue API | Media storage uses Telegram file_id, Mini App rendering needs file access strategy | P1/P2 |
 | 5. Guest catalog search/filter/map | PARTIAL | `GuestVenueRepository.listCatalogVenues` `ORDER BY v.id ASC`; `catalog.ts` local name/city search | Published venues, city/address, local Mini App search | Server search, address/district filters, open now, price, coordinates, map | Backend `q/city/district`, search name/city/address | Geo consent, distance accuracy, no coords | P2 |
@@ -47,10 +49,10 @@
 
 Текущее состояние в коде:
 - Брони хранятся в `bookings`: `id`, `venue_id`, `user_id`, `scheduled_at`, `party_size`, `comment`, `status`, timestamps.
-- Status enum в коде: `PENDING`, `CONFIRMED`, `CHANGED`, `CANCELED`.
-- Активные брони у гостя: `GuestBookingRepository.listActiveByUser` фильтрует `status IN ('PENDING','CONFIRMED','CHANGED')` и `scheduled_at >= CURRENT_TIMESTAMP`.
-- Активные брони у venue: `GuestBookingRepository.listActiveByVenue` с тем же фильтром.
-- Бронь исчезает из активных автоматически по времени `scheduled_at < CURRENT_TIMESTAMP`, а не по arrival deadline.
+- Status enum в текущем коде включает lifecycle statuses for booking operations, including venue arrival/no-show/seated states where supported by current routes.
+- Активные брони у гостя: `GuestBookingRepository.listActiveByUser` is now used by Bot `/my` and Guest Mini App `Мои брони`; active visibility uses persisted `arrival_deadline_at` when available.
+- Активные брони у venue: Venue Mini App booking queue/lifecycle MVP exists.
+- `arrival_deadline_at` is persisted as a booking snapshot. New bookings use the current hold setting; rescheduled bookings recalculate; changing the setting does not rewrite already-created booking deadlines.
 
 Evidence:
 - `backend/app/src/main/resources/db/migration/postgresql/V32__bookings.sql`
@@ -62,14 +64,12 @@ Evidence:
 Расхождение с концепцией:
 - `docs/PRODUCT_SPEC.md` требует booking status `pending/confirmed/changed/cancelled/expired`.
 - В новом списке также нужны `no_show/seated`; их нет.
-- Нет hold duration setting 15/30/60 минут, arrival deadline, guest-facing explanation.
+- Hold duration setting and guest-facing `Держим до HH:mm` now exist; runtime reminders and broader automation remain missing.
 
 MVP дизайн:
-- Добавить статусы `EXPIRED`, `NO_SHOW`, `SEATED`.
-- Добавить `booking_hold_minutes` в `venue_settings` или отдельную `venue_booking_settings`.
-- Активной считать бронь до `scheduled_at + hold_minutes`, если статус pending/confirmed/changed.
-- В Telegram `/my` и future Mini App показывать: "Бронь держится до HH:mm".
-- Venue manager/staff: action `Посадили` -> `SEATED`, action `Не пришёл` -> `NO_SHOW`.
+- Keep current Bot `/my`, Guest Mini App `Мои брони`, Venue Mini App queue and hold settings in regression.
+- Implement M7c adaptive transactional reminders as a separate runtime slice.
+- Do not broaden booking settings into reminders/quiet hours/preorder in the same slice.
 
 Расширенный дизайн:
 - Настройки per day/venue, автоматический no-show после grace period.
@@ -78,27 +78,24 @@ MVP дизайн:
 
 Технические изменения:
 - `BookingStatus`, `GuestBookingRepository`, `VenueBookingRoutes`, Telegram booking actions.
-- `VenueSettingsRepository` or new `VenueBookingSettingsRepository`.
-- Mini App guest booking screen and venue booking queue.
+- Reminder scheduler/outbox repository, if M7c is implemented.
+- Optional future preorder/visit retention links after booking reminders and visit_count are stable.
 
 Миграции БД:
-- Add status constraint/backfill if constraints are added.
-- Add `venue_booking_settings(venue_id, hold_minutes, reminder_hours_before, quiet_hours...)` or columns in `venue_settings`.
-- Optional `bookings.arrival_deadline_at`, `seated_at`, `expired_at`, `no_show_at`.
+- No new migration for M7b.
+- Future M7c reminder tables/outbox scheduling should be separate from hold settings.
 
 API/routes:
-- `GET /api/venue/bookings?venueId=...`
-- `POST /api/venue/bookings/{id}/seat`
-- `POST /api/venue/bookings/{id}/no-show`
-- Extend `GET /api/guest/booking`.
+- `GET /api/guest/bookings` account-level active/upcoming list.
+- Existing guest update/cancel/confirm routes stay lifecycle source of truth.
 
 Telegram bot changes:
-- `/my` show deadline.
-- Inline actions for guest cancel/reschedule; venue/staff actions seat/no-show.
+- `/my` remains Bot parity reference for public booking label and deadline.
+- Future M7c reminder buttons must not overwrite venue confirmation status.
 
 Mini App changes:
-- Guest "Мои брони" screen.
-- Venue bookings queue/settings screen.
+- Guest `Мои брони` screen is implemented / staging smoke target.
+- Keep venue booking queue/settings smoke in regression.
 
 Tests/smoke checks:
 - Active booking remains visible until `scheduled_at + hold_minutes`.

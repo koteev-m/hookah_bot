@@ -237,6 +237,68 @@ class GuestBookingRoutesTest {
         }
 
     @Test
+    fun `guest active booking list is user scoped sorted and uses public venue local labels`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:booking-active-list-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val firstVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue, name = "Микс")
+            val secondVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue, name = "Дым")
+            seedSubscription(jdbcUrl, firstVenueId)
+            seedSubscription(jdbcUrl, secondVenueId)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID + 1)
+            setVenueTimezone(jdbcUrl, firstVenueId, "Europe/Moscow")
+            setVenueTimezone(jdbcUrl, secondVenueId, "Asia/Yekaterinburg")
+            val guestToken = issueToken(config, TELEGRAM_USER_ID)
+            val foreignGuestToken = issueToken(config, TELEGRAM_USER_ID + 1)
+
+            val laterBookingId = createBooking(client, guestToken, firstVenueId, "2030-01-10T18:00:00Z")
+            val earlierBookingId = createBooking(client, guestToken, secondVenueId, "2030-01-09T17:00:00Z")
+            createBooking(client, foreignGuestToken, firstVenueId, "2030-01-09T16:00:00Z")
+            setBookingStatus(jdbcUrl, laterBookingId, "CONFIRMED")
+
+            val response =
+                client.get("/api/guest/bookings") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val items = json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("items").jsonArray
+            assertEquals(2, items.size)
+            val first = items[0].jsonObject
+            val second = items[1].jsonObject
+            assertEquals(earlierBookingId.toString(), first.getValue("bookingId").jsonPrimitive.content)
+            assertEquals("Дым", first.getValue("venueName").jsonPrimitive.content)
+            assertEquals("Бронь №1", first.getValue("displayLabel").jsonPrimitive.content)
+            assertEquals("09.01.2030, 22:00", first.getValue("scheduledAtDisplay").jsonPrimitive.content)
+            assertEquals(laterBookingId.toString(), second.getValue("bookingId").jsonPrimitive.content)
+            assertEquals("Микс", second.getValue("venueName").jsonPrimitive.content)
+            assertEquals("Бронь №1", second.getValue("displayLabel").jsonPrimitive.content)
+            assertEquals("Подтверждена", second.getValue("statusLabel").jsonPrimitive.content)
+            assertEquals("10.01.2030, 21:00", second.getValue("scheduledAtDisplay").jsonPrimitive.content)
+            assertEquals("21:30", second.getValue("arrivalDeadlineTimeDisplay").jsonPrimitive.content)
+            assertEquals("true", second.getValue("canChange").jsonPrimitive.content)
+            assertEquals("true", second.getValue("canCancel").jsonPrimitive.content)
+        }
+
+    @Test
     fun `dialog state allows booking communication states`() =
         testApplication {
             val jdbcUrl =
@@ -389,16 +451,18 @@ class GuestBookingRoutesTest {
     private fun seedVenue(
         jdbcUrl: String,
         status: String,
+        name: String = "Booking Venue",
     ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
                 INSERT INTO venues (name, city, address, status)
-                VALUES ('Booking Venue', 'City', 'Address', ?)
+                VALUES (?, 'City', 'Address', ?)
                 """.trimIndent(),
                 java.sql.Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
-                statement.setString(1, status)
+                statement.setString(1, name)
+                statement.setString(2, status)
                 statement.executeUpdate()
                 statement.generatedKeys.use { keys ->
                     keys.next()
@@ -406,6 +470,26 @@ class GuestBookingRoutesTest {
                 }
             }
         }
+
+    private fun setBookingStatus(
+        jdbcUrl: String,
+        bookingId: Long,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE bookings
+                SET status = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, status)
+                statement.setLong(2, bookingId)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun seedUser(
         jdbcUrl: String,

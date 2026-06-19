@@ -14,6 +14,7 @@ import type {
   GuestBookingCreateRequest,
   GuestBookingListResponse,
   GuestBookingResponse,
+  GuestBookingUpdateRequest,
   GuestFavoriteItemsResponse,
   GuestFavoriteVenuesResponse,
   GuestShiftExtensionOptionsResponse,
@@ -138,6 +139,46 @@ export async function guestGetBookings(
     backendUrl,
     `/api/guest/booking?${search.toString()}`,
     { signal },
+    deps
+  )
+}
+
+export async function guestGetActiveBookings(
+  backendUrl: string,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestBookingListResponse>> {
+  return requestApi<GuestBookingListResponse>(
+    backendUrl,
+    '/api/guest/bookings',
+    { signal },
+    deps
+  )
+}
+
+export async function guestUpdateBooking(
+  backendUrl: string,
+  venueId: number,
+  payload: GuestBookingUpdateRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestBookingResponse>> {
+  if (!Number.isFinite(venueId) || !Number.isInteger(venueId) || venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  if (!Number.isFinite(payload.bookingId) || !Number.isInteger(payload.bookingId) || payload.bookingId <= 0) {
+    return invalidPositiveIdResult('bookingId')
+  }
+  const search = new URLSearchParams({ venueId: String(venueId) })
+  return requestApi<GuestBookingResponse>(
+    backendUrl,
+    `/api/guest/booking/update?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
     deps
   )
 }

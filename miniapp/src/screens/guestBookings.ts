@@ -1,6 +1,13 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestCancelBooking, guestConfirmBooking, guestCreateBooking, guestGetBookings } from '../shared/api/guestApi'
+import {
+  guestCancelBooking,
+  guestConfirmBooking,
+  guestCreateBooking,
+  guestGetActiveBookings,
+  guestGetBookings,
+  guestUpdateBooking
+} from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type { GuestBookingResponse } from '../shared/api/guestDtos'
 import { append, el, on } from '../shared/ui/dom'
@@ -9,6 +16,7 @@ import { showToast } from '../shared/ui/toast'
 const MAX_COMMENT_LENGTH = 500
 const ACTIVE_BOOKING_PAST_GRACE_MS = 2 * 60 * 60 * 1000
 const ACTIVE_BOOKING_STATUSES = new Set(['pending', 'confirmed', 'changed'])
+const HOLD_STATUS_SET = new Set(['confirmed', 'changed'])
 
 type GuestBookingsOptions = {
   root: HTMLDivElement | null
@@ -62,6 +70,12 @@ function bookingStatusLabel(status: string): string {
   }
 }
 
+function bookingDisplayLabel(booking: GuestBookingResponse): string {
+  if (booking.displayLabel) return booking.displayLabel
+  if (booking.displayNumber) return `Бронь №${booking.displayNumber}`
+  return 'Бронь'
+}
+
 function formatBookingTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
@@ -76,9 +90,23 @@ function formatBookingTime(value: string): string {
   })
 }
 
+function displayBookingTime(booking: GuestBookingResponse): string {
+  return booking.scheduledAtDisplay || formatBookingTime(booking.scheduledAt)
+}
+
+function displayBookingStatus(booking: GuestBookingResponse): string {
+  return booking.statusLabel || bookingStatusLabel(booking.status)
+}
+
 function isActiveBooking(booking: GuestBookingResponse): boolean {
   if (!ACTIVE_BOOKING_STATUSES.has(booking.status.toLowerCase())) {
     return false
+  }
+  if (booking.arrivalDeadlineAt) {
+    const deadlineMs = new Date(booking.arrivalDeadlineAt).getTime()
+    if (!Number.isNaN(deadlineMs)) {
+      return deadlineMs >= Date.now()
+    }
   }
   const scheduledAtMs = new Date(booking.scheduledAt).getTime()
   if (Number.isNaN(scheduledAtMs)) {
@@ -87,17 +115,48 @@ function isActiveBooking(booking: GuestBookingResponse): boolean {
   return scheduledAtMs + ACTIVE_BOOKING_PAST_GRACE_MS >= Date.now()
 }
 
+function canChangeBooking(booking: GuestBookingResponse): boolean {
+  return booking.canChange ?? isActiveBooking(booking)
+}
+
+function canCancelBooking(booking: GuestBookingResponse): boolean {
+  return booking.canCancel ?? isActiveBooking(booking)
+}
+
+function shouldShowHoldDeadline(booking: GuestBookingResponse): boolean {
+  return HOLD_STATUS_SET.has(booking.status.toLowerCase()) && Boolean(booking.arrivalDeadlineTimeDisplay)
+}
+
 function defaultDateValue(): string {
   const date = new Date()
   date.setDate(date.getDate() + 1)
   return date.toISOString().slice(0, 10)
 }
 
-function buildScheduledAt(dateValue: string, timeValue: string): string | null {
+function bookingDateValue(booking: GuestBookingResponse): string {
+  if (booking.scheduledLocalDate) return booking.scheduledLocalDate
+  const date = new Date(booking.scheduledAt)
+  if (Number.isNaN(date.getTime())) return defaultDateValue()
+  return date.toISOString().slice(0, 10)
+}
+
+function bookingTimeValue(booking: GuestBookingResponse): string {
+  if (booking.scheduledLocalTime) return booking.scheduledLocalTime
+  const date = new Date(booking.scheduledAt)
+  if (Number.isNaN(date.getTime())) return '19:00'
+  return date.toISOString().slice(11, 16)
+}
+
+function extractIsoOffset(value: string): string | null {
+  const match = value.match(/(Z|[+-]\d{2}:\d{2})$/)
+  return match?.[1] ?? null
+}
+
+function buildScheduledAt(dateValue: string, timeValue: string, offset: string | null = null): string | null {
   if (!dateValue || !timeValue) {
     return null
   }
-  const date = new Date(`${dateValue}T${timeValue}:00`)
+  const date = new Date(`${dateValue}T${timeValue}:00${offset ?? ''}`)
   if (Number.isNaN(date.getTime())) {
     return null
   }
@@ -111,8 +170,8 @@ function isChangedBooking(booking: GuestBookingResponse): boolean {
 function buildDom(root: HTMLDivElement, venueId: number | null): GuestBookingRefs {
   const wrapper = el('div', { className: 'guest-bookings-screen' })
   const card = el('section', { className: 'card' })
-  const title = el('h2', { text: 'Бронирование' })
-  const status = el('p', { className: 'status', text: venueId ? '' : 'Выберите заведение для бронирования.' })
+  const title = el('h2', { text: venueId ? 'Бронирование' : 'Мои брони' })
+  const status = el('p', { className: 'status', text: '' })
 
   const dateLabel = el('p', { className: 'field-label', text: 'Дата' })
   const dateInput = document.createElement('input')
@@ -145,7 +204,7 @@ function buildDom(root: HTMLDivElement, venueId: number | null): GuestBookingRef
   const actions = el('div', { className: 'button-row order-actions' })
   const submitButton = el('button', { text: 'Отправить заявку' }) as HTMLButtonElement
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
-  const backButton = el('button', { className: 'button-secondary', text: 'Вернуться' }) as HTMLButtonElement
+  const backButton = el('button', { className: 'button-secondary', text: venueId ? 'Вернуться' : 'К профилю' }) as HTMLButtonElement
   append(actions, submitButton, refreshButton, backButton)
 
   append(
@@ -179,6 +238,9 @@ function buildDom(root: HTMLDivElement, venueId: number | null): GuestBookingRef
   const list = el('div', { className: 'guest-bookings-list' })
   append(wrapper, card, successCard, list)
   root.replaceChildren(wrapper)
+  if (!venueId) {
+    card.hidden = true
+  }
 
   return {
     formCard: card,
@@ -213,12 +275,13 @@ function renderBookings(
   bookings: GuestBookingResponse[],
   onCancel: (booking: GuestBookingResponse) => void,
   onConfirm: (booking: GuestBookingResponse) => void,
+  onChange: (booking: GuestBookingResponse, payload: { scheduledAt: string; partySize: number | null; comment: string | null }) => void,
   onRefresh: () => void
 ) {
   list.replaceChildren()
   const section = el('section', { className: 'card' })
   const header = el('div', { className: 'venue-order-header' })
-  header.appendChild(el('h3', { text: 'Мои бронирования' }))
+  header.appendChild(el('h3', { text: 'Мои брони' }))
   const refreshButton = el('button', { className: 'button-small button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
   refreshButton.addEventListener('click', onRefresh)
   header.appendChild(refreshButton)
@@ -226,29 +289,39 @@ function renderBookings(
 
   const activeBookings = bookings.filter(isActiveBooking)
   if (!activeBookings.length) {
-    section.appendChild(el('p', { className: 'venue-empty', text: 'Активных броней нет.' }))
-    section.appendChild(el('p', { className: 'venue-order-sub', text: 'История бронирований будет доступна в профиле.' }))
+    section.appendChild(el('p', { className: 'venue-empty', text: 'Активных броней пока нет.' }))
     list.appendChild(section)
     return
   }
   activeBookings.forEach((booking) => {
-    const row = el('div', { className: 'venue-order-row' })
+    const row = el('article', { className: 'venue-order-row' })
     const info = el('div')
-    info.appendChild(el('strong', { text: `Бронь №${booking.bookingId}` }))
+    info.appendChild(el('strong', { text: bookingDisplayLabel(booking) }))
+    if (booking.venueName) {
+      info.appendChild(el('p', { className: 'venue-order-sub', text: booking.venueName }))
+    }
     info.appendChild(
       el('p', {
         className: 'venue-order-meta',
-        text: `${formatBookingTime(booking.scheduledAt)} · ${booking.partySize ?? '—'} гостей · ${bookingStatusLabel(booking.status)}`
+        text: `${displayBookingTime(booking)} · ${booking.partySize ?? '—'} гостей · ${displayBookingStatus(booking)}`
       })
     )
     if (booking.comment) {
-      info.appendChild(el('p', { className: 'venue-order-sub', text: booking.comment }))
+      info.appendChild(el('p', { className: 'venue-order-sub', text: `Комментарий: ${booking.comment}` }))
+    }
+    if (shouldShowHoldDeadline(booking)) {
+      info.appendChild(
+        el('p', {
+          className: 'venue-order-sub',
+          text: `Держим стол до ${booking.arrivalDeadlineTimeDisplay}.`
+        })
+      )
     }
     if (isChangedBooking(booking)) {
       info.appendChild(
         el('p', {
           className: 'venue-order-sub',
-          text: `Заведение предложило новое время: ${formatBookingTime(booking.scheduledAt)}`
+          text: `Заведение предложило новое время: ${displayBookingTime(booking)}`
         })
       )
       if (booking.lastGuestConfirmationAt) {
@@ -261,14 +334,86 @@ function renderBookings(
       }
     }
     append(row, info)
+    const actions = el('div', { className: 'button-row order-actions' })
     if (isChangedBooking(booking) && !booking.lastGuestConfirmationAt) {
       const confirmButton = el('button', { className: 'button-small', text: 'Принять новое время' }) as HTMLButtonElement
       confirmButton.addEventListener('click', () => onConfirm(booking))
-      row.appendChild(confirmButton)
+      actions.appendChild(confirmButton)
     }
-    const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отменить' }) as HTMLButtonElement
-    cancelButton.addEventListener('click', () => onCancel(booking))
-    row.appendChild(cancelButton)
+    const changeForm = el('div', { className: 'venue-form-grid' })
+    changeForm.hidden = true
+    const dateInput = document.createElement('input')
+    dateInput.type = 'date'
+    dateInput.className = 'venue-input'
+    dateInput.value = bookingDateValue(booking)
+    const timeInput = document.createElement('input')
+    timeInput.type = 'time'
+    timeInput.className = 'venue-input'
+    timeInput.value = bookingTimeValue(booking)
+    const partyInput = document.createElement('input')
+    partyInput.type = 'number'
+    partyInput.className = 'venue-input'
+    partyInput.min = '1'
+    partyInput.max = '30'
+    partyInput.value = String(booking.partySize ?? 2)
+    const commentInput = document.createElement('textarea')
+    commentInput.className = 'staff-comment'
+    commentInput.maxLength = MAX_COMMENT_LENGTH
+    commentInput.rows = 2
+    commentInput.value = booking.comment ?? ''
+    commentInput.placeholder = 'Комментарий к брони'
+    const changeActions = el('div', { className: 'button-row order-actions' })
+    const saveChangeButton = el('button', { className: 'button-small', text: 'Сохранить перенос' }) as HTMLButtonElement
+    const cancelChangeButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
+    append(changeActions, saveChangeButton, cancelChangeButton)
+    append(
+      changeForm,
+      el('p', { className: 'field-label', text: 'Новая дата' }),
+      dateInput,
+      el('p', { className: 'field-label', text: 'Новое время' }),
+      timeInput,
+      el('p', { className: 'field-label', text: 'Количество гостей' }),
+      partyInput,
+      el('p', { className: 'field-label', text: 'Комментарий' }),
+      commentInput,
+      changeActions
+    )
+    if (canChangeBooking(booking)) {
+      const changeButton = el('button', { className: 'button-small button-secondary', text: 'Перенести' }) as HTMLButtonElement
+      changeButton.addEventListener('click', () => {
+        changeForm.hidden = false
+        changeButton.disabled = true
+      })
+      actions.appendChild(changeButton)
+    }
+    if (canCancelBooking(booking)) {
+      const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отменить бронь' }) as HTMLButtonElement
+      cancelButton.addEventListener('click', () => onCancel(booking))
+      actions.appendChild(cancelButton)
+    }
+    saveChangeButton.addEventListener('click', () => {
+      const scheduledAt = buildScheduledAt(dateInput.value, timeInput.value, extractIsoOffset(booking.scheduledAt))
+      const partySize = Number(partyInput.value)
+      if (!scheduledAt || !Number.isInteger(partySize) || partySize < 1 || partySize > 30) {
+        return
+      }
+      onChange(booking, {
+        scheduledAt,
+        partySize,
+        comment: commentInput.value.trim() || null
+      })
+    })
+    cancelChangeButton.addEventListener('click', () => {
+      changeForm.hidden = true
+      const changeButton = Array.from(actions.querySelectorAll('button')).find((button) => button.textContent === 'Перенести')
+      if (changeButton instanceof HTMLButtonElement) {
+        changeButton.disabled = false
+      }
+    })
+    if (actions.childElementCount > 0) {
+      row.appendChild(actions)
+    }
+    row.appendChild(changeForm)
     section.appendChild(row)
   })
   list.appendChild(section)
@@ -288,7 +433,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   const setLoading = (loading: boolean) => {
     isLoading = loading
     refs.submitButton.disabled = loading || !venueId
-    refs.refreshButton.disabled = loading || !venueId
+    refs.refreshButton.disabled = loading
     refs.submitButton.textContent = loading ? 'Отправляем…' : 'Отправить заявку'
   }
 
@@ -298,7 +443,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
     refs.partySizeInput.value = '2'
     refs.commentInput.value = ''
     refs.commentCounter.textContent = `0/${MAX_COMMENT_LENGTH}`
-    refs.status.textContent = venueId ? '' : 'Выберите заведение для бронирования.'
+    refs.status.textContent = ''
   }
 
   const showForm = () => {
@@ -309,16 +454,18 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   const showSuccess = (booking: GuestBookingResponse) => {
     refs.formCard.hidden = true
     refs.successCard.hidden = false
-    refs.successMeta.textContent = `${formatBookingTime(booking.scheduledAt)} · ${booking.partySize ?? '—'} гостей`
+    refs.successMeta.textContent = `${displayBookingTime(booking)} · ${booking.partySize ?? '—'} гостей`
   }
 
   const loadBookings = async () => {
-    if (!venueId || isLoading) return
+    if (isLoading) return
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller
     setLoading(true)
-    const result = await guestGetBookings(backendUrl, venueId, deps, controller.signal)
+    const result = venueId
+      ? await guestGetBookings(backendUrl, venueId, deps, controller.signal)
+      : await guestGetActiveBookings(backendUrl, deps, controller.signal)
     if (disposed || abortController !== controller) return
     abortController = null
     setLoading(false)
@@ -332,6 +479,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
       result.data.items,
       (booking) => void cancelBooking(booking),
       (booking) => void confirmBooking(booking),
+      (booking, payload) => void changeBooking(booking, payload),
       () => void loadBookings()
     )
   }
@@ -373,14 +521,20 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   }
 
   const cancelBooking = async (booking: GuestBookingResponse) => {
-    if (!venueId || isLoading) return
+    if (isLoading) return
     const confirmed = window.confirm('Отменить бронь?')
     if (!confirmed) return
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller
     setLoading(true)
-    const result = await guestCancelBooking(backendUrl, venueId, { bookingId: booking.bookingId }, deps, controller.signal)
+    const result = await guestCancelBooking(
+      backendUrl,
+      booking.venueId,
+      { bookingId: booking.bookingId },
+      deps,
+      controller.signal
+    )
     if (disposed || abortController !== controller) return
     abortController = null
     setLoading(false)
@@ -393,12 +547,18 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   }
 
   const confirmBooking = async (booking: GuestBookingResponse) => {
-    if (!venueId || isLoading) return
+    if (isLoading) return
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller
     setLoading(true)
-    const result = await guestConfirmBooking(backendUrl, venueId, { bookingId: booking.bookingId }, deps, controller.signal)
+    const result = await guestConfirmBooking(
+      backendUrl,
+      booking.venueId,
+      { bookingId: booking.bookingId },
+      deps,
+      controller.signal
+    )
     if (disposed || abortController !== controller) return
     abortController = null
     setLoading(false)
@@ -407,6 +567,33 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
       return
     }
     showToast('Новое время подтверждено')
+    await loadBookings()
+  }
+
+  const changeBooking = async (
+    booking: GuestBookingResponse,
+    payload: { scheduledAt: string; partySize: number | null; comment: string | null }
+  ) => {
+    if (isLoading) return
+    abortController?.abort()
+    const controller = new AbortController()
+    abortController = controller
+    setLoading(true)
+    const result = await guestUpdateBooking(
+      backendUrl,
+      booking.venueId,
+      { bookingId: booking.bookingId, ...payload },
+      deps,
+      controller.signal
+    )
+    if (disposed || abortController !== controller) return
+    abortController = null
+    setLoading(false)
+    if (!result.ok) {
+      renderApiError(refs.status, result.error, isDebug)
+      return
+    }
+    showToast('Бронь перенесена')
     await loadBookings()
   }
 

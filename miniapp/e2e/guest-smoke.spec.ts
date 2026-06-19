@@ -181,6 +181,16 @@ type VenueBookingFixture = {
   lastGuestConfirmationAt?: string | null
 }
 
+type GuestBookingFixture = VenueBookingFixture & {
+  venueId: number
+  venueName?: string | null
+  displayLabel?: string | null
+  statusLabel?: string | null
+  arrivalDeadlineTimeDisplay?: string | null
+  canChange?: boolean | null
+  canCancel?: boolean | null
+}
+
 type SupportThreadFixture = {
   threadId: number
   venueId: number
@@ -366,6 +376,31 @@ function buildDefaultGuestMenu(): GuestMenuCategory[] {
   ]
 }
 
+function buildGuestBooking(overrides: Partial<GuestBookingFixture> = {}): GuestBookingFixture {
+  return {
+    bookingId: 501,
+    venueId: 1,
+    venueName: 'Микс',
+    displayNumber: 1,
+    displayLabel: 'Бронь №1',
+    status: 'confirmed',
+    statusLabel: 'Подтверждена',
+    scheduledAt: '2030-01-10T18:00:00Z',
+    scheduledAtDisplay: '10.01.2030, 21:00',
+    scheduledLocalDate: '2030-01-10',
+    scheduledLocalTime: '21:00',
+    arrivalDeadlineAt: '2030-01-10T18:15:00Z',
+    arrivalDeadlineAtDisplay: '10.01.2030, 21:15',
+    arrivalDeadlineTimeDisplay: '21:15',
+    partySize: 3,
+    comment: 'у окна',
+    lastGuestConfirmationAt: null,
+    canChange: true,
+    canCancel: true,
+    ...overrides
+  }
+}
+
 async function installTelegramWebApp(page: Page, userId: number) {
   await page.addInitScript({
     content: `
@@ -436,17 +471,22 @@ async function mockGuestApi(
     restoreContext?: RestoreContext | null
     extensionOptions?: ShiftExtensionOptions | null
     menuCategories?: GuestMenuCategory[]
+    bookings?: GuestBookingFixture[]
   } = {}
 ) {
   let structuredMenuCalls = 0
   let restoreContext = options.restoreContext ?? null
   let extensionOptions = options.extensionOptions ?? buildShiftExtensionOptions()
   const menuCategories = options.menuCategories ?? buildDefaultGuestMenu()
+  let bookings = options.bookings ?? []
   let createExtensionRequestCalls = 0
+  let nextBookingId = 9000
   let activeOrderServiceCharges: ServiceCharge[] = []
   const previewRequests: Array<{ items: AddBatchItemPayload[] }> = []
   const addBatchRequests: AddBatchPayload[] = []
   let submittedOrderItems: AddBatchItemPayload[] = []
+  const bookingUpdateRequests: Array<{ venueId: number; bookingId: number; scheduledAt: string; partySize?: number | null; comment?: string | null }> = []
+  const bookingCancelRequests: Array<{ venueId: number; bookingId: number }> = []
   const staffCallRequests: Array<{ tableToken: string; tableSessionId: number; reason: string; comment?: string | null }> = []
   let staffCallStatuses: Array<{
     staffCallId: number
@@ -565,6 +605,104 @@ async function mockGuestApi(
       contentType: 'image/png',
       body: transparentPng
     })
+  })
+
+  await page.route('**/api/guest/booking**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    const activeBookings = () =>
+      bookings
+        .filter((booking) => ['pending', 'confirmed', 'changed'].includes(booking.status))
+        .sort((left, right) => left.scheduledAt.localeCompare(right.scheduledAt) || right.bookingId - left.bookingId)
+
+    if (path === '/api/guest/bookings' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ items: activeBookings() }))
+      return
+    }
+
+    if (path === '/api/guest/booking' && request.method() === 'GET') {
+      const venueId = Number(url.searchParams.get('venueId'))
+      await route.fulfill(jsonResponse({ items: bookings.filter((booking) => booking.venueId === venueId) }))
+      return
+    }
+
+    if (path === '/api/guest/booking/create' && request.method() === 'POST') {
+      const body = (await request.postDataJSON()) as {
+        venueId: number
+        scheduledAt: string
+        partySize?: number | null
+        comment?: string | null
+      }
+      const booking = buildGuestBooking({
+        bookingId: nextBookingId++,
+        venueId: body.venueId,
+        scheduledAt: body.scheduledAt,
+        scheduledAtDisplay: '11.01.2030, 19:00',
+        scheduledLocalDate: '2030-01-11',
+        scheduledLocalTime: '19:00',
+        status: 'pending',
+        statusLabel: 'Ожидает подтверждения',
+        partySize: body.partySize ?? null,
+        comment: body.comment ?? null,
+        canChange: true,
+        canCancel: true
+      })
+      bookings = [...bookings, booking]
+      await route.fulfill(jsonResponse(booking))
+      return
+    }
+
+    const venueId = Number(url.searchParams.get('venueId'))
+    const body = request.method() === 'POST' ? (await request.postDataJSON()) as {
+      bookingId: number
+      scheduledAt?: string
+      partySize?: number | null
+      comment?: string | null
+    } : null
+    const booking = body ? bookings.find((item) => item.bookingId === body.bookingId && item.venueId === venueId) : null
+    if (!booking) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+
+    if (path === '/api/guest/booking/update' && request.method() === 'POST') {
+      bookingUpdateRequests.push({
+        venueId,
+        bookingId: booking.bookingId,
+        scheduledAt: body?.scheduledAt ?? booking.scheduledAt,
+        partySize: body?.partySize ?? null,
+        comment: body?.comment ?? null
+      })
+      booking.status = 'pending'
+      booking.statusLabel = 'Ожидает подтверждения'
+      booking.scheduledAt = body?.scheduledAt ?? booking.scheduledAt
+      booking.scheduledAtDisplay = '11.01.2030, 20:30'
+      booking.scheduledLocalDate = '2030-01-11'
+      booking.scheduledLocalTime = '20:30'
+      booking.partySize = body?.partySize ?? booking.partySize
+      booking.comment = body?.comment ?? booking.comment
+      await route.fulfill(jsonResponse(booking))
+      return
+    }
+
+    if (path === '/api/guest/booking/cancel' && request.method() === 'POST') {
+      bookingCancelRequests.push({ venueId, bookingId: booking.bookingId })
+      booking.status = 'canceled'
+      booking.statusLabel = 'Отменена'
+      booking.canChange = false
+      booking.canCancel = false
+      await route.fulfill(jsonResponse(booking))
+      return
+    }
+
+    if (path === '/api/guest/booking/confirm' && request.method() === 'POST') {
+      booking.lastGuestConfirmationAt = '2030-01-10T18:05:00Z'
+      await route.fulfill(jsonResponse(booking))
+      return
+    }
+
+    await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
   })
 
   await page.route('**/api/guest/table/resolve?**', async (route) => {
@@ -732,6 +870,9 @@ async function mockGuestApi(
   return {
     getStructuredMenuCalls: () => structuredMenuCalls,
     getCreateExtensionRequestCalls: () => createExtensionRequestCalls,
+    getBookingUpdateRequests: () => bookingUpdateRequests,
+    getBookingCancelRequests: () => bookingCancelRequests,
+    getGuestBookings: () => bookings,
     getPreviewRequests: () => previewRequests,
     getAddBatchRequests: () => addBatchRequests,
     getStaffCallRequests: () => staffCallRequests,
@@ -1984,6 +2125,79 @@ test('pre-QR guest card shows info/photo menu and hides structured order menu', 
   await expect(page.getByAltText('📖 Фото-меню 1')).toBeVisible()
   await expect(page.getByText('Кальянное меню')).toHaveCount(0)
   expect(api.getStructuredMenuCalls()).toBe(0)
+})
+
+test('guest opens my bookings from profile and manages booking actions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    bookings: [
+      buildGuestBooking({
+        bookingId: 501,
+        venueId: 1,
+        venueName: 'Микс',
+        displayNumber: 1,
+        displayLabel: 'Бронь №1',
+        status: 'confirmed',
+        statusLabel: 'Подтверждена',
+        scheduledAt: '2030-01-10T18:00:00Z',
+        scheduledAtDisplay: '10.01.2030, 21:00',
+        scheduledLocalDate: '2030-01-10',
+        scheduledLocalTime: '21:00',
+        arrivalDeadlineTimeDisplay: '21:15',
+        partySize: 3,
+        comment: 'у окна'
+      }),
+      buildGuestBooking({
+        bookingId: 502,
+        venueId: 2,
+        venueName: 'Дым',
+        displayNumber: 1,
+        displayLabel: 'Бронь №1',
+        status: 'pending',
+        statusLabel: 'Ожидает подтверждения',
+        scheduledAt: '2030-01-09T17:00:00Z',
+        scheduledAtDisplay: '09.01.2030, 22:00',
+        scheduledLocalDate: '2030-01-09',
+        scheduledLocalTime: '22:00',
+        arrivalDeadlineTimeDisplay: '22:30',
+        partySize: 2,
+        comment: null
+      })
+    ]
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await expect(page.getByRole('heading', { name: 'Профиль' })).toBeVisible()
+  await page.getByRole('button', { name: '📅 Мои брони' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Мои брони' })).toBeVisible()
+  const rows = page.locator('.venue-order-row')
+  await expect(rows.nth(0)).toContainText('Дым')
+  await expect(rows.nth(1)).toContainText('Микс')
+  const mixCard = rows.filter({ hasText: 'Микс' })
+  await expect(mixCard).toContainText('Бронь №1')
+  await expect(mixCard).toContainText('10.01.2030, 21:00')
+  await expect(mixCard).toContainText('3 гостей')
+  await expect(mixCard).toContainText('Подтверждена')
+  await expect(mixCard).toContainText('Комментарий: у окна')
+  await expect(mixCard).toContainText('Держим стол до 21:15.')
+
+  await mixCard.getByRole('button', { name: 'Перенести' }).click()
+  await mixCard.locator('input[type="date"]').fill('2030-01-11')
+  await mixCard.locator('input[type="time"]').fill('20:30')
+  await mixCard.locator('input[type="number"]').fill('4')
+  await mixCard.locator('textarea').fill('другой стол')
+  await mixCard.getByRole('button', { name: 'Сохранить перенос' }).click()
+
+  expect(api.getBookingUpdateRequests()).toHaveLength(1)
+  expect(api.getBookingUpdateRequests()[0]).toMatchObject({ venueId: 1, bookingId: 501, partySize: 4, comment: 'другой стол' })
+  await expect(rows.filter({ hasText: 'Микс' })).toContainText('11.01.2030, 20:30')
+
+  page.once('dialog', (dialog) => void dialog.accept())
+  await rows.filter({ hasText: 'Микс' }).getByRole('button', { name: 'Отменить бронь' }).click()
+  expect(api.getBookingCancelRequests()).toEqual([{ venueId: 1, bookingId: 501 }])
+  await expect(rows.filter({ hasText: 'Микс' })).toHaveCount(0)
 })
 
 test('table context opens category-first order menu and cart action', async ({ page }) => {

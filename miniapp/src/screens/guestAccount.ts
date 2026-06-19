@@ -28,6 +28,7 @@ export type GuestAccountScreenOptions = {
   currentVenueId: number | null
   hasTableContext: boolean
   onBack: () => void
+  onOpenBookings: () => void
   onOpenVenue: (venueId: number) => void
   onOpenBot: () => OpenBotResult
 }
@@ -117,12 +118,17 @@ function renderBotOnlySection(
   return () => disposables.forEach((dispose) => dispose())
 }
 
-function renderAccountHome(root: HTMLElement, openSection: (section: AccountSection) => void, onBack: () => void) {
+function renderAccountHome(
+  root: HTMLElement,
+  openSection: (section: AccountSection) => void,
+  onBack: () => void,
+  onOpenBookings: () => void
+) {
   const wrapper = el('div', { className: 'venue-settings' })
   const card = el('section', { className: 'card' })
   const heading = el('h2', { text: 'Профиль' })
   const body = el('p', {
-    text: 'Здесь собраны гостевые разделы: история, любимое, акции и лояльность.'
+    text: 'Здесь собраны гостевые разделы: брони, история, любимое, акции и лояльность.'
   })
   const actions = el('div', { className: 'venue-inline-actions' })
   const buttons: Array<[AccountSection, string]> = [
@@ -133,6 +139,9 @@ function renderAccountHome(root: HTMLElement, openSection: (section: AccountSect
     ['loyalty', '🎁 Лояльность']
   ]
   const disposables: Array<() => void> = []
+  const bookingsButton = el('button', { className: 'button-secondary', text: '📅 Мои брони' }) as HTMLButtonElement
+  append(actions, bookingsButton)
+  disposables.push(on(bookingsButton, 'click', onOpenBookings))
   buttons.forEach(([section, label]) => {
     const button = el('button', { className: 'button-secondary', text: label }) as HTMLButtonElement
     append(actions, button)
@@ -388,7 +397,7 @@ function renderFavoritesSection(
 }
 
 export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
-  const { root, backendUrl, isDebug, currentVenueId, hasTableContext, onBack, onOpenVenue, onOpenBot } = options
+  const { root, backendUrl, isDebug, currentVenueId, hasTableContext, onBack, onOpenBookings, onOpenVenue, onOpenBot } = options
   if (!root) return () => undefined
 
   let currentDispose: (() => void) | null = null
@@ -434,7 +443,7 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
         break
       case 'home':
       default:
-        currentDispose = renderAccountHome(root, renderSection, onBack)
+        currentDispose = renderAccountHome(root, renderSection, onBack, onOpenBookings)
         break
     }
   }

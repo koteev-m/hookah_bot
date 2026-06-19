@@ -484,9 +484,9 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Current implementation block after the post-M6 checkpoint: M7a booking hold settings in Venue Mini App is implemented and ready for staging smoke. M4A-M4C messages, M5 staff calls and M6 staff-chat management stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Current implementation block after the post-M6 checkpoint: M7b Guest Mini App `Мои брони` is implemented and ready for staging smoke. M7a booking hold settings is CLOSED / staging smoke passed. M4A-M4C messages, M5 staff calls and M6 staff-chat management stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
-Manual M7a booking hold settings smoke:
+Manual M7a booking hold settings regression smoke:
 1. OWNER opens Venue Mini App `Настройки`.
 2. `Настройки брони` shows current hold duration and example `19:00 -> HH:mm`.
 3. OWNER saves a custom value such as `15`.
@@ -495,6 +495,26 @@ Manual M7a booking hold settings smoke:
 6. Existing bookings keep their stored `arrival_deadline_at` unless rescheduled.
 7. Rescheduling after the setting change recalculates the deadline from the new scheduled time plus current hold minutes.
 8. MANAGER behavior matches backend policy; STAFF does not see or access booking settings.
+
+Manual M7b Guest Mini App `Мои брони` smoke:
+1. Guest opens Guest Mini App and goes to `Профиль → Мои брони`.
+2. Active/upcoming bookings across at least two venues render as separate cards ordered by nearest scheduled time.
+3. Each card shows venue name, public label `Бронь №...`, venue-local date/time, party size, status and comment when present.
+4. A confirmed or changed booking shows `Держим стол до HH:mm` from the persisted booking deadline.
+5. Compare the same booking in Telegram Bot `/my`; public booking number and deadline copy must match.
+6. Guest clicks `Перенести`, saves a new date/time/party/comment and sees the card refresh through the existing guest update endpoint.
+7. Guest clicks `Отменить бронь`, confirms the destructive dialog and the booking disappears from active list.
+8. Empty state shows `Активных броней пока нет.`
+9. Switch Telegram user/account and confirm another guest's bookings are not visible.
+10. Existing Guest/Venue booking queue, conversations, staff calls, staff chat, menu/order and QR restore smoke remains green.
+
+M7c adaptive booking reminders policy is documented only:
+- one transactional reminder maximum per `CONFIRMED`/`CHANGED` booking in MVP;
+- preferred target 24h before visit, fallback 3h before visit, with confirmation/reschedule delay guards;
+- venue-local quiet window 10:00-22:00, only moving reminders earlier and never after the intended target;
+- buttons `Да, буду`, `Перенести`, `Отменить`;
+- `Да, буду` records guest attendance intent separately and must not overwrite venue confirmation status;
+- no reminder worker, migration, scheduler startup or callback runtime is implemented in M7b.
 
 Manual M4B/M4C inbox regression smoke after deployment:
 
