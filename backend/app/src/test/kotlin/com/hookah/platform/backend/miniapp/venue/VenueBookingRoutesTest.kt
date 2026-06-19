@@ -289,6 +289,7 @@ class VenueBookingRoutesTest {
             assertTrue(confirmMessage.contains("Гостей: 4"), confirmMessage)
             assertTrue(confirmMessage.contains("Держим до 22:00"), confirmMessage)
             assertFalse(confirmMessage.contains("UTC"), confirmMessage)
+            assertEquals(0, bookingReminderCount(jdbcUrl, bookingId))
 
             val messageResponse =
                 client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
@@ -981,6 +982,63 @@ class VenueBookingRoutesTest {
             assertEquals(HttpStatusCode.BadRequest, longMessageResponse.status)
         }
 
+    @Test
+    fun `explicit enabled booking reminders schedules legacy reminders on venue confirm`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-booking-reminder-enabled-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                    "booking.reminders.enabled" to "true",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+
+            val guestToken = issueToken(config, GUEST_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+            val createResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId,"scheduledAt":"2030-01-10T18:30:00Z","partySize":4}""")
+                }
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val bookingId =
+                json.parseToJsonElement(createResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("bookingId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+
+            val confirmResponse =
+                client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, confirmResponse.status)
+            assertTrue(bookingReminderCount(jdbcUrl, bookingId) > 0)
+        }
+
     private fun issueToken(
         config: MapApplicationConfig,
         userId: Long,
@@ -1078,6 +1136,26 @@ class VenueBookingRoutesTest {
             }
         }
     }
+
+    private fun bookingReminderCount(
+        jdbcUrl: String,
+        bookingId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM booking_reminders
+                WHERE booking_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
 
     private fun outboxTexts(
         jdbcUrl: String,

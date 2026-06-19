@@ -259,6 +259,7 @@ class TelegramBotRouter(
     private val auditLogRepository: AuditLogRepository = AuditLogRepository(null),
     private val shiftExtensionRepository: ShiftExtensionRepository = ShiftExtensionRepository(null),
     private val supportThreadRepository: SupportThreadRepository? = null,
+    private val bookingRemindersEnabled: Boolean = true,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val aiTelegramHandler =
@@ -5792,6 +5793,7 @@ class TelegramBotRouter(
         bookingId: Long,
         zoneId: ZoneId,
     ) {
+        if (!bookingRemindersEnabled) return
         runCatching {
             guestBookingRepository.scheduleRemindersForBooking(
                 bookingId = bookingId,

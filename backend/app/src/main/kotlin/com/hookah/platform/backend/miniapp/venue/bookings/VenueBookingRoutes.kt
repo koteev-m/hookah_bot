@@ -118,6 +118,7 @@ fun Route.venueBookingRoutes(
     outboxEnqueuer: TelegramOutboxEnqueuer,
     supportThreadRepository: SupportThreadRepository = SupportThreadRepository(null),
     venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
+    bookingRemindersEnabled: Boolean = true,
 ) {
     route("/venue/{venueId}/booking-settings") {
         get {
@@ -181,11 +182,13 @@ fun Route.venueBookingRoutes(
                 chatId = booking.userId,
                 text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, zoneId),
             )
-            guestBookingRepository.scheduleRemindersForBooking(
-                bookingId = booking.id,
-                now = Instant.now(),
-                venueZoneId = zoneId,
-            )
+            if (bookingRemindersEnabled) {
+                guestBookingRepository.scheduleRemindersForBooking(
+                    bookingId = booking.id,
+                    now = Instant.now(),
+                    venueZoneId = zoneId,
+                )
+            }
             call.respond(VenueBookingStatusResponse(bookingId = booking.id, status = booking.status.toApi()))
         }
 
@@ -216,11 +219,13 @@ fun Route.venueBookingRoutes(
                 chatId = updated.userId,
                 text = buildBookingChangedGuestNotification(updated, guestBookingRepository, zoneId, changeReason),
             )
-            guestBookingRepository.scheduleRemindersForBooking(
-                bookingId = updated.id,
-                now = Instant.now(),
-                venueZoneId = zoneId,
-            )
+            if (bookingRemindersEnabled) {
+                guestBookingRepository.scheduleRemindersForBooking(
+                    bookingId = updated.id,
+                    now = Instant.now(),
+                    venueZoneId = zoneId,
+                )
+            }
             call.respond(
                 VenueBookingStatusResponse(
                     bookingId = updated.id,

@@ -650,6 +650,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 auditLogRepository = auditLogRepository,
                 shiftExtensionRepository = shiftExtensionRepository,
                 supportThreadRepository = supportThreadRepository,
+                bookingRemindersEnabled = bookingReminderWorkerConfig.enabled,
             )
 
         if (dataSource != null) {
@@ -1177,6 +1178,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     outboxEnqueuer = telegramOutboxEnqueuer,
                     supportThreadRepository = supportThreadRepository,
                     venueSettingsRepository = venueSettingsRepository,
+                    bookingRemindersEnabled = bookingReminderWorkerConfig.enabled,
                 )
                 venueSupportRoutes(
                     venueAccessRepository = venueAccessRepository,

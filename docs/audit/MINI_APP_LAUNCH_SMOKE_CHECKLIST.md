@@ -484,7 +484,7 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Current implementation block after the post-M6 checkpoint: M7b Guest Mini App `Мои брони` is implemented and ready for staging smoke. M7a booking hold settings is CLOSED / staging smoke passed. M4A-M4C messages, M5 staff calls and M6 staff-chat management stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Current implementation block after the M7c safety checkpoint: M7b Guest Mini App `Мои брони` is implemented with local validation and staging backend/DB evidence, but the release verdict remains `PASS_WITH_UNVERIFIED_RUNTIME_GAPS` until real Bot `/my` side-by-side and real two-account isolation smoke are completed. M7a booking hold settings is CLOSED / staging smoke passed. M7c adaptive reminders are not accepted; legacy reminder runtime is opt-in disabled by default and staging was manually made safe on 2026-06-19 with health checks green after backend recreation. M4A-M4C messages, M5 staff calls and M6 staff-chat management stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
 Manual M7a booking hold settings regression smoke:
 1. OWNER opens Venue Mini App `Настройки`.
@@ -508,13 +508,14 @@ Manual M7b Guest Mini App `Мои брони` smoke:
 9. Switch Telegram user/account and confirm another guest's bookings are not visible.
 10. Existing Guest/Venue booking queue, conversations, staff calls, staff chat, menu/order and QR restore smoke remains green.
 
-M7c adaptive booking reminders policy is documented only:
+M7c target adaptive booking reminders policy is documented only:
 - one transactional reminder maximum per `CONFIRMED`/`CHANGED` booking in MVP;
 - preferred target 24h before visit, fallback 3h before visit, with confirmation/reschedule delay guards;
 - venue-local quiet window 10:00-22:00, only moving reminders earlier and never after the intended target;
 - buttons `Да, буду`, `Перенести`, `Отменить`;
 - `Да, буду` records guest attendance intent separately and must not overwrite venue confirmation status;
-- no reminder worker, migration, scheduler startup or callback runtime is implemented in M7b.
+- legacy reminder tables/worker/callbacks exist from earlier pilot work, but they use legacy 11:00 / 2h / 1h scheduling, can create more than one reminder, do not implement the documented adaptive quiet-window policy, and mark reminder `SENT` after outbox enqueue rather than confirmed Telegram delivery;
+- the legacy worker is disabled by default and must remain off until M7c is implemented, legacy `PENDING`/`FAILED` rows are audited/canceled/recalculated, and real Telegram staging smoke accepts the feature.
 
 Manual M4B/M4C inbox regression smoke after deployment:
 

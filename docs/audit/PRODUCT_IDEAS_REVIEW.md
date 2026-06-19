@@ -2,15 +2,15 @@
 
 Дата: 2026-04-28. Режим: read-only audit. Код, миграции и тесты не изменялись.
 
-> Current correction as of 2026-06-19: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, and Guest Mini App `Мои брони` is implemented / staging smoke target. Runtime booking reminders are still not implemented; M7c adaptive reminder policy is documented only.
+> Current correction as of 2026-06-19: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, and Guest Mini App `Мои брони` is implemented with `PASS_WITH_UNVERIFIED_RUNTIME_GAPS`. A legacy booking reminder runtime exists from earlier pilot work, but it is opt-in disabled by default and not accepted as adaptive M7c. M7c adaptive reminder policy is documented and pending implementation/acceptance.
 
 ## Executive summary
 
 Из нового списка уже частично реализованы: базовые брони, Telegram `/my` для активных броней/заказов, Guest Mini App `Мои брони`, venue-side booking queue/lifecycle API, booking hold settings with persisted `arrival_deadline_at`, owner venue description sections, простой guest catalog, multi-venue membership в БД и Mini App venue selector, staff chat notifications для новых order batches, order close/table session cleanup как техническая основа visit retention.
 
-Частично, но с заметными gap: booking lifecycle and Mini App surfaces are now much stronger, but runtime reminders, preorder, automatic expiry/no-show automation and broader retention remain later; каталог без server-side search/filter/map/geo; order history only partially exists; discount существует как ручной percent на item в счёте, но не как loyalty/promo system.
+Частично, но с заметными gap: booking lifecycle and Mini App surfaces are now much stronger, but accepted adaptive reminders, preorder, automatic expiry/no-show automation and broader retention remain later; каталог без server-side search/filter/map/geo; order history only partially exists; discount существует как ручной percent на item в счёте, но не как loyalty/promo system.
 
-Отсутствует: reminder scheduler для броней, post-visit feedback/reviews, Yandex review link, paid placement, promotions/coupons/campaigns, promotion boosting, favorites/repeat templates, preorder, cashback/points/flexible loyalty rules, hookah master subrole/profile/shift schedule, network/group entity for venue chains.
+Отсутствует: accepted adaptive reminder scheduler для броней, post-visit feedback/reviews, Yandex review link, paid placement, promotions/coupons/campaigns, promotion boosting, favorites/repeat templates, preorder, cashback/points/flexible loyalty rules, hookah master subrole/profile/shift schedule, network/group entity for venue chains.
 
 Главные зависимости:
 - P0 core: active order/table_session/tab correctness из `PRODUCT_AUDIT_SUMMARY.md` остаётся prerequisite для visit_count, feedback, repeat, preorder, loyalty.
@@ -23,7 +23,7 @@
 | Идея | Статус | Evidence из кода | Что уже есть | Чего нет | MVP реализация | Риски | Приоритет |
 |---|---|---|---|---|---|---|---|
 | 1. Брони гостя и жизненный цикл | PARTIAL | `V32__bookings.sql`; `GuestBookingRepository.BookingStatus`; `GuestBookingRoutes`; `VenueBookingRoutes`; `VenueSettingsRepository`; `TelegramBotRouter.showMyOrdersAndBookings`; `guestBookings.ts`; `venueBookings.ts` | Create/update/cancel/list, venue confirm/change/cancel/arrival/no-show, Telegram `/my`, Guest Mini App `Мои брони`, Venue Mini App queue, persisted `arrival_deadline_at`, hold setting | Runtime reminders, preorder, broader automatic expiry/no-show policy | Keep M3/M7a/M7b in regression; implement M7c reminders separately | Label/timezone drift across Bot/Mini App if DTO parity regresses | P1 |
-| 2. Напоминания о бронях | MISSING runtime / DOCUMENTED policy | `Application.kt` starts subscription billing, table session cleanup, telegram workers; no booking reminder worker found; M7c policy in roadmap/spec docs | Immediate messages on booking create/update/cancel/venue status; adaptive reminder policy documented | Scheduler, reminder table, callback runtime, exactly-once reminder delivery | M7c: one adaptive transactional reminder for confirmed/changed bookings using outbox and venue-local quiet window | Спам, timezone/quiet hours, duplicate sends | P1 |
+| 2. Напоминания о бронях | LEGACY GATED / M7c MISSING | `BookingReminderWorker`, `booking_reminders`, `GuestBookingRepository.scheduleRemindersForBooking`, `BookingReminderWorkerConfig`; M7c policy in roadmap/spec docs | Immediate messages on booking create/update/cancel/venue status; legacy reminder runtime exists but is opt-in disabled by default; adaptive reminder policy documented | Accepted adaptive scheduler, data reconciliation for legacy rows, final callback copy/semantics, real Telegram smoke | M7c: one adaptive transactional reminder for confirmed/changed bookings using outbox and venue-local quiet window | Спам, timezone/quiet hours, duplicate sends, legacy rows sent under old policy if enabled too early | P1 |
 | 3. Поствизитный feedback и отзывы | MISSING | `VenueOrdersRepository` can close orders; `TableSessionRepository` can end sessions; no review/feedback files/tables found | Technical close signals exist | Review/rating tables/routes/screens, post-visit trigger, Yandex review link | Send next-day feedback request after closed visit/order | Wrong timing, ночные сообщения, privacy | P2 |
 | 4. Owner venue description sections | PARTIAL | `VenueInfoSectionsRepository.defaultSections`; `V46__venue_info_sections.sql`; `V48__venue_info_section_media.sql`; Telegram owner description callbacks | Default: about/rules/cork_fee/faq/menu; custom sections; image/pdf media in Telegram | Default hall plan/interior; guest Mini App display | Add templates `hall_plan`, `interior`, expose sections in guest venue API | Media storage uses Telegram file_id, Mini App rendering needs file access strategy | P1/P2 |
 | 5. Guest catalog search/filter/map | PARTIAL | `GuestVenueRepository.listCatalogVenues` `ORDER BY v.id ASC`; `catalog.ts` local name/city search | Published venues, city/address, local Mini App search | Server search, address/district filters, open now, price, coordinates, map | Backend `q/city/district`, search name/city/address | Geo consent, distance accuracy, no coords | P2 |
@@ -94,7 +94,7 @@ Telegram bot changes:
 - Future M7c reminder buttons must not overwrite venue confirmation status.
 
 Mini App changes:
-- Guest `Мои брони` screen is implemented / staging smoke target.
+- Guest `Мои брони` screen is implemented with `PASS_WITH_UNVERIFIED_RUNTIME_GAPS`; finish real Bot `/my` and two-account isolation smoke before marking fully closed.
 - Keep venue booking queue/settings smoke in regression.
 
 Tests/smoke checks:
@@ -116,23 +116,26 @@ Tests/smoke checks:
 
 Текущее состояние в коде:
 - Immediate outbound messages есть: guest booking create/update/cancel notifies staff chat; venue confirm/change/cancel notifies guest.
-- В `Application.kt` запускаются `SubscriptionBillingJob`, `TableSessionCleanupWorker`, Telegram webhook/outbox workers. Booking reminder worker не найден.
+- Legacy `BookingReminderWorker`, `booking_reminders` and Telegram callbacks exist from earlier pilot work, but do not match the current adaptive M7c product policy.
+- The worker is opt-in disabled by default through `BOOKING_REMINDER_WORKER_ENABLED=false`; missing/blank/malformed config does not start it.
 - `TelegramOutboxWorker` уже умеет retries/backoff for outbound messages.
 
 Evidence:
 - `GuestBookingRoutes.notifyVenueStaffAboutBooking`
 - `VenueBookingRoutes` sends messages to `booking.userId`
-- `Application.kt` worker startup
+- `Application.kt` worker startup and `BookingReminderWorkerConfig`
+- `BookingReminderWorker`, `GuestBookingRepository.scheduleRemindersForBooking`
 - `TelegramOutboxEnqueuer`, `TelegramOutboxWorker`, `V26__telegram_outbox.sql`
 
 Расхождение с концепцией:
-- Spec требует booking status notifications, но scheduled reminders and pre-visit confirm/cancel/reschedule отсутствуют.
+- Spec requires adaptive one-reminder M7c policy; legacy scheduling uses day-of-visit 11:00 plus 2h/1h pre-visit logic, has no documented 24h/3h adaptive guard/quiet-window behavior, and marks reminder `SENT` after outbox enqueue rather than confirmed Telegram delivery.
+- Existing legacy `PENDING`/`FAILED` rows must be audited, canceled or recalculated before any future enablement.
 
 MVP дизайн:
 - Worker every 1-5 minutes finds confirmed/changed bookings requiring reminder.
-- One reminder at configurable `N` hours before visit, default 3 hours.
-- Message: venue, time, hold until, buttons `Подтвердить`, `Отменить`, `Перенести`.
-- Store sent reminders to prevent duplicates.
+- One adaptive transactional reminder maximum per booking: preferred 24h target, 3h fallback, venue-local quiet window.
+- Message: venue, public booking number, time, party size, hold until, buttons `Да, буду`, `Перенести`, `Отменить`.
+- Store sent reminders and dedupe keys to prevent duplicates; `Да, буду` must record guest attendance intent separately and never overwrite venue confirmation status.
 
 Расширенный дизайн:
 - Multiple reminders: day before + same day.
@@ -140,27 +143,29 @@ MVP дизайн:
 - Auto-expire/no-show after hold.
 
 Технические изменения:
-- `BookingReminderWorker`, repository method `listDueReminders`.
-- Use existing outbox for delivery.
-- Add Telegram callback handlers.
+- Replace/upgrade legacy `BookingReminderWorker` scheduling policy behind the opt-in flag.
+- Use existing outbox for delivery and keep result semantics honest: outbox enqueue is not Telegram-delivered.
+- Add/fix Telegram callback handlers for final M7c copy and guest attendance intent.
 
 Миграции БД:
-- `booking_notifications(id, booking_id, kind, scheduled_for, sent_at, status, attempts)` or `booking_reminder_sent_at` columns.
-- `venue_booking_settings.reminder_hours_before`, `quiet_start`, `quiet_end`.
+- Existing `booking_reminders` table exists; future M7c may need a small migration for guest attendance intent/readable response state, not a broad reminder settings model.
+- Per-venue reminder timing/quiet hours remain later; do not add them to M7c MVP unless the accepted policy requires it.
 
 API/routes:
 - Venue settings route for reminder timing.
 
 Telegram bot changes:
-- Callback data `booking_reminder_confirm`, `booking_reminder_cancel`, `booking_reminder_reschedule`.
+- Callback data for `Да, буду`, `Перенести`, `Отменить`; button copy must not say `Подтвердить бронь` because venue confirmation is a separate status.
 
 Mini App changes:
 - Optional settings UI; not required for first MVP if default is global.
 
 Tests/smoke checks:
-- Reminder sent once.
-- Reschedule invalidates old reminder.
-- Quiet hours shift send time.
+- Worker disabled by default and explicit-enable only.
+- Reminder sent once under final adaptive policy.
+- Reschedule invalidates old reminder and schedules one new reminder when eligible.
+- Quiet window moves only earlier or skips.
+- Real Telegram staging smoke verifies visible message/buttons.
 
 Риски:
 - Telegram users who never opened bot may not receive messages.
@@ -1088,7 +1093,7 @@ Tests/smoke checks:
 ### P1 Operational completeness
 
 1. Booking lifecycle: `EXPIRED/NO_SHOW/SEATED`, hold minutes, active visibility until deadline.
-2. Booking reminders worker with confirm/cancel/reschedule.
+2. Accepted M7c adaptive booking reminders after legacy rows are audited/canceled/recalculated and the opt-in worker is explicitly enabled only after smoke acceptance.
 3. Venue booking queue in Mini App.
 4. Unified staff notifications for orders/reorders/calls/bookings/cancellations.
 5. Telegram multi-venue selector.

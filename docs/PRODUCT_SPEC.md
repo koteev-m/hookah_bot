@@ -81,7 +81,7 @@ MUST:
 SHOULD:
 - Favorites and history (Block 15) integrate with catalog.
 - Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR, and the context resets after bill close.
-- Adaptive booking reminders are a separate transactional milestone: at most one reminder for confirmed/changed bookings in MVP, calculated in venue-local time with 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Reminder worker/runtime is not part of the booking-list MVP.
+- Adaptive booking reminders are a separate transactional milestone: at most one reminder for confirmed/changed bookings in MVP, calculated in venue-local time with 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Any legacy reminder runtime must stay opt-in disabled until final M7c policy, data reconciliation and real Telegram smoke are accepted.
 
 ## Block 5 — Orders (one active order per table + batches)
 MUST:

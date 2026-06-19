@@ -15,7 +15,7 @@ data class BookingReminderWorkerConfig(
                     ?.getString()
                     ?.trim()
                     ?.toBooleanStrictOrNull()
-                    ?: true
+                    ?: false
             val intervalSeconds =
                 config.propertyOrNull("booking.reminders.intervalSeconds")
                     ?.getString()
