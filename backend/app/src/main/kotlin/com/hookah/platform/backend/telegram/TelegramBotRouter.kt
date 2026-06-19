@@ -277,9 +277,9 @@ class TelegramBotRouter(
     private val keyboardRemoveMarker = "\u2060"
     private val botMenuItemsPerPage = 5
     private val activeBookingStatuses = setOf(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.CHANGED)
-    private val defaultBookingHoldMinutes = 30
-    private val minBookingHoldMinutes = 10
-    private val maxBookingHoldMinutes = 240
+    private val defaultBookingHoldMinutes = GuestBookingRepository.DEFAULT_HOLD_MINUTES
+    private val minBookingHoldMinutes = GuestBookingRepository.MIN_HOLD_MINUTES
+    private val maxBookingHoldMinutes = GuestBookingRepository.MAX_HOLD_MINUTES
     private val botDraftCarts = ConcurrentHashMap<BotDraftCartKey, ConcurrentHashMap<Long, BotDraftCartItem>>()
     private val botDraftCartComments = ConcurrentHashMap<BotDraftCartKey, String>()
     private val botMenuMessageIds = ConcurrentHashMap<BotDraftCartKey, Long>()

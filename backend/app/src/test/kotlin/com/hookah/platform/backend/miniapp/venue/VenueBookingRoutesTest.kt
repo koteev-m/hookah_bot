@@ -6,6 +6,7 @@ import com.hookah.platform.backend.module
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -26,6 +27,183 @@ import kotlin.test.assertTrue
 
 class VenueBookingRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun `owner and manager can configure booking hold settings while staff is denied`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-booking-settings-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, OWNER_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedUser(jdbcUrl, STAFF_ID)
+            seedVenueMember(jdbcUrl, venueId, OWNER_ID, "OWNER")
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            seedVenueMember(jdbcUrl, venueId, STAFF_ID, "STAFF")
+
+            val guestToken = issueToken(config, GUEST_ID)
+            val ownerToken = issueToken(config, OWNER_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+            val staffToken = issueToken(config, STAFF_ID)
+
+            val initialResponse =
+                client.get("/api/venue/$venueId/booking-settings") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, initialResponse.status)
+            val initialSettings = json.parseToJsonElement(initialResponse.bodyAsText()).jsonObject
+            assertEquals("30", initialSettings.getValue("holdMinutes").jsonPrimitive.content)
+            assertEquals("10", initialSettings.getValue("minHoldMinutes").jsonPrimitive.content)
+            assertEquals("240", initialSettings.getValue("maxHoldMinutes").jsonPrimitive.content)
+
+            val firstCreateResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId,"scheduledAt":"2030-01-10T18:30:00Z","partySize":2}""")
+                }
+            assertEquals(HttpStatusCode.OK, firstCreateResponse.status)
+            val firstBookingId =
+                json.parseToJsonElement(firstCreateResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("bookingId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+
+            val updateResponse =
+                client.put("/api/venue/$venueId/booking-settings") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"holdMinutes":45}""")
+                }
+            assertEquals(HttpStatusCode.OK, updateResponse.status)
+            assertEquals(
+                "45",
+                json.parseToJsonElement(updateResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("holdMinutes")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            val staffReadResponse =
+                client.get("/api/venue/$venueId/booking-settings") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffReadResponse.status)
+            val staffUpdateResponse =
+                client.put("/api/venue/$venueId/booking-settings") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"holdMinutes":60}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffUpdateResponse.status)
+            val foreignReadResponse =
+                client.get("/api/venue/$foreignVenueId/booking-settings") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignReadResponse.status)
+            val invalidUpdateResponse =
+                client.put("/api/venue/$venueId/booking-settings") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"holdMinutes":9}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, invalidUpdateResponse.status)
+
+            val listExistingResponse =
+                client.get("/api/venue/bookings?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, listExistingResponse.status)
+            val existingItem =
+                json.parseToJsonElement(listExistingResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            assertEquals("10.01.2030, 22:00", existingItem.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+
+            val secondCreateResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId,"scheduledAt":"2030-01-10T19:00:00Z","partySize":2}""")
+                }
+            assertEquals(HttpStatusCode.OK, secondCreateResponse.status)
+            val listAfterSecondCreateResponse =
+                client.get("/api/venue/bookings?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, listAfterSecondCreateResponse.status)
+            val secondItem =
+                json.parseToJsonElement(listAfterSecondCreateResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .map { it.jsonObject }
+                    .single { item ->
+                        item.getValue("scheduledAt").jsonPrimitive.content == "2030-01-10T19:00:00Z"
+                    }
+            assertEquals("10.01.2030, 22:45", secondItem.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+
+            val changeResponse =
+                client.post("/api/venue/bookings/$firstBookingId/change?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"scheduledLocalDate":"2030-01-10","scheduledLocalTime":"22:30"}""")
+                }
+            assertEquals(HttpStatusCode.OK, changeResponse.status)
+            val listAfterChangeResponse =
+                client.get("/api/venue/bookings?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, listAfterChangeResponse.status)
+            val changedItem =
+                json.parseToJsonElement(listAfterChangeResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .map { it.jsonObject }
+                    .single { item ->
+                        item.getValue("bookingId").jsonPrimitive.content == firstBookingId.toString()
+                    }
+            assertEquals("10.01.2030, 23:15", changedItem.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+        }
 
     @Test
     fun `venue can list and confirm active bookings`() =
@@ -1000,6 +1178,7 @@ class VenueBookingRoutesTest {
 
     companion object {
         private const val GUEST_ID = 424242L
+        private const val OWNER_ID = 666666L
         private const val MANAGER_ID = 777777L
         private const val STAFF_ID = 888888L
     }

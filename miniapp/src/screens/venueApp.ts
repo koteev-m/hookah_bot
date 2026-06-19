@@ -159,7 +159,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
     stats: el('button', { className: 'nav-button', text: 'Статистика' }) as HTMLButtonElement,
-    settings: el('button', { className: 'nav-button', text: 'Настройки продления' }) as HTMLButtonElement,
+    settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
     chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement,
     support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
   }
@@ -399,7 +399,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
     refs.navButtons.stats.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
-    refs.navButtons.settings.hidden = !hasPermission('SHIFT_EXTENSION_SETTINGS')
+    refs.navButtons.settings.hidden = !hasPermission('SHIFT_EXTENSION_SETTINGS') && !hasPermission('BOOKING_MANAGE')
     refs.navSections.forEach((section) => {
       section.element.hidden = section.buttons.every((button) => button.hidden)
     })
@@ -422,7 +422,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'tables':
         return hasPermission('TABLE_VIEW')
       case 'settings':
-        return hasPermission('SHIFT_EXTENSION_SETTINGS')
+        return hasPermission('SHIFT_EXTENSION_SETTINGS') || hasPermission('BOOKING_MANAGE')
       case 'staff':
         return currentRole !== 'STAFF'
       case 'stats':

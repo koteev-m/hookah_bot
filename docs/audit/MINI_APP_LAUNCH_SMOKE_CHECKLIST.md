@@ -484,7 +484,17 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Recommended next implementation block after the post-M6 checkpoint: M7a booking hold settings in Venue Mini App. M4A-M4C messages, M5 staff calls and M6 staff-chat management stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Current implementation block after the post-M6 checkpoint: M7a booking hold settings in Venue Mini App is implemented and ready for staging smoke. M4A-M4C messages, M5 staff calls and M6 staff-chat management stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+
+Manual M7a booking hold settings smoke:
+1. OWNER opens Venue Mini App `Настройки`.
+2. `Настройки брони` shows current hold duration and example `19:00 -> HH:mm`.
+3. OWNER saves a custom value such as `15`.
+4. Reload confirms the value is persisted.
+5. A newly created booking on 19:00 shows `Держим до 19:15` in Venue Mini App and guest notification copy.
+6. Existing bookings keep their stored `arrival_deadline_at` unless rescheduled.
+7. Rescheduling after the setting change recalculates the deadline from the new scheduled time plus current hold minutes.
+8. MANAGER behavior matches backend policy; STAFF does not see or access booking settings.
 
 Manual M4B/M4C inbox regression smoke after deployment:
 

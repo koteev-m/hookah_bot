@@ -8,6 +8,7 @@ import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
+import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
@@ -28,6 +29,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
 import java.time.Duration
@@ -55,6 +57,21 @@ private data class VenueBookingCancelRequest(
 @Serializable
 private data class VenueBookingMessageRequest(
     val message: String? = null,
+)
+
+@Serializable
+private data class VenueBookingSettingsUpdateRequest(
+    val holdMinutes: Int? = null,
+)
+
+@Serializable
+private data class VenueBookingSettingsResponse(
+    val venueId: Long,
+    val holdMinutes: Int,
+    val defaultHoldMinutes: Int,
+    val minHoldMinutes: Int,
+    val maxHoldMinutes: Int,
+    val quickHoldMinutes: List<Int>,
 )
 
 @Serializable
@@ -102,6 +119,33 @@ fun Route.venueBookingRoutes(
     supportThreadRepository: SupportThreadRepository = SupportThreadRepository(null),
     venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
 ) {
+    route("/venue/{venueId}/booking-settings") {
+        get {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireBookingSettingsAccess(venueAccessRepository, userId, venueId)
+            call.respond(buildBookingSettingsResponse(venueId, guestBookingRepository.getHoldMinutes(venueId)))
+        }
+
+        put {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireBookingSettingsAccess(venueAccessRepository, userId, venueId)
+            val request = call.receive<VenueBookingSettingsUpdateRequest>()
+            val minutes =
+                request.holdMinutes
+                    ?: throw InvalidInputException("holdMinutes is required")
+            if (minutes !in GuestBookingRepository.MIN_HOLD_MINUTES..GuestBookingRepository.MAX_HOLD_MINUTES) {
+                throw InvalidInputException(
+                    "holdMinutes must be between " +
+                        "${GuestBookingRepository.MIN_HOLD_MINUTES} and ${GuestBookingRepository.MAX_HOLD_MINUTES}",
+                )
+            }
+            val saved = guestBookingRepository.updateHoldMinutes(venueId, minutes)
+            call.respond(buildBookingSettingsResponse(venueId, saved))
+        }
+    }
+
     route("/venue/bookings") {
         get {
             val userId = call.requireUserId()
@@ -281,6 +325,30 @@ fun Route.venueBookingRoutes(
         }
     }
 }
+
+private suspend fun requireBookingSettingsAccess(
+    venueAccessRepository: VenueAccessRepository,
+    userId: Long,
+    venueId: Long,
+) {
+    val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+    if (role !in setOf(VenueRole.OWNER, VenueRole.MANAGER)) {
+        throw ForbiddenException()
+    }
+}
+
+private fun buildBookingSettingsResponse(
+    venueId: Long,
+    holdMinutes: Int,
+): VenueBookingSettingsResponse =
+    VenueBookingSettingsResponse(
+        venueId = venueId,
+        holdMinutes = holdMinutes,
+        defaultHoldMinutes = GuestBookingRepository.DEFAULT_HOLD_MINUTES,
+        minHoldMinutes = GuestBookingRepository.MIN_HOLD_MINUTES,
+        maxHoldMinutes = GuestBookingRepository.MAX_HOLD_MINUTES,
+        quickHoldMinutes = listOf(30, 60),
+    )
 
 private suspend fun io.ktor.server.application.ApplicationCall.performVenueStatusUpdate(
     venueAccessRepository: VenueAccessRepository,

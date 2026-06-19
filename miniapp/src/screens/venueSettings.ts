@@ -2,11 +2,13 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  venueGetBookingSettings,
   venueGetShiftExtensionSettings,
+  venueUpdateBookingSettings,
   venueUpdateShiftExtensionSettings
 } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { ShiftExtensionSettingsDto, VenueAccessDto } from '../shared/api/venueDtos'
+import type { ShiftExtensionSettingsDto, VenueAccessDto, VenueBookingSettingsResponse } from '../shared/api/venueDtos'
 import { append, el, on } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
@@ -21,13 +23,21 @@ export type VenueSettingsOptions = {
 
 type VenueSettingsRefs = {
   status: HTMLParagraphElement
-  summary: HTMLParagraphElement
-  hint: HTMLParagraphElement
+  bookingCard: HTMLElement
+  bookingSummary: HTMLParagraphElement
+  bookingExample: HTMLParagraphElement
+  bookingPresetActions: HTMLDivElement
+  holdInput: HTMLInputElement
+  bookingSaveButton: HTMLButtonElement
+  bookingForm: HTMLDivElement
+  extensionCard: HTMLElement
+  extensionSummary: HTMLParagraphElement
+  extensionHint: HTMLParagraphElement
   enabledInput: HTMLInputElement
   durationSelect: HTMLSelectElement
   priceInput: HTMLInputElement
-  saveButton: HTMLButtonElement
-  form: HTMLDivElement
+  extensionSaveButton: HTMLButtonElement
+  extensionForm: HTMLDivElement
   backButton: HTMLButtonElement
 }
 
@@ -42,15 +52,34 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   const status = el('p', { className: 'status', text: '' })
   append(header, title, status)
 
+  const bookingCard = el('section', { className: 'card' })
+  const bookingTitle = el('h3', { text: 'Настройки брони' })
+  const bookingDescription = el('p', {
+    text: 'Укажите, сколько времени после начала бронирования стол остаётся закреплён за гостем.'
+  })
+  const bookingSummary = el('p', { className: 'venue-order-sub', text: '' })
+  const bookingExample = el('p', { className: 'venue-order-sub', text: '' })
+  const bookingForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
+  const holdLabel = el('p', { className: 'field-label', text: 'Сколько минут держим бронь' })
+  const bookingPresetActions = el('div', { className: 'venue-inline-actions' }) as HTMLDivElement
+  const holdInput = document.createElement('input')
+  holdInput.className = 'venue-input'
+  holdInput.type = 'number'
+  holdInput.inputMode = 'numeric'
+  holdInput.placeholder = '15'
+  const bookingSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
+  append(bookingForm, holdLabel, bookingPresetActions, holdInput, bookingSaveButton)
+  append(bookingCard, bookingTitle, bookingDescription, bookingSummary, bookingExample, bookingForm)
+
   const extensionCard = el('section', { className: 'card' })
   const extensionTitle = el('h3', { text: 'Продление времени' })
   const description = el('p', {
     text: 'Гости смогут запросить платное продление. Персонал подтвердит возможность продления перед добавлением суммы в счёт.'
   })
-  const summary = el('p', { className: 'venue-order-sub', text: '' })
-  const hint = el('p', { className: 'venue-order-sub', text: '' })
+  const extensionSummary = el('p', { className: 'venue-order-sub', text: '' })
+  const extensionHint = el('p', { className: 'venue-order-sub', text: '' })
 
-  const form = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
+  const extensionForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
   const enabledLabel = document.createElement('label')
   enabledLabel.className = 'venue-settings-toggle'
   const enabledInput = document.createElement('input')
@@ -77,24 +106,31 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   priceInput.inputMode = 'decimal'
   priceInput.placeholder = '3000'
 
-  const saveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
-  append(form, enabledLabel, durationLabel, durationSelect, priceLabel, priceInput, saveButton)
-
-  append(extensionCard, extensionTitle, description, summary, hint, form)
+  const extensionSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
+  append(extensionForm, enabledLabel, durationLabel, durationSelect, priceLabel, priceInput, extensionSaveButton)
+  append(extensionCard, extensionTitle, description, extensionSummary, extensionHint, extensionForm)
 
   const backButton = el('button', { className: 'button-secondary', text: 'Вернуться в обзор' }) as HTMLButtonElement
-  append(wrapper, header, extensionCard, backButton)
+  append(wrapper, header, bookingCard, extensionCard, backButton)
   root.replaceChildren(wrapper)
 
   return {
     status,
-    summary,
-    hint,
+    bookingCard,
+    bookingSummary,
+    bookingExample,
+    bookingPresetActions,
+    holdInput,
+    bookingSaveButton,
+    bookingForm,
+    extensionCard,
+    extensionSummary,
+    extensionHint,
     enabledInput,
     durationSelect,
     priceInput,
-    saveButton,
-    form,
+    extensionSaveButton,
+    extensionForm,
     backButton
   }
 }
@@ -104,7 +140,9 @@ function renderApiError(status: HTMLParagraphElement, error: ApiErrorInfo, isDeb
   if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
     clearSession()
   }
-  status.textContent = isDebug ? `${error.message || 'Ошибка'} (${error.code ?? error.status})` : error.message || 'Не удалось выполнить действие.'
+  status.textContent = isDebug
+    ? `${error.message || 'Ошибка'} (${error.code ?? error.status})`
+    : error.message || 'Не удалось выполнить действие.'
 }
 
 function rubInputValue(priceMinor: number | null | undefined): string {
@@ -124,7 +162,36 @@ function parsePriceMinor(raw: string): number | null {
   return Number.isSafeInteger(minor) && minor > 0 ? minor : null
 }
 
-function renderSettings(refs: VenueSettingsRefs, settings: ShiftExtensionSettingsDto) {
+function deadlineExample(minutes: number): string {
+  const total = 19 * 60 + minutes
+  const hours = String(Math.floor(total / 60) % 24).padStart(2, '0')
+  const mins = String(total % 60).padStart(2, '0')
+  return `Например: если бронь на 19:00 и выбран срок ${minutes} минут, стол держим до ${hours}:${mins}.`
+}
+
+function renderBookingSettings(refs: VenueSettingsRefs, settings: VenueBookingSettingsResponse) {
+  refs.holdInput.value = String(settings.holdMinutes)
+  refs.holdInput.min = String(settings.minHoldMinutes)
+  refs.holdInput.max = String(settings.maxHoldMinutes)
+  refs.bookingSummary.textContent = `Держим бронь: ${settings.holdMinutes} минут`
+  refs.bookingExample.textContent = deadlineExample(settings.holdMinutes)
+  refs.bookingPresetActions.replaceChildren()
+  settings.quickHoldMinutes
+    .filter((minutes) => minutes >= settings.minHoldMinutes && minutes <= settings.maxHoldMinutes)
+    .forEach((minutes) => {
+      const button = el('button', {
+        className: 'button-secondary button-small',
+        text: `${minutes} минут`
+      }) as HTMLButtonElement
+      button.disabled = minutes === settings.holdMinutes
+      button.addEventListener('click', () => {
+        refs.holdInput.value = String(minutes)
+      })
+      refs.bookingPresetActions.appendChild(button)
+    })
+}
+
+function renderShiftExtensionSettings(refs: VenueSettingsRefs, settings: ShiftExtensionSettingsDto) {
   refs.enabledInput.checked = settings.enabled
   refs.durationSelect.value = String(settings.durationMinutes)
   if (refs.durationSelect.value !== String(settings.durationMinutes)) {
@@ -135,8 +202,8 @@ function renderSettings(refs: VenueSettingsRefs, settings: ShiftExtensionSetting
 
   const price = settings.priceMinor == null ? 'цена не задана' : formatPrice(settings.priceMinor, settings.currency || 'RUB')
   const state = settings.enabled ? 'Включено' : 'Выключено'
-  refs.summary.textContent = `${state} · ${settings.durationMinutes} мин · ${price}`
-  refs.hint.textContent = settings.configured
+  refs.extensionSummary.textContent = `${state} · ${settings.durationMinutes} мин · ${price}`
+  refs.extensionHint.textContent = settings.configured
     ? 'Гости увидят продление в списке разделов активного счёта.'
     : 'Настройте цену и длительность, чтобы гости могли запросить продление.'
 }
@@ -147,45 +214,113 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const refs = buildDom(root)
   const deps = buildApiDeps(isDebug)
+  const canManageBookingSettings = access.permissions.includes('BOOKING_MANAGE')
   const canManageShiftExtension = access.permissions.includes('SHIFT_EXTENSION_SETTINGS')
   const disposables: Array<() => void> = []
 
   let disposed = false
   let loadAbort: AbortController | null = null
-  let saveAbort: AbortController | null = null
-  let currentSettings: ShiftExtensionSettingsDto | null = null
+  let bookingSaveAbort: AbortController | null = null
+  let extensionSaveAbort: AbortController | null = null
+  let currentBookingSettings: VenueBookingSettingsResponse | null = null
+  let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
 
+  if (!canManageBookingSettings) {
+    refs.bookingCard.remove()
+  }
   if (!canManageShiftExtension) {
-    refs.form.remove()
-    refs.status.textContent = 'У вас нет доступа к настройкам продления.'
+    refs.extensionCard.remove()
+  }
+  if (!canManageBookingSettings && !canManageShiftExtension) {
+    refs.status.textContent = 'У вас нет доступа к настройкам заведения.'
   }
 
-  const setBusy = (busy: boolean) => {
-    refs.saveButton.disabled = busy
-    refs.saveButton.textContent = busy ? 'Сохраняем…' : 'Сохранить'
+  const setBookingBusy = (busy: boolean) => {
+    refs.bookingSaveButton.disabled = busy
+    refs.bookingSaveButton.textContent = busy ? 'Сохраняем…' : 'Сохранить'
+  }
+
+  const setExtensionBusy = (busy: boolean) => {
+    refs.extensionSaveButton.disabled = busy
+    refs.extensionSaveButton.textContent = busy ? 'Сохраняем…' : 'Сохранить'
   }
 
   const load = async () => {
-    if (!canManageShiftExtension) return
+    if (!canManageBookingSettings && !canManageShiftExtension) return
     refs.status.textContent = 'Загрузка…'
     loadAbort?.abort()
     const controller = new AbortController()
     loadAbort = controller
-    const result = await venueGetShiftExtensionSettings(backendUrl, { venueId }, deps, controller.signal)
-    if (disposed || loadAbort !== controller) return
+    if (canManageBookingSettings) {
+      const result = await venueGetBookingSettings(backendUrl, { venueId }, deps, controller.signal)
+      if (disposed || loadAbort !== controller) return
+      if (!result.ok) {
+        if (result.error.code === REQUEST_ABORTED_CODE) return
+        loadAbort = null
+        renderApiError(refs.status, result.error, isDebug)
+        return
+      }
+      currentBookingSettings = result.data
+      renderBookingSettings(refs, currentBookingSettings)
+    }
+    if (canManageShiftExtension) {
+      const result = await venueGetShiftExtensionSettings(backendUrl, { venueId }, deps, controller.signal)
+      if (disposed || loadAbort !== controller) return
+      if (!result.ok) {
+        if (result.error.code === REQUEST_ABORTED_CODE) return
+        loadAbort = null
+        renderApiError(refs.status, result.error, isDebug)
+        return
+      }
+      currentShiftExtensionSettings = result.data.settings
+      renderShiftExtensionSettings(refs, currentShiftExtensionSettings)
+    }
     loadAbort = null
+    refs.status.textContent = 'Настройки загружены.'
+  }
+
+  const saveBookingSettings = async () => {
+    if (!canManageBookingSettings || !currentBookingSettings) return
+    const raw = refs.holdInput.value.trim()
+    const holdMinutes = Number(raw)
+    if (
+      !/^\d+$/.test(raw) ||
+      !Number.isInteger(holdMinutes) ||
+      holdMinutes < currentBookingSettings.minHoldMinutes ||
+      holdMinutes > currentBookingSettings.maxHoldMinutes
+    ) {
+      refs.status.textContent =
+        `Введите число от ${currentBookingSettings.minHoldMinutes} до ` +
+        `${currentBookingSettings.maxHoldMinutes} минут.`
+      return
+    }
+
+    setBookingBusy(true)
+    bookingSaveAbort?.abort()
+    const controller = new AbortController()
+    bookingSaveAbort = controller
+    const result = await venueUpdateBookingSettings(
+      backendUrl,
+      { venueId, body: { holdMinutes } },
+      deps,
+      controller.signal
+    )
+    if (disposed || bookingSaveAbort !== controller) return
+    bookingSaveAbort = null
+    setBookingBusy(false)
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
       return
     }
-    currentSettings = result.data.settings
-    renderSettings(refs, currentSettings)
-    refs.status.textContent = 'Настройки загружены.'
+    currentBookingSettings = result.data
+    renderBookingSettings(refs, currentBookingSettings)
+    refs.status.textContent = 'Настройки брони сохранены.'
+    showToast('Настройки брони сохранены.')
   }
 
-  const save = async () => {
-    if (!canManageShiftExtension || !currentSettings) return
+  const saveShiftExtensionSettings = async () => {
+    if (!canManageShiftExtension || !currentShiftExtensionSettings) return
     const durationMinutes = Number(refs.durationSelect.value)
     const priceMinor = parsePriceMinor(refs.priceInput.value)
     if (!Number.isInteger(durationMinutes) || durationMinutes <= 0 || durationMinutes > 240) {
@@ -201,10 +336,10 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       return
     }
 
-    setBusy(true)
-    saveAbort?.abort()
+    setExtensionBusy(true)
+    extensionSaveAbort?.abort()
     const controller = new AbortController()
-    saveAbort = controller
+    extensionSaveAbort = controller
     const result = await venueUpdateShiftExtensionSettings(
       backendUrl,
       {
@@ -214,27 +349,28 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
           durationMinutes,
           priceMinor,
           currency: 'RUB',
-          maxExtensionsPerSession: currentSettings.maxExtensionsPerSession ?? null
+          maxExtensionsPerSession: currentShiftExtensionSettings.maxExtensionsPerSession ?? null
         }
       },
       deps,
       controller.signal
     )
-    if (disposed || saveAbort !== controller) return
-    saveAbort = null
-    setBusy(false)
+    if (disposed || extensionSaveAbort !== controller) return
+    extensionSaveAbort = null
+    setExtensionBusy(false)
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
       return
     }
-    currentSettings = result.data.settings
-    renderSettings(refs, currentSettings)
+    currentShiftExtensionSettings = result.data.settings
+    renderShiftExtensionSettings(refs, currentShiftExtensionSettings)
     refs.status.textContent = 'Настройки сохранены.'
     showToast('Настройки сохранены')
   }
 
-  disposables.push(on(refs.saveButton, 'click', () => void save()))
+  disposables.push(on(refs.bookingSaveButton, 'click', () => void saveBookingSettings()))
+  disposables.push(on(refs.extensionSaveButton, 'click', () => void saveShiftExtensionSettings()))
   disposables.push(on(refs.backButton, 'click', () => {
     window.location.hash = '#/dashboard'
   }))
@@ -244,7 +380,8 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   return () => {
     disposed = true
     loadAbort?.abort()
-    saveAbort?.abort()
+    bookingSaveAbort?.abort()
+    extensionSaveAbort?.abort()
     disposables.forEach((dispose) => dispose())
   }
 }

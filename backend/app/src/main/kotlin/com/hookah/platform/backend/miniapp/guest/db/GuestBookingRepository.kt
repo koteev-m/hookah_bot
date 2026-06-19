@@ -1482,7 +1482,7 @@ class GuestBookingRepository(
             }
         }
 
-    private companion object {
+    companion object {
         const val DEFAULT_HOLD_MINUTES = 30
         const val DEFAULT_EXPIRY_BATCH_SIZE = 100
         const val DEFAULT_REMINDER_BATCH_SIZE = 100

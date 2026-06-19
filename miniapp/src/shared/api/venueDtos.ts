@@ -168,6 +168,19 @@ export type VenueBookingMessageResponse = {
   message: SupportMessageDto
 }
 
+export type VenueBookingSettingsResponse = {
+  venueId: number
+  holdMinutes: number
+  defaultHoldMinutes: number
+  minHoldMinutes: number
+  maxHoldMinutes: number
+  quickHoldMinutes: number[]
+}
+
+export type VenueBookingSettingsUpdateRequest = {
+  holdMinutes: number
+}
+
 export type VenueTableDto = {
   tableId: number
   tableNumber: number

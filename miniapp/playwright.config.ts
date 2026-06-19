@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const port = Number(process.env.MINIAPP_E2E_PORT ?? 5173)
+const baseURL = `http://127.0.0.1:${port}/miniapp/`
+const reuseExistingServer = process.env.MINIAPP_E2E_REUSE_EXISTING === 'true' && !process.env.CI
+
 export default defineConfig({
   testDir: './e2e',
   outputDir: '../.tmp-checks/playwright',
@@ -9,13 +13,13 @@ export default defineConfig({
   },
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:5173/miniapp/',
+    baseURL,
     trace: 'retain-on-failure'
   },
   webServer: {
-    command: 'VITE_BACKEND_PUBLIC_URL=http://127.0.0.1:5173 npm run dev -- --host 127.0.0.1',
-    url: 'http://127.0.0.1:5173/miniapp/',
-    reuseExistingServer: !process.env.CI,
+    command: `VITE_BACKEND_PUBLIC_URL=http://127.0.0.1:${port} npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+    url: baseURL,
+    reuseExistingServer,
     timeout: 60_000
   },
   projects: [

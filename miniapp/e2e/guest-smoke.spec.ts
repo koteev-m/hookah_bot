@@ -84,6 +84,15 @@ type ShiftExtensionSettings = {
   configured: boolean
 }
 
+type BookingSettings = {
+  venueId: number
+  holdMinutes: number
+  defaultHoldMinutes: number
+  minHoldMinutes: number
+  maxHoldMinutes: number
+  quickHoldMinutes: number[]
+}
+
 type GuestMenuOption = {
   id: number
   name: string
@@ -321,6 +330,18 @@ function buildShiftExtensionSettings(overrides: Partial<ShiftExtensionSettings> 
     currency: 'RUB',
     maxExtensionsPerSession: null,
     configured: false,
+    ...overrides
+  }
+}
+
+function buildBookingSettings(overrides: Partial<BookingSettings> = {}): BookingSettings {
+  return {
+    venueId: 1,
+    holdMinutes: 30,
+    defaultHoldMinutes: 30,
+    minHoldMinutes: 10,
+    maxHoldMinutes: 240,
+    quickHoldMinutes: [30, 60],
     ...overrides
   }
 }
@@ -735,15 +756,18 @@ async function mockVenueShiftExtensionApi(
     role?: 'OWNER' | 'MANAGER' | 'STAFF'
     permissions?: string[]
     settings?: ShiftExtensionSettings
+    bookingSettings?: BookingSettings
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
   const permissions = options.permissions ?? ['ORDER_QUEUE_VIEW', 'SHIFT_EXTENSION_VIEW', 'SHIFT_EXTENSION_CONFIRM']
   let requests = [buildShiftExtensionRequest()]
   let settings = options.settings ?? buildShiftExtensionSettings()
+  let bookingSettings = options.bookingSettings ?? buildBookingSettings()
   let approveCalls = 0
   let rejectCalls = 0
   let updateSettingsCalls = 0
+  let updateBookingSettingsCalls = 0
   let orderServiceCharges: ServiceCharge[] = []
   const rejectedReasons: string[] = []
 
@@ -920,6 +944,18 @@ async function mockVenueShiftExtensionApi(
     await route.fulfill(jsonResponse({ settings }))
   })
 
+  await page.route('**/api/venue/1/booking-settings', async (route) => {
+    if (route.request().method() === 'PUT') {
+      updateBookingSettingsCalls += 1
+      const body = (await route.request().postDataJSON()) as { holdMinutes: number }
+      bookingSettings = {
+        ...bookingSettings,
+        holdMinutes: body.holdMinutes
+      }
+    }
+    await route.fulfill(jsonResponse(bookingSettings))
+  })
+
   await page.route('**/api/venue/1/shift-extension-requests**', async (route) => {
     const url = route.request().url()
     const approveMatch = url.match(/shift-extension-requests\/(\d+)\/approve/)
@@ -962,7 +998,9 @@ async function mockVenueShiftExtensionApi(
     getApproveCalls: () => approveCalls,
     getRejectCalls: () => rejectCalls,
     getUpdateSettingsCalls: () => updateSettingsCalls,
+    getUpdateBookingSettingsCalls: () => updateBookingSettingsCalls,
     getSettings: () => settings,
+    getBookingSettings: () => bookingSettings,
     getRejectedReasons: () => rejectedReasons,
     setRequests: (nextRequests: ShiftExtensionRequest[]) => {
       requests = nextRequests
@@ -2245,7 +2283,7 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await expect(page.getByText('Гость ожидает подтверждения')).toBeVisible()
   await expect(page.getByRole('button', { name: '✅ Подтвердить продление' })).toBeVisible()
   await expect(page.getByRole('button', { name: '❌ Отказать' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Настройки продления', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toHaveCount(0)
 
   await page.getByRole('button', { name: '✅ Подтвердить продление' }).click()
 
@@ -2414,14 +2452,15 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueShiftExtensionApi(page, {
     role: 'MANAGER',
-    permissions: ['ORDER_QUEUE_VIEW', 'SHIFT_EXTENSION_VIEW', 'SHIFT_EXTENSION_CONFIRM', 'SHIFT_EXTENSION_SETTINGS'],
+    permissions: ['ORDER_QUEUE_VIEW', 'BOOKING_MANAGE', 'SHIFT_EXTENSION_VIEW', 'SHIFT_EXTENSION_CONFIRM', 'SHIFT_EXTENSION_SETTINGS'],
     settings: buildShiftExtensionSettings()
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: 'Настройки продления', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Настройки продления', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Настройки брони' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Продление времени' })).toBeVisible()
   await expect(page.getByText('Настройте цену и длительность, чтобы гости могли запросить продление.')).toBeVisible()
 
@@ -2442,6 +2481,33 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
     priceMinor: 300000,
     configured: true
   })
+})
+
+test('venue manager configures booking hold settings', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, {
+    role: 'MANAGER',
+    permissions: ['BOOKING_MANAGE'],
+    bookingSettings: buildBookingSettings({ holdMinutes: 30 })
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  const bookingCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Настройки брони' }) })
+  await expect(bookingCard).toContainText('Держим бронь: 30 минут')
+  await expect(bookingCard).toContainText('если бронь на 19:00')
+  await expect(page.getByRole('heading', { name: 'Продление времени' })).toHaveCount(0)
+
+  await bookingCard.getByPlaceholder('15').fill('45')
+  await bookingCard.getByRole('button', { name: 'Сохранить' }).click()
+
+  await expect(page.locator('p.status')).toHaveText('Настройки брони сохранены.')
+  await expect(bookingCard).toContainText('Держим бронь: 45 минут')
+  await expect(bookingCard).toContainText('стол держим до 19:45')
+  expect(api.getUpdateBookingSettingsCalls()).toBe(1)
+  expect(api.getBookingSettings()).toMatchObject({ holdMinutes: 45 })
 })
 
 test('venue manager manages bookings queue lifecycle', async ({ page }) => {

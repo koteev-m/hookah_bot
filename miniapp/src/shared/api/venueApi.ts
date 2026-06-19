@@ -7,6 +7,8 @@ import type {
   VenueBookingListResponse,
   VenueBookingMessageRequest,
   VenueBookingMessageResponse,
+  VenueBookingSettingsResponse,
+  VenueBookingSettingsUpdateRequest,
   VenueBookingStatusResponse,
   VenueCreateCategoryRequest,
   VenueCreateItemRequest,
@@ -213,6 +215,39 @@ export async function venueMessageBookingGuest(
     `/api/venue/bookings/${params.bookingId}/message?${search.toString()}`,
     {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueGetBookingSettings(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueBookingSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/booking-settings`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueUpdateBookingSettings(
+  backendUrl: string,
+  params: { venueId: number; body: VenueBookingSettingsUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueBookingSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/booking-settings`,
+    {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params.body),
       signal
