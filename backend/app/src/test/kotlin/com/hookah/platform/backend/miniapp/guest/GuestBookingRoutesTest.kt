@@ -22,6 +22,8 @@ import java.sql.DriverManager
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class GuestBookingRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -49,6 +51,7 @@ class GuestBookingRoutesTest {
             client.get("/health")
 
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            setVenueTimezone(jdbcUrl, venueId, "Europe/Moscow")
             seedSubscription(jdbcUrl, venueId)
             seedUser(jdbcUrl, TELEGRAM_USER_ID)
             val managerId = 777777L
@@ -261,6 +264,14 @@ class GuestBookingRoutesTest {
             }
 
             assertEquals(1, outboxCountForChat(jdbcUrl, STAFF_CHAT_ID))
+            val staffText = outboxTextForChat(jdbcUrl, STAFF_CHAT_ID)
+            assertTrue(staffText.contains("✅ Гость подтвердил визит"))
+            assertTrue(staffText.contains("Бронь №1 · 10.01.2030, 21:30"))
+            assertTrue(staffText.contains("Гость: имя не указано"))
+            assertTrue(staffText.contains("Гостей: 2"))
+            assertTrue(staffText.contains("Держим стол до 22:00"))
+            assertFalse(staffText.contains(TELEGRAM_USER_ID.toString()))
+            assertFalse(staffText.contains("u$TELEGRAM_USER_ID"))
         }
 
     @Test
@@ -638,6 +649,31 @@ class GuestBookingRoutesTest {
                 statement.executeQuery().use { rs ->
                     rs.next()
                     rs.getInt(1)
+                }
+            }
+        }
+
+    private fun outboxTextForChat(
+        jdbcUrl: String,
+        chatId: Long,
+    ): String =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT payload_json
+                FROM telegram_outbox
+                WHERE chat_id = ? AND method = 'sendMessage'
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    json.parseToJsonElement(rs.getString("payload_json"))
+                        .jsonObject
+                        .getValue("text")
+                        .jsonPrimitive
+                        .content
                 }
             }
         }

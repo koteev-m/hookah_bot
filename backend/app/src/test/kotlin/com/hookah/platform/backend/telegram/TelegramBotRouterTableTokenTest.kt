@@ -11746,6 +11746,16 @@ class TelegramBotRouterTableTokenTest {
             coEvery {
                 venueRepository.findVenueById(10L)
             } returns VenueShort(id = 10L, name = "Mix", staffChatId = 900L)
+            coEvery {
+                userRepository.findGuestProfile(555L)
+            } returns
+                GuestProfile(
+                    telegramUserId = 555L,
+                    guestDisplayName = "Алексей",
+                    birthdayMonth = null,
+                    birthdayDay = null,
+                    birthdaySetAt = null,
+                )
 
             repeat(2) { index ->
                 router.process(
@@ -11765,7 +11775,16 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 1) {
                 outboxEnqueuer.enqueueSendMessage(
                     900L,
-                    match { it.contains("✅ Гость подтвердил, что придёт по Бронь №7.") },
+                    match { text ->
+                        text.contains("✅ Гость подтвердил визит") &&
+                            text.contains("Бронь №7 · 03.04.2026, 21:00") &&
+                            text.contains("Гость: Алексей") &&
+                            text.contains("Гостей: 3") &&
+                            text.contains("Держим стол до 21:30") &&
+                            !text.contains("77") &&
+                            !text.contains("555") &&
+                            !text.contains("Mix")
+                    },
                     any(),
                     any(),
                     "booking-guest-attendance:77:${anchor.epochSecond}",

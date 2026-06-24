@@ -6089,12 +6089,13 @@ class TelegramBotRouter(
     ) {
         val venue = runCatching { venueRepository.findVenueById(booking.venueId) }.getOrNull() ?: return
         val staffChatId = venue.staffChatId ?: return
-        val guestDisplayName = loadGuestDisplayName(guestUserId)?.takeIf { it.isNotBlank() } ?: "Гость"
+        val guestDisplayName = loadGuestDisplayName(guestUserId)
         val text =
-            buildString {
-                append("✅ Гость подтвердил, что придёт по ").append(formatBookingDisplayLabel(booking)).append('.')
-                append('\n').append("Гость: ").append(guestDisplayName)
-            }
+            buildGuestAttendanceStaffChatText(
+                booking = booking,
+                guestDisplayName = guestDisplayName,
+                zoneId = resolveVenueZoneId(booking.venueId),
+            )
         runCatching {
             outboxEnqueuer.enqueueSendMessage(
                 chatId = staffChatId,

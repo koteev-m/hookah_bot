@@ -23,6 +23,7 @@ import com.hookah.platform.backend.telegram.BookingStaffNotificationEvent
 import com.hookah.platform.backend.telegram.ReplyKeyboardRemove
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
+import com.hookah.platform.backend.telegram.buildGuestAttendanceStaffChatText
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
@@ -220,6 +221,7 @@ fun Route.guestBookingRoutes(
             if (result.status == GuestAttendanceConfirmationStatus.APPLIED) {
                 notifyVenueStaffAboutGuestAttendance(
                     venueRepository = venueRepository,
+                    venueSettingsRepository = venueSettingsRepository,
                     outboxEnqueuer = outboxEnqueuer,
                     booking = confirmed,
                     guestDisplayName = loadGuestDisplayName(userRepository, userId),
@@ -285,6 +287,7 @@ private suspend fun notifyVenueStaffAboutBooking(
 
 private suspend fun notifyVenueStaffAboutGuestAttendance(
     venueRepository: VenueRepository,
+    venueSettingsRepository: VenueSettingsRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
     booking: BookingRecord,
     guestDisplayName: String?,
@@ -293,11 +296,11 @@ private suspend fun notifyVenueStaffAboutGuestAttendance(
     val venue = venueRepository.findVenueById(booking.venueId) ?: return
     val chatId = venue.staffChatId ?: return
     val text =
-        buildString {
-            append("✅ Гость подтвердил, что придёт по ").append(formatBookingDisplayLabel(booking.displayNumber))
-                .append('.')
-            append('\n').append("Гость: ").append(guestDisplayName?.takeIf { it.isNotBlank() } ?: "Гость")
-        }
+        buildGuestAttendanceStaffChatText(
+            booking = booking,
+            guestDisplayName = guestDisplayName,
+            zoneId = venueSettingsRepository.resolveZoneId(booking.venueId),
+        )
     outboxEnqueuer.enqueueSendMessage(
         chatId = chatId,
         text = text,
