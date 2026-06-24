@@ -318,7 +318,7 @@ function renderBookings(
       row.appendChild(
         el('p', {
           className: 'venue-order-sub',
-          text: `Гость подтвердил: ${formatDateTime(booking.lastGuestConfirmationAt)}`
+          text: `Гость подтвердил визит: ${formatDateTime(booking.lastGuestConfirmationAt)}`
         })
       )
     }

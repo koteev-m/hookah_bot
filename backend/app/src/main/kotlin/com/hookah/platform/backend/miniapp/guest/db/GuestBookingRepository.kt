@@ -12,7 +12,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
-import java.time.temporal.ChronoUnit
+import java.time.ZonedDateTime
 import java.util.Locale
 import javax.sql.DataSource
 import java.sql.Date as SqlDate
@@ -53,6 +53,8 @@ data class BookingRecord(
     val noShowAt: Instant? = null,
     val expiredAt: Instant? = null,
     val lastGuestConfirmationAt: Instant? = null,
+    val venueConfirmedAt: Instant? = null,
+    val lastRescheduledAt: Instant? = null,
     val guestDisplayName: String? = null,
 )
 
@@ -67,6 +69,7 @@ data class UserBookingSummaryRecord(
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
     val arrivalDeadlineAt: Instant? = null,
+    val lastGuestConfirmationAt: Instant? = null,
     val guestDisplayName: String? = null,
 )
 
@@ -81,6 +84,7 @@ enum class BookingReminderKind {
 
 enum class BookingReminderStatus {
     PENDING,
+    QUEUED,
     SENT,
     CANCELED,
     SKIPPED,
@@ -103,6 +107,7 @@ data class BookingReminderDelivery(
     val venueName: String,
     val userId: Long,
     val scheduledAt: Instant,
+    val partySize: Int?,
     val displayNumber: Int?,
     val displayDate: LocalDate?,
     val arrivalDeadlineAt: Instant?,
@@ -296,6 +301,9 @@ class GuestBookingRepository(
                                 display_date = ?,
                                 display_number = ?,
                                 arrival_deadline_at = ?,
+                                last_guest_confirmation_at = NULL,
+                                venue_confirmed_at = NULL,
+                                last_rescheduled_at = NULL,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND venue_id = ? AND user_id = ? AND status IN ('PENDING', 'CHANGED', 'CONFIRMED')
                             """.trimIndent(),
@@ -340,7 +348,7 @@ class GuestBookingRepository(
                         SELECT b.id, b.venue_id, b.user_id, b.scheduled_at, b.party_size, b.comment, b.status,
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
-                               b.last_guest_confirmation_at,
+                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
                                u.guest_display_name
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -374,7 +382,7 @@ class GuestBookingRepository(
                         SELECT b.id, b.venue_id, b.user_id, b.scheduled_at, b.party_size, b.comment, b.status,
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
-                               b.last_guest_confirmation_at,
+                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
                                u.guest_display_name
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -431,6 +439,7 @@ class GuestBookingRepository(
             return withContext(Dispatchers.IO) {
                 ds.connection.use { connection ->
                     val current = loadById(connection, bookingId) ?: return@use null
+                    val now = Instant.now()
                     val updated =
                         if (scheduledAt == null) {
                             val deadlineFallback =
@@ -449,6 +458,10 @@ class GuestBookingRepository(
                                     canceled_by_role = ?,
                                     canceled_by_user_id = ?,
                                     arrival_deadline_at = ?,
+                                    venue_confirmed_at = CASE
+                                        WHEN ? IN ('CONFIRMED', 'CHANGED') AND venue_confirmed_at IS NULL THEN ?
+                                        ELSE venue_confirmed_at
+                                    END,
                                     updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
                                 """.trimIndent(),
@@ -468,8 +481,10 @@ class GuestBookingRepository(
                                     statement.setNull(4, java.sql.Types.BIGINT)
                                 }
                                 setNullableTimestamp(statement, 5, deadlineFallback)
-                                statement.setLong(6, bookingId)
-                                statement.setLong(7, venueId)
+                                statement.setString(6, nextStatus.name)
+                                statement.setTimestamp(7, Timestamp.from(now))
+                                statement.setLong(8, bookingId)
+                                statement.setLong(9, venueId)
                                 statement.executeUpdate()
                             }
                         } else {
@@ -493,6 +508,9 @@ class GuestBookingRepository(
                                     seated_at = NULL,
                                     no_show_at = NULL,
                                     expired_at = NULL,
+                                    last_guest_confirmation_at = NULL,
+                                    venue_confirmed_at = COALESCE(venue_confirmed_at, ?),
+                                    last_rescheduled_at = ?,
                                     cancel_reason_text = NULL,
                                     canceled_by_role = NULL,
                                     canceled_by_user_id = NULL,
@@ -505,8 +523,10 @@ class GuestBookingRepository(
                                 statement.setDate(3, SqlDate.valueOf(displayDate))
                                 statement.setInt(4, displayNumber)
                                 statement.setTimestamp(5, Timestamp.from(arrivalDeadlineAt))
-                                statement.setLong(6, bookingId)
-                                statement.setLong(7, venueId)
+                                statement.setTimestamp(6, Timestamp.from(now))
+                                statement.setTimestamp(7, Timestamp.from(now))
+                                statement.setLong(8, bookingId)
+                                statement.setLong(9, venueId)
                                 statement.executeUpdate()
                             }
                         }
@@ -670,14 +690,35 @@ class GuestBookingRepository(
                             ) ?: return@use BookingReminderScheduleResult(
                                 0, 0, 0,
                             )
-                        val canceledCount = cancelPendingReminders(connection, bookingId)
-                        if (booking.status !in setOf(BookingStatus.CONFIRMED, BookingStatus.CHANGED)) {
+                        if (booking.status !in REMINDER_ELIGIBLE_STATUSES) {
+                            val canceledCount = cancelUnsentM7cReminders(connection, bookingId)
                             connection.commit()
                             return@use BookingReminderScheduleResult(0, 0, canceledCount)
                         }
+                        if (hasQueuedOrSentM7cReminder(connection, booking.id)) {
+                            val canceledCount = cancelUnsentM7cReminders(connection, bookingId)
+                            connection.commit()
+                            return@use BookingReminderScheduleResult(0, 0, canceledCount)
+                        }
+                        val plan = buildReminderPlan(booking, now, venueZoneId)
+                        val keepDedupeKey =
+                            plan?.let {
+                                reminderDedupeKey(
+                                    bookingId = booking.id,
+                                    kind = it.kind,
+                                    scheduledFor = it.scheduledFor,
+                                    anchorAt = it.anchorAt,
+                                )
+                            }
+                        val canceledCount =
+                            cancelUnsentM7cReminders(
+                                connection = connection,
+                                bookingId = bookingId,
+                                exceptDedupeKey = keepDedupeKey,
+                            )
                         var pendingCount = 0
                         var skippedCount = 0
-                        buildReminderPlan(booking, now, venueZoneId).forEach { plan ->
+                        plan?.let {
                             if (upsertReminder(connection, booking.id, plan)) {
                                 when (plan.status) {
                                     BookingReminderStatus.PENDING -> pendingCount++
@@ -731,9 +772,8 @@ class GuestBookingRepository(
                     connection.autoCommit = false
                     try {
                         val reminders = selectDueReminders(connection, now, limit)
-                        incrementReminderAttempts(connection, reminders.map { it.reminderId })
                         connection.commit()
-                        reminders.map { it.copy(attempts = it.attempts + 1) }
+                        reminders
                     } catch (e: SQLException) {
                         runCatching { connection.rollback() }
                         throw e
@@ -747,27 +787,69 @@ class GuestBookingRepository(
         }
     }
 
-    suspend fun markReminderSent(
-        reminderId: Long,
-        sentAt: Instant = Instant.now(),
-    ): Boolean =
-        updateReminderStatus(
-            reminderId = reminderId,
-            status = BookingReminderStatus.SENT,
-            sentAt = sentAt,
-            lastError = null,
-        )
+    suspend fun markReminderQueued(reminderId: Long): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        UPDATE booking_reminders
+                        SET status = ?,
+                            attempts = attempts + 1,
+                            sent_at = NULL,
+                            last_error = NULL,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                          AND status = ?
+                          AND policy_version = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, BookingReminderStatus.QUEUED.name)
+                        statement.setLong(2, reminderId)
+                        statement.setString(3, BookingReminderStatus.PENDING.name)
+                        statement.setString(4, REMINDER_POLICY_M7C)
+                        statement.executeUpdate() > 0
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
 
     suspend fun markReminderFailed(
         reminderId: Long,
         lastError: String?,
-    ): Boolean =
-        updateReminderStatus(
-            reminderId = reminderId,
-            status = BookingReminderStatus.FAILED,
-            sentAt = null,
-            lastError = lastError,
-        )
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        UPDATE booking_reminders
+                        SET status = ?,
+                            last_error = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                          AND status = ?
+                          AND policy_version = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, BookingReminderStatus.FAILED.name)
+                        statement.setString(2, lastError?.take(1000))
+                        statement.setLong(3, reminderId)
+                        statement.setString(4, BookingReminderStatus.PENDING.name)
+                        statement.setString(5, REMINDER_POLICY_M7C)
+                        statement.executeUpdate() > 0
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
 
     suspend fun markGuestConfirmed(
         bookingId: Long,
@@ -782,7 +864,7 @@ class GuestBookingRepository(
                         connection.prepareStatement(
                             """
                             UPDATE bookings
-                            SET last_guest_confirmation_at = ?,
+                            SET last_guest_confirmation_at = COALESCE(last_guest_confirmation_at, ?),
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND user_id = ? AND status IN ('CONFIRMED', 'CHANGED')
                             """.trimIndent(),
@@ -814,7 +896,7 @@ class GuestBookingRepository(
                         SELECT b.id, b.venue_id, b.user_id, b.scheduled_at, b.party_size, b.comment, b.status,
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
-                               b.last_guest_confirmation_at,
+                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
                                u.guest_display_name
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -857,7 +939,7 @@ class GuestBookingRepository(
                         SELECT b.id, b.venue_id, b.user_id, b.scheduled_at, b.party_size, b.comment, b.status,
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
-                               b.last_guest_confirmation_at,
+                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
                                u.guest_display_name
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -904,6 +986,7 @@ class GuestBookingRepository(
                                b.display_number,
                                b.display_date,
                                b.arrival_deadline_at,
+                               b.last_guest_confirmation_at,
                                u.guest_display_name
                         FROM bookings b
                         JOIN venues v ON v.id = b.venue_id
@@ -934,6 +1017,8 @@ class GuestBookingRepository(
                                                 rs.getInt("display_number").let { if (rs.wasNull()) null else it },
                                             displayDate = rs.getDate("display_date")?.toLocalDate(),
                                             arrivalDeadlineAt = rs.getTimestamp("arrival_deadline_at")?.toInstant(),
+                                            lastGuestConfirmationAt =
+                                                rs.getTimestamp("last_guest_confirmation_at")?.toInstant(),
                                             guestDisplayName = rs.getString("guest_display_name"),
                                         ),
                                     )
@@ -967,7 +1052,7 @@ class GuestBookingRepository(
                         SELECT b.id, b.venue_id, b.user_id, b.scheduled_at, b.party_size, b.comment, b.status,
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
-                               b.last_guest_confirmation_at,
+                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
                                u.guest_display_name
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -1091,7 +1176,7 @@ class GuestBookingRepository(
             SELECT b.id, b.venue_id, b.user_id, b.scheduled_at, b.party_size, b.comment, b.status,
                    b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                    b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
-                   b.last_guest_confirmation_at,
+                   b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
                    u.guest_display_name
             FROM bookings b
             LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -1122,6 +1207,8 @@ class GuestBookingRepository(
             noShowAt = rs.getTimestamp("no_show_at")?.toInstant(),
             expiredAt = rs.getTimestamp("expired_at")?.toInstant(),
             lastGuestConfirmationAt = rs.getTimestamp("last_guest_confirmation_at")?.toInstant(),
+            venueConfirmedAt = rs.getTimestamp("venue_confirmed_at")?.toInstant(),
+            lastRescheduledAt = rs.getTimestamp("last_rescheduled_at")?.toInstant(),
             guestDisplayName = rs.getString("guest_display_name"),
         )
     }
@@ -1130,63 +1217,94 @@ class GuestBookingRepository(
         val kind: BookingReminderKind,
         val scheduledFor: Instant,
         val status: BookingReminderStatus,
+        val anchorAt: Instant?,
     )
 
     private fun buildReminderPlan(
         booking: BookingRecord,
         now: Instant,
         venueZoneId: ZoneId,
-    ): List<ReminderPlan> {
-        val serviceDate = booking.displayDate ?: bookingDisplayDate(booking.scheduledAt, venueZoneId)
-        val confirmationDate = LocalDateTime.ofInstant(now, venueZoneId).toLocalDate()
-        val daysUntilServiceDate = ChronoUnit.DAYS.between(confirmationDate, serviceDate)
-        val plans = mutableListOf<ReminderPlan>()
-
-        fun statusFor(scheduledFor: Instant): BookingReminderStatus =
-            if (scheduledFor.isAfter(now)) BookingReminderStatus.PENDING else BookingReminderStatus.SKIPPED
-
-        fun add(
-            kind: BookingReminderKind,
-            scheduledFor: Instant,
-        ) {
-            plans.add(ReminderPlan(kind = kind, scheduledFor = scheduledFor, status = statusFor(scheduledFor)))
+    ): ReminderPlan? {
+        if (booking.status !in REMINDER_ELIGIBLE_STATUSES) return null
+        val anchorAt =
+            booking.lastRescheduledAt
+                ?: booking.venueConfirmedAt
+                ?: return skippedReminderPlan(now = now, anchorAt = null)
+        val preferred =
+            adaptiveReminderTarget(
+                booking = booking,
+                anchorAt = anchorAt,
+                now = now,
+                venueZoneId = venueZoneId,
+                hoursBeforeVisit = 24,
+                requiredAnchorGap = Duration.ofHours(6),
+            )
+        if (preferred != null) {
+            return ReminderPlan(
+                kind = BookingReminderKind.PRE_VISIT,
+                scheduledFor = preferred,
+                status = BookingReminderStatus.PENDING,
+                anchorAt = anchorAt,
+            )
         }
-
-        when {
-            daysUntilServiceDate >= 3 -> {
-                add(
-                    BookingReminderKind.DAY_OF_VISIT,
-                    LocalDateTime.of(serviceDate, LocalTime.of(11, 0)).atZone(venueZoneId).toInstant(),
-                )
-                add(BookingReminderKind.PRE_VISIT, booking.scheduledAt.minus(Duration.ofHours(2)))
-            }
-            daysUntilServiceDate in 1..2 -> {
-                add(BookingReminderKind.PRE_VISIT, booking.scheduledAt.minus(Duration.ofHours(2)))
-            }
-            daysUntilServiceDate == 0L -> {
-                if (Duration.between(now, booking.scheduledAt) > Duration.ofHours(2)) {
-                    add(BookingReminderKind.PRE_VISIT, booking.scheduledAt.minus(Duration.ofHours(1)))
-                } else {
-                    plans.add(
-                        ReminderPlan(
-                            kind = BookingReminderKind.PRE_VISIT,
-                            scheduledFor = now,
-                            status = BookingReminderStatus.SKIPPED,
-                        ),
-                    )
-                }
-            }
-            else -> {
-                plans.add(
-                    ReminderPlan(
-                        kind = BookingReminderKind.PRE_VISIT,
-                        scheduledFor = now,
-                        status = BookingReminderStatus.SKIPPED,
-                    ),
-                )
-            }
+        val fallback =
+            adaptiveReminderTarget(
+                booking = booking,
+                anchorAt = anchorAt,
+                now = now,
+                venueZoneId = venueZoneId,
+                hoursBeforeVisit = 3,
+                requiredAnchorGap = Duration.ofHours(2),
+            )
+        if (fallback != null) {
+            return ReminderPlan(
+                kind = BookingReminderKind.PRE_VISIT,
+                scheduledFor = fallback,
+                status = BookingReminderStatus.PENDING,
+                anchorAt = anchorAt,
+            )
         }
-        return plans
+        return skippedReminderPlan(now = now, anchorAt = anchorAt)
+    }
+
+    private fun skippedReminderPlan(
+        now: Instant,
+        anchorAt: Instant?,
+    ): ReminderPlan =
+        ReminderPlan(
+            kind = BookingReminderKind.PRE_VISIT,
+            scheduledFor = now,
+            status = BookingReminderStatus.SKIPPED,
+            anchorAt = anchorAt,
+        )
+
+    private fun adaptiveReminderTarget(
+        booking: BookingRecord,
+        anchorAt: Instant,
+        now: Instant,
+        venueZoneId: ZoneId,
+        hoursBeforeVisit: Long,
+        requiredAnchorGap: Duration,
+    ): Instant? {
+        val scheduledLocal = LocalDateTime.ofInstant(booking.scheduledAt, venueZoneId)
+        val originalTarget = scheduledLocal.minusHours(hoursBeforeVisit).atZone(venueZoneId)
+        val adjustedTarget = adjustReminderToQuietWindow(originalTarget)
+        val adjustedInstant = adjustedTarget.toInstant()
+        if (!adjustedInstant.isAfter(now)) return null
+        if (!adjustedInstant.isBefore(booking.scheduledAt)) return null
+        if (anchorAt.plus(requiredAnchorGap).isAfter(adjustedInstant)) return null
+        return adjustedInstant
+    }
+
+    private fun adjustReminderToQuietWindow(target: ZonedDateTime): ZonedDateTime {
+        val localTime = target.toLocalTime()
+        return when {
+            localTime.isAfter(REMINDER_QUIET_WINDOW_END) ->
+                ZonedDateTime.of(target.toLocalDate(), REMINDER_QUIET_WINDOW_END, target.zone)
+            localTime.isBefore(REMINDER_QUIET_WINDOW_START) ->
+                ZonedDateTime.of(target.toLocalDate().minusDays(1), REMINDER_QUIET_WINDOW_END, target.zone)
+            else -> target
+        }
     }
 
     private fun upsertReminder(
@@ -1194,7 +1312,7 @@ class GuestBookingRepository(
         bookingId: Long,
         plan: ReminderPlan,
     ): Boolean {
-        val dedupeKey = reminderDedupeKey(bookingId, plan.kind, plan.scheduledFor)
+        val dedupeKey = reminderDedupeKey(bookingId, plan.kind, plan.scheduledFor, plan.anchorAt)
         val existing =
             connection.prepareStatement(
                 """
@@ -1210,7 +1328,8 @@ class GuestBookingRepository(
             }
         if (existing != null) {
             val (id, status) = existing
-            if (status == BookingReminderStatus.SENT.name) return false
+            if (status == BookingReminderStatus.QUEUED.name || status == BookingReminderStatus.SENT.name) return false
+            if (status == plan.status.name) return false
             connection.prepareStatement(
                 """
                 UPDATE booking_reminders
@@ -1230,8 +1349,8 @@ class GuestBookingRepository(
         }
         connection.prepareStatement(
             """
-            INSERT INTO booking_reminders (booking_id, kind, scheduled_for, status, dedupe_key)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO booking_reminders (booking_id, kind, scheduled_for, status, dedupe_key, policy_version)
+            VALUES (?, ?, ?, ?, ?, ?)
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, bookingId)
@@ -1239,10 +1358,59 @@ class GuestBookingRepository(
             statement.setTimestamp(3, Timestamp.from(plan.scheduledFor))
             statement.setString(4, plan.status.name)
             statement.setString(5, dedupeKey)
+            statement.setString(6, REMINDER_POLICY_M7C)
             statement.executeUpdate()
         }
         return true
     }
+
+    private fun hasQueuedOrSentM7cReminder(
+        connection: java.sql.Connection,
+        bookingId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM booking_reminders
+            WHERE booking_id = ?
+              AND policy_version = ?
+              AND status IN (?, ?)
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, bookingId)
+            statement.setString(2, REMINDER_POLICY_M7C)
+            statement.setString(3, BookingReminderStatus.QUEUED.name)
+            statement.setString(4, BookingReminderStatus.SENT.name)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    private fun cancelUnsentM7cReminders(
+        connection: java.sql.Connection,
+        bookingId: Long,
+        exceptDedupeKey: String? = null,
+    ): Int =
+        connection.prepareStatement(
+            """
+            UPDATE booking_reminders
+            SET status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE booking_id = ?
+              AND policy_version = ?
+              AND status IN (?, ?, ?)
+              AND (? IS NULL OR dedupe_key <> ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, BookingReminderStatus.CANCELED.name)
+            statement.setLong(2, bookingId)
+            statement.setString(3, REMINDER_POLICY_M7C)
+            statement.setString(4, BookingReminderStatus.PENDING.name)
+            statement.setString(5, BookingReminderStatus.FAILED.name)
+            statement.setString(6, BookingReminderStatus.SKIPPED.name)
+            statement.setString(7, exceptDedupeKey)
+            statement.setString(8, exceptDedupeKey)
+            statement.executeUpdate()
+        }
 
     private fun selectDueReminders(
         connection: java.sql.Connection,
@@ -1265,14 +1433,18 @@ class GuestBookingRepository(
                    b.venue_id,
                    b.user_id,
                    b.scheduled_at,
+                   b.party_size,
                    b.display_number,
                    b.display_date,
                    b.arrival_deadline_at,
+                   vbs.hold_minutes,
                    v.name AS venue_name
             FROM booking_reminders br
             JOIN bookings b ON b.id = br.booking_id
             JOIN venues v ON v.id = b.venue_id
-            WHERE br.status = 'PENDING'
+            LEFT JOIN venue_booking_settings vbs ON vbs.venue_id = b.venue_id
+            WHERE br.policy_version = ?
+              AND br.status = 'PENDING'
               AND br.scheduled_for <= ?
               AND b.status IN ('CONFIRMED', 'CHANGED')
             ORDER BY br.scheduled_for ASC, br.id ASC
@@ -1280,11 +1452,20 @@ class GuestBookingRepository(
             $forUpdateClause
             """.trimIndent(),
         ).use { statement ->
-            statement.setTimestamp(1, Timestamp.from(now))
-            statement.setInt(2, limit)
+            statement.setString(1, REMINDER_POLICY_M7C)
+            statement.setTimestamp(2, Timestamp.from(now))
+            statement.setInt(3, limit)
             statement.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
+                        val scheduledAt = rs.getTimestamp("scheduled_at").toInstant()
+                        val holdMinutes =
+                            rs.getInt("hold_minutes").let {
+                                if (rs.wasNull()) DEFAULT_HOLD_MINUTES else it
+                            }
+                        val arrivalDeadlineAt =
+                            rs.getTimestamp("arrival_deadline_at")?.toInstant()
+                                ?: scheduledAt.plus(Duration.ofMinutes(holdMinutes.toLong()))
                         add(
                             BookingReminderDelivery(
                                 reminderId = rs.getLong("reminder_id"),
@@ -1295,67 +1476,16 @@ class GuestBookingRepository(
                                 venueId = rs.getLong("venue_id"),
                                 venueName = rs.getString("venue_name"),
                                 userId = rs.getLong("user_id"),
-                                scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
+                                scheduledAt = scheduledAt,
+                                partySize = rs.getInt("party_size").let { if (rs.wasNull()) null else it },
                                 displayNumber = rs.getInt("display_number").let { if (rs.wasNull()) null else it },
                                 displayDate = rs.getDate("display_date")?.toLocalDate(),
-                                arrivalDeadlineAt = rs.getTimestamp("arrival_deadline_at")?.toInstant(),
+                                arrivalDeadlineAt = arrivalDeadlineAt,
                             ),
                         )
                     }
                 }
             }
-        }
-    }
-
-    private fun incrementReminderAttempts(
-        connection: java.sql.Connection,
-        reminderIds: List<Long>,
-    ) {
-        if (reminderIds.isEmpty()) return
-        val placeholders = reminderIds.joinToString(",") { "?" }
-        connection.prepareStatement(
-            """
-            UPDATE booking_reminders
-            SET attempts = attempts + 1,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id IN ($placeholders)
-            """.trimIndent(),
-        ).use { statement ->
-            reminderIds.forEachIndexed { index, id -> statement.setLong(index + 1, id) }
-            statement.executeUpdate()
-        }
-    }
-
-    private suspend fun updateReminderStatus(
-        reminderId: Long,
-        status: BookingReminderStatus,
-        sentAt: Instant?,
-        lastError: String?,
-    ): Boolean {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        try {
-            return withContext(Dispatchers.IO) {
-                ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        UPDATE booking_reminders
-                        SET status = ?,
-                            sent_at = ?,
-                            last_error = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setString(1, status.name)
-                        setNullableTimestamp(statement, 2, sentAt)
-                        statement.setString(3, lastError?.take(1000))
-                        statement.setLong(4, reminderId)
-                        statement.executeUpdate() > 0
-                    }
-                }
-            }
-        } catch (_: SQLException) {
-            throw DatabaseUnavailableException()
         }
     }
 
@@ -1375,8 +1505,11 @@ class GuestBookingRepository(
             UPDATE booking_reminders
             SET status = 'CANCELED',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE status = 'PENDING'
-              AND booking_id IN ($placeholders)
+            WHERE booking_id IN ($placeholders)
+              AND (
+                  (policy_version = '$REMINDER_POLICY_M7C' AND status IN ('PENDING', 'FAILED', 'SKIPPED'))
+                  OR (policy_version = 'LEGACY' AND status = 'PENDING')
+              )
             """.trimIndent(),
         ).use { statement ->
             bookingIds.forEachIndexed { index, bookingId -> statement.setLong(index + 1, bookingId) }
@@ -1388,7 +1521,20 @@ class GuestBookingRepository(
         bookingId: Long,
         kind: BookingReminderKind,
         scheduledFor: Instant,
-    ): String = "booking:$bookingId:${kind.name}:${scheduledFor.epochSecond}"
+        anchorAt: Instant?,
+    ): String =
+        buildString {
+            append("booking:")
+            append(bookingId)
+            append(":m7c:")
+            append(kind.name)
+            append(':')
+            append(scheduledFor.epochSecond)
+            anchorAt?.let {
+                append(':')
+                append(it.epochSecond)
+            }
+        }
 
     private fun bookingDisplayDate(
         scheduledAt: Instant,
@@ -1494,5 +1640,9 @@ class GuestBookingRepository(
         val ACTIVE_STATUSES = setOf(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.CHANGED)
         val TERMINAL_STATUSES =
             setOf(BookingStatus.CANCELED, BookingStatus.EXPIRED, BookingStatus.NO_SHOW, BookingStatus.SEATED)
+        private const val REMINDER_POLICY_M7C = "M7C"
+        private val REMINDER_ELIGIBLE_STATUSES = setOf(BookingStatus.CONFIRMED, BookingStatus.CHANGED)
+        private val REMINDER_QUIET_WINDOW_START = LocalTime.of(10, 0)
+        private val REMINDER_QUIET_WINDOW_END = LocalTime.of(22, 0)
     }
 }

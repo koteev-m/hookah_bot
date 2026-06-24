@@ -341,15 +341,15 @@ class GuestBookingRepositoryTest {
         }
 
     @Test
-    fun `strong advance confirmed booking creates day of visit and pre visit reminders`() =
+    fun `far ahead confirmed booking schedules M7c 24 hour reminder`() =
         runBlocking {
-            val jdbcUrl = migratedJdbcUrl("booking-reminders-advance")
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-24h")
             val fixture = seedVenueAndUser(jdbcUrl)
             val repository = GuestBookingRepository(dataSource(jdbcUrl))
             val zoneId = ZoneId.of("Europe/Moscow")
             val serviceDate = LocalDate.of(2030, 5, 10)
-            val scheduledAt = LocalDateTime.of(serviceDate.plusDays(1), LocalTime.of(2, 0)).atZone(zoneId).toInstant()
-            val now = LocalDateTime.of(2030, 5, 6, 12, 0).atZone(zoneId).toInstant()
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
             val booking =
                 repository.create(
                     venueId = fixture.venueId,
@@ -364,69 +364,61 @@ class GuestBookingRepositoryTest {
                 BookingStatus.CONFIRMED,
                 repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
             )
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
 
-            val result = repository.scheduleRemindersForBooking(booking.id, now = now, venueZoneId = zoneId)
+            val result = repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
             val reminders = listReminders(jdbcUrl, booking.id)
 
-            assertEquals(2, result.pendingCount)
+            assertEquals(1, result.pendingCount)
+            assertEquals(1, reminders.size)
+            assertEquals(BookingReminderKind.PRE_VISIT, reminders.single().kind)
             assertEquals(
-                LocalDateTime.of(serviceDate, LocalTime.of(11, 0)).atZone(zoneId).toInstant(),
-                reminders.first { it.kind == BookingReminderKind.DAY_OF_VISIT }.scheduledFor,
-            )
-            assertEquals(
-                scheduledAt.minus(Duration.ofHours(2)),
-                reminders.first {
-                    it.kind == BookingReminderKind.PRE_VISIT
-                }.scheduledFor,
+                LocalDateTime.of(2030, 5, 9, 20, 0).atZone(zoneId).toInstant(),
+                reminders.single().scheduledFor,
             )
             assertTrue(reminders.all { it.status == BookingReminderStatus.PENDING })
         }
 
     @Test
-    fun `booking confirmed one or two days before service date creates only pre visit reminder`() =
+    fun `M7c guard failure falls back to 3 hour reminder`() =
         runBlocking {
-            val jdbcUrl = migratedJdbcUrl("booking-reminders-near")
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-fallback")
             val fixture = seedVenueAndUser(jdbcUrl)
             val repository = GuestBookingRepository(dataSource(jdbcUrl))
             val zoneId = ZoneId.of("Europe/Moscow")
             val serviceDate = LocalDate.of(2030, 5, 10)
             val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
-            val now = LocalDateTime.of(2030, 5, 8, 12, 0).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 9, 19, 0).atZone(zoneId).toInstant()
             val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
             repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
 
-            val result = repository.scheduleRemindersForBooking(booking.id, now = now, venueZoneId = zoneId)
+            val result = repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
             val reminders = listReminders(jdbcUrl, booking.id)
 
             assertEquals(1, result.pendingCount)
             assertEquals(listOf(BookingReminderKind.PRE_VISIT), reminders.map { it.kind })
-            assertEquals(scheduledAt.minus(Duration.ofHours(2)), reminders.single().scheduledFor)
+            assertEquals(
+                LocalDateTime.of(serviceDate, LocalTime.of(17, 0)).atZone(zoneId).toInstant(),
+                reminders.single().scheduledFor,
+            )
         }
 
     @Test
-    fun `same day booking reminder policy uses one hour or skips close booking`() =
+    fun `M7c skips booking that is too close`() =
         runBlocking {
-            val jdbcUrl = migratedJdbcUrl("booking-reminders-same-day")
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-close")
             val fixture = seedVenueAndUser(jdbcUrl)
             val repository = GuestBookingRepository(dataSource(jdbcUrl))
             val zoneId = ZoneId.of("Europe/Moscow")
             val serviceDate = LocalDate.of(2030, 5, 10)
-            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(14, 0)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(serviceDate, LocalTime.of(12, 0)).atZone(zoneId).toInstant()
             val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
             repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
 
-            val earlyNow = LocalDateTime.of(serviceDate, LocalTime.of(14, 0)).atZone(zoneId).toInstant()
-            assertEquals(
-                1,
-                repository.scheduleRemindersForBooking(booking.id, now = earlyNow, venueZoneId = zoneId).pendingCount,
-            )
-            assertEquals(
-                scheduledAt.minus(Duration.ofHours(1)),
-                listReminders(jdbcUrl, booking.id).single().scheduledFor,
-            )
-
-            val closeNow = LocalDateTime.of(serviceDate, LocalTime.of(18, 0)).atZone(zoneId).toInstant()
-            val closeResult = repository.scheduleRemindersForBooking(booking.id, now = closeNow, venueZoneId = zoneId)
+            val closeResult = repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
             val reminders = listReminders(jdbcUrl, booking.id)
 
             assertEquals(0, closeResult.pendingCount)
@@ -435,21 +427,257 @@ class GuestBookingRepositoryTest {
         }
 
     @Test
-    fun `terminal status cancels pending reminders and guest confirmation is idempotent`() =
+    fun `M7c quiet window moves after 22 target earlier on same local date`() =
         runBlocking {
-            val jdbcUrl = migratedJdbcUrl("booking-reminders-terminal")
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-after-22")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val serviceDate = LocalDate.of(2030, 5, 10)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(23, 30)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 8, 10, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+
+            repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
+
+            assertEquals(
+                LocalDateTime.of(2030, 5, 9, 22, 0).atZone(zoneId).toInstant(),
+                listReminders(jdbcUrl, booking.id).single { it.status == BookingReminderStatus.PENDING }.scheduledFor,
+            )
+        }
+
+    @Test
+    fun `M7c quiet window moves before 10 target to previous local day 22`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-before-10")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val serviceDate = LocalDate.of(2030, 5, 10)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(8, 30)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 8, 12, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+
+            repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
+
+            assertEquals(
+                LocalDateTime.of(2030, 5, 8, 22, 0).atZone(zoneId).toInstant(),
+                listReminders(jdbcUrl, booking.id).single { it.status == BookingReminderStatus.PENDING }.scheduledFor,
+            )
+        }
+
+    @Test
+    fun `M7c skips adjusted fallback target when anchor guard fails`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-adjusted-guard")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val serviceDate = LocalDate.of(2030, 5, 10)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(8, 30)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 9, 21, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+
+            val result = repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
+
+            assertEquals(0, result.pendingCount)
+            assertEquals(1, result.skippedCount)
+            assertTrue(listReminders(jdbcUrl, booking.id).none { it.status == BookingReminderStatus.PENDING })
+        }
+
+    @Test
+    fun `M7c scheduling uses venue timezone across DST boundary`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-dst")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Berlin")
+            val serviceDate = LocalDate.of(2030, 3, 31)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(12, 0)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 3, 25, 12, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+
+            repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
+
+            assertEquals(
+                LocalDateTime.of(2030, 3, 30, 12, 0).atZone(zoneId).toInstant(),
+                listReminders(jdbcUrl, booking.id).single { it.status == BookingReminderStatus.PENDING }.scheduledFor,
+            )
+        }
+
+    @Test
+    fun `M7c schedules only confirmed and changed bookings`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-eligible")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val scheduledAt = LocalDateTime.of(2030, 5, 10, 20, 0).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
+            val pending = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId)
+            val confirmed =
+                repository.create(
+                    fixture.venueId,
+                    fixture.userId,
+                    scheduledAt.plusSeconds(60),
+                    2,
+                    null,
+                    zoneId,
+                )
+            val changed =
+                repository.create(
+                    fixture.venueId,
+                    fixture.userId,
+                    scheduledAt.plusSeconds(120),
+                    2,
+                    null,
+                    zoneId,
+                )
+
+            repository.updateByVenue(confirmed.id, fixture.venueId, BookingStatus.CONFIRMED)
+            repository.updateByVenue(
+                changed.id,
+                fixture.venueId,
+                BookingStatus.CHANGED,
+                scheduledAt = scheduledAt.plusSeconds(120),
+            )
+            setBookingAnchors(jdbcUrl, confirmed.id, venueConfirmedAt = anchor)
+            setBookingAnchors(
+                jdbcUrl,
+                changed.id,
+                venueConfirmedAt = anchor,
+                lastRescheduledAt = anchor.plusSeconds(60),
+            )
+
+            assertEquals(
+                0,
+                repository.scheduleRemindersForBooking(pending.id, now = anchor, venueZoneId = zoneId).pendingCount,
+            )
+            assertEquals(
+                1,
+                repository.scheduleRemindersForBooking(confirmed.id, now = anchor, venueZoneId = zoneId).pendingCount,
+            )
+            assertEquals(
+                1,
+                repository.scheduleRemindersForBooking(changed.id, now = anchor, venueZoneId = zoneId).pendingCount,
+            )
+            assertTrue(listReminders(jdbcUrl, pending.id).isEmpty())
+        }
+
+    @Test
+    fun `M7c repeated scheduling does not duplicate pending reminder`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-idempotent")
             val fixture = seedVenueAndUser(jdbcUrl)
             val repository = GuestBookingRepository(dataSource(jdbcUrl))
             val zoneId = ZoneId.of("Europe/Moscow")
             val serviceDate = LocalDate.of(2030, 5, 10)
             val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
-            val now = LocalDateTime.of(2030, 5, 8, 12, 0).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
             val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
             repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+
+            repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
+            repository.scheduleRemindersForBooking(booking.id, now = anchor.plusSeconds(30), venueZoneId = zoneId)
+
+            assertEquals(1, listReminders(jdbcUrl, booking.id).count { it.status == BookingReminderStatus.PENDING })
+        }
+
+    @Test
+    fun `M7c reschedule replaces unsent reminder but not already queued reminder`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-reschedule")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val serviceDate = LocalDate.of(2030, 5, 10)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+            repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
+
+            val rescheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(21, 0)).atZone(zoneId).toInstant()
+            repository.updateByVenue(
+                bookingId = booking.id,
+                venueId = fixture.venueId,
+                nextStatus = BookingStatus.CHANGED,
+                scheduledAt = rescheduledAt,
+                venueZoneId = zoneId,
+                serviceDate = serviceDate,
+            )
+            val rescheduleAnchor = anchor.plus(Duration.ofHours(1))
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor, lastRescheduledAt = rescheduleAnchor)
+            repository.scheduleRemindersForBooking(booking.id, now = rescheduleAnchor, venueZoneId = zoneId)
+
+            val afterReplace = listReminders(jdbcUrl, booking.id)
+            assertEquals(1, afterReplace.count { it.status == BookingReminderStatus.CANCELED })
+            assertEquals(1, afterReplace.count { it.status == BookingReminderStatus.PENDING })
+            assertEquals(
+                LocalDateTime.of(2030, 5, 9, 21, 0).atZone(zoneId).toInstant(),
+                afterReplace.single { it.status == BookingReminderStatus.PENDING }.scheduledFor,
+            )
+
+            markReminderStatus(
+                jdbcUrl,
+                afterReplace.single { it.status == BookingReminderStatus.PENDING }.dedupeKey,
+                "QUEUED",
+            )
+            val secondRescheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(22, 0)).atZone(zoneId).toInstant()
+            repository.updateByVenue(
+                bookingId = booking.id,
+                venueId = fixture.venueId,
+                nextStatus = BookingStatus.CHANGED,
+                scheduledAt = secondRescheduledAt,
+                venueZoneId = zoneId,
+                serviceDate = serviceDate,
+            )
+            setBookingAnchors(
+                jdbcUrl,
+                booking.id,
+                venueConfirmedAt = anchor,
+                lastRescheduledAt = rescheduleAnchor.plus(Duration.ofHours(1)),
+            )
+            repository.scheduleRemindersForBooking(
+                booking.id,
+                now = rescheduleAnchor.plus(Duration.ofHours(1)),
+                venueZoneId = zoneId,
+            )
+
+            val afterQueuedReschedule = listReminders(jdbcUrl, booking.id)
+            assertEquals(1, afterQueuedReschedule.count { it.status == BookingReminderStatus.QUEUED })
+            assertEquals(0, afterQueuedReschedule.count { it.status == BookingReminderStatus.PENDING })
+        }
+
+    @Test
+    fun `terminal status cancels pending reminders and guest confirmation is idempotent`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-reminders-m7c-terminal")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val serviceDate = LocalDate.of(2030, 5, 10)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
+            val now = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = now)
             repository.scheduleRemindersForBooking(booking.id, now = now, venueZoneId = zoneId)
 
             val confirmed = repository.markGuestConfirmed(booking.id, fixture.userId, now.plusSeconds(30))
             assertEquals(now.plusSeconds(30), confirmed?.lastGuestConfirmationAt)
+            val repeated = repository.markGuestConfirmed(booking.id, fixture.userId, now.plusSeconds(60))
+            assertEquals(now.plusSeconds(30), repeated?.lastGuestConfirmationAt)
             repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CANCELED)
 
             assertTrue(listReminders(jdbcUrl, booking.id).all { it.status == BookingReminderStatus.CANCELED })
@@ -600,6 +828,53 @@ class GuestBookingRepositoryTest {
         }
     }
 
+    private fun setBookingAnchors(
+        jdbcUrl: String,
+        bookingId: Long,
+        venueConfirmedAt: Instant,
+        lastRescheduledAt: Instant? = null,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE bookings
+                SET venue_confirmed_at = ?,
+                    last_rescheduled_at = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setTimestamp(1, java.sql.Timestamp.from(venueConfirmedAt))
+                if (lastRescheduledAt == null) {
+                    statement.setNull(2, java.sql.Types.TIMESTAMP_WITH_TIMEZONE)
+                } else {
+                    statement.setTimestamp(2, java.sql.Timestamp.from(lastRescheduledAt))
+                }
+                statement.setLong(3, bookingId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun markReminderStatus(
+        jdbcUrl: String,
+        dedupeKey: String,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE booking_reminders
+                SET status = ?
+                WHERE dedupe_key = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, status)
+                statement.setString(2, dedupeKey)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun listReminders(
         jdbcUrl: String,
         bookingId: Long,
@@ -607,7 +882,7 @@ class GuestBookingRepositoryTest {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                SELECT kind, scheduled_for, status
+                SELECT kind, scheduled_for, status, dedupe_key
                 FROM booking_reminders
                 WHERE booking_id = ?
                 ORDER BY id
@@ -622,6 +897,7 @@ class GuestBookingRepositoryTest {
                                     kind = BookingReminderKind.valueOf(rs.getString("kind")),
                                     scheduledFor = rs.getTimestamp("scheduled_for").toInstant(),
                                     status = BookingReminderStatus.valueOf(rs.getString("status")),
+                                    dedupeKey = rs.getString("dedupe_key"),
                                 ),
                             )
                         }
@@ -634,6 +910,7 @@ class GuestBookingRepositoryTest {
         val kind: BookingReminderKind,
         val scheduledFor: Instant,
         val status: BookingReminderStatus,
+        val dedupeKey: String,
     )
 
     private data class BookingFixture(

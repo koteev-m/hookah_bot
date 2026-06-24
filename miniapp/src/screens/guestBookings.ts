@@ -324,19 +324,19 @@ function renderBookings(
           text: `Заведение предложило новое время: ${displayBookingTime(booking)}`
         })
       )
-      if (booking.lastGuestConfirmationAt) {
-        info.appendChild(
-          el('p', {
-            className: 'venue-order-sub',
-            text: `Вы подтвердили новое время: ${formatBookingTime(booking.lastGuestConfirmationAt)}`
-          })
-        )
-      }
+    }
+    if (booking.lastGuestConfirmationAt) {
+      info.appendChild(
+        el('p', {
+          className: 'venue-order-sub',
+          text: 'Вы подтвердили, что придёте'
+        })
+      )
     }
     append(row, info)
     const actions = el('div', { className: 'button-row order-actions' })
     if (isChangedBooking(booking) && !booking.lastGuestConfirmationAt) {
-      const confirmButton = el('button', { className: 'button-small', text: 'Принять новое время' }) as HTMLButtonElement
+      const confirmButton = el('button', { className: 'button-small', text: 'Подтвердить, что приду' }) as HTMLButtonElement
       confirmButton.addEventListener('click', () => onConfirm(booking))
       actions.appendChild(confirmButton)
     }

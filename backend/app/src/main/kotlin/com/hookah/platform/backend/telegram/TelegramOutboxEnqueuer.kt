@@ -16,12 +16,14 @@ class TelegramOutboxEnqueuer(
         text: String,
         replyMarkup: ReplyMarkup? = null,
         parseMode: String? = null,
+        dedupeKey: String? = null,
     ) {
         val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
         repository.enqueue(
             chatId = chatId,
             method = "sendMessage",
             payloadJson = json.encodeToString(SendMessagePayload.serializer(), payload),
+            dedupeKey = dedupeKey,
         )
     }
 

@@ -70,6 +70,32 @@ class TelegramOutboxWorkerTest {
         }
 
     @Test
+    fun `dedupe key prevents duplicate enqueue`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val repository = TelegramOutboxRepository(dataSource)
+            val json = Json { ignoreUnknownKeys = true }
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+
+            outboxEnqueuer.enqueueSendMessage(123L, "hello", dedupeKey = "booking-reminder:77")
+            outboxEnqueuer.enqueueSendMessage(123L, "hello", dedupeKey = "booking-reminder:77")
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT COUNT(*) AS count FROM telegram_outbox WHERE dedupe_key = 'booking-reminder:77'",
+                ).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        resultSet.next()
+                        assertEquals(1, resultSet.getInt("count"))
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
     fun `retry is scheduled on 429`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()

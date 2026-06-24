@@ -3614,18 +3614,18 @@ object TelegramKeyboards {
                 listOf(
                     listOf(
                         InlineKeyboardButton(
-                            text = "✅ Приду",
+                            text = "✅ Да, буду",
                             callbackData = "br_ok:$bookingId",
                         ),
                     ),
                     listOf(
                         InlineKeyboardButton(
-                            text = "❌ Отменить",
-                            callbackData = "br_cancel:$bookingId",
+                            text = "🔄 Перенести",
+                            callbackData = "br_reschedule:$bookingId",
                         ),
                         InlineKeyboardButton(
-                            text = "✉️ Написать заведению",
-                            callbackData = "br_msg:$bookingId",
+                            text = "❌ Отменить",
+                            callbackData = "br_cancel:$bookingId",
                         ),
                     ),
                 ),

@@ -1133,30 +1133,9 @@ class TelegramBotRouter(
                 callbackAnswered = true
                 promptGuestBookingReply(chatId, callbackQuery.from, callbackQuery.id, data)
             }
-            data?.startsWith("br_ok:") == true -> {
+            isBookingReminderCallback(data) -> {
                 callbackAnswered = true
-                confirmBookingReminderAttendance(chatId, callbackQuery.from, callbackQuery.id, data)
-            }
-            data?.startsWith("br_cancel_yes:") == true -> {
-                callbackAnswered = true
-                confirmBookingReminderCancel(chatId, callbackQuery.from, callbackQuery.id, data)
-            }
-            data?.startsWith("br_cancel:") == true -> {
-                callbackAnswered = true
-                askBookingReminderCancel(chatId, callbackQuery.from, sourceMessageId, callbackQuery.id, data)
-            }
-            data?.startsWith("br_msg:") == true -> {
-                callbackAnswered = true
-                promptBookingReminderMessage(chatId, callbackQuery.from, callbackQuery.id, data)
-            }
-            data?.startsWith("br_back:") == true -> {
-                callbackAnswered = true
-                answerBookingCallbackOrMessage(
-                    chatId = chatId,
-                    callbackQueryId = callbackQuery.id,
-                    text = "Ок",
-                    fallbackMessage = "Бронь остаётся активной.",
-                )
+                handleBookingReminderCallback(chatId, callbackQuery.from, sourceMessageId, callbackQuery.id, data)
             }
             data?.startsWith("fb_r:") == true -> {
                 callbackAnswered = true
@@ -4971,6 +4950,42 @@ class TelegramBotRouter(
         enqueueMessage(chatId, "✅ Ответ отправлен заведению.")
     }
 
+    private fun isBookingReminderCallback(data: String?): Boolean =
+        data?.startsWith("br_ok:") == true ||
+            data?.startsWith("br_cancel_yes:") == true ||
+            data?.startsWith("br_cancel:") == true ||
+            data?.startsWith("br_reschedule:") == true ||
+            data?.startsWith("br_msg:") == true ||
+            data?.startsWith("br_back:") == true
+
+    private suspend fun handleBookingReminderCallback(
+        chatId: Long,
+        user: User,
+        sourceMessageId: Long?,
+        callbackQueryId: String?,
+        data: String?,
+    ) {
+        when {
+            data?.startsWith("br_ok:") == true ->
+                confirmBookingReminderAttendance(chatId, user, callbackQueryId, data)
+            data?.startsWith("br_cancel_yes:") == true ->
+                confirmBookingReminderCancel(chatId, user, callbackQueryId, data)
+            data?.startsWith("br_cancel:") == true ->
+                askBookingReminderCancel(chatId, user, sourceMessageId, callbackQueryId, data)
+            data?.startsWith("br_reschedule:") == true ->
+                rescheduleBookingFromReminder(chatId, user, callbackQueryId, data)
+            data?.startsWith("br_msg:") == true ->
+                promptBookingReminderMessage(chatId, user, callbackQueryId, data)
+            data?.startsWith("br_back:") == true ->
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Ок",
+                    fallbackMessage = "Бронь остаётся активной.",
+                )
+        }
+    }
+
     private suspend fun confirmBookingReminderAttendance(
         chatId: Long,
         user: User,
@@ -5015,8 +5030,45 @@ class TelegramBotRouter(
         answerBookingCallbackOrMessage(
             chatId = chatId,
             callbackQueryId = callbackQueryId,
-            text = "Спасибо, ждём вас",
-            fallbackMessage = "✅ Спасибо! Передали заведению, что вы придёте.",
+            text = "Спасибо, отметили, что вы придёте.",
+            fallbackMessage = "Спасибо, отметили, что вы придёте.",
+        )
+    }
+
+    private suspend fun rescheduleBookingFromReminder(
+        chatId: Long,
+        user: User,
+        callbackQueryId: String?,
+        data: String,
+    ) {
+        val booking =
+            loadActiveGuestBookingFromReminder(
+                chatId = chatId,
+                callbackQueryId = callbackQueryId,
+                userId = user.id,
+                data = data,
+                prefix = "br_reschedule:",
+            ) ?: return
+        val venue = loadCatalogVenueById(chatId, booking.venueId) ?: return
+        botBookingEditContexts[chatId] =
+            BotBookingEditContext(
+                bookingId = booking.id,
+                venueId = booking.venueId,
+                userId = user.id,
+            )
+        renderBotVenueBookingDatePicker(
+            chatId = chatId,
+            venue = venue,
+            offset = 0,
+            prompt =
+                "Выберите новую дату для " +
+                    "${formatBookingDisplayLabel(booking).replaceFirstChar { it.lowercase(Locale.ROOT) }}.",
+        )
+        answerBookingCallbackOrMessage(
+            chatId = chatId,
+            callbackQueryId = callbackQueryId,
+            text = "Выберите новое время",
+            fallbackMessage = "Выберите новую дату и время брони.",
         )
     }
 

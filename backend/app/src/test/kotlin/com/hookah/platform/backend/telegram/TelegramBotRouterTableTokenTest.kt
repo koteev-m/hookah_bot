@@ -11748,7 +11748,12 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueAnswerCallbackQuery(555L, "cb-br-ok", "Спасибо, ждём вас", false)
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    555L,
+                    "cb-br-ok",
+                    "Спасибо, отметили, что вы придёте.",
+                    false,
+                )
             }
         }
 
@@ -11795,7 +11800,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `booking reminder message callback enters guest reply state`() =
+    fun `booking reminder reschedule callback enters existing guest edit flow`() =
         runBlocking {
             coEvery { guestBookingRepository.findActiveByGuest(bookingId = 77L, userId = 555L) } returns
                 BookingRecord(
@@ -11809,36 +11814,37 @@ class TelegramBotRouterTableTokenTest {
                     displayNumber = 7,
                     displayDate = LocalDate.parse("2026-04-03"),
                 )
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Mix",
+                    city = "City",
+                    address = "Address",
+                )
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
 
             router.process(
                 TelegramUpdate(
                     updateId = 10_002_44,
                     callbackQuery =
                         CallbackQuery(
-                            id = "cb-br-msg",
+                            id = "cb-br-reschedule",
                             from = User(id = 555L),
                             message = Message(messageId = 20_002_44, chat = Chat(id = 555, type = "private")),
-                            data = "br_msg:77",
+                            data = "br_reschedule:77",
                         ),
                 ),
             )
 
             coVerify {
-                dialogStateRepository.set(
+                outboxEnqueuer.enqueueSendMessage(
                     555L,
-                    match { state ->
-                        state.state == DialogStateType.GUEST_BOOKING_WAIT_REPLY &&
-                            state.payload["venue_id"] == "10" &&
-                            state.payload["booking_id"] == "77"
-                    },
+                    match { it.contains("Выберите новую дату для бронь №7") },
+                    any(),
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
-                    555L,
-                    match { it.contains("Напишите сообщение заведению по Бронь №7") },
-                    any(),
-                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(555L, "cb-br-reschedule", "Выберите новое время", false)
             }
         }
 

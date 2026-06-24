@@ -26,7 +26,7 @@ import kotlin.test.assertEquals
 
 class BookingReminderWorkerTest {
     @Test
-    fun `runOnce sends due reminder once with overnight human text`() =
+    fun `runOnce queues one M7c reminder with final transactional copy`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("booking-reminder-worker")
             val fixture = seedVenueAndUser(jdbcUrl)
@@ -35,9 +35,9 @@ class BookingReminderWorkerTest {
             val venueSettingsRepository = mockk<VenueSettingsRepository>()
             val zoneId = ZoneId.of("Europe/Moscow")
             val serviceDate = LocalDate.of(2030, 5, 10)
-            val scheduledAt = LocalDateTime.of(serviceDate.plusDays(1), LocalTime.of(2, 0)).atZone(zoneId).toInstant()
-            val now = LocalDateTime.of(2030, 5, 6, 12, 0).atZone(zoneId).toInstant()
-            val dayReminderAt = LocalDateTime.of(serviceDate, LocalTime.of(11, 0)).atZone(zoneId).toInstant()
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
+            val now = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
+            val reminderAt = LocalDateTime.of(2030, 5, 9, 20, 0).atZone(zoneId).toInstant()
             val booking =
                 repository.create(
                     venueId = fixture.venueId,
@@ -51,7 +51,7 @@ class BookingReminderWorkerTest {
             repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
             repository.scheduleRemindersForBooking(booking.id, now = now, venueZoneId = zoneId)
             coEvery { venueSettingsRepository.resolveZoneId(fixture.venueId, any()) } returns zoneId
-            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any()) } returns Unit
+            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any(), any()) } returns Unit
             val worker =
                 BookingReminderWorker(
                     repository = repository,
@@ -60,28 +60,34 @@ class BookingReminderWorkerTest {
                     interval = Duration.ofSeconds(60),
                     batchSize = 100,
                     scope = CoroutineScope(Dispatchers.Unconfined),
-                    nowProvider = { dayReminderAt },
+                    nowProvider = { reminderAt },
                 )
 
-            assertEquals(1, worker.runOnce().sentCount)
-            assertEquals(0, worker.runOnce().sentCount)
+            assertEquals(1, worker.runOnce().queuedCount)
+            assertEquals(0, worker.runOnce().queuedCount)
             coVerify(exactly = 1) {
                 outboxEnqueuer.enqueueSendMessage(
                     fixture.userId,
                     match { text ->
-                        text.contains("Сегодня ждём вас в пятницу ночью, в 02:00.") &&
-                            !text.contains("суббот") &&
-                            !text.contains("Дата смены")
+                        text.contains("Напоминаем о брони") &&
+                            text.contains("Место: Booking Venue") &&
+                            text.contains("Бронь №1") &&
+                            text.contains("Дата и время: 10.05.2030, 20:00") &&
+                            text.contains("Гостей: 2") &&
+                            text.contains("Держим стол до 20:30.")
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
                             markup.inlineKeyboard.flatten().any { it.callbackData == "br_ok:${booking.id}" } &&
                             markup.inlineKeyboard.flatten().any { it.callbackData == "br_cancel:${booking.id}" } &&
-                            markup.inlineKeyboard.flatten().any { it.callbackData == "br_msg:${booking.id}" }
+                            markup.inlineKeyboard.flatten().any { it.callbackData == "br_reschedule:${booking.id}" } &&
+                            markup.inlineKeyboard.flatten().none { it.callbackData == "br_msg:${booking.id}" }
                     },
                     null,
+                    match { it?.startsWith("booking-reminder:") == true },
                 )
             }
+            assertEquals("QUEUED", reminderStatus(jdbcUrl, booking.id))
         }
 
     private fun migratedJdbcUrl(prefix: String): String {
@@ -130,6 +136,26 @@ class BookingReminderWorkerTest {
                 statement.executeUpdate()
             }
             BookingFixture(venueId = venueId, userId = userId)
+        }
+
+    private fun reminderStatus(
+        jdbcUrl: String,
+        bookingId: Long,
+    ): String =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT status
+                FROM booking_reminders
+                WHERE booking_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getString("status")
+                }
+            }
         }
 
     private data class BookingFixture(

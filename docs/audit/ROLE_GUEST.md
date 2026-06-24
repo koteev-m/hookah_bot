@@ -83,6 +83,7 @@ Account/bookings:
 ## Known gaps / needs smoke
 
 - M7b `Мои брони` still needs real staging smoke against Telegram Bot `/my` for the same booking and real two-account isolation; local tests/e2e and staging backend/DB evidence are already green.
+- M7c adaptive booking reminders are implemented locally but disabled by default until real Telegram staging smoke; `Да, буду` records attendance intent without changing booking status, and Guest Mini App shows `Вы подтвердили, что придёте` when recorded.
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
 - Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.

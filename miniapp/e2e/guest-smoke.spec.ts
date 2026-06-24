@@ -2145,7 +2145,8 @@ test('guest opens my bookings from profile and manages booking actions', async (
         scheduledLocalTime: '21:00',
         arrivalDeadlineTimeDisplay: '21:15',
         partySize: 3,
-        comment: 'у окна'
+        comment: 'у окна',
+        lastGuestConfirmationAt: '2030-01-10T18:05:00Z'
       }),
       buildGuestBooking({
         bookingId: 502,
@@ -2182,6 +2183,7 @@ test('guest opens my bookings from profile and manages booking actions', async (
   await expect(mixCard).toContainText('Подтверждена')
   await expect(mixCard).toContainText('Комментарий: у окна')
   await expect(mixCard).toContainText('Держим стол до 21:15.')
+  await expect(mixCard).toContainText('Вы подтвердили, что придёте')
 
   await mixCard.getByRole('button', { name: 'Перенести' }).click()
   await mixCard.locator('input[type="date"]').fill('2030-01-11')
@@ -2726,7 +2728,10 @@ test('venue manager configures booking hold settings', async ({ page }) => {
 
 test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  const api = await mockVenueBookingsApi(page, { role: 'MANAGER' })
+  const api = await mockVenueBookingsApi(page, {
+    role: 'MANAGER',
+    bookings: [buildVenueBooking({ lastGuestConfirmationAt: '2030-01-10T18:05:00Z' })]
+  })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
@@ -2737,6 +2742,7 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await expect(page.getByText(/10\.01\.2030, 21:30/)).toBeVisible()
   await expect(page.getByText('Гость: Алексей')).toBeVisible()
   await expect(page.getByText('Держим до: 10.01.2030, 22:00')).toBeVisible()
+  await expect(page.getByText('Гость подтвердил визит: 10.01.2030, 21:05')).toBeVisible()
   await expect(page.getByText('у окна')).toBeVisible()
 
   await page.getByRole('button', { name: 'Написать гостю' }).click()

@@ -36,21 +36,43 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         chatId: Long,
         method: String,
         payloadJson: String,
+        dedupeKey: String? = null,
     ) {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val sql =
-                        """
-                        INSERT INTO telegram_outbox (chat_id, method, payload_json)
-                        VALUES (?, ?, ?)
-                        """.trimIndent()
-                    connection.prepareStatement(sql).use { statement ->
-                        statement.setLong(1, chatId)
-                        statement.setString(2, method)
-                        statement.setString(3, payloadJson)
-                        statement.executeUpdate()
+                    val normalizedDedupeKey = dedupeKey?.trim()?.takeIf { it.isNotEmpty() }
+                    if (normalizedDedupeKey != null && outboxDedupeExists(connection, normalizedDedupeKey)) {
+                        return@use
+                    }
+                    try {
+                        val sql =
+                            if (normalizedDedupeKey == null) {
+                                """
+                                INSERT INTO telegram_outbox (chat_id, method, payload_json)
+                                VALUES (?, ?, ?)
+                                """.trimIndent()
+                            } else {
+                                """
+                                INSERT INTO telegram_outbox (chat_id, method, payload_json, dedupe_key)
+                                VALUES (?, ?, ?, ?)
+                                """.trimIndent()
+                            }
+                        connection.prepareStatement(sql).use { statement ->
+                            statement.setLong(1, chatId)
+                            statement.setString(2, method)
+                            statement.setString(3, payloadJson)
+                            if (normalizedDedupeKey != null) {
+                                statement.setString(4, normalizedDedupeKey)
+                            }
+                            statement.executeUpdate()
+                        }
+                    } catch (e: SQLException) {
+                        if (normalizedDedupeKey != null && outboxDedupeExists(connection, normalizedDedupeKey)) {
+                            return@use
+                        }
+                        throw e
                     }
                 }
             } catch (e: CancellationException) {
@@ -64,6 +86,21 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
             }
         }
     }
+
+    private fun outboxDedupeExists(
+        connection: java.sql.Connection,
+        dedupeKey: String,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM telegram_outbox
+            WHERE dedupe_key = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, dedupeKey)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
 
     suspend fun claimBatch(
         limit: Int,

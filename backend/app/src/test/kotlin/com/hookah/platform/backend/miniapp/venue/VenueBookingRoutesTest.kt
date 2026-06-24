@@ -983,7 +983,7 @@ class VenueBookingRoutesTest {
         }
 
     @Test
-    fun `explicit enabled booking reminders schedules legacy reminders on venue confirm`() =
+    fun `explicit enabled booking reminders schedules M7c reminder on venue confirm`() =
         testApplication {
             val jdbcUrl =
                 "jdbc:h2:mem:venue-booking-reminder-enabled-${UUID.randomUUID()};MODE=PostgreSQL;" +
@@ -1036,7 +1036,7 @@ class VenueBookingRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, confirmResponse.status)
-            assertTrue(bookingReminderCount(jdbcUrl, bookingId) > 0)
+            assertEquals(1, m7cPendingBookingReminderCount(jdbcUrl, bookingId))
         }
 
     private fun issueToken(
@@ -1147,6 +1147,28 @@ class VenueBookingRoutesTest {
                 SELECT COUNT(*)
                 FROM booking_reminders
                 WHERE booking_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun m7cPendingBookingReminderCount(
+        jdbcUrl: String,
+        bookingId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM booking_reminders
+                WHERE booking_id = ?
+                  AND policy_version = 'M7C'
+                  AND status = 'PENDING'
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, bookingId)

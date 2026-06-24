@@ -56,7 +56,7 @@ class BookingReminderWorkerConfigTest {
     fun `disabled application config leaves due reminders dormant`() =
         testApplication {
             val jdbcUrl = migratedJdbcUrl("booking-reminder-disabled")
-            val fixture = seedDueReminder(jdbcUrl)
+            val fixture = seedDueReminder(jdbcUrl, policyVersion = "M7C")
             environment { config = appConfig(jdbcUrl) }
             application { module() }
 
@@ -68,10 +68,11 @@ class BookingReminderWorkerConfigTest {
         }
 
     @Test
-    fun `explicit enabled application config starts legacy reminder worker`() =
+    fun `explicit enabled application config starts only M7c reminder worker`() =
         testApplication {
             val jdbcUrl = migratedJdbcUrl("booking-reminder-enabled")
-            val fixture = seedDueReminder(jdbcUrl)
+            val legacyFixture = seedDueReminder(jdbcUrl, policyVersion = "LEGACY")
+            val fixture = seedDueReminder(jdbcUrl, policyVersion = "M7C")
             environment { config = appConfig(jdbcUrl, reminderEnabled = "true") }
             application { module() }
 
@@ -79,9 +80,10 @@ class BookingReminderWorkerConfigTest {
 
             assertTrue(
                 waitUntil {
-                    reminderStatus(jdbcUrl, fixture.reminderId) == "SENT" && outboxCount(jdbcUrl) == 1
+                    reminderStatus(jdbcUrl, fixture.reminderId) == "QUEUED" && outboxCount(jdbcUrl) == 1
                 },
             )
+            assertEquals("PENDING", reminderStatus(jdbcUrl, legacyFixture.reminderId))
         }
 
     private fun appConfig(
@@ -116,7 +118,10 @@ class BookingReminderWorkerConfigTest {
         return jdbcUrl
     }
 
-    private fun seedDueReminder(jdbcUrl: String): ReminderFixture =
+    private fun seedDueReminder(
+        jdbcUrl: String,
+        policyVersion: String,
+    ): ReminderFixture =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val venueId =
                 connection.prepareStatement(
@@ -141,7 +146,11 @@ class BookingReminderWorkerConfigTest {
                 statement.setLong(1, venueId)
                 statement.executeUpdate()
             }
-            val userId = 424242L
+            val userId =
+                when (policyVersion) {
+                    "M7C" -> 424243L
+                    else -> 424242L
+                }
             connection.prepareStatement(
                 """
                 INSERT INTO users (telegram_user_id, username, first_name, updated_at)
@@ -184,14 +193,15 @@ class BookingReminderWorkerConfigTest {
             val reminderId =
                 connection.prepareStatement(
                     """
-                    INSERT INTO booking_reminders (booking_id, kind, scheduled_for, status, dedupe_key)
-                    VALUES (?, 'PRE_VISIT', ?, 'PENDING', ?)
+                    INSERT INTO booking_reminders (booking_id, kind, scheduled_for, status, dedupe_key, policy_version)
+                    VALUES (?, 'PRE_VISIT', ?, 'PENDING', ?, ?)
                     """.trimIndent(),
                     Statement.RETURN_GENERATED_KEYS,
                 ).use { statement ->
                     statement.setLong(1, bookingId)
                     statement.setTimestamp(2, Timestamp.from(Instant.now().minusSeconds(60)))
                     statement.setString(3, "test:${UUID.randomUUID()}")
+                    statement.setString(4, policyVersion)
                     statement.executeUpdate()
                     statement.generatedKeys.use { keys ->
                         keys.next()

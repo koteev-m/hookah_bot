@@ -379,6 +379,7 @@ private fun UserBookingSummaryRecord.toResponse(zoneId: ZoneId): GuestBookingRes
         scheduledAt = formatBookingInstant(scheduledAt, zoneId),
         partySize = partySize,
         comment = comment,
+        lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingInstant(it, zoneId) },
         displayNumber = displayNumber,
         displayLabel = formatBookingDisplayLabel(displayNumber),
         venueName = venueName,

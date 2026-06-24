@@ -1,7 +1,6 @@
 package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderDelivery
-import com.hookah.platform.backend.miniapp.guest.db.BookingReminderKind
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.telegram.TelegramKeyboards
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
@@ -13,16 +12,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
-import java.time.DayOfWeek
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 data class BookingReminderWorkerResult(
-    val sentCount: Int,
+    val queuedCount: Int,
     val failedCount: Int,
 )
 
@@ -54,7 +51,7 @@ class BookingReminderWorker(
 
     suspend fun runOnce(now: Instant = nowProvider()): BookingReminderWorkerResult {
         val due = repository.pickDueReminders(now = now, limit = batchSize)
-        var sent = 0
+        var queued = 0
         var failed = 0
         for (reminder in due) {
             try {
@@ -63,9 +60,11 @@ class BookingReminderWorker(
                     chatId = reminder.userId,
                     text = buildReminderText(reminder, zoneId),
                     replyMarkup = TelegramKeyboards.inlineBookingReminderActions(reminder.bookingId),
+                    dedupeKey = reminderOutboxDedupeKey(reminder.reminderId),
                 )
-                repository.markReminderSent(reminder.reminderId, now)
-                sent++
+                if (repository.markReminderQueued(reminder.reminderId)) {
+                    queued++
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -73,67 +72,35 @@ class BookingReminderWorker(
                 failed++
             }
         }
-        if (sent > 0 || failed > 0) {
-            logger.info("Processed booking reminders sent={} failed={}", sent, failed)
+        if (queued > 0 || failed > 0) {
+            logger.info("Processed booking reminders queued={} failed={}", queued, failed)
         }
-        return BookingReminderWorkerResult(sentCount = sent, failedCount = failed)
+        return BookingReminderWorkerResult(queuedCount = queued, failedCount = failed)
     }
 
     private fun buildReminderText(
         reminder: BookingReminderDelivery,
         zoneId: ZoneId,
     ): String {
-        val nominativeLabel = reminder.displayNumber?.let { "бронь №$it" } ?: "бронь"
-        val genitiveLabel = reminder.displayNumber?.let { "брони №$it" } ?: "брони"
-        val visitText = formatVisitText(reminder, zoneId)
+        val bookingLabel = reminder.displayNumber?.let { "Бронь №$it" } ?: "Бронь"
+        val visitText = LocalDateTime.ofInstant(reminder.scheduledAt, zoneId).format(dateTimeFormatter)
         val deadlineText =
             reminder.arrivalDeadlineAt
                 ?.let { LocalDateTime.ofInstant(it, zoneId).format(timeFormatter) }
         return buildString {
-            when (reminder.kind) {
-                BookingReminderKind.DAY_OF_VISIT -> append("⏰ Напоминаем о $genitiveLabel.")
-                BookingReminderKind.PRE_VISIT -> append("⏰ Скоро ваша $nominativeLabel.")
-            }
-            append("\n\n").append(reminder.venueName)
-            append('\n')
-            when (reminder.kind) {
-                BookingReminderKind.DAY_OF_VISIT ->
-                    append(
-                        "Сегодня ",
-                    ).append(visitText.replaceFirstChar { it.lowercase(Locale.ROOT) })
-                BookingReminderKind.PRE_VISIT -> append(visitText)
-            }
-            deadlineText?.let { append("\nБронь держится до ").append(it).append('.') }
+            append("Напоминаем о брони")
+            append("\n\nМесто: ").append(reminder.venueName)
+            append('\n').append(bookingLabel)
+            append("\nДата и время: ").append(visitText)
+            append("\nГостей: ").append(reminder.partySize ?: "не указано")
+            deadlineText?.let { append("\nДержим стол до ").append(it).append('.') }
         }
     }
 
-    private fun formatVisitText(
-        reminder: BookingReminderDelivery,
-        zoneId: ZoneId,
-    ): String {
-        val serviceDate = reminder.displayDate ?: LocalDateTime.ofInstant(reminder.scheduledAt, zoneId).toLocalDate()
-        val actualLocal = LocalDateTime.ofInstant(reminder.scheduledAt, zoneId)
-        val weekday = formatWeekdayVisitPhrase(serviceDate.dayOfWeek)
-        val time = actualLocal.format(timeFormatter)
-        return if (actualLocal.toLocalDate() == serviceDate.plusDays(1)) {
-            "Ждём вас $weekday ночью, в $time."
-        } else {
-            "Ждём вас $weekday, в $time."
-        }
-    }
-
-    private fun formatWeekdayVisitPhrase(dayOfWeek: DayOfWeek): String =
-        when (dayOfWeek) {
-            DayOfWeek.MONDAY -> "в понедельник"
-            DayOfWeek.TUESDAY -> "во вторник"
-            DayOfWeek.WEDNESDAY -> "в среду"
-            DayOfWeek.THURSDAY -> "в четверг"
-            DayOfWeek.FRIDAY -> "в пятницу"
-            DayOfWeek.SATURDAY -> "в субботу"
-            DayOfWeek.SUNDAY -> "в воскресенье"
-        }
+    private fun reminderOutboxDedupeKey(reminderId: Long): String = "booking-reminder:$reminderId"
 
     private companion object {
+        val dateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm")
         val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     }
 }

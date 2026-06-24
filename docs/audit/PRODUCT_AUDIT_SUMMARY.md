@@ -6,7 +6,7 @@
 >
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
 >
-> Current checkpoint as of 2026-06-19: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging backend/DB evidence; release verdict is `PASS_WITH_UNVERIFIED_RUNTIME_GAPS` until real Bot `/my` side-by-side and real two-account isolation smoke are completed. M7c adaptive reminders are not accepted; a legacy reminder runtime exists but is opt-in disabled by default. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for adaptive reminders, broader venue settings slices, platform money/onboarding, promotions/preview and runtime regression priorities.
+> Current checkpoint as of 2026-06-24: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging backend/DB evidence; release verdict is `PASS_WITH_UNVERIFIED_RUNTIME_GAPS` until real Bot `/my` side-by-side and real two-account isolation smoke are completed. M7c adaptive reminders are implemented locally and covered by tests/build/e2e, but remain disabled by default and not CLOSED until real Telegram staging smoke passes. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for broader venue settings slices, platform money/onboarding, promotions/preview and runtime regression priorities.
 
 # Краткое резюме
 
@@ -32,7 +32,7 @@
 
 - Full bill, discounts, excluded items: backend/Telegram/Mini App management bill path exists; keep money snapshots and role denials in regression.
 - Split bill: tabs/invites/consent and active order scoping by `tableSessionId`/`tabId` exist; H2/PostgreSQL active-order uniqueness parity remains a test-fidelity follow-up.
-- Booking: bot/backend and Guest/Venue Mini App screens exist; M7a hold settings is closed and M7b Guest Mini App `Мои брони` is implemented with `PASS_WITH_UNVERIFIED_RUNTIME_GAPS`; accepted adaptive M7c reminders/preorder remain later. Legacy reminder runtime is gated off by default and must not be enabled without a dedicated acceptance milestone.
+- Booking: bot/backend and Guest/Venue Mini App screens exist; M7a hold settings is closed and M7b Guest Mini App `Мои брони` is implemented with `PASS_WITH_UNVERIFIED_RUNTIME_GAPS`. M7c adaptive reminders are implemented locally with legacy-row reconciliation and truthful `QUEUED` outbox semantics, but runtime remains opt-in disabled until dedicated Telegram staging acceptance. Preorder remains later.
 - Staff calls: create/list/ACK/DONE lifecycle exists across Guest/Venue Mini App and bot/staff chat path; cancel/SLA/escalation remain later.
 - Menu constructor: category/item CRUD, structured options/flavors, base profiles and item/option stop-list exist; photos/descriptions/top-list polish remains later.
 - Stop-list: STAFF operational item/option availability is aligned between bot and Mini App; content editing remains MANAGER/OWNER.
@@ -55,7 +55,7 @@
 No confirmed production P0 was found in the post-M6 checkpoint. Current priorities:
 
 1. **P1**: finish the two remaining M7b release QA checks: compare one real booking in Bot `/my` versus Guest Mini App `Мои брони`, and smoke real two-account booking isolation.
-2. **P1**: implement accepted M7c adaptive transactional reminders only after auditing/canceling/recalculating legacy reminder rows; keep the legacy worker disabled until real Telegram smoke passes.
+2. **P1**: run approval-gated M7c Telegram staging smoke; keep the worker disabled by default and verify legacy rows cannot be claimed before enabling it temporarily.
 3. **P1**: continue small Venue Mini App settings slices: profile/card, hours/exceptions and notification toggles, not one bulk endpoint.
 4. **P1**: Platform Mini App hardening: owner invite deep link/copy, remove misleading `ADMIN` owner assignment option, surface quota summary where backend exists.
 5. **P1**: PostgreSQL/H2 test-fidelity gap for active-order uniqueness: PostgreSQL has a partial unique index by `table_session_id`, H2 migration has only non-unique indexes.
