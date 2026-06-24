@@ -26,6 +26,7 @@ data class GuestBookingCancelRequest(
 @Serializable
 data class GuestBookingConfirmRequest(
     val bookingId: Long,
+    val attendanceScheduleVersion: Long? = null,
 )
 
 @Serializable
@@ -37,6 +38,7 @@ data class GuestBookingResponse(
     val partySize: Int?,
     val comment: String?,
     val lastGuestConfirmationAt: String? = null,
+    val attendanceScheduleVersion: Long? = null,
     val displayNumber: Int? = null,
     val displayLabel: String? = null,
     val venueName: String? = null,

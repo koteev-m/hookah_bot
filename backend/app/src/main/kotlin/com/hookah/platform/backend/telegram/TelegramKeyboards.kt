@@ -3608,16 +3608,41 @@ object TelegramKeyboards {
                 ),
         )
 
-    fun inlineBookingReminderActions(bookingId: Long): InlineKeyboardMarkup =
+    fun inlineBookingReminderActions(
+        bookingId: Long,
+        reminderId: Long? = null,
+    ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 listOf(
                     listOf(
                         InlineKeyboardButton(
                             text = "✅ Да, буду",
-                            callbackData = "br_ok:$bookingId",
+                            callbackData =
+                                if (reminderId == null) {
+                                    "br_ok:$bookingId"
+                                } else {
+                                    "br_ok:$bookingId:$reminderId"
+                                },
                         ),
                     ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "🔄 Перенести",
+                            callbackData = "br_reschedule:$bookingId",
+                        ),
+                        InlineKeyboardButton(
+                            text = "❌ Отменить",
+                            callbackData = "br_cancel:$bookingId",
+                        ),
+                    ),
+                ),
+        )
+
+    fun inlineBookingReminderConfirmedActions(bookingId: Long): InlineKeyboardMarkup =
+        InlineKeyboardMarkup(
+            inlineKeyboard =
+                listOf(
                     listOf(
                         InlineKeyboardButton(
                             text = "🔄 Перенести",
@@ -6315,21 +6340,36 @@ object TelegramKeyboards {
     fun inlineBotMyBookingActions(
         bookingId: Long,
         venueId: Long,
+        attendanceScheduleVersion: Long? = null,
+        canConfirmAttendance: Boolean = false,
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
-                listOf(
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "✏️ Изменить",
-                            callbackData = "bot_my_booking_edit:$bookingId:$venueId",
+                buildList {
+                    if (canConfirmAttendance && attendanceScheduleVersion != null) {
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "✅ Я приду",
+                                    callbackData =
+                                        "bot_my_booking_attend:$bookingId:$venueId:$attendanceScheduleVersion",
+                                ),
+                            ),
+                        )
+                    }
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "✏️ Изменить",
+                                callbackData = "bot_my_booking_edit:$bookingId:$venueId",
+                            ),
+                            InlineKeyboardButton(
+                                text = "❌ Отменить",
+                                callbackData = "bot_my_booking_cancel:$bookingId:$venueId",
+                            ),
                         ),
-                        InlineKeyboardButton(
-                            text = "❌ Отменить",
-                            callbackData = "bot_my_booking_cancel:$bookingId:$venueId",
-                        ),
-                    ),
-                ),
+                    )
+                },
         )
 
     fun inlineBotMyOrdersAndBookingsActions(): InlineKeyboardMarkup =

@@ -10,6 +10,7 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
+import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
@@ -30,6 +31,7 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
+import com.hookah.platform.backend.miniapp.guest.db.attendanceScheduleVersionEpochSeconds
 import com.hookah.platform.backend.miniapp.shift.CreateShiftExtensionRequestCommand
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
@@ -398,6 +400,7 @@ class TelegramBotRouter(
     private val bookingDateFormatter = DateTimeFormatter.ofPattern("dd.MM")
     private val bookingDateConfirmFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
     private val bookingDateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
+    private val bookingReminderDateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm")
     private val bookingTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     private val guestVisitDateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("ru"))
     private val bookingDateFirstPageSize = 3
@@ -1077,6 +1080,10 @@ class TelegramBotRouter(
                 editMyBooking(chatId, callbackQuery.from.id, data)
             data?.startsWith("bot_my_booking_cancel:") == true ->
                 cancelMyBooking(chatId, callbackQuery.from.id, data)
+            data?.startsWith("bot_my_booking_attend:") == true -> {
+                callbackAnswered = true
+                confirmMyBookingAttendance(chatId, callbackQuery.from.id, sourceMessageId, callbackQuery.id, data)
+            }
             data?.startsWith("staff_booking_confirm:") == true -> {
                 callbackAnswered = true
                 confirmVenueBookingFromBot(chatId, callbackQuery.from, sourceMessageId, callbackQuery.id, data)
@@ -3296,6 +3303,10 @@ class TelegramBotRouter(
                     TelegramKeyboards.inlineBotMyBookingActions(
                         bookingId = displayBooking.id,
                         venueId = displayBooking.venueId,
+                        attendanceScheduleVersion = displayBooking.attendanceScheduleVersionEpochSeconds(),
+                        canConfirmAttendance =
+                            displayBooking.status in setOf(BookingStatus.CONFIRMED, BookingStatus.CHANGED) &&
+                                displayBooking.lastGuestConfirmationAt == null,
                     ),
                 )
             }
@@ -3906,6 +3917,132 @@ class TelegramBotRouter(
                 guestDisplayName = loadGuestDisplayName(userId),
             ),
         )
+    }
+
+    private suspend fun confirmMyBookingAttendance(
+        chatId: Long,
+        userId: Long,
+        sourceMessageId: Long?,
+        callbackQueryId: String?,
+        data: String,
+    ) {
+        val parsed = parseBotMyBookingAttendanceData(data)
+        if (parsed == null) {
+            answerBookingCallbackOrMessage(
+                chatId = chatId,
+                callbackQueryId = callbackQueryId,
+                text = "Не удалось подтвердить",
+                fallbackMessage = "Не удалось подтвердить визит. Попробуйте ещё раз.",
+                showAlert = true,
+            )
+            return
+        }
+        val (bookingId, _, scheduleVersion) = parsed
+        val result =
+            try {
+                guestBookingRepository.confirmGuestAttendance(
+                    bookingId = bookingId,
+                    userId = userId,
+                    expectedScheduleVersionEpochSeconds = scheduleVersion,
+                )
+            } catch (e: DatabaseUnavailableException) {
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "База недоступна",
+                    fallbackMessage = "База недоступна, попробуйте позже.",
+                    showAlert = true,
+                )
+                return
+            }
+        when (result.status) {
+            GuestAttendanceConfirmationStatus.APPLIED -> {
+                val booking = result.booking ?: return
+                notifyStaffChatAboutGuestReminderConfirmation(
+                    booking = booking,
+                    guestUserId = userId,
+                    scheduleVersionEpochSeconds = result.scheduleVersionEpochSeconds,
+                )
+                refreshMyBookingMessage(chatId, sourceMessageId, booking)
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Спасибо, отметили, что вы придёте.",
+                    fallbackMessage = "Спасибо, отметили, что вы придёте.",
+                )
+            }
+            GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED -> {
+                result.booking?.let { refreshMyBookingMessage(chatId, sourceMessageId, it) }
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Вы уже подтвердили визит.",
+                    fallbackMessage = "Вы уже подтвердили визит.",
+                )
+            }
+            GuestAttendanceConfirmationStatus.STALE -> {
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Время брони изменилось. Откройте актуальную бронь.",
+                    fallbackMessage = "Время брони изменилось. Откройте актуальную бронь.",
+                    showAlert = true,
+                )
+            }
+            GuestAttendanceConfirmationStatus.TERMINAL,
+            GuestAttendanceConfirmationStatus.NOT_ELIGIBLE,
+            GuestAttendanceConfirmationStatus.NOT_FOUND,
+            -> {
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Бронь неактуальна",
+                    fallbackMessage = "Бронь не найдена или уже неактуальна.",
+                    showAlert = true,
+                )
+            }
+        }
+    }
+
+    private suspend fun refreshMyBookingMessage(
+        chatId: Long,
+        sourceMessageId: Long?,
+        booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
+    ) {
+        val displayBooking = withEffectiveBookingDeadline(booking)
+        val venueName = guestBookingRepository.findVenueName(displayBooking.venueId) ?: "Заведение"
+        val summary =
+            com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord(
+                id = displayBooking.id,
+                venueId = displayBooking.venueId,
+                venueName = venueName,
+                scheduledAt = displayBooking.scheduledAt,
+                partySize = displayBooking.partySize,
+                comment = displayBooking.comment,
+                status = displayBooking.status,
+                displayNumber = displayBooking.displayNumber,
+                displayDate = displayBooking.displayDate,
+                arrivalDeadlineAt = displayBooking.arrivalDeadlineAt,
+                lastGuestConfirmationAt = displayBooking.lastGuestConfirmationAt,
+                venueConfirmedAt = displayBooking.venueConfirmedAt,
+                lastRescheduledAt = displayBooking.lastRescheduledAt,
+                guestDisplayName = displayBooking.guestDisplayName,
+            )
+        val replyMarkup =
+            TelegramKeyboards.inlineBotMyBookingActions(
+                bookingId = summary.id,
+                venueId = summary.venueId,
+                attendanceScheduleVersion = summary.attendanceScheduleVersionEpochSeconds(),
+                canConfirmAttendance =
+                    summary.status in setOf(BookingStatus.CONFIRMED, BookingStatus.CHANGED) &&
+                        summary.lastGuestConfirmationAt == null,
+            )
+        val text = buildMyBookingText(summary, resolveVenueZoneId(summary.venueId))
+        if (sourceMessageId == null) {
+            enqueueMessage(chatId, text, replyMarkup)
+        } else {
+            enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
+        }
     }
 
     private suspend fun confirmVenueBookingFromBot(
@@ -4967,7 +5104,7 @@ class TelegramBotRouter(
     ) {
         when {
             data?.startsWith("br_ok:") == true ->
-                confirmBookingReminderAttendance(chatId, user, callbackQueryId, data)
+                confirmBookingReminderAttendance(chatId, user, sourceMessageId, callbackQueryId, data)
             data?.startsWith("br_cancel_yes:") == true ->
                 confirmBookingReminderCancel(chatId, user, callbackQueryId, data)
             data?.startsWith("br_cancel:") == true ->
@@ -4989,11 +5126,12 @@ class TelegramBotRouter(
     private suspend fun confirmBookingReminderAttendance(
         chatId: Long,
         user: User,
+        sourceMessageId: Long?,
         callbackQueryId: String?,
         data: String,
     ) {
-        val bookingId =
-            parseBookingReminderBookingId(data, "br_ok:") ?: run {
+        val parsed =
+            parseBookingReminderAttendanceData(data) ?: run {
                 answerBookingCallbackOrMessage(
                     chatId = chatId,
                     callbackQueryId = callbackQueryId,
@@ -5003,9 +5141,24 @@ class TelegramBotRouter(
                 )
                 return
             }
-        val booking =
+        val (bookingId, reminderId) = parsed
+        if (reminderId == null) {
+            answerBookingCallbackOrMessage(
+                chatId = chatId,
+                callbackQueryId = callbackQueryId,
+                text = "Время брони изменилось. Откройте актуальную бронь.",
+                fallbackMessage = "Время брони изменилось. Откройте актуальную бронь.",
+                showAlert = true,
+            )
+            return
+        }
+        val result =
             try {
-                guestBookingRepository.markGuestConfirmed(bookingId = bookingId, userId = user.id)
+                guestBookingRepository.confirmGuestAttendanceFromReminder(
+                    bookingId = bookingId,
+                    userId = user.id,
+                    reminderId = reminderId,
+                )
             } catch (e: DatabaseUnavailableException) {
                 answerBookingCallbackOrMessage(
                     chatId = chatId,
@@ -5016,23 +5169,130 @@ class TelegramBotRouter(
                 )
                 return
             }
-        if (booking == null) {
-            answerBookingCallbackOrMessage(
-                chatId = chatId,
-                callbackQueryId = callbackQueryId,
-                text = "Бронь неактуальна",
-                fallbackMessage = "Бронь не найдена или уже неактуальна.",
-                showAlert = true,
-            )
-            return
+        when (result.status) {
+            GuestAttendanceConfirmationStatus.APPLIED -> {
+                val booking = result.booking ?: return
+                notifyStaffChatAboutGuestReminderConfirmation(
+                    booking = booking,
+                    guestUserId = user.id,
+                    scheduleVersionEpochSeconds = result.scheduleVersionEpochSeconds,
+                )
+                updateBookingReminderAttendanceMessage(
+                    chatId = chatId,
+                    sourceMessageId = sourceMessageId,
+                    booking = booking,
+                    scheduleVersionEpochSeconds = result.scheduleVersionEpochSeconds,
+                )
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Спасибо, отметили, что вы придёте.",
+                    fallbackMessage = "Спасибо, отметили, что вы придёте.",
+                )
+            }
+            GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED -> {
+                result.booking?.let { booking ->
+                    updateBookingReminderAttendanceMessage(
+                        chatId = chatId,
+                        sourceMessageId = sourceMessageId,
+                        booking = booking,
+                        scheduleVersionEpochSeconds = result.scheduleVersionEpochSeconds,
+                    )
+                }
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Вы уже подтвердили визит.",
+                    fallbackMessage = "Вы уже подтвердили визит.",
+                )
+            }
+            GuestAttendanceConfirmationStatus.STALE -> {
+                if (sourceMessageId != null) {
+                    enqueueEditMessage(
+                        chatId = chatId,
+                        messageId = sourceMessageId,
+                        text = "Время брони изменилось. Откройте актуальную бронь.",
+                        replyMarkup = null,
+                    )
+                }
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Время брони изменилось. Откройте актуальную бронь.",
+                    fallbackMessage = "Время брони изменилось. Откройте актуальную бронь.",
+                    showAlert = true,
+                )
+            }
+            GuestAttendanceConfirmationStatus.TERMINAL,
+            GuestAttendanceConfirmationStatus.NOT_ELIGIBLE,
+            GuestAttendanceConfirmationStatus.NOT_FOUND,
+            -> {
+                if (sourceMessageId != null && result.status == GuestAttendanceConfirmationStatus.TERMINAL) {
+                    enqueueEditMessage(
+                        chatId = chatId,
+                        messageId = sourceMessageId,
+                        text = "Бронь уже неактуальна.",
+                        replyMarkup = null,
+                    )
+                }
+                answerBookingCallbackOrMessage(
+                    chatId = chatId,
+                    callbackQueryId = callbackQueryId,
+                    text = "Бронь неактуальна",
+                    fallbackMessage = "Бронь не найдена или уже неактуальна.",
+                    showAlert = true,
+                )
+            }
         }
-        notifyStaffChatAboutGuestReminderConfirmation(booking, user.id)
-        answerBookingCallbackOrMessage(
+    }
+
+    private suspend fun updateBookingReminderAttendanceMessage(
+        chatId: Long,
+        sourceMessageId: Long?,
+        booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
+        scheduleVersionEpochSeconds: Long?,
+    ) {
+        if (sourceMessageId == null) return
+        val displayBooking = withEffectiveBookingDeadline(booking)
+        val zoneId = resolveVenueZoneId(displayBooking.venueId)
+        val venueName = venueRepository.findVenueById(displayBooking.venueId)?.name ?: "Заведение"
+        enqueueEditMessage(
             chatId = chatId,
-            callbackQueryId = callbackQueryId,
-            text = "Спасибо, отметили, что вы придёте.",
-            fallbackMessage = "Спасибо, отметили, что вы придёте.",
+            messageId = sourceMessageId,
+            text = buildBookingReminderAttendanceConfirmedText(displayBooking, venueName, zoneId),
+            replyMarkup = TelegramKeyboards.inlineBookingReminderConfirmedActions(displayBooking.id),
+            dedupeKey =
+                "booking-reminder-confirm-edit:${displayBooking.id}:" +
+                    "${scheduleVersionEpochSeconds ?: "current"}:$sourceMessageId",
         )
+    }
+
+    private fun buildBookingReminderAttendanceConfirmedText(
+        booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
+        venueName: String,
+        zoneId: ZoneId,
+    ): String {
+        val visitText = LocalDateTime.ofInstant(booking.scheduledAt, zoneId).format(bookingReminderDateTimeFormatter)
+        val deadlineText =
+            booking.arrivalDeadlineAt
+                ?.let { LocalDateTime.ofInstant(it, zoneId).format(bookingTimeFormatter) }
+        return buildString {
+            append("Напоминаем о брони")
+            append("\n\nМесто: ").append(venueName)
+            append('\n').append(formatBookingDisplayLabel(booking))
+            append("\nДата и время: ").append(visitText)
+            append("\nГостей: ").append(booking.partySize ?: "не указано")
+            deadlineText?.let { append("\nДержим стол до ").append(it).append('.') }
+            append("\n\n✅ Вы подтвердили, что придёте.")
+        }
+    }
+
+    private fun parseBookingReminderAttendanceData(data: String): Pair<Long, Long?>? {
+        if (!data.startsWith("br_ok:")) return null
+        val parts = data.removePrefix("br_ok:").split(':')
+        val bookingId = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        val reminderId = parts.getOrNull(1)?.toLongOrNull()
+        return bookingId to reminderId
     }
 
     private suspend fun rescheduleBookingFromReminder(
@@ -5825,6 +6085,7 @@ class TelegramBotRouter(
     private suspend fun notifyStaffChatAboutGuestReminderConfirmation(
         booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
         guestUserId: Long,
+        scheduleVersionEpochSeconds: Long?,
     ) {
         val venue = runCatching { venueRepository.findVenueById(booking.venueId) }.getOrNull() ?: return
         val staffChatId = venue.staffChatId ?: return
@@ -5834,8 +6095,20 @@ class TelegramBotRouter(
                 append("✅ Гость подтвердил, что придёт по ").append(formatBookingDisplayLabel(booking)).append('.')
                 append('\n').append("Гость: ").append(guestDisplayName)
             }
-        enqueueGroupMessageWithoutReplyKeyboard(staffChatId, text)
+        runCatching {
+            outboxEnqueuer.enqueueSendMessage(
+                chatId = staffChatId,
+                text = text,
+                replyMarkup = ReplyKeyboardRemove(removeKeyboard = true),
+                dedupeKey = guestAttendanceStaffDedupeKey(booking.id, scheduleVersionEpochSeconds),
+            )
+        }.onFailure { logBestEffort("staff chat guest attendance notification", it) }
     }
+
+    private fun guestAttendanceStaffDedupeKey(
+        bookingId: Long,
+        scheduleVersionEpochSeconds: Long?,
+    ): String = "booking-guest-attendance:$bookingId:${scheduleVersionEpochSeconds ?: "current"}"
 
     private suspend fun notifyStaffChatAboutBooking(event: BookingStaffNotification) {
         staffChatNotifier?.notifyBookingNow(event)
@@ -6036,6 +6309,9 @@ class TelegramBotRouter(
             }
             append("\nГостей: ${booking.partySize ?: "—"}")
             append("\nСтатус: ${humanizeBookingStatus(booking.status)}")
+            if (booking.lastGuestConfirmationAt != null) {
+                append("\nВаш ответ: придёте")
+            }
         }
 
     private suspend fun loadBookingHoldMinutes(venueId: Long): Int =
@@ -24807,6 +25083,15 @@ class TelegramBotRouter(
         return bookingId to venueId
     }
 
+    private fun parseBotMyBookingAttendanceData(data: String): Triple<Long, Long, Long>? {
+        if (!data.startsWith("bot_my_booking_attend:")) return null
+        val parts = data.removePrefix("bot_my_booking_attend:").split(':')
+        val bookingId = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        val venueId = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        val scheduleVersion = parts.getOrNull(2)?.toLongOrNull() ?: return null
+        return Triple(bookingId, venueId, scheduleVersion)
+    }
+
     private fun parseBookingReminderBookingId(
         data: String,
         prefix: String,
@@ -32050,9 +32335,10 @@ class TelegramBotRouter(
         messageId: Long,
         text: String,
         replyMarkup: ReplyMarkup? = null,
+        dedupeKey: String? = null,
     ) {
         runCatching {
-            outboxEnqueuer.enqueueEditMessageText(chatId, messageId, text, replyMarkup)
+            outboxEnqueuer.enqueueEditMessageText(chatId, messageId, text, replyMarkup, dedupeKey)
         }.onFailure { logBestEffort("outbox enqueue edit message", it) }
     }
 

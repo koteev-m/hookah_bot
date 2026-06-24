@@ -414,6 +414,7 @@ export type GuestBookingUpdateRequest = {
 
 export type GuestBookingConfirmRequest = {
   bookingId: number
+  attendanceScheduleVersion?: number | null
 }
 
 export type GuestBookingResponse = {
@@ -424,6 +425,7 @@ export type GuestBookingResponse = {
   partySize?: number | null
   comment?: string | null
   lastGuestConfirmationAt?: string | null
+  attendanceScheduleVersion?: number | null
   displayNumber?: number | null
   displayLabel?: string | null
   venueName?: string | null

@@ -815,8 +815,13 @@ M7c adaptive transactional booking reminders are implemented locally and awaitin
 - Quiet time: calculate in venue-local timezone, default allowed window 10:00-22:00; move an out-of-window target to the nearest earlier allowed time, never later than target or after booking; skip when no earlier valid time remains.
 - Message: venue, public booking number, venue-local date/time, party size and `Держим до HH:mm`.
 - Buttons: `✅ Да, буду`, `🔄 Перенести`, `❌ Отменить`.
-- Important: `Да, буду` records `last_guest_confirmation_at` separately and must not overwrite venue-controlled booking status.
+- Important: `Да, буду` / `Я приду` records `last_guest_confirmation_at` separately and must not overwrite venue-controlled booking status.
+- Attendance idempotency: confirmation is atomic per booking schedule version. Repeated presses return `Вы уже подтвердили визит.`, do not rewrite the booking, and do not send another staff notification.
+- Reminder UX: after a valid `Да, буду`, the same reminder message is edited to show `✅ Вы подтвердили, что придёте.`, the `Да, буду` button is removed, and `Перенести` / `Отменить` remain available.
 - Lifecycle: reschedule cancels/replaces an unsent M7c schedule; if a reminder is already `QUEUED` or `SENT`, no second scheduled reminder is created in MVP.
+- Reschedule/old actions: rescheduling clears the previous guest attendance response and requires a new response for the new time; reminder and Mini App attendance actions carry a schedule-version token so stale actions cannot confirm the new schedule.
+- Cross-channel display: Bot `/my` and Guest Mini App show venue-controlled status as primary and guest response as secondary (`Ваш ответ: придёте`); Venue Mini App keeps the operational timestamp `Гость подтвердил визит: DD.MM.YYYY, HH:mm`.
+- Staff mirror: attendance confirmation enqueues at most one deduplicated staff-chat operational update per booking schedule version.
 - Delivery truth: worker writes `QUEUED` after Telegram outbox accepts the message; outbox status remains the delivery source of truth. `SENT` must not be written merely because the outbox row exists.
 - Legacy reconciliation: V109 adds `policy_version`, marks legacy `PENDING`/`FAILED` rows `CANCELED`, and the worker only claims `policy_version='M7C'` rows.
 - Feature flag: missing/blank/malformed config and explicit `false` keep runtime disabled; explicit `true` is required for a later smoke.

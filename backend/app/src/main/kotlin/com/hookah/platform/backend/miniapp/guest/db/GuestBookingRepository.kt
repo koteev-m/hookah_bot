@@ -70,6 +70,8 @@ data class UserBookingSummaryRecord(
     val displayDate: LocalDate? = null,
     val arrivalDeadlineAt: Instant? = null,
     val lastGuestConfirmationAt: Instant? = null,
+    val venueConfirmedAt: Instant? = null,
+    val lastRescheduledAt: Instant? = null,
     val guestDisplayName: String? = null,
 )
 
@@ -90,6 +92,27 @@ enum class BookingReminderStatus {
     SKIPPED,
     FAILED,
 }
+
+enum class GuestAttendanceConfirmationStatus {
+    APPLIED,
+    ALREADY_CONFIRMED,
+    STALE,
+    NOT_ELIGIBLE,
+    TERMINAL,
+    NOT_FOUND,
+}
+
+data class GuestAttendanceConfirmationResult(
+    val status: GuestAttendanceConfirmationStatus,
+    val booking: BookingRecord? = null,
+    val scheduleVersionEpochSeconds: Long? = booking?.attendanceScheduleVersionEpochSeconds(),
+)
+
+fun BookingRecord.attendanceScheduleVersionEpochSeconds(): Long =
+    (lastRescheduledAt ?: venueConfirmedAt ?: scheduledAt).epochSecond
+
+fun UserBookingSummaryRecord.attendanceScheduleVersionEpochSeconds(): Long =
+    (lastRescheduledAt ?: venueConfirmedAt ?: scheduledAt).epochSecond
 
 data class BookingReminderScheduleResult(
     val pendingCount: Int,
@@ -856,26 +879,168 @@ class GuestBookingRepository(
         userId: Long,
         now: Instant = Instant.now(),
     ): BookingRecord? {
+        val result =
+            confirmGuestAttendance(
+                bookingId = bookingId,
+                userId = userId,
+                now = now,
+                expectedScheduleVersionEpochSeconds = null,
+            )
+        return when (result.status) {
+            GuestAttendanceConfirmationStatus.APPLIED,
+            GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED,
+            -> result.booking
+            GuestAttendanceConfirmationStatus.STALE,
+            GuestAttendanceConfirmationStatus.NOT_ELIGIBLE,
+            GuestAttendanceConfirmationStatus.TERMINAL,
+            GuestAttendanceConfirmationStatus.NOT_FOUND,
+            -> null
+        }
+    }
+
+    suspend fun confirmGuestAttendanceFromReminder(
+        bookingId: Long,
+        userId: Long,
+        reminderId: Long,
+        now: Instant = Instant.now(),
+    ): GuestAttendanceConfirmationResult {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         try {
             return withContext(Dispatchers.IO) {
                 ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE bookings
-                            SET last_guest_confirmation_at = COALESCE(last_guest_confirmation_at, ?),
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ? AND user_id = ? AND status IN ('CONFIRMED', 'CHANGED')
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setTimestamp(1, Timestamp.from(now))
-                            statement.setLong(2, bookingId)
-                            statement.setLong(3, userId)
-                            statement.executeUpdate()
-                        }
-                    if (updated <= 0) return@use null
-                    loadById(connection, bookingId)
+                    val expectedScheduleVersion =
+                        findM7cReminderAnchorEpochSecond(
+                            connection = connection,
+                            reminderId = reminderId,
+                            bookingId = bookingId,
+                            userId = userId,
+                        ) ?: return@use GuestAttendanceConfirmationResult(GuestAttendanceConfirmationStatus.STALE)
+                    confirmGuestAttendanceInConnection(
+                        connection = connection,
+                        bookingId = bookingId,
+                        userId = userId,
+                        now = now,
+                        expectedScheduleVersionEpochSeconds = expectedScheduleVersion,
+                    )
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
+    private fun confirmGuestAttendanceInConnection(
+        connection: java.sql.Connection,
+        bookingId: Long,
+        userId: Long,
+        now: Instant,
+        expectedScheduleVersionEpochSeconds: Long?,
+    ): GuestAttendanceConfirmationResult {
+        val schedulePredicate =
+            if (expectedScheduleVersionEpochSeconds == null) {
+                ""
+            } else {
+                """
+                AND COALESCE(last_rescheduled_at, venue_confirmed_at, scheduled_at) >= ?
+                AND COALESCE(last_rescheduled_at, venue_confirmed_at, scheduled_at) < ?
+                """.trimIndent()
+            }
+        val updated =
+            connection.prepareStatement(
+                """
+                UPDATE bookings
+                SET last_guest_confirmation_at = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND user_id = ?
+                  AND status IN ('CONFIRMED', 'CHANGED')
+                  AND last_guest_confirmation_at IS NULL
+                  $schedulePredicate
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setTimestamp(1, Timestamp.from(now))
+                statement.setLong(2, bookingId)
+                statement.setLong(3, userId)
+                if (expectedScheduleVersionEpochSeconds != null) {
+                    statement.setTimestamp(
+                        4,
+                        Timestamp.from(Instant.ofEpochSecond(expectedScheduleVersionEpochSeconds)),
+                    )
+                    statement.setTimestamp(
+                        5,
+                        Timestamp.from(Instant.ofEpochSecond(expectedScheduleVersionEpochSeconds + 1)),
+                    )
+                }
+                statement.executeUpdate()
+            }
+        if (updated > 0) {
+            val booking = loadById(connection, bookingId)
+            return GuestAttendanceConfirmationResult(
+                status = GuestAttendanceConfirmationStatus.APPLIED,
+                booking = booking,
+            )
+        }
+
+        val current =
+            loadById(connection, bookingId)
+                ?: return GuestAttendanceConfirmationResult(
+                    GuestAttendanceConfirmationStatus.NOT_FOUND,
+                )
+        if (current.userId != userId) {
+            return GuestAttendanceConfirmationResult(GuestAttendanceConfirmationStatus.NOT_FOUND)
+        }
+        val eligibleStatuses = setOf(BookingStatus.CONFIRMED, BookingStatus.CHANGED)
+        if (current.status !in eligibleStatuses) {
+            val terminalStatuses =
+                setOf(
+                    BookingStatus.CANCELED,
+                    BookingStatus.SEATED,
+                    BookingStatus.NO_SHOW,
+                    BookingStatus.EXPIRED,
+                )
+            val status =
+                if (current.status in terminalStatuses) {
+                    GuestAttendanceConfirmationStatus.TERMINAL
+                } else {
+                    GuestAttendanceConfirmationStatus.NOT_ELIGIBLE
+                }
+            return GuestAttendanceConfirmationResult(status = status, booking = current)
+        }
+        if (
+            expectedScheduleVersionEpochSeconds != null &&
+            current.attendanceScheduleVersionEpochSeconds() != expectedScheduleVersionEpochSeconds
+        ) {
+            return GuestAttendanceConfirmationResult(
+                status = GuestAttendanceConfirmationStatus.STALE,
+                booking = current,
+            )
+        }
+        if (current.lastGuestConfirmationAt != null) {
+            return GuestAttendanceConfirmationResult(
+                status = GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED,
+                booking = current,
+            )
+        }
+        return GuestAttendanceConfirmationResult(status = GuestAttendanceConfirmationStatus.STALE, booking = current)
+    }
+
+    suspend fun confirmGuestAttendance(
+        bookingId: Long,
+        userId: Long,
+        now: Instant = Instant.now(),
+        expectedScheduleVersionEpochSeconds: Long? = null,
+    ): GuestAttendanceConfirmationResult {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    confirmGuestAttendanceInConnection(
+                        connection = connection,
+                        bookingId = bookingId,
+                        userId = userId,
+                        now = now,
+                        expectedScheduleVersionEpochSeconds = expectedScheduleVersionEpochSeconds,
+                    )
                 }
             }
         } catch (_: SQLException) {
@@ -987,6 +1152,8 @@ class GuestBookingRepository(
                                b.display_date,
                                b.arrival_deadline_at,
                                b.last_guest_confirmation_at,
+                               b.venue_confirmed_at,
+                               b.last_rescheduled_at,
                                u.guest_display_name
                         FROM bookings b
                         JOIN venues v ON v.id = b.venue_id
@@ -1019,6 +1186,8 @@ class GuestBookingRepository(
                                             arrivalDeadlineAt = rs.getTimestamp("arrival_deadline_at")?.toInstant(),
                                             lastGuestConfirmationAt =
                                                 rs.getTimestamp("last_guest_confirmation_at")?.toInstant(),
+                                            venueConfirmedAt = rs.getTimestamp("venue_confirmed_at")?.toInstant(),
+                                            lastRescheduledAt = rs.getTimestamp("last_rescheduled_at")?.toInstant(),
                                             guestDisplayName = rs.getString("guest_display_name"),
                                         ),
                                     )
@@ -1535,6 +1704,43 @@ class GuestBookingRepository(
                 append(it.epochSecond)
             }
         }
+
+    private fun findM7cReminderAnchorEpochSecond(
+        connection: java.sql.Connection,
+        reminderId: Long,
+        bookingId: Long,
+        userId: Long,
+    ): Long? =
+        connection.prepareStatement(
+            """
+            SELECT br.dedupe_key
+            FROM booking_reminders br
+            JOIN bookings b ON b.id = br.booking_id
+            WHERE br.id = ?
+              AND br.booking_id = ?
+              AND b.user_id = ?
+              AND br.policy_version = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, reminderId)
+            statement.setLong(2, bookingId)
+            statement.setLong(3, userId)
+            statement.setString(4, REMINDER_POLICY_M7C)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    parseReminderAnchorEpochSecond(rs.getString("dedupe_key"))
+                } else {
+                    null
+                }
+            }
+        }
+
+    private fun parseReminderAnchorEpochSecond(dedupeKey: String?): Long? {
+        val parts = dedupeKey?.split(':') ?: return null
+        if (parts.size < 6) return null
+        if (parts[0] != "booking" || parts[2] != "m7c") return null
+        return parts[5].toLongOrNull()
+    }
 
     private fun bookingDisplayDate(
         scheduledAt: Instant,

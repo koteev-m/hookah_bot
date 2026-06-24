@@ -186,6 +186,7 @@ type GuestBookingFixture = VenueBookingFixture & {
   venueName?: string | null
   displayLabel?: string | null
   statusLabel?: string | null
+  attendanceScheduleVersion?: number | null
   arrivalDeadlineTimeDisplay?: string | null
   canChange?: boolean | null
   canCancel?: boolean | null
@@ -395,6 +396,7 @@ function buildGuestBooking(overrides: Partial<GuestBookingFixture> = {}): GuestB
     partySize: 3,
     comment: 'у окна',
     lastGuestConfirmationAt: null,
+    attendanceScheduleVersion: 1894312800,
     canChange: true,
     canCancel: true,
     ...overrides
@@ -659,6 +661,7 @@ async function mockGuestApi(
       scheduledAt?: string
       partySize?: number | null
       comment?: string | null
+      attendanceScheduleVersion?: number | null
     } : null
     const booking = body ? bookings.find((item) => item.bookingId === body.bookingId && item.venueId === venueId) : null
     if (!booking) {
@@ -697,6 +700,14 @@ async function mockGuestApi(
     }
 
     if (path === '/api/guest/booking/confirm' && request.method() === 'POST') {
+      if (body?.attendanceScheduleVersion !== booking.attendanceScheduleVersion) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'stale booking schedule' })
+        })
+        return
+      }
       booking.lastGuestConfirmationAt = '10.01.2030, 21:05'
       await route.fulfill(jsonResponse(booking))
       return
@@ -2163,6 +2174,23 @@ test('guest opens my bookings from profile and manages booking actions', async (
         arrivalDeadlineTimeDisplay: '22:30',
         partySize: 2,
         comment: null
+      }),
+      buildGuestBooking({
+        bookingId: 503,
+        venueId: 3,
+        venueName: 'Облако',
+        displayNumber: 2,
+        displayLabel: 'Бронь №2',
+        status: 'confirmed',
+        statusLabel: 'Подтверждена',
+        scheduledAt: '2030-01-12T17:00:00Z',
+        scheduledAtDisplay: '12.01.2030, 20:00',
+        scheduledLocalDate: '2030-01-12',
+        scheduledLocalTime: '20:00',
+        arrivalDeadlineTimeDisplay: '20:30',
+        partySize: 2,
+        comment: null,
+        lastGuestConfirmationAt: null
       })
     ]
   })
@@ -2180,10 +2208,17 @@ test('guest opens my bookings from profile and manages booking actions', async (
   await expect(mixCard).toContainText('Бронь №1')
   await expect(mixCard).toContainText('10.01.2030, 21:00')
   await expect(mixCard).toContainText('3 гостей')
-  await expect(mixCard).toContainText('Подтверждена')
+  await expect(mixCard).toContainText('Бронь подтверждена заведением')
   await expect(mixCard).toContainText('Комментарий: у окна')
   await expect(mixCard).toContainText('Держим стол до 21:15.')
-  await expect(mixCard).toContainText('Вы подтвердили, что придёте')
+  await expect(mixCard).toContainText('Ваш ответ: придёте')
+  await expect(mixCard.getByRole('button', { name: '✅ Я приду' })).toHaveCount(0)
+
+  const cloudCard = rows.filter({ hasText: 'Облако' })
+  await expect(cloudCard).toContainText('Бронь подтверждена заведением')
+  await cloudCard.getByRole('button', { name: '✅ Я приду' }).click()
+  await expect(cloudCard).toContainText('Ваш ответ: придёте')
+  await expect(cloudCard.getByRole('button', { name: '✅ Я приду' })).toHaveCount(0)
 
   await mixCard.getByRole('button', { name: 'Перенести' }).click()
   await mixCard.locator('input[type="date"]').fill('2030-01-11')

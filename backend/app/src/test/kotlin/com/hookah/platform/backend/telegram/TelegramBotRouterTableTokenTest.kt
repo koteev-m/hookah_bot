@@ -12,6 +12,8 @@ import com.hookah.platform.backend.miniapp.guest.db.BookingReminderScheduleResul
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
+import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationResult
+import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
@@ -11706,8 +11708,9 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `booking reminder confirm callback marks guest confirmation and notifies staff chat`() =
+    fun `booking reminder confirm callback edits message and repeat is idempotent`() =
         runBlocking {
+            val anchor = Instant.parse("2026-04-01T10:00:00Z")
             val booking =
                 BookingRecord(
                     id = 77L,
@@ -11719,39 +11722,86 @@ class TelegramBotRouterTableTokenTest {
                     status = BookingStatus.CONFIRMED,
                     displayNumber = 7,
                     displayDate = LocalDate.parse("2026-04-03"),
+                    arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
+                    venueConfirmedAt = anchor,
                 )
             coEvery {
-                guestBookingRepository.markGuestConfirmed(bookingId = 77L, userId = 555L, now = any())
-            } returns booking
+                guestBookingRepository.confirmGuestAttendanceFromReminder(
+                    bookingId = 77L,
+                    userId = 555L,
+                    reminderId = 900L,
+                    now = any(),
+                )
+            } returns
+                GuestAttendanceConfirmationResult(
+                    status = GuestAttendanceConfirmationStatus.APPLIED,
+                    booking = booking.copy(lastGuestConfirmationAt = anchor.plusSeconds(60)),
+                    scheduleVersionEpochSeconds = anchor.epochSecond,
+                ) andThen
+                GuestAttendanceConfirmationResult(
+                    status = GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED,
+                    booking = booking.copy(lastGuestConfirmationAt = anchor.plusSeconds(60)),
+                    scheduleVersionEpochSeconds = anchor.epochSecond,
+                )
             coEvery {
                 venueRepository.findVenueById(10L)
             } returns VenueShort(id = 10L, name = "Mix", staffChatId = 900L)
 
-            router.process(
-                TelegramUpdate(
-                    updateId = 10_002_42,
-                    callbackQuery =
-                        CallbackQuery(
-                            id = "cb-br-ok",
-                            from = User(id = 555L),
-                            message = Message(messageId = 20_002_42, chat = Chat(id = 555, type = "private")),
-                            data = "br_ok:77",
-                        ),
-                ),
-            )
+            repeat(2) { index ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_002_42L + index,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-br-ok-$index",
+                                from = User(id = 555L),
+                                message = Message(messageId = 20_002_42, chat = Chat(id = 555, type = "private")),
+                                data = "br_ok:77:900",
+                            ),
+                    ),
+                )
+            }
 
-            coVerify {
+            coVerify(exactly = 1) {
                 outboxEnqueuer.enqueueSendMessage(
                     900L,
                     match { it.contains("✅ Гость подтвердил, что придёт по Бронь №7.") },
+                    any(),
+                    any(),
+                    "booking-guest-attendance:77:${anchor.epochSecond}",
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueEditMessageText(
+                    555L,
+                    20_002_42L,
+                    match {
+                        it.contains("✅ Вы подтвердили, что придёте.") &&
+                            it.contains("Место: Mix") &&
+                            it.contains("Бронь №7")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().none { it.text == "✅ Да, буду" } &&
+                            markup.inlineKeyboard.flatten().any { it.callbackData == "br_reschedule:77" } &&
+                            markup.inlineKeyboard.flatten().any { it.callbackData == "br_cancel:77" }
+                    },
                     any(),
                 )
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     555L,
-                    "cb-br-ok",
+                    "cb-br-ok-0",
                     "Спасибо, отметили, что вы придёте.",
+                    false,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    555L,
+                    "cb-br-ok-1",
+                    "Вы уже подтвердили визит.",
                     false,
                 )
             }
@@ -12420,6 +12470,90 @@ class TelegramBotRouterTableTokenTest {
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "❌ Отменить" && button.callbackData == "bot_my_booking_cancel:77:10"
                             }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `my command separates venue status and guest attendance response`() =
+        runBlocking {
+            val anchor = Instant.parse("2026-04-01T10:00:00Z")
+            coEvery {
+                guestBookingRepository.listActiveByUser(userId = 200, limit = 5)
+            } returns
+                listOf(
+                    UserBookingSummaryRecord(
+                        id = 77L,
+                        venueId = 10L,
+                        venueName = "Тестовая кальянная",
+                        scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                        partySize = 3,
+                        status = BookingStatus.CONFIRMED,
+                        displayNumber = 7,
+                        displayDate = LocalDate.parse("2026-04-03"),
+                        venueConfirmedAt = anchor,
+                        guestDisplayName = "Максим",
+                    ),
+                    UserBookingSummaryRecord(
+                        id = 78L,
+                        venueId = 10L,
+                        venueName = "Тестовая кальянная",
+                        scheduledAt = Instant.parse("2026-04-04T18:00:00Z"),
+                        partySize = 2,
+                        status = BookingStatus.CONFIRMED,
+                        displayNumber = 8,
+                        displayDate = LocalDate.parse("2026-04-04"),
+                        lastGuestConfirmationAt = anchor.plusSeconds(60),
+                        venueConfirmedAt = anchor,
+                        guestDisplayName = "Максим",
+                    ),
+                )
+            coEvery {
+                ordersRepository.listActiveOrderSummariesForUser(userId = 200, limit = 5)
+            } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_003_2,
+                    message =
+                        Message(
+                            messageId = 20_003_2,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "/my",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Бронь №7") &&
+                            text.contains("Статус: Подтверждена") &&
+                            !text.contains("Ваш ответ: придёте")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any { button ->
+                                button.text == "✅ Я приду" &&
+                                    button.callbackData == "bot_my_booking_attend:77:10:${anchor.epochSecond}"
+                            }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Бронь №8") &&
+                            text.contains("Статус: Подтверждена") &&
+                            text.contains("Ваш ответ: придёте")
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().none { button -> button.text == "✅ Я приду" }
                     },
                 )
             }

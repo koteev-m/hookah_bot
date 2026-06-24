@@ -223,6 +223,14 @@ export async function guestConfirmBooking(
   if (!Number.isFinite(payload.bookingId) || !Number.isInteger(payload.bookingId) || payload.bookingId <= 0) {
     return invalidPositiveIdResult('bookingId')
   }
+  if (
+    payload.attendanceScheduleVersion != null &&
+    (!Number.isFinite(payload.attendanceScheduleVersion) ||
+      !Number.isInteger(payload.attendanceScheduleVersion) ||
+      payload.attendanceScheduleVersion <= 0)
+  ) {
+    return invalidPositiveIdResult('attendanceScheduleVersion')
+  }
   const search = new URLSearchParams({ venueId: String(venueId) })
   return requestApi<GuestBookingResponse>(
     backendUrl,

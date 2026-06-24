@@ -78,7 +78,9 @@ class BookingReminderWorkerTest {
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().any { it.callbackData == "br_ok:${booking.id}" } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.callbackData?.startsWith("br_ok:${booking.id}:") == true
+                            } &&
                             markup.inlineKeyboard.flatten().any { it.callbackData == "br_cancel:${booking.id}" } &&
                             markup.inlineKeyboard.flatten().any { it.callbackData == "br_reschedule:${booking.id}" } &&
                             markup.inlineKeyboard.flatten().none { it.callbackData == "br_msg:${booking.id}" }

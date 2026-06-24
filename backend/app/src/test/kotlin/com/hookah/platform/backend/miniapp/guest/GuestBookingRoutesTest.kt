@@ -204,6 +204,66 @@ class GuestBookingRoutesTest {
         }
 
     @Test
+    fun `guest attendance route notifies staff chat only once`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:booking-attendance-route-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            val guestToken = issueToken(config, TELEGRAM_USER_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+            val bookingId = createBooking(client, guestToken, venueId, "2030-01-10T18:30:00Z")
+            val confirmResponse =
+                client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, confirmResponse.status)
+            linkStaffChat(jdbcUrl, venueId, STAFF_CHAT_ID)
+
+            repeat(2) {
+                val guestConfirmResponse =
+                    client.post("/api/guest/booking/confirm?venueId=$venueId") {
+                        headers {
+                            append(HttpHeaders.Authorization, "Bearer $guestToken")
+                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        }
+                        setBody("""{"bookingId":$bookingId}""")
+                    }
+                assertEquals(HttpStatusCode.OK, guestConfirmResponse.status)
+                assertEquals(
+                    "confirmed",
+                    json.parseToJsonElement(guestConfirmResponse.bodyAsText())
+                        .jsonObject
+                        .getValue("status")
+                        .jsonPrimitive
+                        .content,
+                )
+            }
+
+            assertEquals(1, outboxCountForChat(jdbcUrl, STAFF_CHAT_ID))
+        }
+
+    @Test
     fun `booking display date uses venue timezone`() =
         testApplication {
             val jdbcUrl =
@@ -547,6 +607,27 @@ class GuestBookingRoutesTest {
         }
     }
 
+    private fun linkStaffChat(
+        jdbcUrl: String,
+        venueId: Long,
+        staffChatId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE venues
+                SET staff_chat_id = ?,
+                    staff_chat_linked_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, staffChatId)
+                statement.setLong(2, venueId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun outboxCountForChat(
         jdbcUrl: String,
         chatId: Long,
@@ -563,5 +644,7 @@ class GuestBookingRoutesTest {
 
     companion object {
         private const val TELEGRAM_USER_ID = 424242L
+        private const val MANAGER_ID = 515151L
+        private const val STAFF_CHAT_ID = -900900L
     }
 }

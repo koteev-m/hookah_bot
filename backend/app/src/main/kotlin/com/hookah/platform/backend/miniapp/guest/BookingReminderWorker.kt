@@ -59,7 +59,11 @@ class BookingReminderWorker(
                 outboxEnqueuer.enqueueSendMessage(
                     chatId = reminder.userId,
                     text = buildReminderText(reminder, zoneId),
-                    replyMarkup = TelegramKeyboards.inlineBookingReminderActions(reminder.bookingId),
+                    replyMarkup =
+                        TelegramKeyboards.inlineBookingReminderActions(
+                            bookingId = reminder.bookingId,
+                            reminderId = reminder.reminderId,
+                        ),
                     dedupeKey = reminderOutboxDedupeKey(reminder.reminderId),
                 )
                 if (repository.markReminderQueued(reminder.reminderId)) {

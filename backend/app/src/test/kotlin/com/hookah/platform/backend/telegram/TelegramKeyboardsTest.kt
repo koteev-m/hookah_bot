@@ -1925,14 +1925,22 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `inline booking reminder actions render guest callbacks`() {
-        val buttons = TelegramKeyboards.inlineBookingReminderActions(77L).inlineKeyboard.flatten()
+        val buttons = TelegramKeyboards.inlineBookingReminderActions(77L, reminderId = 900L).inlineKeyboard.flatten()
 
         assertEquals("✅ Да, буду", buttons[0].text)
-        assertEquals("br_ok:77", buttons[0].callbackData)
+        assertEquals("br_ok:77:900", buttons[0].callbackData)
         assertEquals("🔄 Перенести", buttons[1].text)
         assertEquals("br_reschedule:77", buttons[1].callbackData)
         assertEquals("❌ Отменить", buttons[2].text)
         assertEquals("br_cancel:77", buttons[2].callbackData)
+    }
+
+    @Test
+    fun `confirmed booking reminder actions omit attendance callback`() {
+        val buttons = TelegramKeyboards.inlineBookingReminderConfirmedActions(77L).inlineKeyboard.flatten()
+
+        assertEquals(listOf("🔄 Перенести", "❌ Отменить"), buttons.map { it.text })
+        assertEquals(listOf("br_reschedule:77", "br_cancel:77"), buttons.map { it.callbackData })
     }
 
     @Test

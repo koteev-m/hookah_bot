@@ -167,6 +167,24 @@ function isChangedBooking(booking: GuestBookingResponse): boolean {
   return booking.status.toLowerCase() === 'changed'
 }
 
+function canConfirmAttendance(booking: GuestBookingResponse): boolean {
+  const status = booking.status.toLowerCase()
+  return (status === 'confirmed' || status === 'changed') && !booking.lastGuestConfirmationAt
+}
+
+function guestBookingStatusText(booking: GuestBookingResponse): string {
+  switch (booking.status.toLowerCase()) {
+    case 'confirmed':
+      return '✅ Бронь подтверждена заведением'
+    case 'changed':
+      return '🔄 Бронь перенесена заведением'
+    case 'pending':
+      return '⏳ Ожидает подтверждения заведения'
+    default:
+      return `Статус: ${displayBookingStatus(booking)}`
+  }
+}
+
 function buildDom(root: HTMLDivElement, venueId: number | null): GuestBookingRefs {
   const wrapper = el('div', { className: 'guest-bookings-screen' })
   const card = el('section', { className: 'card' })
@@ -294,18 +312,21 @@ function renderBookings(
     return
   }
   activeBookings.forEach((booking) => {
-    const row = el('article', { className: 'venue-order-row' })
-    const info = el('div')
-    info.appendChild(el('strong', { text: bookingDisplayLabel(booking) }))
+    const row = el('article', { className: 'venue-order-row guest-booking-card' })
+    const info = el('div', { className: 'guest-booking-content' })
+    const cardHeader = el('div', { className: 'guest-booking-header' })
+    cardHeader.appendChild(el('strong', { className: 'guest-booking-title', text: bookingDisplayLabel(booking) }))
     if (booking.venueName) {
-      info.appendChild(el('p', { className: 'venue-order-sub', text: booking.venueName }))
+      cardHeader.appendChild(el('p', { className: 'venue-order-sub', text: booking.venueName }))
     }
+    info.appendChild(cardHeader)
     info.appendChild(
       el('p', {
         className: 'venue-order-meta',
-        text: `${displayBookingTime(booking)} · ${booking.partySize ?? '—'} гостей · ${displayBookingStatus(booking)}`
+        text: `${displayBookingTime(booking)} · ${booking.partySize ?? '—'} гостей`
       })
     )
+    info.appendChild(el('p', { className: 'guest-booking-status', text: guestBookingStatusText(booking) }))
     if (booking.comment) {
       info.appendChild(el('p', { className: 'venue-order-sub', text: `Комментарий: ${booking.comment}` }))
     }
@@ -328,15 +349,15 @@ function renderBookings(
     if (booking.lastGuestConfirmationAt) {
       info.appendChild(
         el('p', {
-          className: 'venue-order-sub',
-          text: 'Вы подтвердили, что придёте'
+          className: 'guest-booking-attendance',
+          text: 'Ваш ответ: придёте'
         })
       )
     }
     append(row, info)
-    const actions = el('div', { className: 'button-row order-actions' })
-    if (isChangedBooking(booking) && !booking.lastGuestConfirmationAt) {
-      const confirmButton = el('button', { className: 'button-small', text: 'Подтвердить, что приду' }) as HTMLButtonElement
+    const actions = el('div', { className: 'button-row order-actions guest-booking-actions' })
+    if (canConfirmAttendance(booking)) {
+      const confirmButton = el('button', { className: 'button-small', text: '✅ Я приду' }) as HTMLButtonElement
       confirmButton.addEventListener('click', () => onConfirm(booking))
       actions.appendChild(confirmButton)
     }
@@ -555,7 +576,10 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
     const result = await guestConfirmBooking(
       backendUrl,
       booking.venueId,
-      { bookingId: booking.bookingId },
+      {
+        bookingId: booking.bookingId,
+        attendanceScheduleVersion: booking.attendanceScheduleVersion ?? null
+      },
       deps,
       controller.signal
     )
@@ -566,7 +590,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
       renderApiError(refs.status, result.error, isDebug)
       return
     }
-    showToast('Новое время подтверждено')
+    showToast('Отметили, что вы придёте')
     await loadBookings()
   }
 

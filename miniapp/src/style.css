@@ -1133,6 +1133,46 @@ input[type="number"] {
   font-size: 0.9rem;
 }
 
+.guest-booking-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.guest-booking-content,
+.guest-booking-header {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.guest-booking-title {
+  font-size: 1rem;
+}
+
+.guest-booking-status {
+  margin: 0;
+  color: #25324d;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.guest-booking-attendance {
+  width: fit-content;
+  margin: 0;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #334155;
+  font-size: 0.85rem;
+}
+
+.guest-booking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+}
+
 .venue-order-extension-badge {
   width: fit-content;
   border: 1px solid #c7d2fe;

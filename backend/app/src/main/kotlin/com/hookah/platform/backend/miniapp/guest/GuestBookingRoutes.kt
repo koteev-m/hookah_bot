@@ -10,14 +10,17 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestBookingResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingUpdateRequest
 import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
+import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord
+import com.hookah.platform.backend.miniapp.guest.db.attendanceScheduleVersionEpochSeconds
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.telegram.BookingStaffNotification
 import com.hookah.platform.backend.telegram.BookingStaffNotificationEvent
+import com.hookah.platform.backend.telegram.ReplyKeyboardRemove
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.UserRepository
@@ -197,11 +200,32 @@ fun Route.guestBookingRoutes(
                 venueId = venueId,
                 userId = userId,
             ) ?: throw NotFoundException()
-            val confirmed =
-                guestBookingRepository.markGuestConfirmed(
+            val result =
+                guestBookingRepository.confirmGuestAttendance(
                     bookingId = bookingId,
                     userId = userId,
-                ) ?: throw NotFoundException()
+                    expectedScheduleVersionEpochSeconds = request.attendanceScheduleVersion,
+                )
+            val confirmed =
+                when (result.status) {
+                    GuestAttendanceConfirmationStatus.APPLIED,
+                    GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED,
+                    -> result.booking ?: throw NotFoundException()
+                    GuestAttendanceConfirmationStatus.STALE,
+                    GuestAttendanceConfirmationStatus.NOT_ELIGIBLE,
+                    GuestAttendanceConfirmationStatus.TERMINAL,
+                    GuestAttendanceConfirmationStatus.NOT_FOUND,
+                    -> throw NotFoundException()
+                }
+            if (result.status == GuestAttendanceConfirmationStatus.APPLIED) {
+                notifyVenueStaffAboutGuestAttendance(
+                    venueRepository = venueRepository,
+                    outboxEnqueuer = outboxEnqueuer,
+                    booking = confirmed,
+                    guestDisplayName = loadGuestDisplayName(userRepository, userId),
+                    scheduleVersionEpochSeconds = result.scheduleVersionEpochSeconds,
+                )
+            }
             call.respond(
                 confirmed.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
@@ -258,6 +282,34 @@ private suspend fun notifyVenueStaffAboutBooking(
         }
     outboxEnqueuer.enqueueSendMessage(chatId = chatId, text = text)
 }
+
+private suspend fun notifyVenueStaffAboutGuestAttendance(
+    venueRepository: VenueRepository,
+    outboxEnqueuer: TelegramOutboxEnqueuer,
+    booking: BookingRecord,
+    guestDisplayName: String?,
+    scheduleVersionEpochSeconds: Long?,
+) {
+    val venue = venueRepository.findVenueById(booking.venueId) ?: return
+    val chatId = venue.staffChatId ?: return
+    val text =
+        buildString {
+            append("✅ Гость подтвердил, что придёт по ").append(formatBookingDisplayLabel(booking.displayNumber))
+                .append('.')
+            append('\n').append("Гость: ").append(guestDisplayName?.takeIf { it.isNotBlank() } ?: "Гость")
+        }
+    outboxEnqueuer.enqueueSendMessage(
+        chatId = chatId,
+        text = text,
+        replyMarkup = ReplyKeyboardRemove(removeKeyboard = true),
+        dedupeKey = guestAttendanceStaffDedupeKey(booking.id, scheduleVersionEpochSeconds),
+    )
+}
+
+private fun guestAttendanceStaffDedupeKey(
+    bookingId: Long,
+    scheduleVersionEpochSeconds: Long?,
+): String = "booking-guest-attendance:$bookingId:${scheduleVersionEpochSeconds ?: "current"}"
 
 private suspend fun loadGuestDisplayName(
     userRepository: UserRepository,
@@ -357,6 +409,7 @@ private fun BookingRecord.toResponse(
         partySize = partySize,
         comment = comment,
         lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingInstant(it, zoneId) },
+        attendanceScheduleVersion = attendanceScheduleVersionEpochSeconds(),
         displayNumber = displayNumber,
         displayLabel = formatBookingDisplayLabel(displayNumber),
         venueName = venueName,
@@ -380,6 +433,7 @@ private fun UserBookingSummaryRecord.toResponse(zoneId: ZoneId): GuestBookingRes
         partySize = partySize,
         comment = comment,
         lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingInstant(it, zoneId) },
+        attendanceScheduleVersion = attendanceScheduleVersionEpochSeconds(),
         displayNumber = displayNumber,
         displayLabel = formatBookingDisplayLabel(displayNumber),
         venueName = venueName,

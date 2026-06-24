@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
@@ -678,10 +681,83 @@ class GuestBookingRepositoryTest {
             assertEquals(now.plusSeconds(30), confirmed?.lastGuestConfirmationAt)
             val repeated = repository.markGuestConfirmed(booking.id, fixture.userId, now.plusSeconds(60))
             assertEquals(now.plusSeconds(30), repeated?.lastGuestConfirmationAt)
+            val explicitRepeated =
+                repository.confirmGuestAttendance(booking.id, fixture.userId, now.plusSeconds(90))
+            assertEquals(GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED, explicitRepeated.status)
+            assertEquals(BookingStatus.CONFIRMED, explicitRepeated.booking?.status)
             repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CANCELED)
 
             assertTrue(listReminders(jdbcUrl, booking.id).all { it.status == BookingReminderStatus.CANCELED })
             assertNull(repository.markGuestConfirmed(booking.id, fixture.userId, now.plusSeconds(60)))
+            val terminal = repository.confirmGuestAttendance(booking.id, fixture.userId, now.plusSeconds(120))
+            assertEquals(GuestAttendanceConfirmationStatus.TERMINAL, terminal.status)
+        }
+
+    @Test
+    fun `concurrent guest attendance confirmations produce one applied result`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-attendance-concurrent")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val serviceDate = LocalDate.of(2030, 5, 10)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+
+            val results =
+                coroutineScope {
+                    listOf(
+                        async { repository.confirmGuestAttendance(booking.id, fixture.userId, anchor.plusSeconds(30)) },
+                        async { repository.confirmGuestAttendance(booking.id, fixture.userId, anchor.plusSeconds(60)) },
+                    ).awaitAll()
+                }
+
+            assertEquals(1, results.count { it.status == GuestAttendanceConfirmationStatus.APPLIED })
+            assertEquals(1, results.count { it.status == GuestAttendanceConfirmationStatus.ALREADY_CONFIRMED })
+            val stored = repository.findActiveByGuest(booking.id, fixture.venueId, fixture.userId)
+            assertEquals(BookingStatus.CONFIRMED, stored?.status)
+            assertTrue(stored?.lastGuestConfirmationAt in setOf(anchor.plusSeconds(30), anchor.plusSeconds(60)))
+        }
+
+    @Test
+    fun `stale reminder confirmation cannot confirm a rescheduled booking`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("booking-attendance-stale-reminder")
+            val fixture = seedVenueAndUser(jdbcUrl)
+            val repository = GuestBookingRepository(dataSource(jdbcUrl))
+            val zoneId = ZoneId.of("Europe/Moscow")
+            val serviceDate = LocalDate.of(2030, 5, 10)
+            val scheduledAt = LocalDateTime.of(serviceDate, LocalTime.of(20, 0)).atZone(zoneId).toInstant()
+            val anchor = LocalDateTime.of(2030, 5, 5, 12, 0).atZone(zoneId).toInstant()
+            val booking = repository.create(fixture.venueId, fixture.userId, scheduledAt, 2, null, zoneId, serviceDate)
+            repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)
+            setBookingAnchors(jdbcUrl, booking.id, venueConfirmedAt = anchor)
+            repository.scheduleRemindersForBooking(booking.id, now = anchor, venueZoneId = zoneId)
+            val oldReminder = listReminders(jdbcUrl, booking.id).single { it.status == BookingReminderStatus.PENDING }
+
+            repository.updateByVenue(
+                bookingId = booking.id,
+                venueId = fixture.venueId,
+                nextStatus = BookingStatus.CHANGED,
+                scheduledAt = scheduledAt.plus(Duration.ofHours(1)),
+                venueZoneId = zoneId,
+                serviceDate = serviceDate,
+            )
+            val stale =
+                repository.confirmGuestAttendanceFromReminder(
+                    bookingId = booking.id,
+                    userId = fixture.userId,
+                    reminderId = oldReminder.id,
+                    now = anchor.plusSeconds(120),
+                )
+
+            assertEquals(GuestAttendanceConfirmationStatus.STALE, stale.status)
+            val current = repository.findActiveByGuest(booking.id, fixture.venueId, fixture.userId)
+            assertEquals(BookingStatus.CHANGED, current?.status)
+            assertNull(current?.lastGuestConfirmationAt)
         }
 
     private fun migratedJdbcUrl(prefix: String): String {
@@ -882,7 +958,7 @@ class GuestBookingRepositoryTest {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                SELECT kind, scheduled_for, status, dedupe_key
+                SELECT id, kind, scheduled_for, status, dedupe_key
                 FROM booking_reminders
                 WHERE booking_id = ?
                 ORDER BY id
@@ -894,6 +970,7 @@ class GuestBookingRepositoryTest {
                         while (rs.next()) {
                             add(
                                 ReminderRow(
+                                    id = rs.getLong("id"),
                                     kind = BookingReminderKind.valueOf(rs.getString("kind")),
                                     scheduledFor = rs.getTimestamp("scheduled_for").toInstant(),
                                     status = BookingReminderStatus.valueOf(rs.getString("status")),
@@ -907,6 +984,7 @@ class GuestBookingRepositoryTest {
         }
 
     private data class ReminderRow(
+        val id: Long,
         val kind: BookingReminderKind,
         val scheduledFor: Instant,
         val status: BookingReminderStatus,

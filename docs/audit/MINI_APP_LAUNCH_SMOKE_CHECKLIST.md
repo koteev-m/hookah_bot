@@ -513,7 +513,11 @@ M7c adaptive booking reminders are implemented locally but require approval-gate
 - preferred target 24h before visit if the confirmation/reschedule anchor is at least 6h before that target; fallback 3h before visit if still future and at least 2h after the anchor; otherwise no scheduled reminder;
 - venue-local quiet window 10:00-22:00, only moving reminders earlier and never after the intended target or booking time;
 - buttons `Да, буду`, `Перенести`, `Отменить`;
-- `Да, буду` writes `last_guest_confirmation_at` and must not overwrite venue-controlled booking status;
+- `Да, буду` / `Я приду` writes `last_guest_confirmation_at` atomically per booking schedule version and must not overwrite venue-controlled booking status;
+- repeated confirmation returns `Вы уже подтвердили визит.`, produces no database rewrite and no duplicate staff-chat notification;
+- after a valid `Да, буду`, Telegram edits the same reminder message, shows `✅ Вы подтвердили, что придёте.`, removes `Да, буду`, and keeps `Перенести` / `Отменить`;
+- reschedule clears the previous guest attendance response and stale reminder/Mini App attendance actions must not confirm the new schedule;
+- Guest Mini App shows venue status as primary plus compact `Ваш ответ: придёте`; Venue Mini App keeps the staff-oriented `Гость подтвердил визит: DD.MM.YYYY, HH:mm`;
 - `Перенести` and `Отменить` reuse existing guest booking lifecycle flows;
 - legacy rows are preserved but isolated by `policy_version`; V109 marks legacy `PENDING`/`FAILED` rows `CANCELED`, and the worker only claims M7C rows;
 - worker writes reminder status `QUEUED` after Telegram outbox enqueue; outbox delivery status remains the delivery source of truth.
@@ -553,11 +557,14 @@ Manual M7c staging acceptance plan, do not execute without approval:
 6. Reconcile or cancel only approved old test rows, preserving history.
 7. Explicitly enable the worker only for the smoke.
 8. Verify exactly one Telegram reminder appears with the final copy and buttons.
-9. Press `Да, буду` and verify booking status remains `CONFIRMED` or `CHANGED`.
-10. Verify Guest Mini App shows `Вы подтвердили, что придёте`.
-11. Verify Venue Mini App shows `Гость подтвердил визит`.
-12. Verify reminder `Перенести` and `Отменить` reuse existing guest flows and cancel/avoid duplicate unsent reminders.
-13. Disable the worker immediately if any acceptance check fails.
+9. Press `Да, буду` and verify the reminder message changes visibly, `Да, буду` disappears, `Перенести` / `Отменить` remain, and booking status remains `CONFIRMED` or `CHANGED`.
+10. Press the same callback again and verify `Вы уже подтвердили визит.` with no duplicate staff-chat notification.
+11. Verify Bot `/my` shows venue status plus secondary `Ваш ответ: придёте`.
+12. Verify Guest Mini App shows compact `Ваш ответ: придёте` and no duplicate primary confirmation paragraph.
+13. Verify Venue Mini App shows `Гость подтвердил визит: DD.MM.YYYY, HH:mm`.
+14. Verify reschedule clears the guest response, requires a new response for the new time and makes old reminder actions stale.
+15. Verify reminder `Перенести` and `Отменить` reuse existing guest flows and cancel/avoid duplicate unsent reminders.
+16. Disable the worker immediately if any acceptance check fails.
 
 Manual M4B/M4C inbox regression smoke after deployment:
 
