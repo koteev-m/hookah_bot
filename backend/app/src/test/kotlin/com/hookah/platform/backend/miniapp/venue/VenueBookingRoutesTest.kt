@@ -19,6 +19,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
+import java.sql.Timestamp
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -628,6 +630,25 @@ class VenueBookingRoutesTest {
                     .jsonObject
             assertEquals("confirmed", confirmedItem.getValue("status").jsonPrimitive.content)
 
+            setGuestConfirmationAt(jdbcUrl, bookingId, "2030-01-10T18:05:00Z")
+            val guestConfirmedListResponse =
+                client.get("/api/venue/bookings?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, guestConfirmedListResponse.status)
+            val guestConfirmedItem =
+                json.parseToJsonElement(guestConfirmedListResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            assertEquals("confirmed", guestConfirmedItem.getValue("status").jsonPrimitive.content)
+            assertEquals(
+                "10.01.2030, 21:05",
+                guestConfirmedItem.getValue("lastGuestConfirmationAt").jsonPrimitive.content,
+            )
+
             val changeResponse =
                 client.post("/api/venue/bookings/$bookingId/change?venueId=$venueId") {
                     headers {
@@ -1132,6 +1153,26 @@ class VenueBookingRoutesTest {
                 statement.setLong(1, venueId)
                 statement.setLong(2, userId)
                 statement.setString(3, role)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun setGuestConfirmationAt(
+        jdbcUrl: String,
+        bookingId: Long,
+        confirmedAt: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE bookings
+                SET last_guest_confirmation_at = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setTimestamp(1, Timestamp.from(Instant.parse(confirmedAt)))
+                statement.setLong(2, bookingId)
                 statement.executeUpdate()
             }
         }

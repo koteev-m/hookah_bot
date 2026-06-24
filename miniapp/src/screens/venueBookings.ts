@@ -314,11 +314,12 @@ function renderBookings(
     if (booking.status.toLowerCase() === 'changed') {
       row.appendChild(el('p', { className: 'venue-order-sub', text: `Новое время: ${formatBookingTime(booking)}` }))
     }
-    if (booking.lastGuestConfirmationAt) {
+    const guestConfirmationAt = booking.lastGuestConfirmationAt?.trim()
+    if (guestConfirmationAt) {
       row.appendChild(
         el('p', {
           className: 'venue-order-sub',
-          text: `Гость подтвердил визит: ${formatDateTime(booking.lastGuestConfirmationAt)}`
+          text: `Гость подтвердил визит: ${guestConfirmationAt}`
         })
       )
     }

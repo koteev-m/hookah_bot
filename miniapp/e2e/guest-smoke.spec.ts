@@ -697,7 +697,7 @@ async function mockGuestApi(
     }
 
     if (path === '/api/guest/booking/confirm' && request.method() === 'POST') {
-      booking.lastGuestConfirmationAt = '2030-01-10T18:05:00Z'
+      booking.lastGuestConfirmationAt = '10.01.2030, 21:05'
       await route.fulfill(jsonResponse(booking))
       return
     }
@@ -2146,7 +2146,7 @@ test('guest opens my bookings from profile and manages booking actions', async (
         arrivalDeadlineTimeDisplay: '21:15',
         partySize: 3,
         comment: 'у окна',
-        lastGuestConfirmationAt: '2030-01-10T18:05:00Z'
+        lastGuestConfirmationAt: '10.01.2030, 21:05'
       }),
       buildGuestBooking({
         bookingId: 502,
@@ -2726,11 +2726,51 @@ test('venue manager configures booking hold settings', async ({ page }) => {
   expect(api.getBookingSettings()).toMatchObject({ holdMinutes: 45 })
 })
 
+test('venue booking queue shows guest attendance confirmation only when present', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueBookingsApi(page, {
+    role: 'MANAGER',
+    bookings: [
+      buildVenueBooking({
+        bookingId: 701,
+        displayNumber: 12,
+        status: 'confirmed',
+        lastGuestConfirmationAt: '10.01.2030, 21:05'
+      }),
+      buildVenueBooking({
+        bookingId: 702,
+        displayNumber: 13,
+        status: 'changed',
+        scheduledAt: '2030-01-11T17:15:00Z',
+        scheduledAtDisplay: '11.01.2030, 20:15',
+        scheduledLocalDate: '2030-01-11',
+        scheduledLocalTime: '20:15',
+        serviceDate: '2030-01-11',
+        arrivalDeadlineAt: '2030-01-11T17:45:00Z',
+        arrivalDeadlineAtDisplay: '11.01.2030, 20:45',
+        comment: 'без отметки',
+        lastGuestConfirmationAt: null
+      })
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+
+  const confirmedCard = page.locator('.venue-booking-card').filter({ hasText: 'Бронь №12' })
+  await expect(confirmedCard).toContainText('подтверждена')
+  await expect(confirmedCard).toContainText('Гость подтвердил визит: 10.01.2030, 21:05')
+
+  const changedCard = page.locator('.venue-booking-card').filter({ hasText: 'Бронь №13' })
+  await expect(changedCard).toContainText('перенесена')
+  await expect(changedCard).not.toContainText('Гость подтвердил визит')
+})
+
 test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueBookingsApi(page, {
     role: 'MANAGER',
-    bookings: [buildVenueBooking({ lastGuestConfirmationAt: '2030-01-10T18:05:00Z' })]
+    bookings: [buildVenueBooking({ lastGuestConfirmationAt: '10.01.2030, 21:05' })]
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)

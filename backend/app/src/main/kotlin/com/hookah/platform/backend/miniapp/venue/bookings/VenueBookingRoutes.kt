@@ -416,7 +416,7 @@ private fun BookingRecord.toVenueBookingDto(
         partySize = partySize,
         comment = comment,
         guestDisplayName = guestDisplayName,
-        lastGuestConfirmationAt = lastGuestConfirmationAt?.toString(),
+        lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingNotificationTime(it, zoneId) },
     )
 }
 
