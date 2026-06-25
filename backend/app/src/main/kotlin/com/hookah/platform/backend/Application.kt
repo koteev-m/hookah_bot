@@ -71,6 +71,8 @@ import com.hookah.platform.backend.miniapp.shift.venueShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
+import com.hookah.platform.backend.miniapp.venue.location.createVenueLocationProvider
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
@@ -242,6 +244,7 @@ internal data class ModuleOverrides(
     val telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
     val staffChatNotifier: StaffChatNotifier? = null,
     val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
+    val venueLocationProvider: VenueLocationProvider? = null,
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean {
@@ -321,6 +324,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 json(json)
             }
         }
+    val venueLocationProvider =
+        overrides.venueLocationProvider ?: createVenueLocationProvider(appConfig, httpClient, json)
 
     val dataSource = DatabaseFactory.init(dbConfig)
     val venueRepository = VenueRepository(dataSource)
@@ -1142,6 +1147,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository,
+                    venueLocationProvider = venueLocationProvider,
                     staffChatNotifier = guestStaffChatNotifier,
                     telegramBotUsername = telegramConfig.botUsername,
                 )

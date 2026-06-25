@@ -8,6 +8,12 @@ export type CatalogVenueDto = {
   name: string
   city?: string | null
   address?: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  displayAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  routeUrl?: string | null
   guestContact?: string | null
   cardDescription?: string | null
 }
@@ -21,6 +27,12 @@ export type VenueDto = {
   name: string
   city?: string | null
   address?: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  displayAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  routeUrl?: string | null
   guestContact?: string | null
   cardDescription?: string | null
   status: string

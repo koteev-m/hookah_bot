@@ -5,6 +5,13 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationResolveProviderRequest
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationResolveProviderResult
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationResolvedItem
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestProviderRequest
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestProviderResult
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestionItem
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
@@ -35,6 +42,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class VenueRbacRoutesTest {
@@ -206,6 +214,10 @@ class VenueRbacRoutesTest {
                 VenuePublicCardSettingsUpdateRequest(
                     city = " Москва ",
                     address = " Новый Арбат, 24 ",
+                    countryCode = " ru ",
+                    formattedAddress = " Россия, Москва, Новый Арбат, 24 ",
+                    latitude = 55.7522,
+                    longitude = 37.6156,
                     guestContact = " +7 999 000-00-00 ",
                     cardDescription = " Авторские чаши и спокойная посадка. ",
                 )
@@ -223,6 +235,12 @@ class VenueRbacRoutesTest {
             assertEquals("Venue", updated.name)
             assertEquals("Москва", updated.city)
             assertEquals("Новый Арбат, 24", updated.address)
+            assertEquals("RU", updated.countryCode)
+            assertEquals("Россия, Москва, Новый Арбат, 24", updated.formattedAddress)
+            assertEquals("Москва, Новый Арбат, 24", updated.displayAddress)
+            assertEquals(55.7522, updated.latitude)
+            assertEquals(37.6156, updated.longitude)
+            assertEquals("https://yandex.ru/maps/?rtext=~55.7522,37.6156&rtt=auto", updated.routeUrl)
             assertEquals("+7 999 000-00-00", updated.guestContact)
             assertEquals("Авторские чаши и спокойная посадка.", updated.cardDescription)
 
@@ -235,8 +253,96 @@ class VenueRbacRoutesTest {
             val guestPayload = json.decodeFromString(VenueResponse.serializer(), guestResponse.bodyAsText())
             assertEquals("Москва", guestPayload.venue.city)
             assertEquals("Новый Арбат, 24", guestPayload.venue.address)
+            assertEquals("RU", guestPayload.venue.countryCode)
+            assertEquals("Москва, Новый Арбат, 24", guestPayload.venue.displayAddress)
+            assertEquals("https://yandex.ru/maps/?rtext=~55.7522,37.6156&rtt=auto", guestPayload.venue.routeUrl)
             assertEquals("+7 999 000-00-00", guestPayload.venue.guestContact)
             assertEquals("Авторские чаши и спокойная посадка.", guestPayload.venue.cardDescription)
+        }
+
+    @Test
+    fun `manager can use venue-scoped location suggestions and resolve`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-location-suggestions")
+            val config = buildConfig(jdbcUrl)
+            val provider = FakeVenueLocationProvider()
+
+            environment { this.config = config }
+            application { moduleWithOverrides(ModuleOverrides(venueLocationProvider = provider)) }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val token = issueToken(config)
+
+            val suggestionsUrl =
+                "/api/venue/$venueId/location/suggestions" +
+                    "?kind=address" +
+                    "&query=%D0%90%D1%80%D0%B1%D0%B0%D1%82" +
+                    "&countryCode=ru" +
+                    "&city=%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0" +
+                    "&sessionToken=test-session"
+            val suggestionsResponse =
+                client.get(suggestionsUrl) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, suggestionsResponse.status)
+            val suggestions =
+                json.decodeFromString(VenueLocationSuggestionsResponse.serializer(), suggestionsResponse.bodyAsText())
+            assertFalse(suggestions.unavailable)
+            assertEquals("Новый Арбат, 24", suggestions.items.single().address)
+            assertEquals("RU", provider.suggestRequests.single().countryCode)
+            assertEquals("test-session", provider.suggestRequests.single().sessionToken)
+
+            val resolveResponse =
+                client.post("/api/venue/$venueId/location/resolve") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            VenueLocationResolveRequest.serializer(),
+                            VenueLocationResolveRequest(
+                                providerUri = "ymapsbm1://geo?data=test",
+                                query = "Новый Арбат, 24",
+                                countryCode = "RU",
+                                city = "Москва",
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, resolveResponse.status)
+            val resolved =
+                json.decodeFromString(VenueLocationResolveResponse.serializer(), resolveResponse.bodyAsText())
+            assertEquals(55.7522, resolved.location?.latitude)
+            assertEquals(37.6156, resolved.location?.longitude)
+            assertEquals("ymapsbm1://geo?data=test", provider.resolveRequests.single().providerUri)
+        }
+
+    @Test
+    fun `staff cannot use location provider routes`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-location-staff-denied")
+            val config = buildConfig(jdbcUrl)
+            val provider = FakeVenueLocationProvider()
+
+            environment { this.config = config }
+            application { moduleWithOverrides(ModuleOverrides(venueLocationProvider = provider)) }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/venue/$venueId/location/suggestions?kind=city&query=%D0%9C%D0%BE&countryCode=RU") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            assertEquals(emptyList(), provider.suggestRequests)
         }
 
     @Test
@@ -274,6 +380,53 @@ class VenueRbacRoutesTest {
             assertEquals(null, payload.address)
             assertEquals(null, payload.guestContact)
             assertEquals(null, payload.cardDescription)
+        }
+
+    @Test
+    fun `invalid public card coordinates preserve existing values`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-invalid-coordinates")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val token = issueToken(config)
+            val invalid =
+                VenuePublicCardSettingsUpdateRequest(
+                    city = "Москва",
+                    address = "Новый Арбат, 24",
+                    countryCode = "RU",
+                    formattedAddress = "Москва, Новый Арбат, 24",
+                    latitude = 95.0,
+                    longitude = 37.6156,
+                )
+
+            val invalidResponse =
+                client.put("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(VenuePublicCardSettingsUpdateRequest.serializer(), invalid))
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, invalidResponse.status)
+            assertApiErrorEnvelope(invalidResponse, ApiErrorCodes.INVALID_INPUT)
+
+            val readResponse =
+                client.get("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, readResponse.status)
+            val payload =
+                json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), readResponse.bodyAsText())
+            assertEquals("City", payload.city)
+            assertEquals("Address", payload.address)
+            assertNull(payload.latitude)
+            assertNull(payload.longitude)
         }
 
     @Test
@@ -1173,6 +1326,49 @@ class VenueRbacRoutesTest {
         val status: String,
         val reasonLabel: String,
     )
+
+    private class FakeVenueLocationProvider : VenueLocationProvider {
+        val suggestRequests = mutableListOf<VenueLocationSuggestProviderRequest>()
+        val resolveRequests = mutableListOf<VenueLocationResolveProviderRequest>()
+
+        override suspend fun suggest(
+            request: VenueLocationSuggestProviderRequest,
+        ): VenueLocationSuggestProviderResult {
+            suggestRequests += request
+            return VenueLocationSuggestProviderResult(
+                items =
+                    listOf(
+                        VenueLocationSuggestionItem(
+                            id = "ymapsbm1://geo?data=test",
+                            title = "Новый Арбат, 24",
+                            subtitle = "Москва",
+                            countryCode = "RU",
+                            city = "Москва",
+                            address = "Новый Арбат, 24",
+                            formattedAddress = "Москва, Новый Арбат, 24",
+                            providerUri = "ymapsbm1://geo?data=test",
+                        ),
+                    ),
+            )
+        }
+
+        override suspend fun resolve(
+            request: VenueLocationResolveProviderRequest,
+        ): VenueLocationResolveProviderResult {
+            resolveRequests += request
+            return VenueLocationResolveProviderResult(
+                location =
+                    VenueLocationResolvedItem(
+                        countryCode = "RU",
+                        city = "Москва",
+                        address = "Новый Арбат, 24",
+                        formattedAddress = "Москва, Новый Арбат, 24",
+                        latitude = 55.7522,
+                        longitude = 37.6156,
+                    ),
+            )
+        }
+    }
 
     private companion object {
         const val TELEGRAM_USER_ID: Long = 909L

@@ -13,6 +13,10 @@ import type {
   VenueCreateCategoryRequest,
   VenueCreateItemRequest,
   VenueCreateOptionRequest,
+  VenueLocationResolveRequest,
+  VenueLocationResolveResponse,
+  VenueLocationSuggestionKind,
+  VenueLocationSuggestionsResponse,
   VenueTableBatchCreateRequest,
   VenueTableBatchCreateResponse,
   VenueTableRotateTokensRequest,
@@ -283,6 +287,57 @@ export async function venueUpdatePublicCardSettings(
     `/api/venue/${params.venueId}/public-card`,
     {
       method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueGetLocationSuggestions(
+  backendUrl: string,
+  params: {
+    venueId: number
+    kind: VenueLocationSuggestionKind
+    query: string
+    countryCode: string
+    city?: string | null
+    sessionToken?: string | null
+  },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({
+    kind: params.kind,
+    query: params.query,
+    countryCode: params.countryCode
+  })
+  if (params.city) {
+    search.set('city', params.city)
+  }
+  if (params.sessionToken) {
+    search.set('sessionToken', params.sessionToken)
+  }
+  return requestApi<VenueLocationSuggestionsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/location/suggestions?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueResolveLocation(
+  backendUrl: string,
+  params: { venueId: number; body: VenueLocationResolveRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueLocationResolveResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/location/resolve`,
+    {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params.body),
       signal

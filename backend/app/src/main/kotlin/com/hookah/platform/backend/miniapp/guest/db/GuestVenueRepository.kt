@@ -19,7 +19,8 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT v.id, v.name, v.city, v.address, v.guest_contact, v.card_description, v.status
+                        SELECT v.id, v.name, v.city, v.address, v.country_code, v.formatted_address,
+                               v.latitude, v.longitude, v.guest_contact, v.card_description, v.status
                         FROM venues v
                         LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
                         WHERE v.status = ?
@@ -53,7 +54,8 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT id, name, city, address, guest_contact, card_description, status
+                        SELECT id, name, city, address, country_code, formatted_address,
+                               latitude, longitude, guest_contact, card_description, status
                         FROM venues
                         WHERE id = ?
                         """.trimIndent(),
@@ -81,6 +83,10 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
             name = rs.getString("name"),
             city = rs.getString("city"),
             address = rs.getString("address"),
+            countryCode = rs.getString("country_code"),
+            formattedAddress = rs.getString("formatted_address"),
+            latitude = rs.getDouble("latitude").takeIf { !rs.wasNull() },
+            longitude = rs.getDouble("longitude").takeIf { !rs.wasNull() },
             guestContact = rs.getString("guest_contact"),
             cardDescription = rs.getString("card_description"),
             status = status,
@@ -93,6 +99,10 @@ data class VenueShort(
     val name: String,
     val city: String?,
     val address: String?,
+    val countryCode: String? = null,
+    val formattedAddress: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
     val status: VenueStatus,
     val guestContact: String? = null,
     val cardDescription: String? = null,

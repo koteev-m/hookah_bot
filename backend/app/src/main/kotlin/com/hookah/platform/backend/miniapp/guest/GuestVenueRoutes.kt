@@ -3,6 +3,9 @@ package com.hookah.platform.backend.miniapp.guest
 import com.hookah.platform.backend.api.ConfigException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.location.VenueLocationDisplay
+import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
+import com.hookah.platform.backend.location.formatVenueDisplayAddress
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.CatalogVenueDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuCategoryDto
@@ -120,6 +123,12 @@ private fun VenueShort.toCatalogDto(): CatalogVenueDto =
         name = name,
         city = city,
         address = address,
+        countryCode = countryCode,
+        formattedAddress = formattedAddress,
+        displayAddress = displayAddress(),
+        latitude = latitude,
+        longitude = longitude,
+        routeUrl = routeUrl(),
         guestContact = guestContact,
         cardDescription = cardDescription,
     )
@@ -130,9 +139,30 @@ private fun VenueShort.toVenueDto(): VenueDto =
         name = name,
         city = city,
         address = address,
+        countryCode = countryCode,
+        formattedAddress = formattedAddress,
+        displayAddress = displayAddress(),
+        latitude = latitude,
+        longitude = longitude,
+        routeUrl = routeUrl(),
         guestContact = guestContact,
         cardDescription = cardDescription,
         status = status.dbValue,
+    )
+
+private fun VenueShort.displayAddress(): String? = formatVenueDisplayAddress(locationDisplay())
+
+private fun VenueShort.routeUrl(): String = buildYandexVenueRouteUrl(locationDisplay())
+
+private fun VenueShort.locationDisplay(): VenueLocationDisplay =
+    VenueLocationDisplay(
+        name = name,
+        countryCode = countryCode,
+        city = city,
+        address = address,
+        formattedAddress = formattedAddress,
+        latitude = latitude,
+        longitude = longitude,
     )
 
 private suspend fun buildGuestInfoSections(

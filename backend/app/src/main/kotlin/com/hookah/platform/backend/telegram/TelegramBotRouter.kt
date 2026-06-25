@@ -7,6 +7,9 @@ import com.hookah.platform.backend.ai.AiAssistantService
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.location.VenueLocationDisplay
+import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
+import com.hookah.platform.backend.location.formatVenueDisplayAddress
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
@@ -181,8 +184,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.time.DateTimeException
 import java.time.DayOfWeek
@@ -25937,18 +25938,13 @@ class TelegramBotRouter(
     private fun VenueBookingHours.isOpenAcrossMidnight(): Boolean = !isClosed && !closesAt.isAfter(opensAt)
 
     private fun formatVenueAddress(venue: CatalogVenueShort): String {
-        val address = venue.address?.trim().orEmpty().ifBlank { null }
-        val city = venue.city?.trim().orEmpty().ifBlank { null }
-        return when {
-            address != null && city != null && !address.contains(city, ignoreCase = true) -> "$address, $city"
-            address != null -> address
-            city != null -> city
-            else -> "Адрес уточняется"
-        }
+        return formatVenueDisplayAddress(venue.locationDisplay()) ?: "Адрес уточняется"
     }
 
     private fun formatVenueShortAddress(venue: CatalogVenueShort): String {
-        val address = venue.address?.trim().orEmpty().ifBlank { null }
+        val address =
+            formatVenueDisplayAddress(venue.locationDisplay())
+                ?: venue.address?.trim().orEmpty().ifBlank { null }
         val city = venue.city?.trim().orEmpty().ifBlank { null }
         val shortAddress =
             address
@@ -25984,22 +25980,19 @@ class TelegramBotRouter(
     }
 
     private fun buildVenueRouteUrl(venue: CatalogVenueShort): String {
-        val coordinateRegex = Regex("""(-?\d{1,2}(?:\.\d+)?)[,\s]+(-?\d{1,3}(?:\.\d+)?)""")
-        val coordinates =
-            venue.address
-                ?.let { address -> coordinateRegex.find(address) }
-                ?.let { match ->
-                    val lat = match.groupValues.getOrNull(1)?.toDoubleOrNull()
-                    val lon = match.groupValues.getOrNull(2)?.toDoubleOrNull()
-                    if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) lat to lon else null
-                }
-        if (coordinates != null) {
-            val (lat, lon) = coordinates
-            return "https://yandex.ru/maps/?rtext=~$lat,$lon&rtt=auto"
-        }
-        val query = URLEncoder.encode("${venue.name}, ${formatVenueAddress(venue)}", StandardCharsets.UTF_8)
-        return "https://yandex.ru/maps/?text=$query"
+        return buildYandexVenueRouteUrl(venue.locationDisplay())
     }
+
+    private fun CatalogVenueShort.locationDisplay(): VenueLocationDisplay =
+        VenueLocationDisplay(
+            name = name,
+            countryCode = countryCode,
+            city = city,
+            address = address,
+            formattedAddress = formattedAddress,
+            latitude = latitude,
+            longitude = longitude,
+        )
 
     private fun isBotTestCatalogSeedingEnabled(): Boolean {
         return isDevMode()

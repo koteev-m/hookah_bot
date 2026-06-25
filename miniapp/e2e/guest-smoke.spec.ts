@@ -98,6 +98,12 @@ type PublicCardSettings = {
   name: string
   city: string | null
   address: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  displayAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  routeUrl?: string | null
   guestContact: string | null
   cardDescription: string | null
 }
@@ -372,6 +378,12 @@ function buildPublicCardSettings(overrides: Partial<PublicCardSettings> = {}): P
     name: 'Микс',
     city: 'Москва',
     address: 'Пилотная, 1',
+    countryCode: 'RU',
+    formattedAddress: null,
+    displayAddress: 'Москва, Пилотная, 1',
+    latitude: null,
+    longitude: null,
+    routeUrl: 'https://yandex.ru/maps/?text=%D0%9C%D0%B8%D0%BA%D1%81%2C+%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0%2C+%D0%9F%D0%B8%D0%BB%D0%BE%D1%82%D0%BD%D0%B0%D1%8F%2C+1',
     guestContact: null,
     cardDescription: null,
     ...overrides
@@ -931,6 +943,7 @@ async function mockVenueShiftExtensionApi(
     settings?: ShiftExtensionSettings
     bookingSettings?: BookingSettings
     publicCardSettings?: PublicCardSettings
+    failPublicCardUpdateOnce?: boolean
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
@@ -944,6 +957,7 @@ async function mockVenueShiftExtensionApi(
   let updateSettingsCalls = 0
   let updateBookingSettingsCalls = 0
   let updatePublicCardSettingsCalls = 0
+  let failPublicCardUpdateOnce = options.failPublicCardUpdateOnce === true
   let orderServiceCharges: ServiceCharge[] = []
   const rejectedReasons: string[] = []
 
@@ -977,12 +991,22 @@ async function mockVenueShiftExtensionApi(
           name: publicCardSettings.name,
           city: publicCardSettings.city,
           address: publicCardSettings.address,
+          countryCode: publicCardSettings.countryCode,
+          formattedAddress: publicCardSettings.formattedAddress,
+          displayAddress: publicCardSettings.displayAddress,
+          latitude: publicCardSettings.latitude,
+          longitude: publicCardSettings.longitude,
+          routeUrl: publicCardSettings.routeUrl,
           guestContact: publicCardSettings.guestContact,
           cardDescription: publicCardSettings.cardDescription,
           status: 'PUBLISHED'
         }
       })
     )
+  })
+
+  await page.route('**/api/guest/venue/1/info-sections', async (route) => {
+    await route.fulfill(jsonResponse({ venueId: 1, sections: [] }))
   })
 
   await page.route('**/api/venue/1/staff-calls**', async (route) => {
@@ -1137,21 +1161,108 @@ async function mockVenueShiftExtensionApi(
   await page.route('**/api/venue/1/public-card', async (route) => {
     if (route.request().method() === 'PUT') {
       updatePublicCardSettingsCalls += 1
+      if (failPublicCardUpdateOnce) {
+        failPublicCardUpdateOnce = false
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { code: 'INVALID_INPUT', message: 'Не удалось сохранить публичную карточку.' } })
+        })
+        return
+      }
       const body = (await route.request().postDataJSON()) as {
         city?: string | null
         address?: string | null
+        countryCode?: string | null
+        formattedAddress?: string | null
+        latitude?: number | null
+        longitude?: number | null
         guestContact?: string | null
         cardDescription?: string | null
       }
+      const city = body.city?.trim() || null
+      const address = body.address?.trim() || null
+      const formattedAddress = body.formattedAddress?.trim() || null
+      const latitude = typeof body.latitude === 'number' ? body.latitude : null
+      const longitude = typeof body.longitude === 'number' ? body.longitude : null
+      const displayAddress =
+        formattedAddress?.replace(/^Россия,\s*/, '') || [city, address].filter(Boolean).join(', ') || null
       publicCardSettings = {
         ...publicCardSettings,
-        city: body.city?.trim() || null,
-        address: body.address?.trim() || null,
+        city,
+        address,
+        countryCode: body.countryCode?.trim().toUpperCase() || null,
+        formattedAddress,
+        displayAddress,
+        latitude,
+        longitude,
+        routeUrl:
+          latitude != null && longitude != null
+            ? `https://yandex.ru/maps/?rtext=~${latitude},${longitude}&rtt=auto`
+            : `https://yandex.ru/maps/?text=${encodeURIComponent(`${publicCardSettings.name}, ${displayAddress || ''}`)}`,
         guestContact: body.guestContact?.trim() || null,
         cardDescription: body.cardDescription?.trim() || null
       }
     }
     await route.fulfill(jsonResponse(publicCardSettings))
+  })
+
+  await page.route('**/api/venue/1/location/suggestions?**', async (route) => {
+    const url = new URL(route.request().url())
+    const kind = url.searchParams.get('kind')
+    if (kind === 'city') {
+      await route.fulfill(
+        jsonResponse({
+          items: [
+            {
+              id: 'city-spb',
+              title: 'Санкт-Петербург',
+              subtitle: 'Россия',
+              countryCode: 'RU',
+              city: 'Санкт-Петербург',
+              address: null,
+              formattedAddress: 'Россия, Санкт-Петербург',
+              providerUri: 'ymapsbm1://geo?data=city-spb'
+            }
+          ],
+          unavailable: false
+        })
+      )
+      return
+    }
+    await route.fulfill(
+      jsonResponse({
+        items: [
+          {
+            id: 'address-liteinyi-7',
+            title: 'Литейный проспект, 7',
+            subtitle: 'Санкт-Петербург',
+            countryCode: 'RU',
+            city: 'Санкт-Петербург',
+            address: 'Литейный проспект, 7',
+            formattedAddress: 'Россия, Санкт-Петербург, Литейный проспект, 7',
+            providerUri: 'ymapsbm1://geo?data=liteinyi-7'
+          }
+        ],
+        unavailable: false
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/location/resolve', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        location: {
+          countryCode: 'RU',
+          city: 'Санкт-Петербург',
+          address: 'Литейный проспект, 7',
+          formattedAddress: 'Россия, Санкт-Петербург, Литейный проспект, 7',
+          latitude: 59.9386,
+          longitude: 30.3451
+        },
+        unavailable: false
+      })
+    )
   })
 
   await page.route('**/api/venue/1/shift-extension-requests**', async (route) => {
@@ -2767,21 +2878,50 @@ test('venue manager configures public profile card settings', async ({ page }) =
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
   await expect(publicCard).toContainText('Эти данные видят гости в каталоге')
   await expect(publicCard).toContainText('Микс')
+  await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
 
-  await publicCard.getByPlaceholder('Москва').fill('Санкт-Петербург')
-  await publicCard.getByPlaceholder('Новый Арбат, 24').fill('Литейный, 7')
+  const cityInput = publicCard.getByPlaceholder('Начните вводить город')
+  await cityInput.focus()
+  const focusStyle = await cityInput.evaluate((input) => {
+    const styles = window.getComputedStyle(input)
+    return { caretColor: styles.caretColor, boxShadow: styles.boxShadow }
+  })
+  expect(focusStyle.caretColor).not.toBe('rgba(0, 0, 0, 0)')
+  expect(focusStyle.boxShadow).not.toBe('none')
+
+  await publicCard.getByPlaceholder('Россия').fill('Ро')
+  await publicCard.getByRole('button', { name: 'Россия · RU' }).click()
+  await cityInput.fill('Са')
+  await publicCard.getByRole('button', { name: /Санкт-Петербург/ }).click()
+  await publicCard.getByPlaceholder('Улица, дом').fill('Лит')
+  await publicCard.getByRole('button', { name: /Литейный проспект, 7/ }).click()
+  await expect(publicCard.getByText('Адрес выбран из подсказок и сохранится с координатами.')).toBeVisible()
   await publicCard.getByPlaceholder('+7 999 000-00-00').fill('+7 900 111-22-33')
   await publicCard.getByPlaceholder(/авторские чаши/).fill('Лаунж с чайной картой и спокойной посадкой.')
+  await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
   await publicCard.getByRole('button', { name: 'Сохранить' }).click()
 
   await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(publicCard.getByRole('button', { name: '✓ Сохранено' })).toBeDisabled()
   expect(api.getUpdatePublicCardSettingsCalls()).toBe(1)
   expect(api.getPublicCardSettings()).toMatchObject({
     city: 'Санкт-Петербург',
-    address: 'Литейный, 7',
+    address: 'Литейный проспект, 7',
+    countryCode: 'RU',
+    formattedAddress: 'Россия, Санкт-Петербург, Литейный проспект, 7',
+    latitude: 59.9386,
+    longitude: 30.3451,
     guestContact: '+7 900 111-22-33',
     cardDescription: 'Лаунж с чайной картой и спокойной посадкой.'
   })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.evaluate(() => {
+    window.location.hash = '#/venue/1'
+  })
+  await expect(page.getByText('Санкт-Петербург, Литейный проспект, 7')).toBeVisible()
+  const routeLink = page.getByRole('link', { name: 'Построить маршрут' })
+  await expect(routeLink).toHaveAttribute('href', 'https://yandex.ru/maps/?rtext=~59.9386,30.3451&rtt=auto')
 })
 
 test('venue staff does not see public profile card settings', async ({ page }) => {
@@ -2799,6 +2939,30 @@ test('venue staff does not see public profile card settings', async ({ page }) =
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Публичная карточка' })).toHaveCount(0)
+})
+
+test('venue public card failed save preserves manual location draft', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, {
+    role: 'MANAGER',
+    permissions: ['BOOKING_MANAGE'],
+    failPublicCardUpdateOnce: true
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+
+  const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
+  await publicCard.getByPlaceholder('Начните вводить город').fill('Казань')
+  await publicCard.getByPlaceholder('Улица, дом').fill('Баумана, 7')
+  await publicCard.getByRole('button', { name: 'Ввести адрес вручную' }).click()
+  await expect(publicCard.getByText('Адрес сохранён без координат. Маршрут будет построен по тексту адреса.')).toBeVisible()
+  await publicCard.getByRole('button', { name: 'Сохранить' }).click()
+
+  await expect(page.locator('p.status')).toContainText('Не удалось сохранить публичную карточку.')
+  await expect(publicCard.getByPlaceholder('Начните вводить город')).toHaveValue('Казань')
+  await expect(publicCard.getByPlaceholder('Улица, дом')).toHaveValue('Баумана, 7')
+  await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
 })
 
 test('venue manager configures paid shift extension settings', async ({ page }) => {

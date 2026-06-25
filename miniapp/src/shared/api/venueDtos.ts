@@ -186,6 +186,12 @@ export type VenuePublicCardSettingsResponse = {
   name: string
   city?: string | null
   address?: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  displayAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  routeUrl?: string | null
   guestContact?: string | null
   cardDescription?: string | null
 }
@@ -193,8 +199,53 @@ export type VenuePublicCardSettingsResponse = {
 export type VenuePublicCardSettingsUpdateRequest = {
   city?: string | null
   address?: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
   guestContact?: string | null
   cardDescription?: string | null
+}
+
+export type VenueLocationSuggestionKind = 'city' | 'address'
+
+export type VenueLocationSuggestionItem = {
+  id: string
+  title: string
+  subtitle?: string | null
+  countryCode?: string | null
+  city?: string | null
+  address?: string | null
+  formattedAddress?: string | null
+  providerUri?: string | null
+}
+
+export type VenueLocationSuggestionsResponse = {
+  items: VenueLocationSuggestionItem[]
+  unavailable?: boolean
+  message?: string | null
+}
+
+export type VenueLocationResolveRequest = {
+  providerUri?: string | null
+  query?: string | null
+  countryCode?: string | null
+  city?: string | null
+}
+
+export type VenueLocationResolvedItem = {
+  countryCode?: string | null
+  city?: string | null
+  address?: string | null
+  formattedAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+}
+
+export type VenueLocationResolveResponse = {
+  location?: VenueLocationResolvedItem | null
+  unavailable?: boolean
+  message?: string | null
 }
 
 export type VenueTableDto = {

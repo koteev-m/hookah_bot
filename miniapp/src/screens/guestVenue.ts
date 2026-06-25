@@ -63,6 +63,7 @@ type VenueRefs = {
   errorDetails: HTMLDivElement
   venueTitle: HTMLHeadingElement
   venueLocation: HTMLParagraphElement
+  routeLink: HTMLAnchorElement
   bookingButton: HTMLButtonElement
   extensionSlot: HTMLDivElement
   menuBody: HTMLDivElement
@@ -139,8 +140,12 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const header = el('div', { className: 'venue-header' })
   const venueTitle = el('h3', { text: 'Загрузка...' })
   const venueLocation = el('p', { className: 'venue-location', text: '' })
+  const routeLink = el('a', { className: 'button-secondary button-small venue-route-link', text: 'Построить маршрут' }) as HTMLAnchorElement
+  routeLink.target = '_blank'
+  routeLink.rel = 'noopener noreferrer'
+  routeLink.hidden = true
   const bookingButton = el('button', { className: 'button-secondary button-small', text: 'Забронировать' }) as HTMLButtonElement
-  append(header, venueTitle, venueLocation, bookingButton)
+  append(header, venueTitle, venueLocation, routeLink, bookingButton)
 
   const status = el('p', { className: 'status', text: '' })
   const message = el('p', { className: 'status menu-message', text: '' })
@@ -217,6 +222,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     errorDetails,
     venueTitle,
     venueLocation,
+    routeLink,
     bookingButton,
     extensionSlot,
     menuBody,
@@ -833,8 +839,16 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   const renderVenueInfo = (venue: VenueDto) => {
     refs.venueTitle.textContent = venue.name
-    const locationParts = [venue.city, venue.address].filter(Boolean)
-    refs.venueLocation.textContent = locationParts.length ? locationParts.join(', ') : 'Адрес не указан'
+    const fallbackParts = [venue.city, venue.address].filter(Boolean)
+    const displayAddress = venue.displayAddress?.trim() || (fallbackParts.length ? fallbackParts.join(', ') : '')
+    refs.venueLocation.textContent = displayAddress || 'Адрес не указан'
+    const routeUrl = venue.routeUrl?.trim()
+    refs.routeLink.hidden = !routeUrl
+    if (routeUrl) {
+      refs.routeLink.href = routeUrl
+    } else {
+      refs.routeLink.removeAttribute('href')
+    }
   }
 
   const renderPreQrInfo = (venue: VenueDto, sections: VenueInfoSectionDto[]) => {

@@ -4,6 +4,16 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.location.VenueLocationDisplay
+import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
+import com.hookah.platform.backend.location.formatVenueDisplayAddress
+import com.hookah.platform.backend.miniapp.venue.location.DisabledVenueLocationProvider
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationResolveProviderRequest
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationResolvedItem
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestProviderRequest
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestionItem
+import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestionKind
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
@@ -23,8 +33,12 @@ import org.slf4j.LoggerFactory
 private val logger = LoggerFactory.getLogger("VenueRoutes")
 private const val PUBLIC_CARD_CITY_MAX_LENGTH = 120
 private const val PUBLIC_CARD_ADDRESS_MAX_LENGTH = 300
+private const val PUBLIC_CARD_FORMATTED_ADDRESS_MAX_LENGTH = 500
 private const val PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH = 300
 private const val PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
+private const val LOCATION_QUERY_MAX_LENGTH = 120
+private const val LOCATION_CITY_MAX_LENGTH = 120
+private const val LOCATION_SESSION_TOKEN_MAX_LENGTH = 120
 
 @Serializable
 data class VenueMeResponse(
@@ -77,6 +91,12 @@ data class VenuePublicCardSettingsResponse(
     val name: String,
     val city: String? = null,
     val address: String? = null,
+    val countryCode: String? = null,
+    val formattedAddress: String? = null,
+    val displayAddress: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val routeUrl: String? = null,
     val guestContact: String? = null,
     val cardDescription: String? = null,
 )
@@ -85,14 +105,41 @@ data class VenuePublicCardSettingsResponse(
 data class VenuePublicCardSettingsUpdateRequest(
     val city: String? = null,
     val address: String? = null,
+    val countryCode: String? = null,
+    val formattedAddress: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
     val guestContact: String? = null,
     val cardDescription: String? = null,
+)
+
+@Serializable
+data class VenueLocationSuggestionsResponse(
+    val items: List<VenueLocationSuggestionItem>,
+    val unavailable: Boolean = false,
+    val message: String? = null,
+)
+
+@Serializable
+data class VenueLocationResolveRequest(
+    val providerUri: String? = null,
+    val query: String? = null,
+    val countryCode: String? = null,
+    val city: String? = null,
+)
+
+@Serializable
+data class VenueLocationResolveResponse(
+    val location: VenueLocationResolvedItem? = null,
+    val unavailable: Boolean = false,
+    val message: String? = null,
 )
 
 fun Route.venueRoutes(
     venueAccessRepository: VenueAccessRepository,
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
     venueRepository: VenueRepository,
+    venueLocationProvider: VenueLocationProvider = DisabledVenueLocationProvider(),
     staffChatNotifier: StaffChatNotifier? = null,
     telegramBotUsername: String? = null,
 ) {
@@ -143,6 +190,14 @@ fun Route.venueRoutes(
             val request = call.receive<VenuePublicCardSettingsUpdateRequest>()
             val city = normalizePublicCardText(request.city, PUBLIC_CARD_CITY_MAX_LENGTH, "city")
             val address = normalizePublicCardText(request.address, PUBLIC_CARD_ADDRESS_MAX_LENGTH, "address")
+            val countryCode = normalizeCountryCode(request.countryCode)
+            val formattedAddress =
+                normalizePublicCardText(
+                    request.formattedAddress,
+                    PUBLIC_CARD_FORMATTED_ADDRESS_MAX_LENGTH,
+                    "formattedAddress",
+                )
+            val coordinates = normalizeCoordinates(request.latitude, request.longitude, formattedAddress)
             val guestContact =
                 normalizePublicCardText(request.guestContact, PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH, "guestContact")
             val cardDescription =
@@ -156,10 +211,103 @@ fun Route.venueRoutes(
                     venueId = venueId,
                     city = city,
                     address = address,
+                    countryCode = countryCode,
+                    formattedAddress = formattedAddress,
+                    latitude = coordinates.first,
+                    longitude = coordinates.second,
                     guestContact = guestContact,
                     cardDescription = cardDescription,
                 ) ?: throw NotFoundException()
             call.respond(settings.toResponse())
+        }
+
+        get("/{venueId}/location/suggestions") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requirePublicCardSettingsPermission(venueAccessRepository, userId, venueId)
+            if (venueRepository.findVenueById(venueId) == null) {
+                throw NotFoundException()
+            }
+            val params = call.request.queryParameters
+            val kind =
+                when (params["kind"]?.trim()?.lowercase()) {
+                    "city" -> VenueLocationSuggestionKind.CITY
+                    "address" -> VenueLocationSuggestionKind.ADDRESS
+                    else -> throw InvalidInputException("kind must be city or address")
+                }
+            val query = normalizeLocationQuery(params["query"], "query")
+            val countryCode =
+                normalizeCountryCode(params["countryCode"])
+                    ?: throw InvalidInputException("countryCode is required")
+            val city =
+                normalizeOptionalLocationText(params["city"], LOCATION_CITY_MAX_LENGTH, "city").also {
+                    if (kind == VenueLocationSuggestionKind.ADDRESS && it == null) {
+                        throw InvalidInputException("city is required for address suggestions")
+                    }
+                }
+            val sessionToken =
+                normalizeOptionalLocationText(
+                    params["sessionToken"],
+                    LOCATION_SESSION_TOKEN_MAX_LENGTH,
+                    "sessionToken",
+                )
+            val result =
+                venueLocationProvider.suggest(
+                    VenueLocationSuggestProviderRequest(
+                        kind = kind,
+                        query = query,
+                        countryCode = countryCode,
+                        city = city,
+                        sessionToken = sessionToken,
+                    ),
+                )
+            call.respond(
+                VenueLocationSuggestionsResponse(
+                    items = result.items,
+                    unavailable = result.unavailable,
+                    message = if (result.unavailable) "Подсказки временно недоступны." else null,
+                ),
+            )
+        }
+
+        post("/{venueId}/location/resolve") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requirePublicCardSettingsPermission(venueAccessRepository, userId, venueId)
+            if (venueRepository.findVenueById(venueId) == null) {
+                throw NotFoundException()
+            }
+            val request = call.receive<VenueLocationResolveRequest>()
+            val providerUri =
+                normalizeOptionalLocationText(request.providerUri, 600, "providerUri")
+            val query =
+                normalizeOptionalLocationText(request.query, LOCATION_QUERY_MAX_LENGTH, "query")
+            if (providerUri == null && query == null) {
+                throw InvalidInputException("providerUri or query is required")
+            }
+            val countryCode = normalizeCountryCode(request.countryCode)
+            val city = normalizeOptionalLocationText(request.city, LOCATION_CITY_MAX_LENGTH, "city")
+            val result =
+                venueLocationProvider.resolve(
+                    VenueLocationResolveProviderRequest(
+                        providerUri = providerUri,
+                        query = query,
+                        countryCode = countryCode,
+                        city = city,
+                    ),
+                )
+            call.respond(
+                VenueLocationResolveResponse(
+                    location = result.location,
+                    unavailable = result.unavailable,
+                    message =
+                        if (result.unavailable) {
+                            "Не удалось уточнить координаты. Адрес можно сохранить вручную."
+                        } else {
+                            null
+                        },
+                ),
+            )
         }
 
         post("/{venueId}/staff-chat/link-code") {
@@ -306,14 +454,83 @@ private fun normalizePublicCardText(
     return normalized.ifBlank { null }
 }
 
+private fun normalizeOptionalLocationText(
+    raw: String?,
+    maxLength: Int,
+    fieldName: String,
+): String? = normalizePublicCardText(raw, maxLength, fieldName)
+
+private fun normalizeLocationQuery(
+    raw: String?,
+    fieldName: String,
+): String {
+    val normalized = raw?.trim().orEmpty()
+    if (normalized.length < 2) {
+        throw InvalidInputException("$fieldName length must be >= 2")
+    }
+    if (normalized.length > LOCATION_QUERY_MAX_LENGTH) {
+        throw InvalidInputException("$fieldName length must be <= $LOCATION_QUERY_MAX_LENGTH")
+    }
+    return normalized
+}
+
+private fun normalizeCountryCode(raw: String?): String? {
+    val normalized = raw?.trim().orEmpty().uppercase()
+    if (normalized.isBlank()) return null
+    if (!Regex("^[A-Z]{2}$").matches(normalized)) {
+        throw InvalidInputException("countryCode must be ISO 3166-1 alpha-2")
+    }
+    return normalized
+}
+
+private fun normalizeCoordinates(
+    latitude: Double?,
+    longitude: Double?,
+    formattedAddress: String?,
+): Pair<Double?, Double?> {
+    if (latitude == null && longitude == null) return null to null
+    if (latitude == null || longitude == null) {
+        throw InvalidInputException("latitude and longitude must be provided together")
+    }
+    if (latitude !in -90.0..90.0) {
+        throw InvalidInputException("latitude must be between -90 and 90")
+    }
+    if (longitude !in -180.0..180.0) {
+        throw InvalidInputException("longitude must be between -180 and 180")
+    }
+    if (formattedAddress == null) {
+        throw InvalidInputException("formattedAddress is required when coordinates are provided")
+    }
+    return latitude to longitude
+}
+
 private fun VenuePublicCardSettings.toResponse(): VenuePublicCardSettingsResponse =
-    VenuePublicCardSettingsResponse(
-        venueId = venueId,
+    locationDisplay().let { location ->
+        VenuePublicCardSettingsResponse(
+            venueId = venueId,
+            name = name,
+            city = city,
+            address = address,
+            countryCode = countryCode,
+            formattedAddress = formattedAddress,
+            displayAddress = formatVenueDisplayAddress(location),
+            latitude = latitude,
+            longitude = longitude,
+            routeUrl = buildYandexVenueRouteUrl(location),
+            guestContact = guestContact,
+            cardDescription = cardDescription,
+        )
+    }
+
+private fun VenuePublicCardSettings.locationDisplay(): VenueLocationDisplay =
+    VenueLocationDisplay(
         name = name,
+        countryCode = countryCode,
         city = city,
         address = address,
-        guestContact = guestContact,
-        cardDescription = cardDescription,
+        formattedAddress = formattedAddress,
+        latitude = latitude,
+        longitude = longitude,
     )
 
 private fun buildStaffChatTelegramCommand(

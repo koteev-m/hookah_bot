@@ -968,6 +968,34 @@ input[type="number"] {
   border: 1px solid #dfe3eb;
   border-radius: 8px;
   font-size: 1rem;
+  color: #111827;
+  background: #ffffff;
+  caret-color: #0f766e;
+}
+
+.venue-select:focus,
+.venue-input:focus,
+.venue-textarea:focus,
+.venue-select:focus-visible,
+.venue-input:focus-visible,
+.venue-textarea:focus-visible {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.18);
+  outline: none;
+}
+
+.venue-select::selection,
+.venue-input::selection,
+.venue-textarea::selection {
+  color: #ffffff;
+  background: #0f766e;
+}
+
+.venue-input:disabled,
+.venue-textarea:disabled {
+  color: #64748b;
+  background: #f8fafc;
+  cursor: not-allowed;
 }
 
 .venue-textarea {
@@ -1217,6 +1245,59 @@ input[type="number"] {
   display: grid;
   gap: 0.5rem;
   margin-top: 0.5rem;
+}
+
+.venue-combobox-field {
+  position: relative;
+}
+
+.venue-suggestion-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  left: 0;
+  display: grid;
+  gap: 0.25rem;
+  max-height: 16rem;
+  overflow: auto;
+  padding: 0.35rem;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.venue-suggestion-option {
+  display: grid;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: 6px;
+  color: #111827;
+  background: transparent;
+  text-align: left;
+}
+
+.venue-suggestion-option:hover,
+.venue-suggestion-option:focus-visible {
+  background: #ecfdf5;
+  outline: none;
+}
+
+.venue-suggestion-option small,
+.venue-suggestion-message,
+.venue-location-hint {
+  color: #64748b;
+}
+
+.venue-suggestion-message {
+  padding: 0.55rem 0.65rem;
+}
+
+.venue-manual-address {
+  justify-self: start;
 }
 
 .venue-modal-overlay {

@@ -22,7 +22,7 @@ Guest:
 - guest (end users)
 
 ## Core entities (domain)
-- venue: id, name, address, geo(optional), description, hours, status(lifecycle), owner_user_id, settings
+- venue: id, name, structured public location (country/city/address/formatted address/optional coordinates), description, hours, status(lifecycle), owner_user_id, settings
 - user_role: (user_id, venue_id?, role)
 - menu_category, menu_item: name, price, description, photos, options (e.g., flavors), is_available (stop-list), is_featured (top list)
 - table: id, venue_id, name/number, qr_token, status
@@ -103,7 +103,7 @@ SHOULD:
 
 ## Block 7 — Venue onboarding & settings
 MUST:
-- Venue owner/admin can set: description, hours, contact, address.
+- Venue owner/admin can set: description, hours, contact and public location/address; Mini App location suggestions must go through backend provider proxy, not expose map API keys.
 - Create tables; assign staff roles; configure visible modules.
 - Connect staff group chat (optional) by providing chat_id / invite flow.
 SHOULD:

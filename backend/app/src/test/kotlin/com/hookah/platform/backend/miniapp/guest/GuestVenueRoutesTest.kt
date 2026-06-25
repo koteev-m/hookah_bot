@@ -237,13 +237,22 @@ class GuestVenueRoutesTest {
                     connection.prepareStatement(
                         """
                         UPDATE venues
-                        SET guest_contact = ?, card_description = ?
+                        SET guest_contact = ?,
+                            card_description = ?,
+                            country_code = ?,
+                            formatted_address = ?,
+                            latitude = ?,
+                            longitude = ?
                         WHERE id = ?
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, "+7 999 000-00-00")
                         statement.setString(2, "Авторские чаши и спокойная посадка.")
-                        statement.setLong(3, id)
+                        statement.setString(3, "RU")
+                        statement.setString(4, "Россия, Москва, Новый Арбат, 24")
+                        statement.setDouble(5, 55.7522)
+                        statement.setDouble(6, 37.6156)
+                        statement.setLong(7, id)
                         statement.executeUpdate()
                     }
                     id
@@ -259,6 +268,8 @@ class GuestVenueRoutesTest {
             val payload = json.decodeFromString(VenueResponse.serializer(), response.bodyAsText())
             assertEquals("+7 999 000-00-00", payload.venue.guestContact)
             assertEquals("Авторские чаши и спокойная посадка.", payload.venue.cardDescription)
+            assertEquals("Москва, Новый Арбат, 24", payload.venue.displayAddress)
+            assertEquals("https://yandex.ru/maps/?rtext=~55.7522,37.6156&rtt=auto", payload.venue.routeUrl)
         }
 
     @Test

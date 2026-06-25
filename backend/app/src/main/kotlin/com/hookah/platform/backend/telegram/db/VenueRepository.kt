@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Types
 import java.time.Instant
 import javax.sql.DataSource
 
@@ -72,7 +73,8 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT v.id, v.name, v.city, v.address, v.guest_contact, v.card_description, v.status
+                        SELECT v.id, v.name, v.city, v.address, v.country_code, v.formatted_address,
+                               v.latitude, v.longitude, v.guest_contact, v.card_description, v.status
                         FROM venues v
                         LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
                         WHERE v.status = ?
@@ -149,7 +151,8 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT v.id, v.name, v.city, v.address, v.guest_contact, v.card_description, v.status
+                        SELECT v.id, v.name, v.city, v.address, v.country_code, v.formatted_address,
+                               v.latitude, v.longitude, v.guest_contact, v.card_description, v.status
                         FROM venues v
                         LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
                         WHERE v.id = ?
@@ -190,6 +193,10 @@ open class VenueRepository(private val dataSource: DataSource?) {
         venueId: Long,
         city: String?,
         address: String?,
+        countryCode: String?,
+        formattedAddress: String?,
+        latitude: Double?,
+        longitude: Double?,
         guestContact: String?,
         cardDescription: String?,
     ): VenuePublicCardSettings? {
@@ -205,6 +212,10 @@ open class VenueRepository(private val dataSource: DataSource?) {
                                 UPDATE venues
                                 SET city = ?,
                                     address = ?,
+                                    country_code = ?,
+                                    formatted_address = ?,
+                                    latitude = ?,
+                                    longitude = ?,
                                     guest_contact = ?,
                                     card_description = ?,
                                     updated_at = now()
@@ -213,9 +224,21 @@ open class VenueRepository(private val dataSource: DataSource?) {
                             ).use { statement ->
                                 statement.setString(1, city)
                                 statement.setString(2, address)
-                                statement.setString(3, guestContact)
-                                statement.setString(4, cardDescription)
-                                statement.setLong(5, venueId)
+                                statement.setString(3, countryCode)
+                                statement.setString(4, formattedAddress)
+                                if (latitude == null) {
+                                    statement.setNull(5, Types.DOUBLE)
+                                } else {
+                                    statement.setDouble(5, latitude)
+                                }
+                                if (longitude == null) {
+                                    statement.setNull(6, Types.DOUBLE)
+                                } else {
+                                    statement.setDouble(6, longitude)
+                                }
+                                statement.setString(7, guestContact)
+                                statement.setString(8, cardDescription)
+                                statement.setLong(9, venueId)
                                 statement.executeUpdate()
                             }
                         if (updatedRows <= 0) {
@@ -454,7 +477,8 @@ open class VenueRepository(private val dataSource: DataSource?) {
     ): VenuePublicCardSettings? {
         return connection.prepareStatement(
             """
-            SELECT id, name, city, address, guest_contact, card_description
+            SELECT id, name, city, address, country_code, formatted_address, latitude, longitude,
+                   guest_contact, card_description
             FROM venues
             WHERE id = ?
             """.trimIndent(),
@@ -467,6 +491,10 @@ open class VenueRepository(private val dataSource: DataSource?) {
                         name = rs.getString("name"),
                         city = rs.getString("city"),
                         address = rs.getString("address"),
+                        countryCode = rs.getString("country_code"),
+                        formattedAddress = rs.getString("formatted_address"),
+                        latitude = rs.getDouble("latitude").takeIf { !rs.wasNull() },
+                        longitude = rs.getDouble("longitude").takeIf { !rs.wasNull() },
                         guestContact = rs.getString("guest_contact"),
                         cardDescription = rs.getString("card_description"),
                     )
@@ -613,6 +641,10 @@ open class VenueRepository(private val dataSource: DataSource?) {
             name = rs.getString("name"),
             city = rs.getString("city"),
             address = rs.getString("address"),
+            countryCode = rs.getString("country_code"),
+            formattedAddress = rs.getString("formatted_address"),
+            latitude = rs.getDouble("latitude").takeIf { !rs.wasNull() },
+            longitude = rs.getDouble("longitude").takeIf { !rs.wasNull() },
             guestContact = rs.getString("guest_contact"),
             cardDescription = rs.getString("card_description"),
         )
@@ -668,6 +700,10 @@ data class CatalogVenueShort(
     val name: String,
     val city: String?,
     val address: String?,
+    val countryCode: String? = null,
+    val formattedAddress: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
     val guestContact: String? = null,
     val cardDescription: String? = null,
 )
@@ -677,6 +713,10 @@ data class VenuePublicCardSettings(
     val name: String,
     val city: String?,
     val address: String?,
+    val countryCode: String?,
+    val formattedAddress: String?,
+    val latitude: Double?,
+    val longitude: Double?,
     val guestContact: String?,
     val cardDescription: String?,
 )
