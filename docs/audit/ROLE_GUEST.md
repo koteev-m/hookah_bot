@@ -53,7 +53,7 @@ QR/table Guest Mini App:
 
 Account/bookings:
 - guest booking MVP присутствует: create/list active bookings/status refresh, cancel/accept changed time where supported;
-- M7b Guest Mini App `Мои брони` implemented with `PASS_WITH_UNVERIFIED_RUNTIME_GAPS`: account-level list shows active/upcoming bookings across venues with bot-compatible public `Бронь №...`, venue-local date/time, status, party size, comment and `Держим до HH:mm` when applicable; remaining runtime checks are real Bot `/my` side-by-side and real two-account isolation smoke;
+- M7b Guest Mini App `Мои брони` implemented with staging visual parity: account-level list shows active/upcoming bookings across venues with bot-compatible public `Бронь №...`, venue-local date/time, status, party size, comment and `Держим до HH:mm` when applicable; recorded staging evidence compares Bot `/my` and Guest Mini App public label, venue-local time and deadline, while real two-account Telegram runtime isolation remains unverified;
 - account baseline включает history/favorites sections;
 - `Сообщения` показывает persisted support/booking threads with context/status/unread and active/resolved filters;
 - profile/promotions/loyalty остаются partial или safe fallback, если backend не отдаёт полноценные данные.
@@ -82,8 +82,8 @@ Account/bookings:
 
 ## Known gaps / needs smoke
 
-- M7b `Мои брони` still needs real staging smoke against Telegram Bot `/my` for the same booking and real two-account isolation; local tests/e2e and staging backend/DB evidence are already green.
-- M7c adaptive booking reminders are implemented locally but disabled by default until real Telegram staging smoke; `Да, буду` records attendance intent without changing booking status, and Guest Mini App shows `Вы подтвердили, что придёте` when recorded.
+- M7b `Мои брони` still needs real two-account Telegram runtime isolation smoke; local tests/e2e and staging Bot `/my` visual parity for the same booking's label/time/deadline are already green.
+- M7c adaptive booking reminders passed one controlled real Telegram staging smoke but remain disabled by default for rollout; `Да, буду` records attendance intent without changing booking status, edits the guest reminder message, and Guest Mini App shows `Вы подтвердили, что придёте` when recorded.
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
 - Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
