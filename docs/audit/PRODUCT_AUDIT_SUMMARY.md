@@ -6,7 +6,7 @@
 >
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
 >
-> Current checkpoint as of 2026-06-25: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual parity for Bot `/my` public label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are implemented, code/test-backed and passed one controlled real Telegram staging smoke; runtime remains disabled by default and staging is back to `BOOKING_REMINDER_WORKER_ENABLED=false`. The latest enriched staff-chat attendance copy is code/test-backed but not manually re-smoked with a new booking. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for broader venue settings slices, platform money/onboarding, promotions/preview and runtime regression priorities.
+> Current checkpoint as of 2026-06-25: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual parity for Bot `/my` public label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are implemented, code/test-backed and passed one controlled real Telegram staging smoke; runtime remains disabled by default and staging is back to `BOOKING_REMINDER_WORKER_ENABLED=false`. M8a/M8b-Free public profile/card settings is CLOSED / staging smoke passed: Venue Mini App edits public location/contact/description with provider-free local country/city data and manual address fallback. The latest enriched staff-chat attendance copy is code/test-backed but not manually re-smoked with a new booking. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for hours/exceptions, platform onboarding/money, promotions/preview and runtime regression priorities.
 
 # Краткое резюме
 
@@ -38,7 +38,7 @@
 - Stop-list: STAFF operational item/option availability is aligned between bot and Mini App; content editing remains MANAGER/OWNER.
 - Table QR: batch create/rotate/export есть, single edit/delete/capacity incomplete.
 - Statistics: Telegram stats and Venue Mini App read-only stats exist; custom ranges/platform analytics remain later.
-- Settings: broad Telegram setup exists; Mini App settings now covers booking hold and shift extension settings, but broader profile/card/hours settings should still be expanded through small slices.
+- Settings: broad Telegram setup exists; Mini App settings now covers booking hold, shift extension settings and public profile/card basics with provider-free structured location. Hours/exceptions, info/media editing, preview/readiness and other broad settings should still be expanded through small slices.
 - Platform mode: venues/status/owners/subscription есть, requests/billing/support/analytics cockpit incomplete.
 
 # Что отсутствует
@@ -54,7 +54,7 @@
 
 No confirmed production P0 was found in the post-M6 checkpoint. Current priorities:
 
-1. **P1**: continue small Venue Mini App settings slices: profile/card, hours/exceptions and notification toggles, not one bulk endpoint.
+1. **P1**: continue small Venue Mini App settings slices after the closed public profile/card slice: hours/exceptions, info/media editing and notification toggles, not one bulk endpoint.
 2. **P1**: Platform Mini App hardening: owner invite deep link/copy, remove misleading `ADMIN` owner assignment option, surface quota summary where backend exists.
 3. **P1**: PostgreSQL/H2 test-fidelity gap for active-order uniqueness: PostgreSQL has a partial unique index by `table_session_id`, H2 migration has only non-unique indexes.
 4. **P1/P2**: keep M7b real two-account isolation and M7c opt-in reminder rollout as release regression checks, not new implementation milestones unless a regression is found.

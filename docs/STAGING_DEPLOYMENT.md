@@ -127,6 +127,32 @@ On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64
 
 The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and dependency caches. If Docker build fails while downloading the Gradle distribution or Maven dependencies with a transient `SocketTimeoutException`, rerun the same deploy command after confirming it is a network timeout, not a Kotlin compile/test failure. The wrapper network timeout is intentionally higher than the default, and a successful retry should reuse the warmed Docker/Gradle cache.
 
+### Intermittent New SSH Connection Failures
+
+During the M8b-Free staging deploy, direct deployment repeatedly failed while opening fresh SSH/SCP/rsync connections. Both `scp` and `rsync` saw intermittent key-exchange or connection-closed failures. At the same time, server resources, disk, Docker, backend and PostgreSQL health were normal, and server logs showed substantial unauthenticated SSH scanning.
+
+Do not treat this as a proven root cause analysis. The observed incident only proves that repeated new SSH connection establishment was unreliable, while an already-authenticated persistent SSH connection worked.
+
+The proven workaround was to open one authenticated SSH ControlMaster connection first and run the upload/deploy commands through that same control socket. Use a generic temporary control path and do not put secrets, private keys or local machine paths in scripts or docs:
+
+```bash
+CONTROL_PATH="${TMPDIR:-/tmp}/hookah-staging-%r@%h:%p"
+ssh -MNf \
+  -o ControlMaster=yes \
+  -o ControlPersist=10m \
+  -o ControlPath="$CONTROL_PATH" \
+  user@your-vps-host
+
+# Example: route follow-up commands through the established control socket.
+ssh -o ControlPath="$CONTROL_PATH" user@your-vps-host 'cd /opt/hookah-bot && docker compose ps'
+rsync -e "ssh -o ControlPath=$CONTROL_PATH" ./local-file user@your-vps-host:/opt/hookah-bot/
+
+# Close the control connection after deploy/smoke is complete.
+ssh -O exit -o ControlPath="$CONTROL_PATH" user@your-vps-host
+```
+
+If the deploy script itself is used, prefer an SSH host alias whose config enables `ControlMaster auto`, `ControlPersist` and a safe local `ControlPath`, then pass that alias to the script. Keep permanent SSH/firewall hardening, fail2ban-style controls and log-rate analysis as a separate ops follow-up.
+
 Optional overrides:
 
 ```bash

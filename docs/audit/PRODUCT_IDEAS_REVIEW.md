@@ -2,7 +2,7 @@
 
 Дата: 2026-04-28. Режим: read-only audit. Код, миграции и тесты не изменялись.
 
-> Current correction as of 2026-06-25: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout.
+> Current correction as of 2026-06-25: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description, while hours, info/media editing and guest preview remain later.
 
 ## Executive summary
 
@@ -1096,7 +1096,7 @@ Tests/smoke checks:
 ### P1 Operational completeness
 
 1. Booking lifecycle: `EXPIRED/NO_SHOW/SEATED`, hold minutes, active visibility until deadline.
-2. Venue Mini App profile/card settings parity through small backend-backed slices.
+2. Venue Mini App hours/exceptions and remaining profile setup parity through small backend-backed slices; public card/location basics are closed by M8a/M8b-Free.
 3. Owner/manager working hours and exceptions UX.
 4. Unified staff notifications for orders/reorders/calls/bookings/cancellations.
 5. Telegram multi-venue selector.
