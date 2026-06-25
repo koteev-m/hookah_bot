@@ -23,6 +23,8 @@ import type {
   VenueMenuItemDto,
   VenueMenuOptionDto,
   VenueMenuResponse,
+  VenuePublicCardSettingsResponse,
+  VenuePublicCardSettingsUpdateRequest,
   VenueReorderCategoriesRequest,
   VenueReorderItemsRequest,
   VenueStatsPeriod,
@@ -246,6 +248,39 @@ export async function venueUpdateBookingSettings(
   return requestApi<VenueBookingSettingsResponse>(
     backendUrl,
     `/api/venue/${params.venueId}/booking-settings`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueGetPublicCardSettings(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePublicCardSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/public-card`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueUpdatePublicCardSettings(
+  backendUrl: string,
+  params: { venueId: number; body: VenuePublicCardSettingsUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePublicCardSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/public-card`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

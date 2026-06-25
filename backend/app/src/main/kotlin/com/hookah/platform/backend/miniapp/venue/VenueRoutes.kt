@@ -2,21 +2,29 @@ package com.hookah.platform.backend.miniapp.venue
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.VenuePublicCardSettings
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("VenueRoutes")
+private const val PUBLIC_CARD_CITY_MAX_LENGTH = 120
+private const val PUBLIC_CARD_ADDRESS_MAX_LENGTH = 300
+private const val PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH = 300
+private const val PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
 
 @Serializable
 data class VenueMeResponse(
@@ -63,6 +71,24 @@ data class StaffChatTestResponse(
     val message: String,
 )
 
+@Serializable
+data class VenuePublicCardSettingsResponse(
+    val venueId: Long,
+    val name: String,
+    val city: String? = null,
+    val address: String? = null,
+    val guestContact: String? = null,
+    val cardDescription: String? = null,
+)
+
+@Serializable
+data class VenuePublicCardSettingsUpdateRequest(
+    val city: String? = null,
+    val address: String? = null,
+    val guestContact: String? = null,
+    val cardDescription: String? = null,
+)
+
 fun Route.venueRoutes(
     venueAccessRepository: VenueAccessRepository,
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
@@ -100,6 +126,40 @@ fun Route.venueRoutes(
                 throw ForbiddenException()
             }
             call.respond(VenueMeResponse(userId = userId, venues = venues))
+        }
+
+        get("/{venueId}/public-card") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requirePublicCardSettingsPermission(venueAccessRepository, userId, venueId)
+            val settings = venueRepository.findPublicCardSettings(venueId) ?: throw NotFoundException()
+            call.respond(settings.toResponse())
+        }
+
+        put("/{venueId}/public-card") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requirePublicCardSettingsPermission(venueAccessRepository, userId, venueId)
+            val request = call.receive<VenuePublicCardSettingsUpdateRequest>()
+            val city = normalizePublicCardText(request.city, PUBLIC_CARD_CITY_MAX_LENGTH, "city")
+            val address = normalizePublicCardText(request.address, PUBLIC_CARD_ADDRESS_MAX_LENGTH, "address")
+            val guestContact =
+                normalizePublicCardText(request.guestContact, PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH, "guestContact")
+            val cardDescription =
+                normalizePublicCardText(
+                    request.cardDescription,
+                    PUBLIC_CARD_DESCRIPTION_MAX_LENGTH,
+                    "cardDescription",
+                )
+            val settings =
+                venueRepository.updatePublicCardSettings(
+                    venueId = venueId,
+                    city = city,
+                    address = address,
+                    guestContact = guestContact,
+                    cardDescription = cardDescription,
+                ) ?: throw NotFoundException()
+            call.respond(settings.toResponse())
         }
 
         post("/{venueId}/staff-chat/link-code") {
@@ -217,6 +277,44 @@ fun Route.venueRoutes(
         }
     }
 }
+
+private suspend fun requirePublicCardSettingsPermission(
+    venueAccessRepository: VenueAccessRepository,
+    userId: Long,
+    venueId: Long,
+) {
+    val role =
+        resolveVenueRole(
+            venueAccessRepository = venueAccessRepository,
+            userId = userId,
+            venueId = venueId,
+        )
+    if (role != VenueRole.OWNER && role != VenueRole.MANAGER) {
+        throw ForbiddenException()
+    }
+}
+
+private fun normalizePublicCardText(
+    raw: String?,
+    maxLength: Int,
+    fieldName: String,
+): String? {
+    val normalized = raw?.trim().orEmpty()
+    if (normalized.length > maxLength) {
+        throw InvalidInputException("$fieldName length must be <= $maxLength")
+    }
+    return normalized.ifBlank { null }
+}
+
+private fun VenuePublicCardSettings.toResponse(): VenuePublicCardSettingsResponse =
+    VenuePublicCardSettingsResponse(
+        venueId = venueId,
+        name = name,
+        city = city,
+        address = address,
+        guestContact = guestContact,
+        cardDescription = cardDescription,
+    )
 
 private fun buildStaffChatTelegramCommand(
     botUsername: String?,

@@ -173,6 +173,71 @@ open class VenueRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findPublicCardSettings(venueId: Long): VenuePublicCardSettings? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    loadPublicCardSettings(connection, venueId)
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun updatePublicCardSettings(
+        venueId: Long,
+        city: String?,
+        address: String?,
+        guestContact: String?,
+        cardDescription: String?,
+    ): VenuePublicCardSettings? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val updatedRows =
+                            connection.prepareStatement(
+                                """
+                                UPDATE venues
+                                SET city = ?,
+                                    address = ?,
+                                    guest_contact = ?,
+                                    card_description = ?,
+                                    updated_at = now()
+                                WHERE id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, city)
+                                statement.setString(2, address)
+                                statement.setString(3, guestContact)
+                                statement.setString(4, cardDescription)
+                                statement.setLong(5, venueId)
+                                statement.executeUpdate()
+                            }
+                        if (updatedRows <= 0) {
+                            connection.rollback()
+                            return@withContext null
+                        }
+                        val updated = loadPublicCardSettings(connection, venueId)
+                        connection.commit()
+                        updated
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun findStaffChatStatus(venueId: Long): StaffChatStatus? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
@@ -383,6 +448,35 @@ open class VenueRepository(private val dataSource: DataSource?) {
         }
     }
 
+    private fun loadPublicCardSettings(
+        connection: Connection,
+        venueId: Long,
+    ): VenuePublicCardSettings? {
+        return connection.prepareStatement(
+            """
+            SELECT id, name, city, address, guest_contact, card_description
+            FROM venues
+            WHERE id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    VenuePublicCardSettings(
+                        venueId = rs.getLong("id"),
+                        name = rs.getString("name"),
+                        city = rs.getString("city"),
+                        address = rs.getString("address"),
+                        guestContact = rs.getString("guest_contact"),
+                        cardDescription = rs.getString("card_description"),
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
     protected open fun findVenueIdByChatId(
         connection: Connection,
         chatId: Long,
@@ -576,6 +670,15 @@ data class CatalogVenueShort(
     val address: String?,
     val guestContact: String? = null,
     val cardDescription: String? = null,
+)
+
+data class VenuePublicCardSettings(
+    val venueId: Long,
+    val name: String,
+    val city: String?,
+    val address: String?,
+    val guestContact: String?,
+    val cardDescription: String?,
 )
 
 data class StaffChatStatus(

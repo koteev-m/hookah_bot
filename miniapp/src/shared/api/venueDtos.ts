@@ -181,6 +181,22 @@ export type VenueBookingSettingsUpdateRequest = {
   holdMinutes: number
 }
 
+export type VenuePublicCardSettingsResponse = {
+  venueId: number
+  name: string
+  city?: string | null
+  address?: string | null
+  guestContact?: string | null
+  cardDescription?: string | null
+}
+
+export type VenuePublicCardSettingsUpdateRequest = {
+  city?: string | null
+  address?: string | null
+  guestContact?: string | null
+  cardDescription?: string | null
+}
+
 export type VenueTableDto = {
   tableId: number
   tableNumber: number

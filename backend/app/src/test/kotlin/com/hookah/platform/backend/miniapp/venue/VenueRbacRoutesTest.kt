@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.venue
 
 import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
@@ -12,9 +13,13 @@ import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
+import io.ktor.client.request.put
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import io.mockk.coEvery
@@ -152,6 +157,237 @@ class VenueRbacRoutesTest {
             val payload = json.decodeFromString(StaffChatLinkCodeResponse.serializer(), response.bodyAsText())
             assertTrue(payload.code.isNotBlank())
             assertTrue(payload.ttlSeconds > 0)
+        }
+
+    @Test
+    fun `owner can read public card settings`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-owner-read")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload =
+                json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), response.bodyAsText())
+            assertEquals(venueId, payload.venueId)
+            assertEquals("Venue", payload.name)
+            assertEquals("City", payload.city)
+            assertEquals("Address", payload.address)
+            assertEquals(null, payload.guestContact)
+            assertEquals(null, payload.cardDescription)
+        }
+
+    @Test
+    fun `manager can update public card settings and guest card reflects them`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-manager-update")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val token = issueToken(config)
+            val request =
+                VenuePublicCardSettingsUpdateRequest(
+                    city = " Москва ",
+                    address = " Новый Арбат, 24 ",
+                    guestContact = " +7 999 000-00-00 ",
+                    cardDescription = " Авторские чаши и спокойная посадка. ",
+                )
+
+            val updateResponse =
+                client.put("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(VenuePublicCardSettingsUpdateRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, updateResponse.status)
+            val updated =
+                json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), updateResponse.bodyAsText())
+            assertEquals("Venue", updated.name)
+            assertEquals("Москва", updated.city)
+            assertEquals("Новый Арбат, 24", updated.address)
+            assertEquals("+7 999 000-00-00", updated.guestContact)
+            assertEquals("Авторские чаши и спокойная посадка.", updated.cardDescription)
+
+            val guestResponse =
+                client.get("/api/guest/venue/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, guestResponse.status)
+            val guestPayload = json.decodeFromString(VenueResponse.serializer(), guestResponse.bodyAsText())
+            assertEquals("Москва", guestPayload.venue.city)
+            assertEquals("Новый Арбат, 24", guestPayload.venue.address)
+            assertEquals("+7 999 000-00-00", guestPayload.venue.guestContact)
+            assertEquals("Авторские чаши и спокойная посадка.", guestPayload.venue.cardDescription)
+        }
+
+    @Test
+    fun `blank public card fields are normalized to null`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-blank")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val token = issueToken(config)
+            val request =
+                VenuePublicCardSettingsUpdateRequest(
+                    city = " ",
+                    address = "",
+                    guestContact = "\t",
+                    cardDescription = "\n",
+                )
+
+            val response =
+                client.put("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(VenuePublicCardSettingsUpdateRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload =
+                json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), response.bodyAsText())
+            assertEquals(null, payload.city)
+            assertEquals(null, payload.address)
+            assertEquals(null, payload.guestContact)
+            assertEquals(null, payload.cardDescription)
+        }
+
+    @Test
+    fun `staff cannot read or update public card settings`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-staff-denied")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
+            val token = issueToken(config)
+
+            val readResponse =
+                client.get("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, readResponse.status)
+            assertApiErrorEnvelope(readResponse, ApiErrorCodes.FORBIDDEN)
+
+            val updateResponse =
+                client.put("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            VenuePublicCardSettingsUpdateRequest.serializer(),
+                            VenuePublicCardSettingsUpdateRequest(city = "Москва"),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, updateResponse.status)
+            assertApiErrorEnvelope(updateResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `foreign venue cannot update public card settings`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-foreign")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val foreignVenueId = seedVenueMembership(jdbcUrl, 777L, "OWNER")
+            val token = issueToken(config)
+
+            val response =
+                client.put("/api/venue/$foreignVenueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            VenuePublicCardSettingsUpdateRequest.serializer(),
+                            VenuePublicCardSettingsUpdateRequest(city = "Москва"),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `invalid public card settings update preserves existing values`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-invalid")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val token = issueToken(config)
+            val invalid =
+                VenuePublicCardSettingsUpdateRequest(
+                    city = "М".repeat(121),
+                    address = "Новый Арбат, 24",
+                    guestContact = "+7 999 000-00-00",
+                    cardDescription = "Описание",
+                )
+
+            val invalidResponse =
+                client.put("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(VenuePublicCardSettingsUpdateRequest.serializer(), invalid))
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, invalidResponse.status)
+            assertApiErrorEnvelope(invalidResponse, ApiErrorCodes.INVALID_INPUT)
+
+            val readResponse =
+                client.get("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, readResponse.status)
+            val payload =
+                json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), readResponse.bodyAsText())
+            assertEquals("City", payload.city)
+            assertEquals("Address", payload.address)
+            assertEquals(null, payload.guestContact)
+            assertEquals(null, payload.cardDescription)
         }
 
     @Test

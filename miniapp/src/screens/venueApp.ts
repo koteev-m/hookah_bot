@@ -387,6 +387,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   }
 
   const hasPermission = (permission: string) => currentPermissions.includes(permission)
+  const canManagePublicCard = () => currentRole === 'OWNER' || currentRole === 'MANAGER'
 
   const updateNavVisibility = () => {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
@@ -399,7 +400,8 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
     refs.navButtons.stats.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
-    refs.navButtons.settings.hidden = !hasPermission('SHIFT_EXTENSION_SETTINGS') && !hasPermission('BOOKING_MANAGE')
+    refs.navButtons.settings.hidden =
+      !canManagePublicCard() && !hasPermission('SHIFT_EXTENSION_SETTINGS') && !hasPermission('BOOKING_MANAGE')
     refs.navSections.forEach((section) => {
       section.element.hidden = section.buttons.every((button) => button.hidden)
     })
@@ -422,7 +424,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'tables':
         return hasPermission('TABLE_VIEW')
       case 'settings':
-        return hasPermission('SHIFT_EXTENSION_SETTINGS') || hasPermission('BOOKING_MANAGE')
+        return canManagePublicCard() || hasPermission('SHIFT_EXTENSION_SETTINGS') || hasPermission('BOOKING_MANAGE')
       case 'staff':
         return currentRole !== 'STAFF'
       case 'stats':

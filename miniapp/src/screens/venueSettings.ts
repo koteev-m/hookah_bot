@@ -3,12 +3,19 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   venueGetBookingSettings,
+  venueGetPublicCardSettings,
   venueGetShiftExtensionSettings,
   venueUpdateBookingSettings,
+  venueUpdatePublicCardSettings,
   venueUpdateShiftExtensionSettings
 } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { ShiftExtensionSettingsDto, VenueAccessDto, VenueBookingSettingsResponse } from '../shared/api/venueDtos'
+import type {
+  ShiftExtensionSettingsDto,
+  VenueAccessDto,
+  VenueBookingSettingsResponse,
+  VenuePublicCardSettingsResponse
+} from '../shared/api/venueDtos'
 import { append, el, on } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
@@ -23,6 +30,14 @@ export type VenueSettingsOptions = {
 
 type VenueSettingsRefs = {
   status: HTMLParagraphElement
+  publicCard: HTMLElement
+  publicName: HTMLParagraphElement
+  cityInput: HTMLInputElement
+  addressInput: HTMLInputElement
+  guestContactInput: HTMLInputElement
+  cardDescriptionInput: HTMLTextAreaElement
+  publicCardSaveButton: HTMLButtonElement
+  publicCardForm: HTMLDivElement
   bookingCard: HTMLElement
   bookingSummary: HTMLParagraphElement
   bookingExample: HTMLParagraphElement
@@ -41,6 +56,11 @@ type VenueSettingsRefs = {
   backButton: HTMLButtonElement
 }
 
+const PUBLIC_CARD_CITY_MAX_LENGTH = 120
+const PUBLIC_CARD_ADDRESS_MAX_LENGTH = 300
+const PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH = 300
+const PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
+
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
 }
@@ -51,6 +71,58 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   const title = el('h2', { text: 'Настройки' })
   const status = el('p', { className: 'status', text: '' })
   append(header, title, status)
+
+  const publicCard = el('section', { className: 'card' })
+  const publicTitle = el('h3', { text: 'Публичная карточка' })
+  const publicDescription = el('p', {
+    text: 'Эти данные видят гости в каталоге и карточке заведения.'
+  })
+  const publicNameLabel = el('p', { className: 'field-label', text: 'Название' })
+  const publicName = el('p', { className: 'venue-order-sub', text: '' })
+  const publicCardForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
+
+  const cityLabel = el('p', { className: 'field-label', text: 'Город' })
+  const cityInput = document.createElement('input')
+  cityInput.className = 'venue-input'
+  cityInput.type = 'text'
+  cityInput.maxLength = PUBLIC_CARD_CITY_MAX_LENGTH
+  cityInput.placeholder = 'Москва'
+
+  const addressLabel = el('p', { className: 'field-label', text: 'Адрес' })
+  const addressInput = document.createElement('input')
+  addressInput.className = 'venue-input'
+  addressInput.type = 'text'
+  addressInput.maxLength = PUBLIC_CARD_ADDRESS_MAX_LENGTH
+  addressInput.placeholder = 'Новый Арбат, 24'
+
+  const guestContactLabel = el('p', { className: 'field-label', text: 'Контакт для гостей' })
+  const guestContactInput = document.createElement('input')
+  guestContactInput.className = 'venue-input'
+  guestContactInput.type = 'text'
+  guestContactInput.maxLength = PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH
+  guestContactInput.placeholder = '+7 999 000-00-00'
+
+  const cardDescriptionLabel = el('p', { className: 'field-label', text: 'Краткое описание' })
+  const cardDescriptionInput = document.createElement('textarea')
+  cardDescriptionInput.className = 'venue-textarea'
+  cardDescriptionInput.maxLength = PUBLIC_CARD_DESCRIPTION_MAX_LENGTH
+  cardDescriptionInput.rows = 4
+  cardDescriptionInput.placeholder = 'Например: авторские чаши, спокойная посадка, чайная карта.'
+
+  const publicCardSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
+  append(
+    publicCardForm,
+    cityLabel,
+    cityInput,
+    addressLabel,
+    addressInput,
+    guestContactLabel,
+    guestContactInput,
+    cardDescriptionLabel,
+    cardDescriptionInput,
+    publicCardSaveButton
+  )
+  append(publicCard, publicTitle, publicDescription, publicNameLabel, publicName, publicCardForm)
 
   const bookingCard = el('section', { className: 'card' })
   const bookingTitle = el('h3', { text: 'Настройки брони' })
@@ -111,11 +183,19 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   append(extensionCard, extensionTitle, description, extensionSummary, extensionHint, extensionForm)
 
   const backButton = el('button', { className: 'button-secondary', text: 'Вернуться в обзор' }) as HTMLButtonElement
-  append(wrapper, header, bookingCard, extensionCard, backButton)
+  append(wrapper, header, publicCard, bookingCard, extensionCard, backButton)
   root.replaceChildren(wrapper)
 
   return {
     status,
+    publicCard,
+    publicName,
+    cityInput,
+    addressInput,
+    guestContactInput,
+    cardDescriptionInput,
+    publicCardSaveButton,
+    publicCardForm,
     bookingCard,
     bookingSummary,
     bookingExample,
@@ -191,6 +271,14 @@ function renderBookingSettings(refs: VenueSettingsRefs, settings: VenueBookingSe
     })
 }
 
+function renderPublicCardSettings(refs: VenueSettingsRefs, settings: VenuePublicCardSettingsResponse) {
+  refs.publicName.textContent = settings.name || 'Название не задано'
+  refs.cityInput.value = settings.city ?? ''
+  refs.addressInput.value = settings.address ?? ''
+  refs.guestContactInput.value = settings.guestContact ?? ''
+  refs.cardDescriptionInput.value = settings.cardDescription ?? ''
+}
+
 function renderShiftExtensionSettings(refs: VenueSettingsRefs, settings: ShiftExtensionSettingsDto) {
   refs.enabledInput.checked = settings.enabled
   refs.durationSelect.value = String(settings.durationMinutes)
@@ -214,25 +302,36 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const refs = buildDom(root)
   const deps = buildApiDeps(isDebug)
+  const canManagePublicCard = access.role === 'OWNER' || access.role === 'MANAGER'
   const canManageBookingSettings = access.permissions.includes('BOOKING_MANAGE')
   const canManageShiftExtension = access.permissions.includes('SHIFT_EXTENSION_SETTINGS')
   const disposables: Array<() => void> = []
 
   let disposed = false
   let loadAbort: AbortController | null = null
+  let publicCardSaveAbort: AbortController | null = null
   let bookingSaveAbort: AbortController | null = null
   let extensionSaveAbort: AbortController | null = null
+  let currentPublicCardSettings: VenuePublicCardSettingsResponse | null = null
   let currentBookingSettings: VenueBookingSettingsResponse | null = null
   let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
 
+  if (!canManagePublicCard) {
+    refs.publicCard.remove()
+  }
   if (!canManageBookingSettings) {
     refs.bookingCard.remove()
   }
   if (!canManageShiftExtension) {
     refs.extensionCard.remove()
   }
-  if (!canManageBookingSettings && !canManageShiftExtension) {
+  if (!canManagePublicCard && !canManageBookingSettings && !canManageShiftExtension) {
     refs.status.textContent = 'У вас нет доступа к настройкам заведения.'
+  }
+
+  const setPublicCardBusy = (busy: boolean) => {
+    refs.publicCardSaveButton.disabled = busy
+    refs.publicCardSaveButton.textContent = busy ? 'Сохраняем…' : 'Сохранить'
   }
 
   const setBookingBusy = (busy: boolean) => {
@@ -246,11 +345,23 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const load = async () => {
-    if (!canManageBookingSettings && !canManageShiftExtension) return
+    if (!canManagePublicCard && !canManageBookingSettings && !canManageShiftExtension) return
     refs.status.textContent = 'Загрузка…'
     loadAbort?.abort()
     const controller = new AbortController()
     loadAbort = controller
+    if (canManagePublicCard) {
+      const result = await venueGetPublicCardSettings(backendUrl, { venueId }, deps, controller.signal)
+      if (disposed || loadAbort !== controller) return
+      if (!result.ok) {
+        if (result.error.code === REQUEST_ABORTED_CODE) return
+        loadAbort = null
+        renderApiError(refs.status, result.error, isDebug)
+        return
+      }
+      currentPublicCardSettings = result.data
+      renderPublicCardSettings(refs, currentPublicCardSettings)
+    }
     if (canManageBookingSettings) {
       const result = await venueGetBookingSettings(backendUrl, { venueId }, deps, controller.signal)
       if (disposed || loadAbort !== controller) return
@@ -277,6 +388,63 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
     loadAbort = null
     refs.status.textContent = 'Настройки загружены.'
+  }
+
+  const savePublicCardSettings = async () => {
+    if (!canManagePublicCard || !currentPublicCardSettings) return
+    const city = refs.cityInput.value.trim()
+    const address = refs.addressInput.value.trim()
+    const guestContact = refs.guestContactInput.value.trim()
+    const cardDescription = refs.cardDescriptionInput.value.trim()
+    if (city.length > PUBLIC_CARD_CITY_MAX_LENGTH) {
+      refs.status.textContent = `Город должен быть не длиннее ${PUBLIC_CARD_CITY_MAX_LENGTH} символов.`
+      return
+    }
+    if (address.length > PUBLIC_CARD_ADDRESS_MAX_LENGTH) {
+      refs.status.textContent = `Адрес должен быть не длиннее ${PUBLIC_CARD_ADDRESS_MAX_LENGTH} символов.`
+      return
+    }
+    if (guestContact.length > PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH) {
+      refs.status.textContent =
+        `Контакт для гостей должен быть не длиннее ${PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH} символов.`
+      return
+    }
+    if (cardDescription.length > PUBLIC_CARD_DESCRIPTION_MAX_LENGTH) {
+      refs.status.textContent =
+        `Описание должно быть не длиннее ${PUBLIC_CARD_DESCRIPTION_MAX_LENGTH} символов.`
+      return
+    }
+
+    setPublicCardBusy(true)
+    publicCardSaveAbort?.abort()
+    const controller = new AbortController()
+    publicCardSaveAbort = controller
+    const result = await venueUpdatePublicCardSettings(
+      backendUrl,
+      {
+        venueId,
+        body: {
+          city: city || null,
+          address: address || null,
+          guestContact: guestContact || null,
+          cardDescription: cardDescription || null
+        }
+      },
+      deps,
+      controller.signal
+    )
+    if (disposed || publicCardSaveAbort !== controller) return
+    publicCardSaveAbort = null
+    setPublicCardBusy(false)
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) return
+      renderApiError(refs.status, result.error, isDebug)
+      return
+    }
+    currentPublicCardSettings = result.data
+    renderPublicCardSettings(refs, currentPublicCardSettings)
+    refs.status.textContent = 'Публичная карточка сохранена.'
+    showToast('Публичная карточка сохранена.')
   }
 
   const saveBookingSettings = async () => {
@@ -369,6 +537,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     showToast('Настройки сохранены')
   }
 
+  disposables.push(on(refs.publicCardSaveButton, 'click', () => void savePublicCardSettings()))
   disposables.push(on(refs.bookingSaveButton, 'click', () => void saveBookingSettings()))
   disposables.push(on(refs.extensionSaveButton, 'click', () => void saveShiftExtensionSettings()))
   disposables.push(on(refs.backButton, 'click', () => {
@@ -380,6 +549,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   return () => {
     disposed = true
     loadAbort?.abort()
+    publicCardSaveAbort?.abort()
     bookingSaveAbort?.abort()
     extensionSaveAbort?.abort()
     disposables.forEach((dispose) => dispose())

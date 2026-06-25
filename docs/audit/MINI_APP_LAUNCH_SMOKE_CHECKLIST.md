@@ -24,6 +24,7 @@
 - M7b Guest Mini App `Мои брони` passed staging visual parity for the same booking's public label, venue-local time and `Держим до` against Bot `/my`; real two-account Telegram runtime isolation remains unverified.
 - M7c adaptive transactional reminders passed one controlled real Telegram staging smoke: one M7C reminder was created and delivered, `Да, буду` visibly updated the reminder message, `Да, буду` disappeared, transfer/cancel remained, Guest/Venue Mini App attendance indicators appeared, booking status stayed venue-controlled, repeat confirmation was idempotent and staff notification was deduplicated. The worker was returned to `BOOKING_REMINDER_WORKER_ENABLED=false`, and `/health` plus `/db/health` returned ok.
 - M7c latest enriched staff-chat attendance copy is code/test-backed but was not manually re-smoked with a new booking.
+- M8a Venue Mini App public profile/card settings is code/test/e2e-backed: OWNER/MANAGER can edit guest-facing city, address, public contact and short card description; STAFF is hidden/forbidden; guest public venue card/catalog read models reflect saved fields. Staging smoke is still pending.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -73,6 +74,7 @@ Remaining:
 - P1 CLOSED: M5 staff calls lifecycle and compact Guest Mini App UX staging smoke passed. Keep linked Telegram group notification and inline ACK/DONE behavior in per-venue regression.
 - P1 CLOSED: M6 staff chat diagnostics/unlink polish staging smoke passed. Keep real Telegram group link/test/unlink and operational notification delivery in per-venue regression.
 - P1 CLOSED: M7c adaptive transactional reminders passed core real Telegram staging smoke and remain disabled by default for rollout. Keep feature flag, legacy-row isolation, attendance idempotency, message editing and staff notification dedupe in regression. The enriched staff-chat attendance copy after the smoke is code/test-backed only.
+- P1 code/e2e-backed, staging pending: M8a Venue Mini App public profile/card settings exposes only existing guest-facing public fields (`city`, `address`, `guestContact`, `cardDescription`) for OWNER/MANAGER; STAFF stays denied/hidden. Keep guest public card/catalog reflection, validation and tenant isolation in regression.
 - P2 stats follow-up: custom date range picker (`from`/`to`), arbitrary period stats and future AI-generated summaries/insights.
 - P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
@@ -491,7 +493,19 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Current implementation block after M7c acceptance: M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b and M7c stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Current implementation block after M7c acceptance: M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a Venue Mini App public profile/card settings is code/test/e2e-backed and awaits staging smoke. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c and M8a stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+
+Manual M8a public profile/card settings regression smoke:
+1. OWNER opens Venue Mini App `Настройки`.
+2. `Публичная карточка` shows venue name read-only plus editable `Город`, `Адрес`, `Контакт для гостей` and `Краткое описание`.
+3. OWNER updates all four editable fields and saves.
+4. Reload confirms the values are persisted.
+5. Open Guest Mini App catalog/card for the venue and confirm city, address, public contact and description match the saved values.
+6. MANAGER can repeat the edit.
+7. STAFF cannot see `Публичная карточка` controls, and direct API access is denied.
+8. A manager/owner of another venue cannot read or update this venue's public card settings.
+9. Blank optional fields normalize to absent public fields; invalid lengths preserve existing values.
+10. Restore original public copy after smoke if production-like test data was changed.
 
 Manual M7a booking hold settings regression smoke:
 1. OWNER opens Venue Mini App `Настройки`.

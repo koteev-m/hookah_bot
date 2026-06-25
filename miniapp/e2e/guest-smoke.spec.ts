@@ -93,6 +93,15 @@ type BookingSettings = {
   quickHoldMinutes: number[]
 }
 
+type PublicCardSettings = {
+  venueId: number
+  name: string
+  city: string | null
+  address: string | null
+  guestContact: string | null
+  cardDescription: string | null
+}
+
 type GuestMenuOption = {
   id: number
   name: string
@@ -353,6 +362,18 @@ function buildBookingSettings(overrides: Partial<BookingSettings> = {}): Booking
     minHoldMinutes: 10,
     maxHoldMinutes: 240,
     quickHoldMinutes: [30, 60],
+    ...overrides
+  }
+}
+
+function buildPublicCardSettings(overrides: Partial<PublicCardSettings> = {}): PublicCardSettings {
+  return {
+    venueId: 1,
+    name: 'Микс',
+    city: 'Москва',
+    address: 'Пилотная, 1',
+    guestContact: null,
+    cardDescription: null,
     ...overrides
   }
 }
@@ -909,6 +930,7 @@ async function mockVenueShiftExtensionApi(
     permissions?: string[]
     settings?: ShiftExtensionSettings
     bookingSettings?: BookingSettings
+    publicCardSettings?: PublicCardSettings
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
@@ -916,10 +938,12 @@ async function mockVenueShiftExtensionApi(
   let requests = [buildShiftExtensionRequest()]
   let settings = options.settings ?? buildShiftExtensionSettings()
   let bookingSettings = options.bookingSettings ?? buildBookingSettings()
+  let publicCardSettings = options.publicCardSettings ?? buildPublicCardSettings()
   let approveCalls = 0
   let rejectCalls = 0
   let updateSettingsCalls = 0
   let updateBookingSettingsCalls = 0
+  let updatePublicCardSettingsCalls = 0
   let orderServiceCharges: ServiceCharge[] = []
   const rejectedReasons: string[] = []
 
@@ -950,9 +974,11 @@ async function mockVenueShiftExtensionApi(
       jsonResponse({
         venue: {
           id: 1,
-          name: 'Микс',
-          city: 'Москва',
-          address: 'Пилотная, 1',
+          name: publicCardSettings.name,
+          city: publicCardSettings.city,
+          address: publicCardSettings.address,
+          guestContact: publicCardSettings.guestContact,
+          cardDescription: publicCardSettings.cardDescription,
           status: 'PUBLISHED'
         }
       })
@@ -1108,6 +1134,26 @@ async function mockVenueShiftExtensionApi(
     await route.fulfill(jsonResponse(bookingSettings))
   })
 
+  await page.route('**/api/venue/1/public-card', async (route) => {
+    if (route.request().method() === 'PUT') {
+      updatePublicCardSettingsCalls += 1
+      const body = (await route.request().postDataJSON()) as {
+        city?: string | null
+        address?: string | null
+        guestContact?: string | null
+        cardDescription?: string | null
+      }
+      publicCardSettings = {
+        ...publicCardSettings,
+        city: body.city?.trim() || null,
+        address: body.address?.trim() || null,
+        guestContact: body.guestContact?.trim() || null,
+        cardDescription: body.cardDescription?.trim() || null
+      }
+    }
+    await route.fulfill(jsonResponse(publicCardSettings))
+  })
+
   await page.route('**/api/venue/1/shift-extension-requests**', async (route) => {
     const url = route.request().url()
     const approveMatch = url.match(/shift-extension-requests\/(\d+)\/approve/)
@@ -1151,8 +1197,10 @@ async function mockVenueShiftExtensionApi(
     getRejectCalls: () => rejectCalls,
     getUpdateSettingsCalls: () => updateSettingsCalls,
     getUpdateBookingSettingsCalls: () => updateBookingSettingsCalls,
+    getUpdatePublicCardSettingsCalls: () => updatePublicCardSettingsCalls,
     getSettings: () => settings,
     getBookingSettings: () => bookingSettings,
+    getPublicCardSettings: () => publicCardSettings,
     getRejectedReasons: () => rejectedReasons,
     setRequests: (nextRequests: ShiftExtensionRequest[]) => {
       requests = nextRequests
@@ -2697,6 +2745,60 @@ test('venue staff does not see staff chat management', async ({ page }) => {
     window.location.hash = '#/chat'
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+})
+
+test('venue manager configures public profile card settings', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, {
+    role: 'MANAGER',
+    permissions: ['BOOKING_MANAGE'],
+    publicCardSettings: buildPublicCardSettings({
+      city: 'Москва',
+      address: 'Пилотная, 1',
+      guestContact: null,
+      cardDescription: null
+    })
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
+  await expect(publicCard).toContainText('Эти данные видят гости в каталоге')
+  await expect(publicCard).toContainText('Микс')
+
+  await publicCard.getByPlaceholder('Москва').fill('Санкт-Петербург')
+  await publicCard.getByPlaceholder('Новый Арбат, 24').fill('Литейный, 7')
+  await publicCard.getByPlaceholder('+7 999 000-00-00').fill('+7 900 111-22-33')
+  await publicCard.getByPlaceholder(/авторские чаши/).fill('Лаунж с чайной картой и спокойной посадкой.')
+  await publicCard.getByRole('button', { name: 'Сохранить' }).click()
+
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  expect(api.getUpdatePublicCardSettingsCalls()).toBe(1)
+  expect(api.getPublicCardSettings()).toMatchObject({
+    city: 'Санкт-Петербург',
+    address: 'Литейный, 7',
+    guestContact: '+7 900 111-22-33',
+    cardDescription: 'Лаунж с чайной картой и спокойной посадкой.'
+  })
+})
+
+test('venue staff does not see public profile card settings', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, {
+    role: 'STAFF',
+    permissions: ['ORDER_QUEUE_VIEW']
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/settings'
+  })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Публичная карточка' })).toHaveCount(0)
 })
 
 test('venue manager configures paid shift extension settings', async ({ page }) => {
