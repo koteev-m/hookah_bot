@@ -109,6 +109,12 @@ For temporary tunnel-based local dev, keep using local env files and set public 
 Standard local one-command deploy:
 
 ```bash
+./scripts/deploy-staging.sh <ssh-alias>
+```
+
+Current staging alias example:
+
+```bash
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
@@ -131,6 +137,14 @@ The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and depende
 
 Normal deployment remains supported and unchanged. Use the ControlMaster helper only when repeated new SSH connection establishment is unreliable during deploy.
 
+Resilient command:
+
+```bash
+./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+```
+
+Current staging alias example with optional overrides:
+
 ```bash
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.example.com \
@@ -141,7 +155,7 @@ BACKEND_IMAGE=example-backend:staging \
 
 The helper:
 
-- opens one persistent authenticated SSH ControlMaster connection with the operator's existing SSH config and host alias;
+- opens one persistent authenticated SSH ControlMaster connection with the operator's existing SSH config and host alias, using bounded initial connection retries;
 - creates a temporary SSH wrapper and makes child `ssh` and `rsync` calls reuse the helper-owned control socket;
 - calls the existing `./scripts/deploy-staging.sh` for compose validation, env validation, Docker build/upload, service restart and health checks;
 - closes the master with `ssh -O exit` and removes its temporary socket/wrapper directory on success, failure, `SIGINT` or `SIGTERM`.
@@ -155,14 +169,34 @@ The helper does not:
 
 During the M8b-Free staging deploy, direct deployment repeatedly failed while opening fresh SSH/SCP/rsync connections. Both `scp` and `rsync` saw intermittent key-exchange or connection-closed failures. At the same time, server resources, disk, Docker, backend and PostgreSQL health were normal, and server logs showed substantial unauthenticated SSH scanning.
 
-Do not treat this as a proven root cause analysis. The observed incident only proves that repeated new SSH connection establishment was unreliable, while an already-authenticated persistent SSH connection worked.
+Do not treat this as a proven root cause analysis. The observed incident only proves that repeated new SSH connection establishment was unreliable, while an already-authenticated persistent SSH connection worked. M9a validated the persistent connection as an operational workaround and release-reliability improvement; it did not prove that Docker, server resources, SSH scanning, `MaxStartups` or any other single factor caused the fresh-connection drops.
 
-Expected success indicators:
+M9a verified staging evidence:
+
+- initial master connection attempt hit an SSH banner timeout;
+- the helper's bounded retry opened the master successfully;
+- rsync upload succeeded through the persistent connection;
+- Docker image build completed;
+- image upload to the VPS completed;
+- backend container was recreated successfully;
+- PostgreSQL remained healthy;
+- local backend `/health` returned ok;
+- local `/db/health` returned ok;
+- local Mini App static check passed;
+- public `/health` returned ok;
+- public `/db/health` returned ok;
+- public `/miniapp/` returned the application HTML;
+- a separate retry-based public check also passed for all three public endpoints.
+
+Expected success indicators for future deploys:
 
 - the helper reports that the ControlMaster is ready;
 - upload steps complete without opening new authenticated SSH sessions;
+- image build/upload completes;
+- backend restarts/recreates successfully;
 - the existing deploy script prints `==> Staging deploy finished`;
-- `/health`, `/db/health`, and `/miniapp/` checks pass.
+- local `/health`, `/db/health`, and `/miniapp/` checks pass;
+- public `/health`, `/db/health`, and `/miniapp/` checks pass.
 
 Troubleshooting:
 
@@ -173,7 +207,7 @@ Troubleshooting:
 - Docker Desktop not running: the helper fails before opening the master connection. Start Docker and rerun the same helper command.
 - Health endpoint retry behavior: endpoint waits and retries still come from `deploy-staging.sh`. If retries are exhausted, inspect container status and backend logs before redeploying.
 
-Manual staging smoke plan, not part of local implementation validation:
+Manual regression smoke for future ControlMaster deploys:
 
 1. Verify Docker Desktop is running.
 2. Run the ControlMaster helper with the staging SSH alias.
@@ -186,7 +220,13 @@ Manual staging smoke plan, not part of local implementation validation:
 9. Run `ssh -O check` after cleanup for the known socket and confirm no helper-owned master remains.
 10. Record fresh-connection SSH failures separately; do not treat this helper as proof of root cause.
 
-Permanent server-network/SSH hardening remains a separate ops follow-up.
+Permanent server-network/SSH hardening remains a separate ops follow-up:
+
+- determine the exact SSH drop cause;
+- consider firewall/VPN/private management networking;
+- review SSH daemon hardening;
+- monitor rejected pre-auth connections;
+- design deployment rollback/blue-green work separately from the ControlMaster helper.
 
 Optional overrides:
 

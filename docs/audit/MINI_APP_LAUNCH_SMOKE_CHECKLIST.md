@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-06-18.
+Дата: 2026-06-25.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -25,6 +25,7 @@
 - M7c adaptive transactional reminders passed one controlled real Telegram staging smoke: one M7C reminder was created and delivered, `Да, буду` visibly updated the reminder message, `Да, буду` disappeared, transfer/cancel remained, Guest/Venue Mini App attendance indicators appeared, booking status stayed venue-controlled, repeat confirmation was idempotent and staff notification was deduplicated. The worker was returned to `BOOKING_REMINDER_WORKER_ENABLED=false`, and `/health` plus `/db/health` returned ok.
 - M7c latest enriched staff-chat attendance copy is code/test-backed but was not manually re-smoked with a new booking.
 - M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED after provider-free staging smoke: OWNER/MANAGER can edit guest-facing country/city/address, public contact and short card description without a runtime geodata provider; country/city suggestions are local, missing cities and addresses remain manually enterable, STAFF is hidden/forbidden, and guest public venue card/catalog read models plus route links reflect saved fields. Existing coordinates remain supported for coordinate-first route links, but manually entered addresses are not verified coordinates. Yandex adapters remain optional/commercial-only and disabled by default.
+- M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper opened one authenticated persistent connection after a bounded retry, reused that connection for rsync/plain SSH through the existing deployment script, completed image build/upload and backend recreate, and passed local/public health, DB health and Mini App static checks. The normal `./scripts/deploy-staging.sh hookah-staging` path remains supported and unchanged. The exact fresh SSH connection failure cause remains unconfirmed.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -37,7 +38,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE`; baseline smoke passed on 2026-06-04, with later staged parity smokes recorded through M7c.
+Status: `PASSED FOR CURRENT RELEASE THROUGH M9a`; baseline smoke passed on 2026-06-04, with later staged parity and deployment smokes recorded through M9a.
 
 Confirmed:
 
@@ -64,10 +65,12 @@ Confirmed:
 - M7c controlled real Telegram smoke passed: M7C reminder delivery, visible Telegram message edit after `Да, буду`, removal of the attendance button, retained transfer/cancel buttons, Guest/Venue Mini App attendance display, unchanged venue booking status, idempotent repeat confirmation, deduplicated staff notification, final `/health` and `/db/health` ok, and staging returned to `BOOKING_REMINDER_WORKER_ENABLED=false`.
 - M7c legacy audit after smoke recorded `LEGACY/CANCELED = 3`, `LEGACY/SKIPPED = 1`, and claimable legacy rows `0`.
 - M8a/M8b-Free public profile/card settings staging smoke passed: OWNER edited country, city, manual address, public contact and description; reload preserved the values; the guest card reflected the saved public fields; `Построить маршрут` opened from the saved textual address; STAFF remained denied/hidden; Yandex geodata remained disabled and unused.
+- M9a ControlMaster deployment path staging smoke passed: initial master connection hit an SSH banner timeout, bounded retry opened the master, rsync upload, Docker build, image upload and backend recreate succeeded through the persistent connection, PostgreSQL stayed healthy, local `/health`, `/db/health` and Mini App static checks passed, public `/health`, `/db/health` and `/miniapp/` passed, and a separate retry-based public check also passed for all three endpoints.
 
 Remaining:
 
 - repeat this smoke after any additional release batch;
+- selected next implementation milestone: M9b Venue Working Hours and Date Exceptions Mini App Parity. Backend/Bot already have weekly hours and date overrides; Venue Mini App lacks equivalent settings and Mini App guest booking currently accepts arbitrary scheduled times without schedule validation.
 - P1 follow-up: paid venue/shift extension is implemented in backend, Guest/Venue Mini App, Guest Bot entry and staff-chat action path; remaining parity is Owner/Manager Bot settings smoke/closure where still needed by roadmap;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
@@ -77,7 +80,7 @@ Remaining:
 - P1 CLOSED: M7c adaptive transactional reminders passed core real Telegram staging smoke and remain disabled by default for rollout. Keep feature flag, legacy-row isolation, attendance idempotency, message editing and staff notification dedupe in regression. The enriched staff-chat attendance copy after the smoke is code/test-backed only.
 - P1 CLOSED / staging smoke passed: M8a/M8b-Free Venue Mini App structured public profile/card settings exposes guest-facing public location/contact fields (`countryCode`, `city`, `address`, `formattedAddress`, optional coordinates, `guestContact`, `cardDescription`) for OWNER/MANAGER; STAFF stays denied/hidden; provider-free country/city suggestions and manual address entry are the primary flow. Keep guest public card/catalog reflection, route links, validation and tenant isolation in regression.
 - P2 stats follow-up: custom date range picker (`from`/`to`), arbitrary period stats and future AI-generated summaries/insights.
-- P2 follow-ups remain: owner hours/exceptions UX, optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
+- P2 follow-ups remain: optional `📖 Фото-меню` subsections, quieter owner multi-image upload, expand frontend/browser e2e beyond the minimal Guest smoke, richer Platform cockpit parity and optional lifecycle restore semantics if product wants restore to non-published state.
 
 ## 1. Automated Coverage Map
 
@@ -494,7 +497,7 @@ Expected:
 
 ## 11. Next Implementation Smoke Target
 
-Current implementation block after M8b-Free acceptance: M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED / staging smoke passed in provider-free mode: OWNER tested country, city, manual address, save/reload, guest card reflection and route opening; visual polish remains deferred until functional blocks are complete. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c and M8b stay in regression smoke; paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
+Current implementation block after M9a: M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed, with the standard deploy command still supported and the opt-in ControlMaster helper validated as a persistent-connection workaround for unreliable fresh SSH/rsync connections. The exact SSH/network root cause remains unconfirmed and belongs to future operations hardening, not the M9a closure. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED / staging smoke passed in provider-free mode: OWNER tested country, city, manual address, save/reload, guest card reflection and route opening; visual polish remains deferred until functional blocks are complete. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c, M8b-Free and M9a stay in regression smoke; M9b Venue Working Hours and Date Exceptions Mini App Parity is the selected next bounded implementation milestone. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
 Manual M8b-Free structured public profile/card settings regression smoke (passed once on staging; keep in regression):
 1. OWNER opens Venue Mini App `Настройки`.

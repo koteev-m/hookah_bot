@@ -2,18 +2,18 @@
 
 Дата: 2026-04-28. Режим: read-only audit. Код, миграции и тесты не изменялись.
 
-> Current correction as of 2026-06-25: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description, while hours, info/media editing and guest preview remain later.
+> Current correction as of 2026-06-25: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description, while hours, info/media editing and guest preview remain later. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed. Current code also implements Telegram multi-venue selected context; old "Telegram selector missing" notes below are historical, while chain/network entities remain future work.
 
 ## Executive summary
 
-Из нового списка уже частично реализованы: базовые брони, Telegram `/my` для активных броней/заказов, Guest Mini App `Мои брони`, venue-side booking queue/lifecycle API, booking hold settings with persisted `arrival_deadline_at`, owner venue description sections, простой guest catalog, multi-venue membership в БД и Mini App venue selector, staff chat notifications для новых order batches, order close/table session cleanup как техническая основа visit retention.
+Из нового списка уже частично реализованы: базовые брони, Telegram `/my` для активных броней/заказов, Guest Mini App `Мои брони`, venue-side booking queue/lifecycle API, booking hold settings with persisted `arrival_deadline_at`, owner venue description sections, простой guest catalog, multi-venue membership в БД, Mini App venue selector and Telegram selected-venue context, staff chat notifications для новых order batches, order close/table session cleanup как техническая основа visit retention.
 
 Частично, но с заметными gap: booking lifecycle, Mini App surfaces and M7c core reminder flow are now much stronger, but preorder, automatic expiry/no-show automation, broader reminder rollout and broader retention remain later; каталог без server-side search/filter/map/geo; order history only partially exists; discount существует как ручной percent на item в счёте, но не как loyalty/promo system.
 
 Отсутствует: post-visit feedback/reviews, Yandex review link, paid placement, promotions/coupons/campaigns, promotion boosting, favorites/repeat templates, preorder, cashback/points/flexible loyalty rules, hookah master subrole/profile/shift schedule, network/group entity for venue chains. M7c reminder rollout remains opt-in disabled, not absent.
 
 Главные зависимости:
-- P0 core: active order/table_session/tab correctness из `PRODUCT_AUDIT_SUMMARY.md` остаётся prerequisite для visit_count, feedback, repeat, preorder, loyalty.
+- Core order/session/tab scoping is no longer the old April P0; current code scopes active orders by table session/tab and PostgreSQL has the active-order uniqueness constraint. Remaining related work is a P1 release/test-fidelity gap where H2 does not enforce the same uniqueness.
 - P1 ops: booking lifecycle and notifications need venue settings, scheduler/outbox, status events, Mini App screens.
 - P2 growth: favorites/history/repeat/promotions/reviews need stable visit/order history.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.
@@ -30,8 +30,8 @@
 | 6. Catalog promotion / paid placement | MISSING | No promo/campaign/placement files found; billing exists separately | Subscription/billing foundation | Placement/campaign/budget/status/labeling | Platform-managed `catalog_placements` with start/end/priority and label | Abuse, undisclosed ads, unfair ranking | P3 |
 | 7. Акции для гостей | PLACEHOLDER | `TelegramKeyboards.mainMenu` has `🎁 Акции`; `TelegramBotRouter.showPromotions` returns "следующий шаг" | Visible button | Promotions tables/routes/screens and owner flow | `venue_promotions` list active by venue/catalog | UI обещает несуществующую функцию | P2 |
 | 8. Продвижение акций | MISSING | No promotion/campaign models found | Billing infra only | Paid boost for promotions, moderation | Add promotion placement entity linked to promotion | Fraud/moderation/billing disputes | P3 |
-| 9. Мульти-venue owner / сеть | PARTIAL | `venue_members` PK `(venue_id,user_id)`; `VenueAccessRepository.listVenueMemberships`; `venueApp.ts` selector; Telegram `resolvePrimaryVenueBotAccess` picks first by role | One user can belong to many venues; Mini App selector | Telegram venue selector; network/group entity; consolidated stats | Telegram "Выбрать заведение"; improve Mini App labels | Wrong venue actions in Telegram | P1 for selector, P3 for networks |
-| 10. Staff/order notifications | PARTIAL | `StaffChatNotifier.notifyNewBatch`; `TelegramOutboxWorker`; `GuestBookingRoutes.notifyVenueStaffAboutBooking`; bot `notifyStaffChat` | Staff chat new order/reorder, bot staff calls, booking create/update/cancel messages | Personal staff notifications, unified event policy, Mini App staff call notification broken/absent | Always-on staff chat + optional personal bot subscriptions | Telegram sound constraints, disabled chat, missing staff chat link | P1 |
+| 9. Мульти-venue owner / сеть | PARTIAL | `venue_members` PK `(venue_id,user_id)`; `VenueAccessRepository.listVenueMemberships`; `venueApp.ts` selector; `telegram_venue_context`; Telegram selector callbacks/tests | One user can belong to many venues; Mini App selector; Telegram selected-venue context | Network/group entity; consolidated stats; runtime smoke for multi-venue roles | Keep selector in regression; later design chain/network entity | Wrong venue actions if selected context regresses | P3 for networks; selector is implemented/regression |
+| 10. Staff/order notifications | PARTIAL / CORE CLOSED | `StaffChatNotifier.notifyNewBatch`; `TelegramOutboxWorker`; `GuestBookingRoutes.notifyVenueStaffAboutBooking`; bot `notifyStaffChat`; M5/M6 staging smoke | Staff chat new order/reorder, bot and Mini App staff calls lifecycle, booking create/update/cancel messages, staff-chat diagnostics/unlink | Personal staff notifications, unified event policy, richer delivery history | Keep M5/M6 in regression; add personal subscriptions only after core smoke stays green | Telegram sound constraints, disabled chat, missing staff chat link | P2 after launch core |
 | 11. История заказов гостя | PARTIAL | `OrdersRepository.listActiveOrderSummariesForUser` filters `o.status='ACTIVE'`; `/my` active only | Active orders in Telegram; order tables retain data | Past order history, repeat order, favorites | `/api/guest/orders/history` from closed orders by user/tab | Current user/order relation depends on idempotency/batches | P2 |
 | 12. Избранное / любимые / repeat | MISSING | No favorites files/tables found; cart draft only localStorage in `cartStore.ts` | Local cart draft per table token | Favorite venue/item, repeat templates, frequent items | favorite items + repeat last order only in active table context | Reordering unavailable/stopped items | P2 |
 | 13. Предзаказ для постоянных | MISSING | Booking comment mentions "предзаказ"; no preorder model found | Booking exists; orders exist | Preorder settings, eligibility, cutoff, staff queue | `venue_preorder_settings`, `preorders` linked to confirmed booking | Requires reliable visit_count and booking lifecycle | P3 after visit history |
@@ -541,7 +541,7 @@ Tests/smoke checks:
 Текущее состояние в коде:
 - DB supports many memberships per user via `venue_members` primary key `(venue_id,user_id)`.
 - Mini App `/api/venue/me` returns all memberships; `venueApp.ts` has `<select>`.
-- Telegram bot resolves a single primary venue: role priority OWNER > MANAGER > STAFF, then first membership by `venue_id`.
+- Telegram bot stores selected venue context per chat/user and prompts selection when multiple current memberships are available; stale or unauthorized callbacks are rejected.
 - Manager/staff assigned per venue via `venue_members`.
 - No network/group entity.
 
@@ -549,47 +549,45 @@ Evidence:
 - `VenueAccessRepository.listVenueMemberships`
 - `VenueRoutes.get("/me")`
 - `miniapp/src/screens/venueApp.ts`
-- `TelegramBotRouter.resolvePrimaryVenueBotAccess`
+- `TelegramBotRouter.resolveSelectedVenueBotAccess`
+- `TelegramVenueContextRepository`
+- `V67__telegram_venue_context.sql`
 - `V11__venue_members.sql`
 
 Расхождение с концепцией:
 - Multi-tenant exists; chain/network management is beyond spec v1.
-- Telegram "first venue" problem exists.
+- Historical Telegram "first venue" problem is closed in current code; keep multi-venue role smoke in regression.
 
 MVP дизайн:
-- Telegram: if multiple memberships, show "Выберите заведение" before owner/manager/staff menu.
-- Persist selected venue in `telegram_chat_context` or dialog state.
-- Mini App: show venue names, not only `Venue #id`.
+- Telegram: keep "Выберите заведение" selected-context behavior in regression.
+- Mini App: keep venue selector labels clear.
 
 Расширенный дизайн:
 - `venue_networks`, `network_members`, bulk roles, consolidated stats, shared menu templates.
 
 Технические изменения:
-- Telegram venue selector keyboards and selected venue context.
-- Extend `/api/venue/me` with venue name/status.
+- Future chain/network data model and aggregate dashboards only if product needs multi-venue networks.
 
 Миграции БД:
 - MVP none.
 - Extended: `venue_networks`, `venue_network_members`, `venue_network_roles`.
 
 API/routes:
-- `GET /api/venue/me` add names.
 - Future `/api/network/...`.
 
 Telegram bot changes:
-- Role-aware menu becomes selected-venue-aware.
+- Role-aware menu is selected-venue-aware; keep callback authorization and stale-context cleanup in regression.
 
 Mini App changes:
-- Better selector labels and network filters.
+- Better network filters only after chain entity design.
 
 Tests/smoke checks:
-- Owner with two venues can choose each in Telegram.
-- Staff actions apply to selected venue.
+- Owner/manager/staff with two venues can choose each in Telegram and actions apply to the selected venue.
 
 Риски:
-- Existing flows parse venueId in callbacks; selector must not break callbacks.
+- Existing flows parse venueId in callbacks; selected context and callback authorization must stay aligned.
 
-Рекомендованный приоритет: **P1** for Telegram selector, **P3** for chain entity.
+Рекомендованный приоритет: selector is implemented/regression; **P3** for chain entity.
 
 Что делать не сейчас: consolidated chain analytics before per-venue stats are complete in Mini App.
 
@@ -620,12 +618,12 @@ Evidence:
 - `notify_orders_enabled` false in `venue_settings`.
 - Idempotency replay suppresses repeat notification in `GuestOrderRoutes`.
 - Outbox failed/retrying or staff chat bot lacks access.
-- Mini App staff call broken payload and no notifier.
+- Mini App staff call payload/lifecycle and staff-chat notification path were fixed in later M5 work; keep linked staff-chat runtime in per-venue regression.
 - Booking notifications are direct staff chat messages, not unified notifier/dedupe.
 
 MVP дизайн:
 - Make staff chat notification for order/reorder always-on by default.
-- Add Mini App staff call notification.
+- Keep Mini App staff call notification in regression.
 - Add personal opt-in notifications for staff via bot only after staff starts bot.
 
 Расширенный дизайн:
@@ -635,7 +633,7 @@ MVP дизайн:
 
 Технические изменения:
 - Unified notification service for order/call/booking/cancellation.
-- Fix Mini App staff call payload and route notification.
+- Preserve Mini App staff call payload and route notification coverage.
 - Add diagnostics screen "Последнее уведомление".
 
 Миграции БД:
@@ -1057,21 +1055,21 @@ Tests/smoke checks:
 - Multiple guests in shared tab counted correctly.
 
 Риски:
-- Existing table/order session scoping bug can corrupt visits.
+- H2/PostgreSQL uniqueness fidelity can hide active-order concurrency regressions in tests if not fixed.
 
-Рекомендованный приоритет: **P0/P1 dependency**; design now, implement after order/session fix.
+Рекомендованный приоритет: core notification path is regression; personal subscriptions/unified notification history are **P2**.
 
 Что делать не сейчас: loyalty/preorder rules until visit_count is reliable.
 
 ### 18. Что делать не сейчас
 
 Делать сейчас:
-- Fix P0 core blockers from previous audit: order per `table_session`, tab-scoped active order, CORS mutation methods.
-- Booking lifecycle MVP: hold minutes, statuses, active visibility.
-- Notification reliability for orders/calls/bookings.
-- Multi-venue Telegram selector if owner/manager operates multiple venues.
+- M9b Venue Working Hours and Date Exceptions Mini App Parity if following the current roadmap.
+- PostgreSQL/H2 active-order uniqueness fidelity as a release-confidence follow-up.
+- Platform onboarding/access hardening if prioritizing platform-owner correctness.
+- Keep booking lifecycle, notification reliability and multi-venue Telegram selector in regression smoke.
 
-Отложить до стабилизации core order/session/tab:
+Отложить до стабилизации post-M9a launch core:
 - Visit_count, guest order history, repeat order, favorites, feedback trigger, preorder eligibility.
 
 Отложить до platform billing/analytics:
