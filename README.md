@@ -295,7 +295,12 @@ Docker build собирает production Mini App и копирует стати
 
 One-command deploy from local machine:
 ```bash
-./scripts/deploy-staging.sh user@your-vps-host
+./scripts/deploy-staging.sh hookah-staging
+```
+
+If fresh SSH connections are unreliable during deploy, use the explicitly opt-in persistent SSH wrapper documented in the staging runbook:
+```bash
+./scripts/deploy-staging-controlmaster.sh hookah-staging
 ```
 
 ## Telegram Bot (long polling / webhook)

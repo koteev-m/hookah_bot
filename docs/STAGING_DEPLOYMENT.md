@@ -106,10 +106,10 @@ For temporary tunnel-based local dev, keep using local env files and set public 
 
 ## 5. Build And Deploy
 
-Preferred local one-command deploy:
+Standard local one-command deploy:
 
 ```bash
-./scripts/deploy-staging.sh user@your-vps-host
+./scripts/deploy-staging.sh hookah-staging
 ```
 
 The script:
@@ -127,31 +127,66 @@ On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64
 
 The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and dependency caches. If Docker build fails while downloading the Gradle distribution or Maven dependencies with a transient `SocketTimeoutException`, rerun the same deploy command after confirming it is a network timeout, not a Kotlin compile/test failure. The wrapper network timeout is intentionally higher than the default, and a successful retry should reuse the warmed Docker/Gradle cache.
 
-### Intermittent New SSH Connection Failures
+### Opt-In Persistent SSH Deploy
+
+Normal deployment remains supported and unchanged. Use the ControlMaster helper only when repeated new SSH connection establishment is unreliable during deploy.
+
+```bash
+STAGING_PATH=/opt/hookah-bot \
+STAGING_DOMAIN=staging.example.com \
+DOCKER_PLATFORM=linux/amd64 \
+BACKEND_IMAGE=example-backend:staging \
+./scripts/deploy-staging-controlmaster.sh staging-alias
+```
+
+The helper:
+
+- opens one persistent authenticated SSH ControlMaster connection with the operator's existing SSH config and host alias;
+- creates a temporary SSH wrapper and makes child `ssh` and `rsync` calls reuse the helper-owned control socket;
+- calls the existing `./scripts/deploy-staging.sh` for compose validation, env validation, Docker build/upload, service restart and health checks;
+- closes the master with `ssh -O exit` and removes its temporary socket/wrapper directory on success, failure, `SIGINT` or `SIGTERM`.
+
+The helper does not:
+
+- change SSH server configuration, firewall, fail2ban, ports, users, keys or sudo policy;
+- store credentials or write to `~/.ssh`;
+- disable host-key verification;
+- prove the root cause of intermittent new-connection drops.
 
 During the M8b-Free staging deploy, direct deployment repeatedly failed while opening fresh SSH/SCP/rsync connections. Both `scp` and `rsync` saw intermittent key-exchange or connection-closed failures. At the same time, server resources, disk, Docker, backend and PostgreSQL health were normal, and server logs showed substantial unauthenticated SSH scanning.
 
 Do not treat this as a proven root cause analysis. The observed incident only proves that repeated new SSH connection establishment was unreliable, while an already-authenticated persistent SSH connection worked.
 
-The proven workaround was to open one authenticated SSH ControlMaster connection first and run the upload/deploy commands through that same control socket. Use a generic temporary control path and do not put secrets, private keys or local machine paths in scripts or docs:
+Expected success indicators:
 
-```bash
-CONTROL_PATH="${TMPDIR:-/tmp}/hookah-staging-%r@%h:%p"
-ssh -MNf \
-  -o ControlMaster=yes \
-  -o ControlPersist=10m \
-  -o ControlPath="$CONTROL_PATH" \
-  user@your-vps-host
+- the helper reports that the ControlMaster is ready;
+- upload steps complete without opening new authenticated SSH sessions;
+- the existing deploy script prints `==> Staging deploy finished`;
+- `/health`, `/db/health`, and `/miniapp/` checks pass.
 
-# Example: route follow-up commands through the established control socket.
-ssh -o ControlPath="$CONTROL_PATH" user@your-vps-host 'cd /opt/hookah-bot && docker compose ps'
-rsync -e "ssh -o ControlPath=$CONTROL_PATH" ./local-file user@your-vps-host:/opt/hookah-bot/
+Troubleshooting:
 
-# Close the control connection after deploy/smoke is complete.
-ssh -O exit -o ControlPath="$CONTROL_PATH" user@your-vps-host
-```
+- Initial master connection failure: verify Docker Desktop is running, then check the SSH alias manually with normal SSH. The helper uses `BatchMode=yes`, bounded connect timeout and bounded retries; it does not fall back to the normal deploy automatically.
+- Stale socket cleanup: the helper uses a fresh `mktemp` directory and removes only the exact helper-owned directories it created. If you manually inspect a leftover socket, remove only the exact confirmed temporary directory, never a wildcard under `~/.ssh`.
+- Checking a known socket manually: `ssh -O check -S /tmp/hcm.xxxxxx/cm.sock staging-alias`.
+- Closing a known socket manually: `ssh -O exit -S /tmp/hcm.xxxxxx/cm.sock staging-alias`.
+- Docker Desktop not running: the helper fails before opening the master connection. Start Docker and rerun the same helper command.
+- Health endpoint retry behavior: endpoint waits and retries still come from `deploy-staging.sh`. If retries are exhausted, inspect container status and backend logs before redeploying.
 
-If the deploy script itself is used, prefer an SSH host alias whose config enables `ControlMaster auto`, `ControlPersist` and a safe local `ControlPath`, then pass that alias to the script. Keep permanent SSH/firewall hardening, fail2ban-style controls and log-rate analysis as a separate ops follow-up.
+Manual staging smoke plan, not part of local implementation validation:
+
+1. Verify Docker Desktop is running.
+2. Run the ControlMaster helper with the staging SSH alias.
+3. Observe initial master connection confirmation.
+4. Verify upload succeeds through the master.
+5. Verify the existing deploy script completes.
+6. Verify `/health`, `/db/health`, and `/miniapp/`.
+7. Verify safety flags remain unchanged where applicable.
+8. Confirm the helper closes and removes the control socket.
+9. Run `ssh -O check` after cleanup for the known socket and confirm no helper-owned master remains.
+10. Record fresh-connection SSH failures separately; do not treat this helper as proof of root cause.
+
+Permanent server-network/SSH hardening remains a separate ops follow-up.
 
 Optional overrides:
 
@@ -162,13 +197,13 @@ BACKEND_IMAGE=hookah_bot_ant-backend:staging \
 DOCKER_PLATFORM=linux/amd64 \
 HEALTHCHECK_ATTEMPTS=20 \
 HEALTHCHECK_SLEEP_SECONDS=3 \
-./scripts/deploy-staging.sh user@your-vps-host
+./scripts/deploy-staging.sh hookah-staging
 ```
 
 Before first deploy, create `.env` on the VPS. This file is mandatory before the deploy script can start Compose:
 
 ```bash
-ssh user@your-vps-host
+ssh hookah-staging
 sudo mkdir -p /opt/hookah-bot
 sudo chown "$USER":"$USER" /opt/hookah-bot
 cd /opt/hookah-bot
