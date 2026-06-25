@@ -1,6 +1,5 @@
 package com.hookah.platform.backend.miniapp.venue.location
 
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpRequestTimeoutException
@@ -25,20 +24,25 @@ private const val MAX_PROVIDER_RESULTS = 7
 
 data class VenueLocationProviderConfig(
     val enabled: Boolean,
-    val apiKey: String?,
+    val geosuggestApiKey: String?,
+    val geocoderApiKey: String?,
     val timeoutMs: Long,
 ) {
     companion object {
         fun from(config: ApplicationConfig): VenueLocationProviderConfig {
             val enabled = config.optionalBoolean("yandex.maps.geodata.enabled") ?: false
-            val apiKey = config.optionalString("yandex.maps.geodata.apiKey")?.trim()?.takeIf { it.isNotBlank() }
+            val geosuggestApiKey =
+                config.optionalString("yandex.maps.geodata.geosuggestApiKey")?.trim()?.takeIf { it.isNotBlank() }
+            val geocoderApiKey =
+                config.optionalString("yandex.maps.geodata.geocoderApiKey")?.trim()?.takeIf { it.isNotBlank() }
             val timeoutMs =
                 config.optionalLong("yandex.maps.geodata.timeoutMs")
                     ?.takeIf { it > 0 }
                     ?: DEFAULT_TIMEOUT_MS
             return VenueLocationProviderConfig(
                 enabled = enabled,
-                apiKey = apiKey,
+                geosuggestApiKey = geosuggestApiKey,
+                geocoderApiKey = geocoderApiKey,
                 timeoutMs = timeoutMs,
             )
         }
@@ -119,7 +123,8 @@ class YandexVenueLocationProvider(
     private val logger = LoggerFactory.getLogger(YandexVenueLocationProvider::class.java)
 
     override suspend fun suggest(request: VenueLocationSuggestProviderRequest): VenueLocationSuggestProviderResult {
-        val apiKey = config.apiKey ?: return VenueLocationSuggestProviderResult(emptyList(), unavailable = true)
+        val apiKey =
+            config.geosuggestApiKey ?: return VenueLocationSuggestProviderResult(emptyList(), unavailable = true)
         return safeProviderCall(
             unavailable = VenueLocationSuggestProviderResult(emptyList(), unavailable = true),
             operation = "suggest",
@@ -153,7 +158,7 @@ class YandexVenueLocationProvider(
     }
 
     override suspend fun resolve(request: VenueLocationResolveProviderRequest): VenueLocationResolveProviderResult {
-        val apiKey = config.apiKey ?: return VenueLocationResolveProviderResult(null, unavailable = true)
+        val apiKey = config.geocoderApiKey ?: return VenueLocationResolveProviderResult(null, unavailable = true)
         val uri = request.providerUri?.trim()?.takeIf { it.isNotBlank() }
         val geocode = buildGeocodeQuery(request)
         if (uri == null && geocode == null) {
@@ -195,7 +200,7 @@ class YandexVenueLocationProvider(
             logger.warn("Yandex geodata {} timed out", operation)
             unavailable
         } catch (e: Exception) {
-            logger.warn("Yandex geodata {} failed: {}", operation, sanitizeTelegramForLog(e.message))
+            logger.warn("Yandex geodata {} failed with {}", operation, e::class.simpleName)
             unavailable
         }
 
@@ -299,7 +304,7 @@ fun createVenueLocationProvider(
     json: Json,
 ): VenueLocationProvider {
     val providerConfig = VenueLocationProviderConfig.from(config)
-    if (!providerConfig.enabled || providerConfig.apiKey == null) {
+    if (!providerConfig.enabled) {
         return DisabledVenueLocationProvider()
     }
     return YandexVenueLocationProvider(providerConfig, httpClient, json)

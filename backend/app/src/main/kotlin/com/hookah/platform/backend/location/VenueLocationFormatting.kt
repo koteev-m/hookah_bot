@@ -4,6 +4,17 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 private val russianCountryPrefixes = listOf("Россия, ", "Российская Федерация, ")
+private val routeCountryNames =
+    mapOf(
+        "RU" to "Россия",
+        "KZ" to "Казахстан",
+        "BY" to "Беларусь",
+        "AM" to "Армения",
+        "GE" to "Грузия",
+        "UZ" to "Узбекистан",
+        "AE" to "ОАЭ",
+        "TR" to "Турция",
+    )
 
 data class VenueLocationDisplay(
     val name: String,
@@ -46,7 +57,24 @@ fun buildYandexVenueRouteUrl(location: VenueLocationDisplay): String {
         return "https://yandex.ru/maps/?rtext=~$lat,$lon&rtt=auto"
     }
 
-    val address = formatVenueDisplayAddress(location) ?: "Адрес уточняется"
+    val address = buildRouteAddress(location) ?: formatVenueDisplayAddress(location) ?: "Адрес уточняется"
     val query = URLEncoder.encode("${location.name}, $address", StandardCharsets.UTF_8)
     return "https://yandex.ru/maps/?text=$query"
+}
+
+private fun buildRouteAddress(location: VenueLocationDisplay): String? {
+    val formatted = location.formattedAddress?.trim().orEmpty().ifBlank { null }
+    if (formatted != null) return formatted
+
+    val countryCode = location.countryCode?.trim().orEmpty().uppercase().ifBlank { null }
+    val country = countryCode?.let { routeCountryNames[it] ?: it }
+    val city = location.city?.trim().orEmpty().ifBlank { null }
+    val address = location.address?.trim().orEmpty().ifBlank { null }
+    val parts =
+        buildList {
+            if (country != null) add(country)
+            if (city != null) add(city)
+            if (address != null && (city == null || !address.contains(city, ignoreCase = true))) add(address)
+        }
+    return parts.joinToString(", ").ifBlank { null }
 }

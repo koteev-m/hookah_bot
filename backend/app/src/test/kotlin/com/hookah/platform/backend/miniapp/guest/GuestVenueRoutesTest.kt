@@ -21,6 +21,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.sql.DriverManager
 import java.sql.Statement
 import java.util.UUID
@@ -270,6 +272,50 @@ class GuestVenueRoutesTest {
             assertEquals("Авторские чаши и спокойная посадка.", payload.venue.cardDescription)
             assertEquals("Москва, Новый Арбат, 24", payload.venue.displayAddress)
             assertEquals("https://yandex.ru/maps/?rtext=~55.7522,37.6156&rtt=auto", payload.venue.routeUrl)
+        }
+
+    @Test
+    fun `venue by id returns encoded text route without coordinates`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-text-route")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val id = insertVenue(connection, "Mix", "Казань", "Баумана, 7", VenueStatus.PUBLISHED.dbValue)
+                    connection.prepareStatement(
+                        """
+                        UPDATE venues
+                        SET country_code = ?
+                        WHERE id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, "RU")
+                        statement.setLong(2, id)
+                        statement.executeUpdate()
+                    }
+                    id
+                }
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/venue/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.decodeFromString(VenueResponse.serializer(), response.bodyAsText())
+            assertEquals("Казань, Баумана, 7", payload.venue.displayAddress)
+            assertEquals(
+                "https://yandex.ru/maps/?text=" +
+                    URLEncoder.encode("Mix, Россия, Казань, Баумана, 7", StandardCharsets.UTF_8),
+                payload.venue.routeUrl,
+            )
         }
 
     @Test

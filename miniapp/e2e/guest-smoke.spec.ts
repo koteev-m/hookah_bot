@@ -372,6 +372,24 @@ function buildBookingSettings(overrides: Partial<BookingSettings> = {}): Booking
   }
 }
 
+function countryNameForRoute(countryCode?: string | null): string | null {
+  switch (countryCode?.trim().toUpperCase()) {
+    case 'RU':
+      return 'Россия'
+    case 'KZ':
+      return 'Казахстан'
+    case 'BY':
+      return 'Беларусь'
+    default:
+      return countryCode?.trim().toUpperCase() || null
+  }
+}
+
+function buildTextRouteUrl(name: string, countryCode: string | null | undefined, city: string | null, address: string | null): string {
+  const routeAddress = [countryNameForRoute(countryCode), city, address].filter(Boolean).join(', ')
+  return `https://yandex.ru/maps/?text=${encodeURIComponent(`${name}, ${routeAddress || 'Адрес уточняется'}`)}`
+}
+
 function buildPublicCardSettings(overrides: Partial<PublicCardSettings> = {}): PublicCardSettings {
   return {
     venueId: 1,
@@ -383,7 +401,7 @@ function buildPublicCardSettings(overrides: Partial<PublicCardSettings> = {}): P
     displayAddress: 'Москва, Пилотная, 1',
     latitude: null,
     longitude: null,
-    routeUrl: 'https://yandex.ru/maps/?text=%D0%9C%D0%B8%D0%BA%D1%81%2C+%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0%2C+%D0%9F%D0%B8%D0%BB%D0%BE%D1%82%D0%BD%D0%B0%D1%8F%2C+1',
+    routeUrl: buildTextRouteUrl('Микс', 'RU', 'Москва', 'Пилотная, 1'),
     guestContact: null,
     cardDescription: null,
     ...overrides
@@ -437,6 +455,13 @@ function buildGuestBooking(overrides: Partial<GuestBookingFixture> = {}): GuestB
 }
 
 async function installTelegramWebApp(page: Page, userId: number) {
+  await page.route('https://telegram.org/js/telegram-web-app.js', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/javascript',
+      body: 'window.Telegram = window.Telegram || { WebApp: {} };'
+    })
+  })
   await page.addInitScript({
     content: `
       (() => {
@@ -957,6 +982,7 @@ async function mockVenueShiftExtensionApi(
   let updateSettingsCalls = 0
   let updateBookingSettingsCalls = 0
   let updatePublicCardSettingsCalls = 0
+  let locationProviderCalls = 0
   let failPublicCardUpdateOnce = options.failPublicCardUpdateOnce === true
   let orderServiceCharges: ServiceCharge[] = []
   const rejectedReasons: string[] = []
@@ -1199,7 +1225,7 @@ async function mockVenueShiftExtensionApi(
         routeUrl:
           latitude != null && longitude != null
             ? `https://yandex.ru/maps/?rtext=~${latitude},${longitude}&rtt=auto`
-            : `https://yandex.ru/maps/?text=${encodeURIComponent(`${publicCardSettings.name}, ${displayAddress || ''}`)}`,
+            : buildTextRouteUrl(publicCardSettings.name, body.countryCode, city, address),
         guestContact: body.guestContact?.trim() || null,
         cardDescription: body.cardDescription?.trim() || null
       }
@@ -1208,6 +1234,7 @@ async function mockVenueShiftExtensionApi(
   })
 
   await page.route('**/api/venue/1/location/suggestions?**', async (route) => {
+    locationProviderCalls += 1
     const url = new URL(route.request().url())
     const kind = url.searchParams.get('kind')
     if (kind === 'city') {
@@ -1250,6 +1277,7 @@ async function mockVenueShiftExtensionApi(
   })
 
   await page.route('**/api/venue/1/location/resolve', async (route) => {
+    locationProviderCalls += 1
     await route.fulfill(
       jsonResponse({
         location: {
@@ -1309,6 +1337,7 @@ async function mockVenueShiftExtensionApi(
     getUpdateSettingsCalls: () => updateSettingsCalls,
     getUpdateBookingSettingsCalls: () => updateBookingSettingsCalls,
     getUpdatePublicCardSettingsCalls: () => updatePublicCardSettingsCalls,
+    getLocationProviderCalls: () => locationProviderCalls,
     getSettings: () => settings,
     getBookingSettings: () => bookingSettings,
     getPublicCardSettings: () => publicCardSettings,
@@ -2889,13 +2918,19 @@ test('venue manager configures public profile card settings', async ({ page }) =
   expect(focusStyle.caretColor).not.toBe('rgba(0, 0, 0, 0)')
   expect(focusStyle.boxShadow).not.toBe('none')
 
+  await publicCard.getByPlaceholder('Россия').fill('Р')
+  await expect(publicCard.getByRole('button', { name: 'Россия · RU' })).toHaveCount(0)
+  await publicCard.getByPlaceholder('Россия').fill('Ка')
+  await publicCard.getByRole('button', { name: 'Казахстан · KZ' }).click()
+  await cityInput.fill('Са')
+  await expect(publicCard.getByText('Санкт-Петербург')).toHaveCount(0)
+  await expect(publicCard.getByText('Ничего не найдено. Можно ввести город вручную.')).toBeVisible()
   await publicCard.getByPlaceholder('Россия').fill('Ро')
   await publicCard.getByRole('button', { name: 'Россия · RU' }).click()
   await cityInput.fill('Са')
   await publicCard.getByRole('button', { name: /Санкт-Петербург/ }).click()
-  await publicCard.getByPlaceholder('Улица, дом').fill('Лит')
-  await publicCard.getByRole('button', { name: /Литейный проспект, 7/ }).click()
-  await expect(publicCard.getByText('Адрес выбран из подсказок и сохранится с координатами.')).toBeVisible()
+  await publicCard.getByPlaceholder('Улица, дом').fill('Литейный проспект, 7')
+  await expect(publicCard.getByText('Маршрут будет построен по указанному адресу.')).toBeVisible()
   await publicCard.getByPlaceholder('+7 999 000-00-00').fill('+7 900 111-22-33')
   await publicCard.getByPlaceholder(/авторские чаши/).fill('Лаунж с чайной картой и спокойной посадкой.')
   await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
@@ -2908,20 +2943,25 @@ test('venue manager configures public profile card settings', async ({ page }) =
     city: 'Санкт-Петербург',
     address: 'Литейный проспект, 7',
     countryCode: 'RU',
-    formattedAddress: 'Россия, Санкт-Петербург, Литейный проспект, 7',
-    latitude: 59.9386,
-    longitude: 30.3451,
+    formattedAddress: null,
+    latitude: null,
+    longitude: null,
     guestContact: '+7 900 111-22-33',
     cardDescription: 'Лаунж с чайной картой и спокойной посадкой.'
   })
+  expect(api.getLocationProviderCalls()).toBe(0)
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.evaluate(() => {
     window.location.hash = '#/venue/1'
   })
   await expect(page.getByText('Санкт-Петербург, Литейный проспект, 7')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible()
   const routeLink = page.getByRole('link', { name: 'Построить маршрут' })
-  await expect(routeLink).toHaveAttribute('href', 'https://yandex.ru/maps/?rtext=~59.9386,30.3451&rtt=auto')
+  await expect(routeLink).toHaveAttribute(
+    'href',
+    buildTextRouteUrl('Микс', 'RU', 'Санкт-Петербург', 'Литейный проспект, 7')
+  )
 })
 
 test('venue staff does not see public profile card settings', async ({ page }) => {
@@ -2953,14 +2993,15 @@ test('venue public card failed save preserves manual location draft', async ({ p
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
 
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
-  await publicCard.getByPlaceholder('Начните вводить город').fill('Казань')
+  await publicCard.getByPlaceholder('Начните вводить город').fill('Иннополис')
+  await expect(publicCard.getByText('Ничего не найдено. Можно ввести город вручную.')).toBeVisible()
   await publicCard.getByPlaceholder('Улица, дом').fill('Баумана, 7')
   await publicCard.getByRole('button', { name: 'Ввести адрес вручную' }).click()
-  await expect(publicCard.getByText('Адрес сохранён без координат. Маршрут будет построен по тексту адреса.')).toBeVisible()
+  await expect(publicCard.getByText('Маршрут будет построен по указанному адресу.')).toBeVisible()
   await publicCard.getByRole('button', { name: 'Сохранить' }).click()
 
   await expect(page.locator('p.status')).toContainText('Не удалось сохранить публичную карточку.')
-  await expect(publicCard.getByPlaceholder('Начните вводить город')).toHaveValue('Казань')
+  await expect(publicCard.getByPlaceholder('Начните вводить город')).toHaveValue('Иннополис')
   await expect(publicCard.getByPlaceholder('Улица, дом')).toHaveValue('Баумана, 7')
   await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
 })

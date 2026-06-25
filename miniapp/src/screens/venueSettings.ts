@@ -3,10 +3,8 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   venueGetBookingSettings,
-  venueGetLocationSuggestions,
   venueGetPublicCardSettings,
   venueGetShiftExtensionSettings,
-  venueResolveLocation,
   venueUpdateBookingSettings,
   venueUpdatePublicCardSettings,
   venueUpdateShiftExtensionSettings
@@ -16,9 +14,9 @@ import type {
   ShiftExtensionSettingsDto,
   VenueAccessDto,
   VenueBookingSettingsResponse,
-  VenueLocationSuggestionItem,
   VenuePublicCardSettingsResponse
 } from '../shared/api/venueDtos'
+import { countryName, filterCities, filterCountries, type LocalCityOption } from '../shared/location/localLocationData'
 import { append, el, on } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
@@ -69,13 +67,7 @@ const PUBLIC_CARD_CITY_MAX_LENGTH = 120
 const PUBLIC_CARD_ADDRESS_MAX_LENGTH = 300
 const PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH = 300
 const PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
-const LOCATION_SUGGESTION_DEBOUNCE_MS = 300
-
-type CountryOption = {
-  code: string
-  name: string
-  search: string[]
-}
+const DEFAULT_COUNTRY_CODE = 'RU'
 
 type PublicCardDraft = {
   city: string | null
@@ -87,17 +79,6 @@ type PublicCardDraft = {
   guestContact: string | null
   cardDescription: string | null
 }
-
-const COUNTRIES: CountryOption[] = [
-  { code: 'RU', name: 'Россия', search: ['россия', 'russia', 'ru', 'рф'] },
-  { code: 'KZ', name: 'Казахстан', search: ['казахстан', 'kazakhstan', 'kz'] },
-  { code: 'BY', name: 'Беларусь', search: ['беларусь', 'belarus', 'by'] },
-  { code: 'AM', name: 'Армения', search: ['армения', 'armenia', 'am'] },
-  { code: 'GE', name: 'Грузия', search: ['грузия', 'georgia', 'ge'] },
-  { code: 'UZ', name: 'Узбекистан', search: ['узбекистан', 'uzbekistan', 'uz'] },
-  { code: 'AE', name: 'ОАЭ', search: ['оаэ', 'эмираты', 'uae', 'united arab emirates', 'ae'] },
-  { code: 'TR', name: 'Турция', search: ['турция', 'turkey', 'türkiye', 'tr'] }
-]
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
@@ -327,33 +308,25 @@ function normalizeNullableText(raw: string | null | undefined): string | null {
   return normalized.length ? normalized : null
 }
 
-function countryByCode(code: string | null | undefined): CountryOption | null {
-  const normalized = code?.trim().toUpperCase()
-  if (!normalized) return null
-  return COUNTRIES.find((country) => country.code === normalized) ?? null
-}
-
-function countryName(code: string | null | undefined): string {
-  return countryByCode(code)?.name ?? code?.trim().toUpperCase() ?? ''
-}
-
-function filterCountries(query: string): CountryOption[] {
-  const normalized = query.trim().toLowerCase()
-  if (normalized.length < 2) return []
-  return COUNTRIES.filter((country) => {
-    return country.name.toLowerCase().includes(normalized) || country.search.some((value) => value.includes(normalized))
-  }).slice(0, 7)
-}
-
 function normalizeNumber(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function isEmptyLocation(settings: VenuePublicCardSettingsResponse): boolean {
+  return !normalizeNullableText(settings.countryCode) &&
+    !normalizeNullableText(settings.city) &&
+    !normalizeNullableText(settings.address) &&
+    !normalizeNullableText(settings.formattedAddress) &&
+    normalizeNumber(settings.latitude) == null &&
+    normalizeNumber(settings.longitude) == null
+}
+
 function settingsToDraft(settings: VenuePublicCardSettingsResponse): PublicCardDraft {
+  const defaultCountryCode = isEmptyLocation(settings) ? DEFAULT_COUNTRY_CODE : null
   return {
     city: normalizeNullableText(settings.city),
     address: normalizeNullableText(settings.address),
-    countryCode: normalizeNullableText(settings.countryCode)?.toUpperCase() ?? 'RU',
+    countryCode: normalizeNullableText(settings.countryCode)?.toUpperCase() ?? defaultCountryCode,
     formattedAddress: normalizeNullableText(settings.formattedAddress),
     latitude: normalizeNumber(settings.latitude),
     longitude: normalizeNumber(settings.longitude),
@@ -412,12 +385,12 @@ function renderPublicCardSettings(refs: VenueSettingsRefs, settings: VenuePublic
   refs.addressInput.value = draft.address ?? ''
   refs.guestContactInput.value = draft.guestContact ?? ''
   refs.cardDescriptionInput.value = draft.cardDescription ?? ''
-  refs.cityInput.disabled = !draft.countryCode
+  refs.cityInput.disabled = !draft.countryCode && !draft.city
   refs.addressInput.disabled = !draft.city
   refs.manualAddressButton.disabled = !draft.city
   refs.locationHint.textContent = draft.latitude != null && draft.longitude != null
-    ? 'Адрес сохранён с координатами для маршрута.'
-    : 'Можно выбрать адрес из подсказок или сохранить вручную без координат.'
+    ? 'Сохранены координаты. Если изменить город или адрес, маршрут будет построен по тексту.'
+    : 'Укажите улицу и номер дома. Маршрут будет построен по указанному адресу.'
 }
 
 function renderShiftExtensionSettings(refs: VenueSettingsRefs, settings: ShiftExtensionSettingsDto) {
@@ -461,16 +434,6 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let selectedLongitude: number | null = null
   let publicCardSaving = false
   let publicCardSavedTimer: number | null = null
-  let citySuggestAbort: AbortController | null = null
-  let addressSuggestAbort: AbortController | null = null
-  let citySuggestTimer: number | null = null
-  let addressSuggestTimer: number | null = null
-  let citySuggestSeq = 0
-  let addressSuggestSeq = 0
-  const locationSessionToken =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
   let currentBookingSettings: VenueBookingSettingsResponse | null = null
   let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
 
@@ -807,10 +770,10 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
         if (changed) {
           refs.cityInput.value = ''
           refs.addressInput.value = ''
-          selectedFormattedAddress = null
-          selectedLatitude = null
-          selectedLongitude = null
-          refs.locationHint.textContent = 'Страна изменена: выберите город и адрес заново.'
+        selectedFormattedAddress = null
+        selectedLatitude = null
+        selectedLongitude = null
+          refs.locationHint.textContent = 'Страна изменена: выберите город и укажите адрес заново.'
         }
         closeSuggestions(refs.countryOptions)
         refs.countryInput.setAttribute('aria-expanded', 'false')
@@ -821,23 +784,22 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.countryOptions.hidden = false
   }
 
-  const renderSuggestionItems = (
+  const renderCityItems = (
     container: HTMLDivElement,
-    items: VenueLocationSuggestionItem[],
-    onSelect: (item: VenueLocationSuggestionItem) => void
+    items: LocalCityOption[],
+    onSelect: (item: LocalCityOption) => void
   ) => {
     if (!items.length) {
-      renderSuggestionMessage(container, 'Ничего не найдено.')
+      renderSuggestionMessage(container, 'Ничего не найдено. Можно ввести город вручную.')
       return
     }
     container.replaceChildren()
     items.slice(0, 7).forEach((item) => {
       const button = el('button', { className: 'venue-suggestion-option' }) as HTMLButtonElement
       button.type = 'button'
-      button.appendChild(el('span', { text: item.title }))
-      const subtitle = item.subtitle || item.formattedAddress
-      if (subtitle) {
-        button.appendChild(el('small', { text: subtitle }))
+      button.appendChild(el('span', { text: item.name }))
+      if (item.region) {
+        button.appendChild(el('small', { text: item.region }))
       }
       button.addEventListener('click', () => onSelect(item))
       container.appendChild(button)
@@ -845,139 +807,25 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     container.hidden = false
   }
 
-  const requestCitySuggestions = () => {
+  const renderCitySuggestions = () => {
     const countryCode = selectedCountryCode
     const query = refs.cityInput.value.trim()
-    citySuggestSeq += 1
-    const seq = citySuggestSeq
-    citySuggestAbort?.abort()
     if (!countryCode || query.length < 2) {
       closeSuggestions(refs.citySuggestions)
       return
     }
-    renderSuggestionMessage(refs.citySuggestions, 'Ищем город…')
-    const controller = new AbortController()
-    citySuggestAbort = controller
-    venueGetLocationSuggestions(
-      backendUrl,
-      { venueId, kind: 'city', query, countryCode, sessionToken: locationSessionToken },
-      deps,
-      controller.signal
-    ).then((result) => {
-      if (disposed || citySuggestAbort !== controller || seq !== citySuggestSeq) return
-      citySuggestAbort = null
-      if (!result.ok) {
-        if (result.error.code === REQUEST_ABORTED_CODE) return
-        renderSuggestionMessage(refs.citySuggestions, 'Подсказки временно недоступны.')
-        return
-      }
-      if (result.data.unavailable) {
-        renderSuggestionMessage(refs.citySuggestions, result.data.message || 'Подсказки временно недоступны.')
-        return
-      }
-      renderSuggestionItems(refs.citySuggestions, result.data.items, (item) => {
-        refs.cityInput.value = item.city || item.title
-        refs.addressInput.disabled = !refs.cityInput.value.trim()
-        refs.manualAddressButton.disabled = !refs.cityInput.value.trim()
-        refs.addressInput.value = ''
-        selectedFormattedAddress = null
-        selectedLatitude = null
-        selectedLongitude = null
-        refs.locationHint.textContent = 'Теперь выберите адрес или введите его вручную.'
-        closeSuggestions(refs.citySuggestions)
-        markPublicCardChanged()
-      })
+    renderCityItems(refs.citySuggestions, filterCities(countryCode, query), (item) => {
+      refs.cityInput.value = item.name
+      refs.addressInput.disabled = false
+      refs.manualAddressButton.disabled = false
+      refs.addressInput.value = ''
+      selectedFormattedAddress = null
+      selectedLatitude = null
+      selectedLongitude = null
+      refs.locationHint.textContent = 'Укажите улицу и номер дома. Маршрут будет построен по указанному адресу.'
+      closeSuggestions(refs.citySuggestions)
+      markPublicCardChanged()
     })
-  }
-
-  const requestAddressSuggestions = () => {
-    const countryCode = selectedCountryCode
-    const city = refs.cityInput.value.trim()
-    const query = refs.addressInput.value.trim()
-    addressSuggestSeq += 1
-    const seq = addressSuggestSeq
-    addressSuggestAbort?.abort()
-    if (!countryCode || !city || query.length < 2) {
-      closeSuggestions(refs.addressSuggestions)
-      return
-    }
-    renderSuggestionMessage(refs.addressSuggestions, 'Ищем адрес…')
-    const controller = new AbortController()
-    addressSuggestAbort = controller
-    venueGetLocationSuggestions(
-      backendUrl,
-      { venueId, kind: 'address', query, countryCode, city, sessionToken: locationSessionToken },
-      deps,
-      controller.signal
-    ).then((result) => {
-      if (disposed || addressSuggestAbort !== controller || seq !== addressSuggestSeq) return
-      addressSuggestAbort = null
-      if (!result.ok) {
-        if (result.error.code === REQUEST_ABORTED_CODE) return
-        renderSuggestionMessage(refs.addressSuggestions, 'Подсказки временно недоступны.')
-        return
-      }
-      if (result.data.unavailable) {
-        renderSuggestionMessage(refs.addressSuggestions, result.data.message || 'Подсказки временно недоступны.')
-        return
-      }
-      renderSuggestionItems(refs.addressSuggestions, result.data.items, (item) => {
-        refs.addressInput.value = item.address || item.title
-        selectedFormattedAddress = item.formattedAddress ?? null
-        selectedLatitude = null
-        selectedLongitude = null
-        closeSuggestions(refs.addressSuggestions)
-        refs.locationHint.textContent = 'Уточняем координаты…'
-        markPublicCardChanged()
-        const resolveController = new AbortController()
-        addressSuggestAbort = resolveController
-        void venueResolveLocation(
-          backendUrl,
-          {
-            venueId,
-            body: {
-              providerUri: item.providerUri ?? null,
-              query: item.formattedAddress || item.address || item.title,
-              countryCode: item.countryCode || countryCode,
-              city: item.city || city
-            }
-          },
-          deps,
-          resolveController.signal
-        ).then((resolved) => {
-          if (disposed || addressSuggestAbort !== resolveController) return
-          addressSuggestAbort = null
-          if (!resolved.ok || resolved.data.unavailable || !resolved.data.location) {
-            refs.locationHint.textContent = 'Адрес сохранён без координат. Маршрут будет построен по тексту адреса.'
-            markPublicCardChanged()
-            return
-          }
-          const location = resolved.data.location
-          if (location.city) refs.cityInput.value = location.city
-          if (location.address) refs.addressInput.value = location.address
-          selectedCountryCode = location.countryCode || selectedCountryCode
-          refs.countryInput.value = countryName(selectedCountryCode)
-          selectedFormattedAddress = location.formattedAddress ?? item.formattedAddress ?? null
-          selectedLatitude = typeof location.latitude === 'number' ? location.latitude : null
-          selectedLongitude = typeof location.longitude === 'number' ? location.longitude : null
-          refs.locationHint.textContent =
-            selectedLatitude != null && selectedLongitude != null
-              ? 'Адрес выбран из подсказок и сохранится с координатами.'
-              : 'Адрес сохранён без координат. Маршрут будет построен по тексту адреса.'
-          markPublicCardChanged()
-        })
-      })
-    })
-  }
-
-  const scheduleCitySuggestions = () => {
-    if (citySuggestTimer) window.clearTimeout(citySuggestTimer)
-    citySuggestTimer = window.setTimeout(requestCitySuggestions, LOCATION_SUGGESTION_DEBOUNCE_MS)
-  }
-
-  const scheduleAddressSuggestions = () => {
-    if (addressSuggestTimer) window.clearTimeout(addressSuggestTimer)
-    addressSuggestTimer = window.setTimeout(requestAddressSuggestions, LOCATION_SUGGESTION_DEBOUNCE_MS)
   }
 
   const clearTrustedAddress = (message?: string) => {
@@ -1011,23 +859,23 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.addressInput.disabled = !refs.cityInput.value.trim()
     refs.manualAddressButton.disabled = !refs.cityInput.value.trim()
     refs.addressInput.value = ''
-    clearTrustedAddress('Город изменён: выберите адрес заново или сохраните вручную.')
+    clearTrustedAddress('Город изменён: укажите улицу и номер дома заново.')
     markPublicCardChanged()
-    scheduleCitySuggestions()
+    renderCitySuggestions()
   }))
   disposables.push(on(refs.cityInput, 'keydown', (event) => {
     if ((event as KeyboardEvent).key === 'Escape') closeSuggestions(refs.citySuggestions)
   }))
   disposables.push(on(refs.addressInput, 'input', () => {
-    clearTrustedAddress('Адрес изменён вручную. Маршрут будет построен по тексту адреса.')
+    closeSuggestions(refs.addressSuggestions)
+    clearTrustedAddress('Маршрут будет построен по указанному адресу.')
     markPublicCardChanged()
-    scheduleAddressSuggestions()
   }))
   disposables.push(on(refs.addressInput, 'keydown', (event) => {
     if ((event as KeyboardEvent).key === 'Escape') closeSuggestions(refs.addressSuggestions)
   }))
   disposables.push(on(refs.manualAddressButton, 'click', () => {
-    clearTrustedAddress('Адрес сохранён без координат. Маршрут будет построен по тексту адреса.')
+    clearTrustedAddress('Маршрут будет построен по указанному адресу.')
     closeSuggestions(refs.addressSuggestions)
     markPublicCardChanged()
   }))
@@ -1055,10 +903,6 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     disposed = true
     loadAbort?.abort()
     publicCardSaveAbort?.abort()
-    citySuggestAbort?.abort()
-    addressSuggestAbort?.abort()
-    if (citySuggestTimer) window.clearTimeout(citySuggestTimer)
-    if (addressSuggestTimer) window.clearTimeout(addressSuggestTimer)
     if (publicCardSavedTimer) window.clearTimeout(publicCardSavedTimer)
     bookingSaveAbort?.abort()
     extensionSaveAbort?.abort()

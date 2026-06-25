@@ -64,6 +64,7 @@ type VenueRefs = {
   venueTitle: HTMLHeadingElement
   venueLocation: HTMLParagraphElement
   routeLink: HTMLAnchorElement
+  copyAddressButton: HTMLButtonElement
   bookingButton: HTMLButtonElement
   extensionSlot: HTMLDivElement
   menuBody: HTMLDivElement
@@ -144,8 +145,13 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   routeLink.target = '_blank'
   routeLink.rel = 'noopener noreferrer'
   routeLink.hidden = true
+  const copyAddressButton = el('button', {
+    className: 'button-secondary button-small venue-route-link',
+    text: 'Скопировать адрес'
+  }) as HTMLButtonElement
+  copyAddressButton.hidden = true
   const bookingButton = el('button', { className: 'button-secondary button-small', text: 'Забронировать' }) as HTMLButtonElement
-  append(header, venueTitle, venueLocation, routeLink, bookingButton)
+  append(header, venueTitle, venueLocation, routeLink, copyAddressButton, bookingButton)
 
   const status = el('p', { className: 'status', text: '' })
   const message = el('p', { className: 'status menu-message', text: '' })
@@ -223,6 +229,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     venueTitle,
     venueLocation,
     routeLink,
+    copyAddressButton,
     bookingButton,
     extensionSlot,
     menuBody,
@@ -842,6 +849,13 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const fallbackParts = [venue.city, venue.address].filter(Boolean)
     const displayAddress = venue.displayAddress?.trim() || (fallbackParts.length ? fallbackParts.join(', ') : '')
     refs.venueLocation.textContent = displayAddress || 'Адрес не указан'
+    refs.copyAddressButton.hidden = !displayAddress
+    refs.copyAddressButton.onclick = displayAddress
+      ? () => {
+          void navigator.clipboard?.writeText(displayAddress)
+          showToast('Адрес скопирован.')
+        }
+      : null
     const routeUrl = venue.routeUrl?.trim()
     refs.routeLink.hidden = !routeUrl
     if (routeUrl) {

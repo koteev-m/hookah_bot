@@ -103,7 +103,8 @@ SHOULD:
 
 ## Block 7 — Venue onboarding & settings
 MUST:
-- Venue owner/admin can set: description, hours, contact and public location/address; Mini App location suggestions must go through backend provider proxy, not expose map API keys.
+- Venue owner/admin can set: description, hours, contact and public location/address; Mini App public-location editing must work provider-free through local country/city lists and manual address entry, with optional backend geodata providers kept disabled/commercial-only unless approved.
+- Bundled country/city data is a convenience seed, not address verification; full local street/house autocomplete requires a separate ФИАС/ГАР import/indexing slice and must not depend on runtime third-party geodata APIs.
 - Create tables; assign staff roles; configure visible modules.
 - Connect staff group chat (optional) by providing chat_id / invite flow.
 SHOULD:
