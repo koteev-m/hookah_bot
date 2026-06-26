@@ -1065,6 +1065,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         venueInfoSectionsRepository = venueInfoSectionsRepository,
                         venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                         subscriptionRepository = subscriptionRepository,
+                        venueBookingHoursRepository = venueBookingHoursRepository,
+                        venueSettingsRepository = venueSettingsRepository,
                     )
                     guestFavoritesRoutes(
                         guestFavoritesRepository = guestFavoritesRepository,
@@ -1107,6 +1109,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         staffChatNotifier = guestStaffChatNotifier,
                         userRepository = userRepository,
                         venueSettingsRepository = venueSettingsRepository,
+                        venueBookingHoursRepository = venueBookingHoursRepository,
                     )
                     guestSupportRoutes(
                         supportThreadRepository = supportThreadRepository,
@@ -1147,6 +1150,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository,
+                    venueBookingHoursRepository = venueBookingHoursRepository,
                     venueLocationProvider = venueLocationProvider,
                     staffChatNotifier = guestStaffChatNotifier,
                     telegramBotUsername = telegramConfig.botUsername,

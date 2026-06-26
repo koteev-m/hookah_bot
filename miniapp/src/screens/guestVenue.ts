@@ -16,7 +16,8 @@ import type {
   StaffCallStatusDto,
   VenueDto,
   VenueInfoSectionDto,
-  VenueInfoSectionsResponse
+  VenueInfoSectionsResponse,
+  VenueTodayScheduleDto
 } from '../shared/api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { updateItemCache } from '../shared/state/itemCache'
@@ -63,6 +64,7 @@ type VenueRefs = {
   errorDetails: HTMLDivElement
   venueTitle: HTMLHeadingElement
   venueLocation: HTMLParagraphElement
+  venueSchedule: HTMLParagraphElement
   routeLink: HTMLAnchorElement
   copyAddressButton: HTMLButtonElement
   bookingButton: HTMLButtonElement
@@ -141,6 +143,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const header = el('div', { className: 'venue-header' })
   const venueTitle = el('h3', { text: 'Загрузка...' })
   const venueLocation = el('p', { className: 'venue-location', text: '' })
+  const venueSchedule = el('p', { className: 'venue-location', text: '' })
   const routeLink = el('a', { className: 'button-secondary button-small venue-route-link', text: 'Построить маршрут' }) as HTMLAnchorElement
   routeLink.target = '_blank'
   routeLink.rel = 'noopener noreferrer'
@@ -151,7 +154,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   }) as HTMLButtonElement
   copyAddressButton.hidden = true
   const bookingButton = el('button', { className: 'button-secondary button-small', text: 'Забронировать' }) as HTMLButtonElement
-  append(header, venueTitle, venueLocation, routeLink, copyAddressButton, bookingButton)
+  append(header, venueTitle, venueLocation, venueSchedule, routeLink, copyAddressButton, bookingButton)
 
   const status = el('p', { className: 'status', text: '' })
   const message = el('p', { className: 'status menu-message', text: '' })
@@ -228,6 +231,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     errorDetails,
     venueTitle,
     venueLocation,
+    venueSchedule,
     routeLink,
     copyAddressButton,
     bookingButton,
@@ -385,6 +389,13 @@ function resolveInfoMediaUrl(backendUrl: string, mediaUrl: string) {
   } catch {
     return mediaUrl
   }
+}
+
+function formatTodaySchedule(schedule: VenueTodayScheduleDto | null | undefined): string {
+  if (!schedule) return ''
+  if (schedule.isConfigured === false) return schedule.statusLabel || 'График не указан'
+  const timeLabel = schedule.timeLabel?.trim()
+  return timeLabel ? `${schedule.statusLabel} · ${timeLabel}` : schedule.statusLabel
 }
 
 function normalizeInfoMedia(section: VenueInfoSectionDto) {
@@ -849,6 +860,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const fallbackParts = [venue.city, venue.address].filter(Boolean)
     const displayAddress = venue.displayAddress?.trim() || (fallbackParts.length ? fallbackParts.join(', ') : '')
     refs.venueLocation.textContent = displayAddress || 'Адрес не указан'
+    const scheduleText = formatTodaySchedule(venue.todaySchedule)
+    refs.venueSchedule.textContent = scheduleText
+    refs.venueSchedule.hidden = !scheduleText
     refs.copyAddressButton.hidden = !displayAddress
     refs.copyAddressButton.onclick = displayAddress
       ? () => {

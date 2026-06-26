@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.VenueScheduleNotConfiguredException
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingCancelRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingConfirmRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingCreateRequest
@@ -16,6 +17,8 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord
 import com.hookah.platform.backend.miniapp.guest.db.attendanceScheduleVersionEpochSeconds
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.BookingStartAvailability
+import com.hookah.platform.backend.miniapp.venue.checkBookingStartAvailability
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.telegram.BookingStaffNotification
@@ -25,6 +28,7 @@ import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.buildGuestAttendanceStaffChatText
 import com.hookah.platform.backend.telegram.db.UserRepository
+import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import io.ktor.server.application.call
@@ -60,6 +64,7 @@ fun Route.guestBookingRoutes(
     staffChatNotifier: StaffChatNotifier? = null,
     userRepository: UserRepository = UserRepository(null),
     venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
+    venueBookingHoursRepository: VenueBookingHoursRepository,
 ) {
     get("/bookings") {
         val userId = call.requireUserId()
@@ -80,11 +85,18 @@ fun Route.guestBookingRoutes(
             ensureGuestActionAvailable(venueId, guestVenueRepository, subscriptionRepository)
             val userId = call.requireUserId()
             val venueZoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val scheduledAt = parseBookingInstant(request.scheduledAt)
+            requireBookingWithinVenueHours(
+                venueBookingHoursRepository = venueBookingHoursRepository,
+                venueId = venueId,
+                scheduledAt = scheduledAt,
+                zoneId = venueZoneId,
+            )
             val created =
                 guestBookingRepository.create(
                     venueId = venueId,
                     userId = userId,
-                    scheduledAt = parseBookingInstant(request.scheduledAt),
+                    scheduledAt = scheduledAt,
                     partySize = normalizePartySize(request.partySize),
                     comment = normalizeBookingComment(request.comment),
                     venueZoneId = venueZoneId,
@@ -120,12 +132,19 @@ fun Route.guestBookingRoutes(
             val venueId = call.requireVenueId()
             val venueZoneId = venueSettingsRepository.resolveZoneId(venueId)
             ensureGuestActionAvailable(venueId, guestVenueRepository, subscriptionRepository)
+            val scheduledAt = parseBookingInstant(request.scheduledAt)
+            requireBookingWithinVenueHours(
+                venueBookingHoursRepository = venueBookingHoursRepository,
+                venueId = venueId,
+                scheduledAt = scheduledAt,
+                zoneId = venueZoneId,
+            )
             val updated =
                 guestBookingRepository.updateByGuest(
                     bookingId = bookingId,
                     venueId = venueId,
                     userId = userId,
-                    scheduledAt = parseBookingInstant(request.scheduledAt),
+                    scheduledAt = scheduledAt,
                     partySize = normalizePartySize(request.partySize),
                     comment = normalizeBookingComment(request.comment),
                     venueZoneId = venueZoneId,
@@ -359,6 +378,28 @@ private fun parseBookingInstant(value: String): Instant {
     }
     return runCatching { Instant.parse(trimmed) }.getOrElse {
         throw InvalidInputException("scheduledAt must be ISO-8601 instant")
+    }
+}
+
+private suspend fun requireBookingWithinVenueHours(
+    venueBookingHoursRepository: VenueBookingHoursRepository,
+    venueId: Long,
+    scheduledAt: Instant,
+    zoneId: ZoneId,
+) {
+    when (
+        venueBookingHoursRepository.checkBookingStartAvailability(
+            venueId = venueId,
+            scheduledAt = scheduledAt,
+            zoneId = zoneId,
+        )
+    ) {
+        BookingStartAvailability.ALLOWED -> Unit
+        BookingStartAvailability.NOT_CONFIGURED -> throw VenueScheduleNotConfiguredException()
+        BookingStartAvailability.OUTSIDE_HOURS ->
+            throw InvalidInputException(
+                "scheduledAt is outside venue working hours",
+            )
     }
 }
 

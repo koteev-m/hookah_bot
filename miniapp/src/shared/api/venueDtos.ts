@@ -181,6 +181,39 @@ export type VenueBookingSettingsUpdateRequest = {
   holdMinutes: number
 }
 
+export type VenueScheduleDayDto = {
+  weekday: number
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+  configured: boolean
+}
+
+export type VenueScheduleOverrideDto = {
+  serviceDate: string
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+}
+
+export type VenueScheduleSettingsResponse = {
+  venueId: number
+  weeklyHours: VenueScheduleDayDto[]
+  dateOverrides: VenueScheduleOverrideDto[]
+}
+
+export type VenueScheduleDayUpdateRequest = {
+  opensAt?: string | null
+  closesAt?: string | null
+  isClosed?: boolean
+}
+
+export type VenueScheduleOverrideUpdateRequest = {
+  opensAt?: string | null
+  closesAt?: string | null
+  isClosed?: boolean
+}
+
 export type VenuePublicCardSettingsResponse = {
   venueId: number
   name: string

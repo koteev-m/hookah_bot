@@ -25,6 +25,8 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.sql.DriverManager
 import java.sql.Statement
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -316,6 +318,113 @@ class GuestVenueRoutesTest {
                     URLEncoder.encode("Mix, Россия, Казань, Баумана, 7", StandardCharsets.UTF_8),
                 payload.venue.routeUrl,
             )
+        }
+
+    @Test
+    fun `catalog and venue by id expose safe today schedule`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-today-schedule")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val today = LocalDate.now(ZoneId.of("UTC"))
+            val venueId =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val id = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    insertVenueTimezone(connection, id, "UTC")
+                    insertWeeklyHours(
+                        connection = connection,
+                        venueId = id,
+                        weekday = today.dayOfWeek.value,
+                        opensAt = "00:00:00",
+                        closesAt = "00:00:00",
+                        isClosed = false,
+                    )
+                    id
+                }
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val token = issueToken(config)
+
+            val catalogResponse =
+                client.get("/api/guest/catalog") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, catalogResponse.status)
+            val catalogPayload = json.decodeFromString(CatalogResponse.serializer(), catalogResponse.bodyAsText())
+            val catalogSchedule = catalogPayload.venues.single().todaySchedule
+            check(catalogSchedule != null)
+            assertEquals(today.toString(), catalogSchedule.date)
+            assertEquals("Круглосуточно", catalogSchedule.timeLabel)
+            assertEquals("Открыто сейчас", catalogSchedule.statusLabel)
+            assertEquals(true, catalogSchedule.isConfigured)
+            assertEquals(true, catalogSchedule.isOpenNow)
+
+            val venueResponse =
+                client.get("/api/guest/venue/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, venueResponse.status)
+            val venuePayload = json.decodeFromString(VenueResponse.serializer(), venueResponse.bodyAsText())
+            val venueSchedule = venuePayload.venue.todaySchedule
+            check(venueSchedule != null)
+            assertEquals(today.toString(), venueSchedule.date)
+            assertEquals("00:00", venueSchedule.opensAt)
+            assertEquals("00:00", venueSchedule.closesAt)
+            assertEquals(true, venueSchedule.isConfigured)
+            assertEquals(false, venueSchedule.isClosed)
+        }
+
+    @Test
+    fun `catalog and venue by id expose unconfigured schedule without closed state`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-missing-schedule")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val id = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    insertVenueTimezone(connection, id, "UTC")
+                    id
+                }
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val token = issueToken(config)
+
+            val catalogResponse =
+                client.get("/api/guest/catalog") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, catalogResponse.status)
+            val catalogPayload = json.decodeFromString(CatalogResponse.serializer(), catalogResponse.bodyAsText())
+            val catalogSchedule = catalogPayload.venues.single().todaySchedule
+            check(catalogSchedule != null)
+            assertEquals("График не указан", catalogSchedule.statusLabel)
+            assertEquals(false, catalogSchedule.isConfigured)
+            assertEquals(false, catalogSchedule.isClosed)
+            assertEquals(false, catalogSchedule.isOpenNow)
+            assertEquals(null, catalogSchedule.timeLabel)
+
+            val venueResponse =
+                client.get("/api/guest/venue/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, venueResponse.status)
+            val venuePayload = json.decodeFromString(VenueResponse.serializer(), venueResponse.bodyAsText())
+            val venueSchedule = venuePayload.venue.todaySchedule
+            check(venueSchedule != null)
+            assertEquals("График не указан", venueSchedule.statusLabel)
+            assertEquals(false, venueSchedule.isConfigured)
+            assertEquals(false, venueSchedule.isClosed)
+            assertEquals(false, venueSchedule.isOpenNow)
+            assertEquals(null, venueSchedule.timeLabel)
         }
 
     @Test
@@ -680,6 +789,46 @@ class GuestVenueRoutesTest {
             }
         }
         error("Failed to insert venue")
+    }
+
+    private fun insertVenueTimezone(
+        connection: java.sql.Connection,
+        venueId: Long,
+        timezone: String,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_settings (venue_id, timezone)
+            VALUES (?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, timezone)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun insertWeeklyHours(
+        connection: java.sql.Connection,
+        venueId: Long,
+        weekday: Int,
+        opensAt: String,
+        closesAt: String,
+        isClosed: Boolean,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at, is_closed)
+            VALUES (?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setInt(2, weekday)
+            statement.setTime(3, java.sql.Time.valueOf(opensAt))
+            statement.setTime(4, java.sql.Time.valueOf(closesAt))
+            statement.setBoolean(5, isClosed)
+            statement.executeUpdate()
+        }
     }
 
     private fun insertInfoSection(

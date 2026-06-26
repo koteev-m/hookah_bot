@@ -93,6 +93,27 @@ type BookingSettings = {
   quickHoldMinutes: number[]
 }
 
+type VenueScheduleDay = {
+  weekday: number
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+  configured: boolean
+}
+
+type VenueScheduleOverride = {
+  serviceDate: string
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+}
+
+type VenueScheduleSettings = {
+  venueId: number
+  weeklyHours: VenueScheduleDay[]
+  dateOverrides: VenueScheduleOverride[]
+}
+
 type PublicCardSettings = {
   venueId: number
   name: string
@@ -372,6 +393,21 @@ function buildBookingSettings(overrides: Partial<BookingSettings> = {}): Booking
   }
 }
 
+function buildVenueScheduleSettings(overrides: Partial<VenueScheduleSettings> = {}): VenueScheduleSettings {
+  return {
+    venueId: 1,
+    weeklyHours: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({
+      weekday,
+      opensAt: '18:00',
+      closesAt: '00:00',
+      isClosed: false,
+      configured: true
+    })),
+    dateOverrides: [],
+    ...overrides
+  }
+}
+
 function countryNameForRoute(countryCode?: string | null): string | null {
   switch (countryCode?.trim().toUpperCase()) {
     case 'RU':
@@ -610,7 +646,15 @@ async function mockGuestApi(
             name: 'Микс',
             city: 'Москва',
             address: 'Пилотная, 1',
-            cardDescription: 'Тестовая карточка'
+            cardDescription: 'Тестовая карточка',
+            todaySchedule: {
+              date: '2030-01-10',
+              isConfigured: false,
+              isClosed: false,
+              isOpenNow: false,
+              statusLabel: 'График не указан',
+              timeLabel: null
+            }
           }
         ]
       })
@@ -627,6 +671,14 @@ async function mockGuestApi(
           address: 'Пилотная, 1',
           guestContact: '+7 000 000-00-00',
           cardDescription: 'Текстовая информация о заведении',
+          todaySchedule: {
+            date: '2030-01-10',
+            isConfigured: false,
+            isClosed: false,
+            isOpenNow: false,
+            statusLabel: 'График не указан',
+            timeLabel: null
+          },
           status: 'PUBLISHED'
         }
       })
@@ -967,6 +1019,7 @@ async function mockVenueShiftExtensionApi(
     permissions?: string[]
     settings?: ShiftExtensionSettings
     bookingSettings?: BookingSettings
+    scheduleSettings?: VenueScheduleSettings
     publicCardSettings?: PublicCardSettings
     failPublicCardUpdateOnce?: boolean
   } = {}
@@ -976,6 +1029,7 @@ async function mockVenueShiftExtensionApi(
   let requests = [buildShiftExtensionRequest()]
   let settings = options.settings ?? buildShiftExtensionSettings()
   let bookingSettings = options.bookingSettings ?? buildBookingSettings()
+  let scheduleSettings = options.scheduleSettings ?? buildVenueScheduleSettings()
   let publicCardSettings = options.publicCardSettings ?? buildPublicCardSettings()
   let approveCalls = 0
   let rejectCalls = 0
@@ -1184,6 +1238,73 @@ async function mockVenueShiftExtensionApi(
     await route.fulfill(jsonResponse(bookingSettings))
   })
 
+  await page.route('**/api/venue/1/schedule/weekly/*', async (route) => {
+    if (route.request().method() !== 'PUT') {
+      await route.fallback()
+      return
+    }
+    const weekday = Number(new URL(route.request().url()).pathname.split('/').pop())
+    const body = (await route.request().postDataJSON()) as {
+      opensAt?: string | null
+      closesAt?: string | null
+      isClosed?: boolean
+    }
+    scheduleSettings = {
+      ...scheduleSettings,
+      weeklyHours: scheduleSettings.weeklyHours.map((day) =>
+        day.weekday === weekday
+          ? {
+              ...day,
+              opensAt: body.isClosed ? '00:00' : body.opensAt ?? day.opensAt,
+              closesAt: body.isClosed ? '00:00' : body.closesAt ?? day.closesAt,
+              isClosed: body.isClosed === true,
+              configured: true
+            }
+          : day
+      )
+    }
+    await route.fulfill(jsonResponse(scheduleSettings))
+  })
+
+  await page.route('**/api/venue/1/schedule/overrides/*', async (route) => {
+    const serviceDate = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? '')
+    if (route.request().method() === 'DELETE') {
+      scheduleSettings = {
+        ...scheduleSettings,
+        dateOverrides: scheduleSettings.dateOverrides.filter((override) => override.serviceDate !== serviceDate)
+      }
+      await route.fulfill(jsonResponse(scheduleSettings))
+      return
+    }
+    if (route.request().method() !== 'PUT') {
+      await route.fallback()
+      return
+    }
+    const body = (await route.request().postDataJSON()) as {
+      opensAt?: string | null
+      closesAt?: string | null
+      isClosed?: boolean
+    }
+    const nextOverride = {
+      serviceDate,
+      opensAt: body.isClosed ? '00:00' : body.opensAt ?? '18:00',
+      closesAt: body.isClosed ? '00:00' : body.closesAt ?? '00:00',
+      isClosed: body.isClosed === true
+    }
+    scheduleSettings = {
+      ...scheduleSettings,
+      dateOverrides: [
+        ...scheduleSettings.dateOverrides.filter((override) => override.serviceDate !== serviceDate),
+        nextOverride
+      ].sort((left, right) => left.serviceDate.localeCompare(right.serviceDate))
+    }
+    await route.fulfill(jsonResponse(scheduleSettings))
+  })
+
+  await page.route('**/api/venue/1/schedule', async (route) => {
+    await route.fulfill(jsonResponse(scheduleSettings))
+  })
+
   await page.route('**/api/venue/1/public-card', async (route) => {
     if (route.request().method() === 'PUT') {
       updatePublicCardSettingsCalls += 1
@@ -1340,6 +1461,7 @@ async function mockVenueShiftExtensionApi(
     getLocationProviderCalls: () => locationProviderCalls,
     getSettings: () => settings,
     getBookingSettings: () => bookingSettings,
+    getScheduleSettings: () => scheduleSettings,
     getPublicCardSettings: () => publicCardSettings,
     getRejectedReasons: () => rejectedReasons,
     setRequests: (nextRequests: ShiftExtensionRequest[]) => {
@@ -2315,9 +2437,11 @@ test('pre-QR guest card shows info/photo menu and hides structured order menu', 
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await expect(page.getByRole('heading', { name: 'Hookah Mini App' })).toBeVisible()
+  await expect(page.getByText('График не указан')).toBeVisible()
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
 
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
+  await expect(page.getByText('График не указан')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'ℹ️ Информация' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '📖 Фото-меню' })).toBeVisible()
   await expect(page.getByText('Заказное меню и корзина доступны после сканирования QR-кода на столе.')).toBeVisible()
@@ -3004,6 +3128,47 @@ test('venue public card failed save preserves manual location draft', async ({ p
   await expect(publicCard.getByPlaceholder('Начните вводить город')).toHaveValue('Иннополис')
   await expect(publicCard.getByPlaceholder('Улица, дом')).toHaveValue('Баумана, 7')
   await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
+})
+
+test('venue manager configures working hours and date exceptions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, {
+    role: 'MANAGER',
+    permissions: ['BOOKING_MANAGE']
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  let scheduleCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Часы работы' }) })
+  await expect(scheduleCard).toContainText('7 дней · исключений: 0')
+
+  const mondayRow = scheduleCard.getByText('Пн · 18:00-00:00').locator('xpath=..')
+  await mondayRow.getByLabel('Закрыто').check()
+  await mondayRow.getByRole('button', { name: 'Сохранить день' }).click()
+  await expect(page.locator('p.status')).toHaveText('Часы работы сохранены.')
+  expect(api.getScheduleSettings().weeklyHours.find((day) => day.weekday === 1)).toMatchObject({
+    isClosed: true,
+    opensAt: '00:00',
+    closesAt: '00:00'
+  })
+
+  await page.getByRole('button', { name: 'Вернуться в обзор' }).click()
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  scheduleCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Часы работы' }) })
+  await expect(scheduleCard).toContainText('Пн · Закрыто')
+
+  await scheduleCard.locator('input[type="date"]').fill('2030-01-10')
+  await scheduleCard.getByLabel('Закрыто в эту дату').check()
+  await scheduleCard.getByRole('button', { name: 'Сохранить исключение' }).click()
+  await expect(page.locator('p.status')).toHaveText('Исключение сохранено.')
+  await expect(scheduleCard).toContainText('2030-01-10 · Закрыто')
+  expect(api.getScheduleSettings().dateOverrides).toHaveLength(1)
+
+  await scheduleCard.getByText('2030-01-10 · Закрыто').locator('xpath=..').getByRole('button', { name: 'Удалить' }).click()
+  await expect(page.locator('p.status')).toHaveText('Исключение удалено.')
+  expect(api.getScheduleSettings().dateOverrides).toHaveLength(0)
 })
 
 test('venue manager configures paid shift extension settings', async ({ page }) => {

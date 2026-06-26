@@ -106,3 +106,12 @@ class DatabaseUnavailableException(
         message = "Database unavailable",
         details = details,
     )
+
+class VenueScheduleNotConfiguredException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.VENUE_SCHEDULE_NOT_CONFIGURED,
+        httpStatus = HttpStatusCode.BadRequest,
+        message = "Заведение пока не настроило график бронирования.",
+        details = details,
+    )

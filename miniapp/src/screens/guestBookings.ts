@@ -285,6 +285,10 @@ function renderApiError(status: HTMLParagraphElement, error: ApiErrorInfo, isDeb
   if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
     clearSession()
   }
+  if (code === ApiErrorCodes.VENUE_SCHEDULE_NOT_CONFIGURED) {
+    status.textContent = 'Заведение пока не настроило график бронирования.'
+    return
+  }
   status.textContent = isDebug ? `${error.message} (${error.code})` : error.message || 'Не удалось выполнить действие.'
 }
 

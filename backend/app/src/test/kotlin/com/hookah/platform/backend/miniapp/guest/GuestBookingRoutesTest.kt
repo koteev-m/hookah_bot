@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -19,6 +20,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
+import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -370,6 +372,171 @@ class GuestBookingRoutesTest {
         }
 
     @Test
+    fun `guest booking create and update reject schedule violations`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:booking-schedule-guard-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            val guestToken = issueToken(config, TELEGRAM_USER_ID)
+            val missingScheduleVenueId =
+                seedVenue(
+                    jdbcUrl = jdbcUrl,
+                    status = VenueStatus.PUBLISHED.dbValue,
+                    name = "Missing schedule",
+                    seedBookingHours = false,
+                )
+            seedSubscription(jdbcUrl, missingScheduleVenueId)
+            setVenueTimezone(jdbcUrl, missingScheduleVenueId, "UTC")
+
+            suspend fun createResponse(
+                venueId: Long,
+                scheduledAt: String,
+            ) = client.post("/api/guest/booking/create") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $guestToken")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody("""{"venueId":$venueId,"scheduledAt":"$scheduledAt","partySize":2}""")
+            }
+
+            val missingScheduleResponse = createResponse(missingScheduleVenueId, "2030-01-10T18:00:00Z")
+            assertEquals(HttpStatusCode.BadRequest, missingScheduleResponse.status)
+            val missingScheduleError =
+                json.parseToJsonElement(missingScheduleResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("error")
+                    .jsonObject
+            assertEquals(
+                ApiErrorCodes.VENUE_SCHEDULE_NOT_CONFIGURED,
+                missingScheduleError.getValue("code").jsonPrimitive.content,
+            )
+            assertEquals(
+                "Заведение пока не настроило график бронирования.",
+                missingScheduleError.getValue("message").jsonPrimitive.content,
+            )
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue, name = "Guarded schedule")
+            seedSubscription(jdbcUrl, venueId)
+            setVenueTimezone(jdbcUrl, venueId, "UTC")
+
+            val closedWeekdayDate = LocalDate.of(2030, 1, 10)
+            setWeekdayHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                weekday = closedWeekdayDate.dayOfWeek.value,
+                opensAt = "00:00:00",
+                closesAt = "00:00:00",
+                isClosed = true,
+            )
+            val closedWeekdayResponse = createResponse(venueId, "2030-01-10T18:00:00Z")
+            assertEquals(HttpStatusCode.BadRequest, closedWeekdayResponse.status)
+
+            setWeekdayHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                weekday = closedWeekdayDate.dayOfWeek.value,
+                opensAt = "18:00:00",
+                closesAt = "22:00:00",
+                isClosed = false,
+            )
+            val beforeOpenResponse = createResponse(venueId, "2030-01-10T17:30:00Z")
+            assertEquals(HttpStatusCode.BadRequest, beforeOpenResponse.status)
+            val inHoursResponse = createResponse(venueId, "2030-01-10T19:00:00Z")
+            assertEquals(HttpStatusCode.OK, inHoursResponse.status)
+
+            val closedOverrideDate = LocalDate.of(2030, 1, 11)
+            setDateOverrideHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = closedOverrideDate,
+                opensAt = "00:00:00",
+                closesAt = "00:00:00",
+                isClosed = true,
+            )
+            val closedOverrideResponse = createResponse(venueId, "2030-01-11T19:00:00Z")
+            assertEquals(HttpStatusCode.BadRequest, closedOverrideResponse.status)
+
+            val openOverrideDate = LocalDate.of(2030, 1, 12)
+            setDateOverrideHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = openOverrideDate,
+                opensAt = "20:00:00",
+                closesAt = "23:00:00",
+                isClosed = false,
+            )
+            val overrideBeforeOpenResponse = createResponse(venueId, "2030-01-12T19:30:00Z")
+            assertEquals(HttpStatusCode.BadRequest, overrideBeforeOpenResponse.status)
+            val bookingId = createBooking(client, guestToken, venueId, "2030-01-12T20:30:00Z")
+
+            val overnightDate = LocalDate.of(2030, 1, 13)
+            setDateOverrideHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = overnightDate,
+                opensAt = "18:00:00",
+                closesAt = "02:00:00",
+                isClosed = false,
+            )
+            setDateOverrideHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = overnightDate.plusDays(1),
+                opensAt = "00:00:00",
+                closesAt = "00:00:00",
+                isClosed = true,
+            )
+            val overnightAllowedResponse = createResponse(venueId, "2030-01-14T00:30:00Z")
+            assertEquals(HttpStatusCode.OK, overnightAllowedResponse.status)
+            val overnightTooLateResponse = createResponse(venueId, "2030-01-14T01:30:00Z")
+            assertEquals(HttpStatusCode.BadRequest, overnightTooLateResponse.status)
+
+            val updateClosedOverrideResponse =
+                client.post("/api/guest/booking/update?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"bookingId":$bookingId,"scheduledAt":"2030-01-11T19:00:00Z","partySize":2}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, updateClosedOverrideResponse.status)
+
+            val moscowVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue, name = "Moscow schedule")
+            seedSubscription(jdbcUrl, moscowVenueId)
+            setVenueTimezone(jdbcUrl, moscowVenueId, "Europe/Moscow")
+            val moscowLocalDate = LocalDate.of(2030, 1, 15)
+            setWeekdayHours(
+                jdbcUrl = jdbcUrl,
+                venueId = moscowVenueId,
+                weekday = moscowLocalDate.dayOfWeek.value,
+                opensAt = "21:00:00",
+                closesAt = "23:00:00",
+                isClosed = false,
+            )
+            val moscowBeforeOpenResponse = createResponse(moscowVenueId, "2030-01-15T17:30:00Z")
+            assertEquals(HttpStatusCode.BadRequest, moscowBeforeOpenResponse.status)
+            val moscowInHoursResponse = createResponse(moscowVenueId, "2030-01-15T18:30:00Z")
+            assertEquals(HttpStatusCode.OK, moscowInHoursResponse.status)
+        }
+
+    @Test
     fun `dialog state allows booking communication states`() =
         testApplication {
             val jdbcUrl =
@@ -523,24 +690,104 @@ class GuestBookingRoutesTest {
         jdbcUrl: String,
         status: String,
         name: String = "Booking Venue",
+        seedBookingHours: Boolean = true,
     ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val venueId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venues (name, city, address, status)
+                    VALUES (?, 'City', 'Address', ?)
+                    """.trimIndent(),
+                    java.sql.Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setString(1, name)
+                    statement.setString(2, status)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            if (seedBookingHours) {
+                seedDailyBookingHours(connection, venueId)
+            }
+            venueId
+        }
+
+    private fun seedDailyBookingHours(
+        connection: java.sql.Connection,
+        venueId: Long,
+        opensAt: String = "00:00:00",
+        closesAt: String = "00:00:00",
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at, is_closed)
+            VALUES (?, ?, ?, ?, FALSE)
+            """.trimIndent(),
+        ).use { statement ->
+            (1..7).forEach { weekday ->
+                statement.setLong(1, venueId)
+                statement.setInt(2, weekday)
+                statement.setTime(3, java.sql.Time.valueOf(opensAt))
+                statement.setTime(4, java.sql.Time.valueOf(closesAt))
+                statement.addBatch()
+            }
+            statement.executeBatch()
+        }
+    }
+
+    private fun setWeekdayHours(
+        jdbcUrl: String,
+        venueId: Long,
+        weekday: Int,
+        opensAt: String,
+        closesAt: String,
+        isClosed: Boolean,
+    ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                INSERT INTO venues (name, city, address, status)
-                VALUES (?, 'City', 'Address', ?)
+                UPDATE venue_booking_hours
+                SET opens_at = ?, closes_at = ?, is_closed = ?
+                WHERE venue_id = ? AND weekday = ?
                 """.trimIndent(),
-                java.sql.Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
-                statement.setString(1, name)
-                statement.setString(2, status)
+                statement.setTime(1, java.sql.Time.valueOf(opensAt))
+                statement.setTime(2, java.sql.Time.valueOf(closesAt))
+                statement.setBoolean(3, isClosed)
+                statement.setLong(4, venueId)
+                statement.setInt(5, weekday)
                 statement.executeUpdate()
-                statement.generatedKeys.use { keys ->
-                    keys.next()
-                    keys.getLong(1)
-                }
             }
         }
+    }
+
+    private fun setDateOverrideHours(
+        jdbcUrl: String,
+        venueId: Long,
+        serviceDate: LocalDate,
+        opensAt: String,
+        closesAt: String,
+        isClosed: Boolean,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_booking_hours_overrides (venue_id, service_date, opens_at, closes_at, is_closed)
+                VALUES (?, ?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setDate(2, java.sql.Date.valueOf(serviceDate))
+                statement.setTime(3, java.sql.Time.valueOf(opensAt))
+                statement.setTime(4, java.sql.Time.valueOf(closesAt))
+                statement.setBoolean(5, isClosed)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun setBookingStatus(
         jdbcUrl: String,

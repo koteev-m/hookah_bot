@@ -2,7 +2,7 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestGetCatalog } from '../shared/api/guestApi'
-import type { CatalogVenueDto } from '../shared/api/guestDtos'
+import type { CatalogVenueDto, VenueTodayScheduleDto } from '../shared/api/guestDtos'
 import type { ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -84,6 +84,13 @@ function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
   }
 }
 
+function formatTodaySchedule(schedule: VenueTodayScheduleDto | null | undefined): string {
+  if (!schedule) return ''
+  if (schedule.isConfigured === false) return schedule.statusLabel || 'График не указан'
+  const timeLabel = schedule.timeLabel?.trim()
+  return timeLabel ? `${schedule.statusLabel} · ${timeLabel}` : schedule.statusLabel
+}
+
 function renderCatalogList(
   venues: CatalogVenueDto[],
   onOpenVenue: (venueId: number) => void,
@@ -116,6 +123,10 @@ function renderCatalogList(
     info.appendChild(city)
     if (venue.address) {
       info.appendChild(address)
+    }
+    const scheduleText = formatTodaySchedule(venue.todaySchedule)
+    if (scheduleText) {
+      info.appendChild(el('div', { className: 'catalog-meta', text: scheduleText }))
     }
 
     const actions = document.createElement('div')

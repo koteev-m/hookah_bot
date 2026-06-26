@@ -103,6 +103,11 @@ export function presentApiError(
       message = error.message?.trim() ? error.message : 'Некорректные данные.'
       severity = 'warn'
       break
+    case ApiErrorCodes.VENUE_SCHEDULE_NOT_CONFIGURED:
+      title = 'Бронирование недоступно'
+      message = 'Заведение пока не настроило график бронирования.'
+      severity = 'warn'
+      break
     default:
       title = 'Ошибка'
       message = 'Попробуйте ещё раз.'

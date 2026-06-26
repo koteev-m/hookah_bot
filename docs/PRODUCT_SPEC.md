@@ -111,6 +111,7 @@ MUST:
 SHOULD:
 - Onboarding checklist + readiness score.
 - Weekly working hours and concrete-date exceptions are displayed as distinct concepts: base weekday schedule, enabled/closed day state, and override state must not look like duplicate/conflicting controls.
+- For launch, the existing weekly working-hours/date-exception model is intentionally the shared source for public venue open/closed state and booking slot availability. Missing schedule setup is shown as `График не указан` / `Заведение пока не настроило график бронирования.`, not as a deliberate closed day.
 
 ## Block 8 — Menu builder + photos + stop-list + top list
 MUST:

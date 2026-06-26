@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.venue
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -205,6 +206,137 @@ class VenueBookingRoutesTest {
                         item.getValue("bookingId").jsonPrimitive.content == firstBookingId.toString()
                     }
             assertEquals("10.01.2030, 23:15", changedItem.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+        }
+
+    @Test
+    fun `owner and manager can configure schedule while staff and foreign venue are denied`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-schedule-settings-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, OWNER_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedUser(jdbcUrl, STAFF_ID)
+            seedVenueMember(jdbcUrl, venueId, OWNER_ID, "OWNER")
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            seedVenueMember(jdbcUrl, venueId, STAFF_ID, "STAFF")
+
+            val ownerToken = issueToken(config, OWNER_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+            val staffToken = issueToken(config, STAFF_ID)
+
+            val initialResponse =
+                client.get("/api/venue/$venueId/schedule") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, initialResponse.status)
+            val initial = json.parseToJsonElement(initialResponse.bodyAsText()).jsonObject
+            assertEquals("7", initial.getValue("weeklyHours").jsonArray.size.toString())
+
+            val closedWeekdayResponse =
+                client.put("/api/venue/$venueId/schedule/weekly/5") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"isClosed":true}""")
+                }
+            assertEquals(HttpStatusCode.OK, closedWeekdayResponse.status)
+            val friday =
+                json.parseToJsonElement(closedWeekdayResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("weeklyHours")
+                    .jsonArray
+                    .map { it.jsonObject }
+                    .single { it.getValue("weekday").jsonPrimitive.content == "5" }
+            assertEquals("true", friday.getValue("isClosed").jsonPrimitive.content)
+
+            val openOverrideResponse =
+                client.put("/api/venue/$venueId/schedule/overrides/2030-01-10") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $ownerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"opensAt":"19:00","closesAt":"02:00","isClosed":false}""")
+                }
+            assertEquals(HttpStatusCode.OK, openOverrideResponse.status)
+            val openOverrides =
+                json.parseToJsonElement(openOverrideResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("dateOverrides")
+                    .jsonArray
+            assertEquals("2030-01-10", openOverrides.single().jsonObject.getValue("serviceDate").jsonPrimitive.content)
+
+            val closedOverrideResponse =
+                client.put("/api/venue/$venueId/schedule/overrides/2030-01-11") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"isClosed":true}""")
+                }
+            assertEquals(HttpStatusCode.OK, closedOverrideResponse.status)
+            val closedOverride =
+                json.parseToJsonElement(closedOverrideResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("dateOverrides")
+                    .jsonArray
+                    .map { it.jsonObject }
+                    .single { it.getValue("serviceDate").jsonPrimitive.content == "2030-01-11" }
+            assertEquals("true", closedOverride.getValue("isClosed").jsonPrimitive.content)
+
+            val deleteOverrideResponse =
+                client.delete("/api/venue/$venueId/schedule/overrides/2030-01-10") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, deleteOverrideResponse.status)
+            val remainingOverrideDates =
+                json.parseToJsonElement(deleteOverrideResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("dateOverrides")
+                    .jsonArray
+                    .map { it.jsonObject.getValue("serviceDate").jsonPrimitive.content }
+            assertEquals(listOf("2030-01-11"), remainingOverrideDates)
+
+            val staffReadResponse =
+                client.get("/api/venue/$venueId/schedule") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffReadResponse.status)
+
+            val staffWriteResponse =
+                client.put("/api/venue/$venueId/schedule/weekly/1") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"opensAt":"18:00","closesAt":"23:00","isClosed":false}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffWriteResponse.status)
+
+            val foreignReadResponse =
+                client.get("/api/venue/$foreignVenueId/schedule") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignReadResponse.status)
         }
 
     @Test
@@ -1099,8 +1231,30 @@ class VenueBookingRoutesTest {
                 statement.setLong(1, venueId)
                 statement.executeUpdate()
             }
+            seedDailyBookingHours(connection, venueId)
             venueId
         }
+
+    private fun seedDailyBookingHours(
+        connection: java.sql.Connection,
+        venueId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at, is_closed)
+            VALUES (?, ?, ?, ?, FALSE)
+            """.trimIndent(),
+        ).use { statement ->
+            (1..7).forEach { weekday ->
+                statement.setLong(1, venueId)
+                statement.setInt(2, weekday)
+                statement.setTime(3, java.sql.Time.valueOf("00:00:00"))
+                statement.setTime(4, java.sql.Time.valueOf("00:00:00"))
+                statement.addBatch()
+            }
+            statement.executeBatch()
+        }
+    }
 
     private fun seedSubscription(
         jdbcUrl: String,

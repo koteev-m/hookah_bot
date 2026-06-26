@@ -15,6 +15,7 @@ object ApiErrorCodes {
     const val RATE_LIMITED = "RATE_LIMITED"
     const val INTERNAL_ERROR = "INTERNAL_ERROR"
     const val CONFIG_ERROR = "CONFIG_ERROR"
+    const val VENUE_SCHEDULE_NOT_CONFIGURED = "VENUE_SCHEDULE_NOT_CONFIGURED"
 }
 
 @Serializable

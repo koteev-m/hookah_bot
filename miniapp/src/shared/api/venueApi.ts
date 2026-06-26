@@ -31,6 +31,9 @@ import type {
   VenuePublicCardSettingsUpdateRequest,
   VenueReorderCategoriesRequest,
   VenueReorderItemsRequest,
+  VenueScheduleDayUpdateRequest,
+  VenueScheduleOverrideUpdateRequest,
+  VenueScheduleSettingsResponse,
   VenueStatsPeriod,
   VenueStatsResponse,
   VenueUpdateCategoryRequest,
@@ -258,6 +261,72 @@ export async function venueUpdateBookingSettings(
       body: JSON.stringify(params.body),
       signal
     },
+    deps
+  )
+}
+
+export async function venueGetScheduleSettings(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueScheduleSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/schedule`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueUpdateScheduleDay(
+  backendUrl: string,
+  params: { venueId: number; weekday: number; body: VenueScheduleDayUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueScheduleSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/schedule/weekly/${params.weekday}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateScheduleOverride(
+  backendUrl: string,
+  params: { venueId: number; serviceDate: string; body: VenueScheduleOverrideUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueScheduleSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/schedule/overrides/${encodeURIComponent(params.serviceDate)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueDeleteScheduleOverride(
+  backendUrl: string,
+  params: { venueId: number; serviceDate: string },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueScheduleSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/schedule/overrides/${encodeURIComponent(params.serviceDate)}`,
+    { method: 'DELETE', signal },
     deps
   )
 }

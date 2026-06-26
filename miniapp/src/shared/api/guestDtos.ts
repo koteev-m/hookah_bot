@@ -16,6 +16,7 @@ export type CatalogVenueDto = {
   routeUrl?: string | null
   guestContact?: string | null
   cardDescription?: string | null
+  todaySchedule?: VenueTodayScheduleDto | null
 }
 
 export type VenueResponse = {
@@ -35,7 +36,19 @@ export type VenueDto = {
   routeUrl?: string | null
   guestContact?: string | null
   cardDescription?: string | null
+  todaySchedule?: VenueTodayScheduleDto | null
   status: string
+}
+
+export type VenueTodayScheduleDto = {
+  date: string
+  opensAt?: string | null
+  closesAt?: string | null
+  isConfigured?: boolean
+  isClosed: boolean
+  isOpenNow: boolean
+  statusLabel: string
+  timeLabel?: string | null
 }
 
 export type VenueInfoSectionsResponse = {

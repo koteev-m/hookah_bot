@@ -19,6 +19,7 @@ data class CatalogVenueDto(
     val routeUrl: String? = null,
     val guestContact: String? = null,
     val cardDescription: String? = null,
+    val todaySchedule: VenueTodayScheduleDto? = null,
 )
 
 @Serializable
@@ -38,7 +39,20 @@ data class VenueDto(
     val routeUrl: String? = null,
     val guestContact: String? = null,
     val cardDescription: String? = null,
+    val todaySchedule: VenueTodayScheduleDto? = null,
     val status: String,
+)
+
+@Serializable
+data class VenueTodayScheduleDto(
+    val date: String,
+    val opensAt: String? = null,
+    val closesAt: String? = null,
+    val isConfigured: Boolean = true,
+    val isClosed: Boolean,
+    val isOpenNow: Boolean,
+    val statusLabel: String,
+    val timeLabel: String? = null,
 )
 
 @Serializable

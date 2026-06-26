@@ -7066,7 +7066,7 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it.contains("Это предпросмотр. Заведение пока не опубликовано.") &&
                             it.contains("Тестовая кальянная") &&
-                            it.contains("📍 Тверская, 1") &&
+                            it.contains("📍 Москва, Тверская, 1") &&
                             it.contains("☎️ Контакт: +7 999 000-00-00") &&
                             it.contains("Авторские чаши и спокойная посадка.") &&
                             it.contains("Что хотите сделать?")

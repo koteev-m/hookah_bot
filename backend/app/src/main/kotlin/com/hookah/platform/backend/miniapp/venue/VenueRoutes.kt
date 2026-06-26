@@ -18,17 +18,23 @@ import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.VenueBookingDateOverride
+import com.hookah.platform.backend.telegram.db.VenueBookingHours
+import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenuePublicCardSettings
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
+import java.time.LocalDate
+import java.time.LocalTime
 
 private val logger = LoggerFactory.getLogger("VenueRoutes")
 private const val PUBLIC_CARD_CITY_MAX_LENGTH = 120
@@ -39,6 +45,8 @@ private const val PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
 private const val LOCATION_QUERY_MAX_LENGTH = 120
 private const val LOCATION_CITY_MAX_LENGTH = 120
 private const val LOCATION_SESSION_TOKEN_MAX_LENGTH = 120
+private val DEFAULT_SCHEDULE_OPENS_AT: LocalTime = LocalTime.of(18, 0)
+private val DEFAULT_SCHEDULE_CLOSES_AT: LocalTime = LocalTime.MIDNIGHT
 
 @Serializable
 data class VenueMeResponse(
@@ -135,10 +143,49 @@ data class VenueLocationResolveResponse(
     val message: String? = null,
 )
 
+@Serializable
+data class VenueScheduleSettingsResponse(
+    val venueId: Long,
+    val weeklyHours: List<VenueScheduleDayDto>,
+    val dateOverrides: List<VenueScheduleOverrideDto>,
+)
+
+@Serializable
+data class VenueScheduleDayDto(
+    val weekday: Int,
+    val opensAt: String,
+    val closesAt: String,
+    val isClosed: Boolean,
+    val configured: Boolean,
+)
+
+@Serializable
+data class VenueScheduleDayUpdateRequest(
+    val opensAt: String? = null,
+    val closesAt: String? = null,
+    val isClosed: Boolean = false,
+)
+
+@Serializable
+data class VenueScheduleOverrideDto(
+    val serviceDate: String,
+    val opensAt: String,
+    val closesAt: String,
+    val isClosed: Boolean,
+)
+
+@Serializable
+data class VenueScheduleOverrideUpdateRequest(
+    val opensAt: String? = null,
+    val closesAt: String? = null,
+    val isClosed: Boolean = false,
+)
+
 fun Route.venueRoutes(
     venueAccessRepository: VenueAccessRepository,
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
     venueRepository: VenueRepository,
+    venueBookingHoursRepository: VenueBookingHoursRepository,
     venueLocationProvider: VenueLocationProvider = DisabledVenueLocationProvider(),
     staffChatNotifier: StaffChatNotifier? = null,
     telegramBotUsername: String? = null,
@@ -219,6 +266,68 @@ fun Route.venueRoutes(
                     cardDescription = cardDescription,
                 ) ?: throw NotFoundException()
             call.respond(settings.toResponse())
+        }
+
+        get("/{venueId}/schedule") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
+            ensureVenueExists(venueRepository, venueId)
+            call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
+        }
+
+        put("/{venueId}/schedule/weekly/{weekday}") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val weekday =
+                call.parameters["weekday"]?.toIntOrNull()
+                    ?: throw InvalidInputException("weekday is required")
+            requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
+            val request = call.receive<VenueScheduleDayUpdateRequest>()
+            val update = normalizeScheduleUpdate(request.opensAt, request.closesAt, request.isClosed)
+            val updated =
+                venueBookingHoursRepository.upsertWeekdayHours(
+                    venueId = venueId,
+                    weekday = weekday,
+                    opensAt = update.opensAt,
+                    closesAt = update.closesAt,
+                    isClosed = update.isClosed,
+                )
+            if (!updated) {
+                throw NotFoundException()
+            }
+            call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
+        }
+
+        put("/{venueId}/schedule/overrides/{serviceDate}") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val serviceDate = parseScheduleDate(call.parameters["serviceDate"])
+            requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
+            val request = call.receive<VenueScheduleOverrideUpdateRequest>()
+            val update = normalizeScheduleUpdate(request.opensAt, request.closesAt, request.isClosed)
+            val updated =
+                venueBookingHoursRepository.upsertDateOverride(
+                    venueId = venueId,
+                    serviceDate = serviceDate,
+                    opensAt = update.opensAt,
+                    closesAt = update.closesAt,
+                    isClosed = update.isClosed,
+                )
+            if (!updated) {
+                throw NotFoundException()
+            }
+            call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
+        }
+
+        delete("/{venueId}/schedule/overrides/{serviceDate}") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val serviceDate = parseScheduleDate(call.parameters["serviceDate"])
+            requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
+            ensureVenueExists(venueRepository, venueId)
+            venueBookingHoursRepository.deleteDateOverride(venueId, serviceDate)
+            call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
         }
 
         get("/{venueId}/location/suggestions") {
@@ -441,6 +550,97 @@ private suspend fun requirePublicCardSettingsPermission(
         throw ForbiddenException()
     }
 }
+
+private suspend fun requireScheduleSettingsPermission(
+    venueAccessRepository: VenueAccessRepository,
+    userId: Long,
+    venueId: Long,
+) = requirePublicCardSettingsPermission(venueAccessRepository, userId, venueId)
+
+private suspend fun ensureVenueExists(
+    venueRepository: VenueRepository,
+    venueId: Long,
+) {
+    if (venueRepository.findVenueById(venueId) == null) {
+        throw NotFoundException()
+    }
+}
+
+private data class NormalizedScheduleUpdate(
+    val opensAt: LocalTime,
+    val closesAt: LocalTime,
+    val isClosed: Boolean,
+)
+
+private fun normalizeScheduleUpdate(
+    opensAt: String?,
+    closesAt: String?,
+    isClosed: Boolean,
+): NormalizedScheduleUpdate {
+    if (isClosed) {
+        return NormalizedScheduleUpdate(
+            opensAt = LocalTime.MIDNIGHT,
+            closesAt = LocalTime.MIDNIGHT,
+            isClosed = true,
+        )
+    }
+    val normalizedOpensAt =
+        parseScheduleTime(opensAt)
+            ?: throw InvalidInputException("opensAt must be HH:mm")
+    val normalizedClosesAt =
+        parseScheduleTime(closesAt)
+            ?: throw InvalidInputException("closesAt must be HH:mm")
+    return NormalizedScheduleUpdate(
+        opensAt = normalizedOpensAt,
+        closesAt = normalizedClosesAt,
+        isClosed = false,
+    )
+}
+
+private fun parseScheduleDate(value: String?): LocalDate =
+    runCatching { LocalDate.parse(value?.trim().orEmpty()) }.getOrElse {
+        throw InvalidInputException("serviceDate must be ISO date")
+    }
+
+private suspend fun buildVenueScheduleSettingsResponse(
+    venueId: Long,
+    venueBookingHoursRepository: VenueBookingHoursRepository,
+): VenueScheduleSettingsResponse {
+    val weeklyHours = venueBookingHoursRepository.listWeeklyHours(venueId).associateBy { it.weekday }
+    val dateOverrides = venueBookingHoursRepository.listDateOverrides(venueId, limit = 100)
+    return VenueScheduleSettingsResponse(
+        venueId = venueId,
+        weeklyHours =
+            (1..7).map { weekday ->
+                weeklyHours[weekday]?.toDto(configured = true)
+                    ?: VenueScheduleDayDto(
+                        weekday = weekday,
+                        opensAt = formatScheduleTime(DEFAULT_SCHEDULE_OPENS_AT),
+                        closesAt = formatScheduleTime(DEFAULT_SCHEDULE_CLOSES_AT),
+                        isClosed = false,
+                        configured = false,
+                    )
+            },
+        dateOverrides = dateOverrides.map { it.toDto() },
+    )
+}
+
+private fun VenueBookingHours.toDto(configured: Boolean): VenueScheduleDayDto =
+    VenueScheduleDayDto(
+        weekday = weekday,
+        opensAt = formatScheduleTime(opensAt),
+        closesAt = formatScheduleTime(closesAt),
+        isClosed = isClosed,
+        configured = configured,
+    )
+
+private fun VenueBookingDateOverride.toDto(): VenueScheduleOverrideDto =
+    VenueScheduleOverrideDto(
+        serviceDate = serviceDate.toString(),
+        opensAt = formatScheduleTime(opensAt),
+        closesAt = formatScheduleTime(closesAt),
+        isClosed = isClosed,
+    )
 
 private fun normalizePublicCardText(
     raw: String?,
