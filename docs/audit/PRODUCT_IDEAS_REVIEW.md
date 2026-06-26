@@ -2,7 +2,7 @@
 
 Дата: 2026-04-28. Режим: read-only audit. Код, миграции и тесты не изменялись.
 
-> Current correction as of 2026-06-25: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description, while hours, info/media editing and guest preview remain later. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed. Current code also implements Telegram multi-venue selected context; old "Telegram selector missing" notes below are historical, while chain/network entities remain future work.
+> Current correction as of 2026-06-26: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed: Venue Mini App can edit weekly hours and inclusive date-exception ranges with optional guest-facing reason/comment, and guest/Bot booking rejection copy is human. Info/media editing and guest preview remain later. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed. Current code also implements Telegram multi-venue selected context; old "Telegram selector missing" notes below are historical, while chain/network entities remain future work.
 
 ## Executive summary
 
@@ -1064,7 +1064,7 @@ Tests/smoke checks:
 ### 18. Что делать не сейчас
 
 Делать сейчас:
-- M9b Venue Working Hours and Date Exceptions Mini App Parity if following the current roadmap.
+- Platform Owner Invite / ADMIN Semantics Hardening if following the current roadmap.
 - PostgreSQL/H2 active-order uniqueness fidelity as a release-confidence follow-up.
 - Platform onboarding/access hardening if prioritizing platform-owner correctness.
 - Keep booking lifecycle, notification reliability and multi-venue Telegram selector in regression smoke.
@@ -1085,20 +1085,17 @@ Tests/smoke checks:
 
 ### P0 Core blockers
 
-1. Active order per `table_session`, not only `table_id`.
-2. Guest active order endpoints scoped by `tableSessionId` and `tabId`.
-3. CORS methods for Mini App mutations.
-4. Mini App staff call payload/notification fix.
-5. Fallback chat order payload contract.
+No current P0 is selected from this historical list. The original P0 order/session, CORS and staff-call items have been fixed or superseded by later code and smoke evidence; keep them in regression instead of reopening without a concrete regression.
 
 ### P1 Operational completeness
 
 1. Booking lifecycle: `EXPIRED/NO_SHOW/SEATED`, hold minutes, active visibility until deadline.
-2. Venue Mini App hours/exceptions and remaining profile setup parity through small backend-backed slices; public card/location basics are closed by M8a/M8b-Free.
-3. Owner/manager working hours and exceptions UX.
-4. Unified staff notifications for orders/reorders/calls/bookings/cancellations.
-5. Telegram multi-venue selector.
-6. Owner description section defaults `Схема зала` and `Интерьер`; expose sections to guests.
+2. Platform Owner Invite / ADMIN Semantics Hardening.
+3. Venue Mini App remaining profile setup parity through small backend-backed slices; public card/location basics are closed by M8a/M8b-Free and hours/exceptions are closed by M9b-M9b.3.
+4. Owner/manager working hours and exceptions UX polish only if new operator confusion appears in regression.
+5. Unified staff notifications for orders/reorders/calls/bookings/cancellations.
+6. Telegram multi-venue selector.
+7. Owner description section defaults `Схема зала` and `Интерьер`; expose sections to guests.
 
 ### P2 Growth/retention
 

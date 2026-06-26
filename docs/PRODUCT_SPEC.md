@@ -105,6 +105,7 @@ SHOULD:
 MUST:
 - Venue owner/admin can set: description, hours, contact and public location/address; Mini App public-location editing must work provider-free through local country/city lists and manual address entry, with optional backend geodata providers kept disabled/commercial-only unless approved.
 - M8a/M8b-Free public card/location basics are CLOSED after staging smoke: Venue Mini App lets OWNER/MANAGER edit public city/address/contact/description plus structured country/city/address fields, while venue name stays read-only and STAFF stays denied/hidden.
+- M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed: Venue Mini App lets OWNER/MANAGER manage weekly working hours, date exceptions, inclusive exception ranges, post-save exception UX and changed date ranges after creation; STAFF stays denied/hidden.
 - Bundled country/city data is a convenience seed, not address verification; full local street/house autocomplete requires a separate ФИАС/ГАР import/indexing slice and must not depend on runtime third-party geodata APIs.
 - Create tables; assign staff roles; configure visible modules.
 - Connect staff group chat (optional) by providing chat_id / invite flow.
@@ -112,10 +113,11 @@ SHOULD:
 - Onboarding checklist + readiness score.
 - Weekly working hours and concrete-date exceptions are displayed as distinct concepts: base weekday schedule, enabled/closed day state, and override state must not look like duplicate/conflicting controls.
 - For launch, the existing weekly working-hours/date-exception model is intentionally the shared source for public venue open/closed state and booking slot availability. Missing schedule setup is shown as `График не указан` / `Заведение пока не настроило график бронирования.`, not as a deliberate closed day.
-- Date exceptions support inclusive single-day or multi-day periods for closed dates and special hours. Optional guest-facing reason/comment may be shown in booking rejection copy; private admin notes must not leak through guest APIs.
+- Date exceptions support inclusive single-day or multi-day periods for closed dates and special hours; the same from/to date means one day. Optional guest-facing reason/comment may be shown in booking rejection copy; private admin notes must not leak through guest APIs.
+- Range exceptions remain stored as per-date overrides for launch. Saving or editing a range upserts each target date, so overlapping target dates are deterministically overwritten by the latest saved closed/special-hours values and guest-facing reason/comment.
 - Venue Mini App date-exception saves must give clear post-save feedback: close/reset the form, show the compact exception list, and render changed-hours rows with the date range, special hours and guest comment.
 - Venue Mini App date-exception edits must allow changing the inclusive date range; when ranges are stored as per-date overrides, editing a grouped row replaces the old date set atomically.
-- Guest booking rejection copy must be human: closed dates say the venue does not work on the selected date and include the optional reason when present; out-of-hours rejection says booking is unavailable and shows the effective hours for that day when known.
+- Guest booking rejection copy must be human in Bot and Mini App: missing schedule rejects direct booking with `Заведение пока не настроило график бронирования.`, closed dates say the venue does not work on the selected date and include the optional reason when present, and out-of-hours rejection says booking is unavailable with the effective hours for that day when known.
 
 ## Block 8 — Menu builder + photos + stop-list + top list
 MUST:

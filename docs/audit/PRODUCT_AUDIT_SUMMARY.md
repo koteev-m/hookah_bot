@@ -6,7 +6,7 @@
 >
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
 >
-> Current checkpoint as of 2026-06-25: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual parity for Bot `/my` public label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are implemented, code/test-backed and passed one controlled real Telegram staging smoke; runtime remains disabled by default and staging is back to `BOOKING_REMINDER_WORKER_ENABLED=false`. M8a/M8b-Free public profile/card settings is CLOSED / staging smoke passed: Venue Mini App edits public location/contact/description with provider-free local country/city data and manual address fallback. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper completed a real staging deploy and endpoint smoke while the normal deploy command remains supported; the exact SSH/network root cause remains unconfirmed. The latest enriched staff-chat attendance copy is code/test-backed but not manually re-smoked with a new booking. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call list; use the current roadmap for hours/exceptions, platform onboarding/access, H2/PostgreSQL fidelity, promotions/preview and runtime regression priorities.
+> Current checkpoint as of 2026-06-26: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual parity for Bot `/my` public label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are implemented, code/test-backed and passed one controlled real Telegram staging smoke; runtime remains disabled by default and staging is back to `BOOKING_REMINDER_WORKER_ENABLED=false`. M8a/M8b-Free public profile/card settings is CLOSED / staging smoke passed: Venue Mini App edits public location/contact/description with provider-free local country/city data and manual address fallback. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper completed a real staging deploy and endpoint smoke while the normal deploy command remains supported; the exact SSH/network root cause remains unconfirmed. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed. The latest enriched staff-chat attendance copy is code/test-backed but not manually re-smoked with a new booking. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call/schedule list; use the current roadmap for platform onboarding/access, H2/PostgreSQL fidelity, billing, support/growth and runtime regression priorities.
 
 # Краткое резюме
 
@@ -38,7 +38,7 @@
 - Stop-list: STAFF operational item/option availability is aligned between bot and Mini App; content editing remains MANAGER/OWNER.
 - Table QR: batch create/rotate/export есть, single edit/delete/capacity incomplete.
 - Statistics: Telegram stats and Venue Mini App read-only stats exist; custom ranges/platform analytics remain later.
-- Settings: broad Telegram setup exists; Mini App settings now covers booking hold, shift extension settings and public profile/card basics with provider-free structured location. Hours/exceptions, info/media editing, preview/readiness and other broad settings should still be expanded through small slices.
+- Settings: broad Telegram setup exists; Mini App settings now covers booking hold, shift extension settings, public profile/card basics with provider-free structured location and weekly hours/date exceptions. Info/media editing, preview/readiness and other broad settings should still be expanded through small slices.
 - Platform mode: venues/status/owners/subscription есть, requests/billing/support/analytics cockpit incomplete.
 
 # Что отсутствует
@@ -54,10 +54,10 @@
 
 No confirmed production P0 was found in the post-M9a checkpoint. Current priorities:
 
-1. **P1 / selected next**: Venue Working Hours and Date Exceptions Mini App Parity. Backend/Bot already support weekly hours and date-specific overrides, but Venue Mini App lacks equivalent settings/open-state read models and Mini App guest booking currently accepts arbitrary scheduled times without schedule validation.
-2. **P1**: Platform onboarding/access hardening: API and bot platform-owner config precedence can diverge if both legacy and new env vars are set differently; owner invite create/accept lacks audit events; Mini App owner assignment still exposes unsupported `ADMIN`; invite copy/deep link UX is weak.
-3. **P1 release/test-fidelity**: PostgreSQL/H2 active-order uniqueness fidelity. PostgreSQL has a partial unique index by `table_session_id`, H2 migration has only non-unique indexes. This is not a confirmed PostgreSQL production P0, but it can hide concurrency/uniqueness regressions in local H2 tests.
-4. **P1/P2**: keep M7b real two-account isolation and M7c opt-in reminder rollout as release regression checks, not new implementation milestones unless a regression is found.
+1. **P1 / selected next**: Platform onboarding/access hardening: API and bot platform-owner config precedence can diverge if both legacy and new env vars are set differently; owner invite create/accept lacks audit events; Mini App owner assignment still exposes unsupported `ADMIN`; invite copy/deep link UX is weak.
+2. **P1 release/test-fidelity**: PostgreSQL/H2 active-order and personal-tab uniqueness fidelity. PostgreSQL has partial unique indexes by `table_session_id` and active personal tab owner/session, while H2 migrations have only non-unique indexes. This is not a confirmed PostgreSQL production P0, but it can hide concurrency/uniqueness regressions in local H2 tests.
+3. **P1/P2**: platform billing cockpit / owner payment UX. Backend invoice/payment routes and subscription settings exist, but Platform Mini App invoice operations and manual mark-paid UX are incomplete.
+4. **P1/P2**: keep M7b real two-account isolation, M7c opt-in reminder rollout and M9b schedule validation as release regression checks, not new implementation milestones unless a regression is found.
 5. **P2**: General guest support ticket creation beyond booking threads.
 6. **P2**: Guest Mini App repeat/favorite mutation parity and promotion/review surfaces.
 
@@ -122,7 +122,7 @@ No confirmed production P0 was found in the post-M9a checkpoint. Current priorit
 
 # Технический долг
 
-- Active order uniqueness by table instead of table session.
+- Historical active-order table-only risk is closed in current code; remaining debt is H2/PostgreSQL uniqueness fidelity for active orders and personal tabs.
 - DTO/UI mismatch: backend has fields not surfaced in Mini App.
 - Telegram and Mini App permission divergence.
 - Placeholder screens/buttons visible to users.
@@ -154,8 +154,7 @@ No confirmed production P0 was found in the post-M9a checkpoint. Current priorit
 Ключевые сценарии без достаточного покрытия:
 - Mini App frontend end-to-end flows; frontend tests не найдены.
 - CORS preflight for `PATCH/DELETE/PUT`.
-- Active order scoped by table session and tab.
-- Two table sessions at same table with previous active order.
+- H2/PostgreSQL active-order and personal-tab uniqueness fidelity.
 - Mini App staff call payload and notification.
 - Fallback chat order `CHAT_ORDER` payload.
 - Staff stop-list permission parity.
