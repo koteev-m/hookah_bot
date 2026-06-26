@@ -1299,10 +1299,41 @@ async function mockVenueShiftExtensionApi(
   await page.route('**/api/venue/1/schedule/override-ranges**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
-    const deleteMatch = path.match(/\/api\/venue\/1\/schedule\/override-ranges\/([^/]+)\/([^/]+)$/)
-    if (deleteMatch && request.method() === 'DELETE') {
-      const fromDate = decodeURIComponent(deleteMatch[1])
-      const toDate = decodeURIComponent(deleteMatch[2])
+    const rangeMatch = path.match(/\/api\/venue\/1\/schedule\/override-ranges\/([^/]+)\/([^/]+)$/)
+    if (rangeMatch && request.method() === 'PUT') {
+      const originalFromDate = decodeURIComponent(rangeMatch[1])
+      const originalToDate = decodeURIComponent(rangeMatch[2])
+      const body = (await request.postDataJSON()) as {
+        fromDate: string
+        toDate: string
+        opensAt?: string | null
+        closesAt?: string | null
+        isClosed?: boolean
+        guestNote?: string | null
+      }
+      const originalDates = eachIsoDate(originalFromDate, originalToDate)
+      const dates = eachIsoDate(body.fromDate, body.toDate)
+      scheduleSettings = {
+        ...scheduleSettings,
+        dateOverrides: [
+          ...scheduleSettings.dateOverrides.filter(
+            (override) => !originalDates.includes(override.serviceDate) && !dates.includes(override.serviceDate)
+          ),
+          ...dates.map((serviceDate) => ({
+            serviceDate,
+            opensAt: body.isClosed ? '00:00' : body.opensAt ?? '18:00',
+            closesAt: body.isClosed ? '00:00' : body.closesAt ?? '00:00',
+            isClosed: body.isClosed === true,
+            guestNote: body.guestNote?.trim() || null
+          }))
+        ].sort((left, right) => left.serviceDate.localeCompare(right.serviceDate))
+      }
+      await route.fulfill(jsonResponse(scheduleSettings))
+      return
+    }
+    if (rangeMatch && request.method() === 'DELETE') {
+      const fromDate = decodeURIComponent(rangeMatch[1])
+      const toDate = decodeURIComponent(rangeMatch[2])
       scheduleSettings = {
         ...scheduleSettings,
         dateOverrides: scheduleSettings.dateOverrides.filter(
@@ -3313,20 +3344,52 @@ test('venue manager configures working hours and date exceptions', async ({ page
     .getByRole('button', { name: 'Изменить' })
     .click()
   exceptionForm = scheduleCard.getByTestId('schedule-exception-form')
-  await expect(exceptionForm.locator('input[type="date"]').nth(0)).toBeDisabled()
+  await expect(exceptionForm.locator('input[type="date"]').nth(0)).toBeEnabled()
+  await exceptionForm.locator('input[type="date"]').nth(0).fill('2030-01-13')
+  await exceptionForm.locator('input[type="date"]').nth(1).fill('2030-01-14')
   await exceptionForm.locator('textarea').fill('Плановый выходной')
   await exceptionForm.getByRole('button', { name: 'Сохранить' }).click()
-  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('10.01.2030–12.01.2030 · Закрыто')
+  await expect(exceptionForm).toBeHidden()
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).not.toContainText('10.01.2030–12.01.2030 · Закрыто')
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('13.01.2030–14.01.2030 · Закрыто')
   await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('Причина: Плановый выходной')
 
   await scheduleCard
     .getByTestId('schedule-exception-list')
     .getByText('20.01.2030–21.01.2030 · 12:00–23:00')
     .locator('xpath=..')
+    .getByRole('button', { name: 'Изменить' })
+    .click()
+  exceptionForm = scheduleCard.getByTestId('schedule-exception-form')
+  await expect(exceptionForm.locator('input[type="date"]').nth(0)).toBeEnabled()
+  await exceptionForm.locator('input[type="date"]').nth(0).fill('2030-01-22')
+  await exceptionForm.locator('input[type="date"]').nth(1).fill('2030-01-22')
+  await exceptionForm.locator('input[type="time"]').nth(0).fill('13:00')
+  await exceptionForm.locator('input[type="time"]').nth(1).fill('01:00')
+  await exceptionForm.locator('textarea').fill('Новогодний график')
+  await exceptionForm.getByRole('button', { name: 'Сохранить' }).click()
+  await expect(page.locator('p.status')).toHaveText('Особые часы сохранены.')
+  await expect(exceptionForm).toBeHidden()
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).not.toContainText('20.01.2030–21.01.2030 · 12:00–23:00')
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('22.01.2030 · 13:00–01:00')
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('Комментарий: Новогодний график')
+  expect(api.getScheduleSettings().dateOverrides).toHaveLength(3)
+
+  await scheduleCard.getByRole('button', { name: 'Изменить часы на период' }).click()
+  exceptionForm = scheduleCard.getByTestId('schedule-exception-form')
+  await expect(exceptionForm.locator('input[type="date"]').nth(0)).toHaveValue('')
+  await expect(exceptionForm.locator('input[type="date"]').nth(1)).toHaveValue('')
+  await expect(exceptionForm.locator('textarea')).toHaveValue('')
+  await exceptionForm.getByRole('button', { name: 'Отмена' }).click()
+
+  await scheduleCard
+    .getByTestId('schedule-exception-list')
+    .getByText('22.01.2030 · 13:00–01:00')
+    .locator('xpath=..')
     .getByRole('button', { name: 'Удалить' })
     .click()
   await expect(page.locator('p.status')).toHaveText('Исключение удалено.')
-  expect(api.getScheduleSettings().dateOverrides).toHaveLength(3)
+  expect(api.getScheduleSettings().dateOverrides).toHaveLength(2)
 })
 
 test('venue manager configures paid shift extension settings', async ({ page }) => {

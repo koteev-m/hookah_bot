@@ -337,6 +337,27 @@ export async function venueUpdateScheduleOverrideRange(
   )
 }
 
+export async function venueReplaceScheduleOverrideRange(
+  backendUrl: string,
+  params: { venueId: number; fromDate: string; toDate: string; body: VenueScheduleOverrideRangeUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueScheduleSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/schedule/override-ranges/${encodeURIComponent(
+      params.fromDate
+    )}/${encodeURIComponent(params.toDate)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
 export async function venueDeleteScheduleOverride(
   backendUrl: string,
   params: { venueId: number; serviceDate: string },

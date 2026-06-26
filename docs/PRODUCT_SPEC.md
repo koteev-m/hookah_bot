@@ -114,6 +114,7 @@ SHOULD:
 - For launch, the existing weekly working-hours/date-exception model is intentionally the shared source for public venue open/closed state and booking slot availability. Missing schedule setup is shown as `График не указан` / `Заведение пока не настроило график бронирования.`, not as a deliberate closed day.
 - Date exceptions support inclusive single-day or multi-day periods for closed dates and special hours. Optional guest-facing reason/comment may be shown in booking rejection copy; private admin notes must not leak through guest APIs.
 - Venue Mini App date-exception saves must give clear post-save feedback: close/reset the form, show the compact exception list, and render changed-hours rows with the date range, special hours and guest comment.
+- Venue Mini App date-exception edits must allow changing the inclusive date range; when ranges are stored as per-date overrides, editing a grouped row replaces the old date set atomically.
 - Guest booking rejection copy must be human: closed dates say the venue does not work on the selected date and include the optional reason when present; out-of-hours rejection says booking is unavailable and shows the effective hours for that day when known.
 
 ## Block 8 — Menu builder + photos + stop-list + top list

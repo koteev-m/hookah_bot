@@ -448,6 +448,232 @@ class VenueBookingRoutesTest {
         }
 
     @Test
+    fun `owner and manager can edit schedule exception ranges atomically`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-schedule-range-edit-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, OWNER_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedUser(jdbcUrl, STAFF_ID)
+            seedVenueMember(jdbcUrl, venueId, OWNER_ID, "OWNER")
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            seedVenueMember(jdbcUrl, venueId, STAFF_ID, "STAFF")
+
+            val guestToken = issueToken(config, GUEST_ID)
+            val ownerToken = issueToken(config, OWNER_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+            val staffToken = issueToken(config, STAFF_ID)
+
+            fun dateOverrides(body: String) =
+                json.parseToJsonElement(body)
+                    .jsonObject
+                    .getValue("dateOverrides")
+                    .jsonArray
+                    .map { it.jsonObject }
+
+            suspend fun postRange(
+                token: String,
+                body: String,
+            ) = client.post("/api/venue/$venueId/schedule/override-ranges") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $token")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody(body)
+            }.also { response -> assertEquals(HttpStatusCode.OK, response.status) }
+
+            suspend fun putRange(
+                token: String,
+                originalFromDate: String,
+                originalToDate: String,
+                body: String,
+            ) = client.put("/api/venue/$venueId/schedule/override-ranges/$originalFromDate/$originalToDate") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $token")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody(body)
+            }.also { response -> assertEquals(HttpStatusCode.OK, response.status) }
+
+            suspend fun createGuestBooking(scheduledAt: String) =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId,"scheduledAt":"$scheduledAt","partySize":2}""")
+                }
+
+            postRange(
+                ownerToken,
+                """{"fromDate":"2030-02-01","toDate":"2030-02-01","isClosed":true,"guestNote":"ремонт"}""",
+            )
+            var overrides =
+                dateOverrides(
+                    putRange(
+                        managerToken,
+                        "2030-02-01",
+                        "2030-02-01",
+                        """{"fromDate":"2030-02-02","toDate":"2030-02-02","isClosed":true,"guestNote":"перенос"}""",
+                    ).bodyAsText(),
+                )
+            assertFalse(overrides.any { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-01" })
+            assertEquals(
+                "перенос",
+                overrides.single { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-02" }
+                    .getValue("guestNote")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            overrides =
+                dateOverrides(
+                    putRange(
+                        ownerToken,
+                        "2030-02-02",
+                        "2030-02-02",
+                        """{"fromDate":"2030-02-03","toDate":"2030-02-04","isClosed":true,"guestNote":"два дня"}""",
+                    ).bodyAsText(),
+                )
+            assertFalse(overrides.any { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-02" })
+            assertEquals(
+                listOf("2030-02-03", "2030-02-04"),
+                overrides
+                    .filter { it.getValue("guestNote").jsonPrimitive.content == "два дня" }
+                    .map { it.getValue("serviceDate").jsonPrimitive.content },
+            )
+
+            overrides =
+                dateOverrides(
+                    putRange(
+                        managerToken,
+                        "2030-02-03",
+                        "2030-02-04",
+                        """{"fromDate":"2030-02-05","toDate":"2030-02-05","isClosed":true,"guestNote":"один день"}""",
+                    ).bodyAsText(),
+                )
+            assertFalse(overrides.any { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-03" })
+            assertFalse(overrides.any { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-04" })
+            assertEquals(
+                "true",
+                overrides.single { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-05" }
+                    .getValue("isClosed")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            postRange(
+                ownerToken,
+                """{"fromDate":"2030-02-06","toDate":"2030-02-06","opensAt":"12:00",""" +
+                    """"closesAt":"23:00","isClosed":false,"guestNote":"особые часы"}""",
+            )
+            overrides =
+                dateOverrides(
+                    putRange(
+                        managerToken,
+                        "2030-02-06",
+                        "2030-02-06",
+                        """{"fromDate":"2030-02-07","toDate":"2030-02-07","opensAt":"13:00",""" +
+                            """"closesAt":"22:00","isClosed":false,"guestNote":"перенос часов"}""",
+                    ).bodyAsText(),
+                )
+            assertFalse(overrides.any { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-06" })
+            val movedSpecialHours =
+                overrides.single { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-07" }
+            assertEquals("13:00", movedSpecialHours.getValue("opensAt").jsonPrimitive.content)
+            assertEquals("22:00", movedSpecialHours.getValue("closesAt").jsonPrimitive.content)
+            assertEquals("перенос часов", movedSpecialHours.getValue("guestNote").jsonPrimitive.content)
+
+            postRange(
+                ownerToken,
+                """{"fromDate":"2030-02-08","toDate":"2030-02-09","opensAt":"14:00",""" +
+                    """"closesAt":"23:00","isClosed":false,"guestNote":"праздник"}""",
+            )
+            postRange(
+                ownerToken,
+                """{"fromDate":"2030-02-10","toDate":"2030-02-10","isClosed":true,"guestNote":"ярмарка"}""",
+            )
+            overrides =
+                dateOverrides(
+                    putRange(
+                        managerToken,
+                        "2030-02-08",
+                        "2030-02-09",
+                        """{"fromDate":"2030-02-10","toDate":"2030-02-11","opensAt":"16:00",""" +
+                            """"closesAt":"02:00","isClosed":false,"guestNote":"ночной график"}""",
+                    ).bodyAsText(),
+                )
+            assertFalse(overrides.any { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-08" })
+            assertFalse(overrides.any { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-09" })
+            val overlappedDate =
+                overrides.single { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-10" }
+            assertEquals("false", overlappedDate.getValue("isClosed").jsonPrimitive.content)
+            assertEquals("16:00", overlappedDate.getValue("opensAt").jsonPrimitive.content)
+            assertEquals("ночной график", overlappedDate.getValue("guestNote").jsonPrimitive.content)
+            assertEquals(
+                "16:00",
+                overrides.single { it.getValue("serviceDate").jsonPrimitive.content == "2030-02-11" }
+                    .getValue("opensAt")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            val staffEditResponse =
+                client.put("/api/venue/$venueId/schedule/override-ranges/2030-02-05/2030-02-05") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"fromDate":"2030-02-12","toDate":"2030-02-12","isClosed":true}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffEditResponse.status)
+
+            val foreignEditResponse =
+                client.put("/api/venue/$foreignVenueId/schedule/override-ranges/2030-02-05/2030-02-05") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"fromDate":"2030-02-12","toDate":"2030-02-12","isClosed":true}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignEditResponse.status)
+
+            assertEquals(HttpStatusCode.OK, createGuestBooking("2030-02-04T19:00:00Z").status)
+            val editedClosedResponse = createGuestBooking("2030-02-05T19:00:00Z")
+            assertEquals(HttpStatusCode.BadRequest, editedClosedResponse.status)
+            assertTrue(
+                editedClosedResponse
+                    .bodyAsText()
+                    .contains("На выбранную дату заведение не работает: один день."),
+            )
+            assertEquals(HttpStatusCode.OK, createGuestBooking("2030-02-10T14:00:00Z").status)
+            val outsideEditedSpecialHoursResponse = createGuestBooking("2030-02-10T12:00:00Z")
+            assertEquals(HttpStatusCode.BadRequest, outsideEditedSpecialHoursResponse.status)
+            assertTrue(outsideEditedSpecialHoursResponse.bodyAsText().contains("работает с 16:00 до 02:00"))
+        }
+
+    @Test
     fun `venue can list and confirm active bookings`() =
         testApplication {
             val jdbcUrl =

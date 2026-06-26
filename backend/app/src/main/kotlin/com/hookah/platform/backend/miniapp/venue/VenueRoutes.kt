@@ -359,6 +359,35 @@ fun Route.venueRoutes(
             call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
         }
 
+        put("/{venueId}/schedule/override-ranges/{fromDate}/{toDate}") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val originalFromDate = parseScheduleDate(call.parameters["fromDate"])
+            val originalToDate = parseScheduleDate(call.parameters["toDate"])
+            requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
+            val (normalizedOriginalFromDate, normalizedOriginalToDate) =
+                normalizeScheduleDateRange(originalFromDate.toString(), originalToDate.toString())
+            val request = call.receive<VenueScheduleOverrideRangeUpdateRequest>()
+            val (fromDate, toDate) = normalizeScheduleDateRange(request.fromDate, request.toDate)
+            val update = normalizeScheduleUpdate(request.opensAt, request.closesAt, request.isClosed, request.guestNote)
+            val updated =
+                venueBookingHoursRepository.replaceDateOverrideRange(
+                    venueId = venueId,
+                    originalFromDate = normalizedOriginalFromDate,
+                    originalToDate = normalizedOriginalToDate,
+                    fromDate = fromDate,
+                    toDate = toDate,
+                    opensAt = update.opensAt,
+                    closesAt = update.closesAt,
+                    isClosed = update.isClosed,
+                    guestNote = update.guestNote,
+                )
+            if (!updated) {
+                throw NotFoundException()
+            }
+            call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
+        }
+
         delete("/{venueId}/schedule/overrides/{serviceDate}") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()

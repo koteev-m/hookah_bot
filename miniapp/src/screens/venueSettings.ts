@@ -7,6 +7,7 @@ import {
   venueGetPublicCardSettings,
   venueGetScheduleSettings,
   venueGetShiftExtensionSettings,
+  venueReplaceScheduleOverrideRange,
   venueUpdateScheduleDay,
   venueUpdateScheduleOverrideRange,
   venueUpdateBookingSettings,
@@ -539,6 +540,11 @@ type ScheduleOverrideGroup = {
   guestNote?: string | null
 }
 
+type EditingOverrideRange = {
+  fromDate: string
+  toDate: string
+}
+
 function isValidScheduleTime(value: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value.trim())
 }
@@ -760,6 +766,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let publicCardSavedTimer: number | null = null
   let currentScheduleSettings: VenueScheduleSettingsResponse | null = null
   let overrideFormMode: OverrideFormMode | null = null
+  let editingOverrideRange: EditingOverrideRange | null = null
   let scheduleSaving = false
   let currentBookingSettings: VenueBookingSettingsResponse | null = null
   let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
@@ -807,10 +814,11 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const openOverrideForm = (mode: OverrideFormMode, group: ScheduleOverrideGroup | null = null) => {
     overrideFormMode = mode
+    editingOverrideRange = group ? { fromDate: group.fromDate, toDate: group.toDate } : null
     refs.overrideForm.hidden = false
     refs.overrideFormTitle.textContent = mode === 'closed' ? 'Закрыть период' : 'Изменить часы на период'
-    refs.overrideFromDateInput.disabled = group != null
-    refs.overrideToDateInput.disabled = group != null
+    refs.overrideFromDateInput.disabled = false
+    refs.overrideToDateInput.disabled = false
     if (group) {
       refs.overrideFromDateInput.value = group.fromDate
       refs.overrideToDateInput.value = group.toDate
@@ -825,6 +833,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const closeOverrideForm = () => {
     overrideFormMode = null
+    editingOverrideRange = null
     refs.overrideForm.hidden = true
     refs.overrideFromDateInput.disabled = false
     refs.overrideToDateInput.disabled = false
@@ -1116,6 +1125,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     const opensAt = refs.overrideOpensInput.value
     const closesAt = refs.overrideClosesInput.value
     const guestNote = refs.overrideNoteInput.value.trim() || null
+    const originalRange = editingOverrideRange
     if (!mode) {
       refs.status.textContent = 'Выберите действие для исключения.'
       return
@@ -1137,22 +1147,35 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     scheduleSaveAbort?.abort()
     const controller = new AbortController()
     scheduleSaveAbort = controller
-    const result = await venueUpdateScheduleOverrideRange(
-      backendUrl,
-      {
-        venueId,
-        body: {
-          fromDate,
-          toDate,
-          isClosed,
-          opensAt: isClosed ? null : opensAt,
-          closesAt: isClosed ? null : closesAt,
-          guestNote
-        }
-      },
-      deps,
-      controller.signal
-    )
+    const body = {
+      fromDate,
+      toDate,
+      isClosed,
+      opensAt: isClosed ? null : opensAt,
+      closesAt: isClosed ? null : closesAt,
+      guestNote
+    }
+    const result = originalRange
+      ? await venueReplaceScheduleOverrideRange(
+          backendUrl,
+          {
+            venueId,
+            fromDate: originalRange.fromDate,
+            toDate: originalRange.toDate,
+            body
+          },
+          deps,
+          controller.signal
+        )
+      : await venueUpdateScheduleOverrideRange(
+          backendUrl,
+          {
+            venueId,
+            body
+          },
+          deps,
+          controller.signal
+        )
     if (disposed || scheduleSaveAbort !== controller) return
     scheduleSaveAbort = null
     setScheduleBusy(false)

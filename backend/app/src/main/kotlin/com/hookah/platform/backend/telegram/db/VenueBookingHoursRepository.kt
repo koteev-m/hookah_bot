@@ -7,6 +7,7 @@ import java.sql.SQLException
 import java.sql.Time
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.temporal.ChronoUnit
 import javax.sql.DataSource
 import java.sql.Date as SqlDate
 
@@ -431,6 +432,60 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun replaceDateOverrideRange(
+        venueId: Long,
+        originalFromDate: LocalDate,
+        originalToDate: LocalDate,
+        fromDate: LocalDate,
+        toDate: LocalDate,
+        opensAt: LocalTime,
+        closesAt: LocalTime,
+        isClosed: Boolean = false,
+        guestNote: String? = null,
+    ): Boolean {
+        if (originalToDate.isBefore(originalFromDate) || toDate.isBefore(fromDate)) return false
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val initialAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        if (!venueExists(connection, venueId)) {
+                            connection.rollback()
+                            return@withContext false
+                        }
+                        val originalOverrides =
+                            listDateOverrides(connection, venueId, originalFromDate, originalToDate)
+                        val expectedOriginalDays = ChronoUnit.DAYS.between(originalFromDate, originalToDate) + 1
+                        if (
+                            originalOverrides.size.toLong() != expectedOriginalDays ||
+                            !isSingleOverrideGroup(originalOverrides)
+                        ) {
+                            connection.rollback()
+                            return@withContext false
+                        }
+                        deleteDateOverrideRange(connection, venueId, originalFromDate, originalToDate)
+                        var date = fromDate
+                        while (!date.isAfter(toDate)) {
+                            upsertDateOverride(connection, venueId, date, opensAt, closesAt, isClosed, guestNote)
+                            date = date.plusDays(1)
+                        }
+                        connection.commit()
+                        true
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = initialAutoCommit }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun deleteDateOverride(
         venueId: Long,
         serviceDate: LocalDate,
@@ -643,6 +698,74 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
                 statement.setString(6, guestNote)
                 statement.executeUpdate()
             }
+        }
+    }
+
+    private fun listDateOverrides(
+        connection: java.sql.Connection,
+        venueId: Long,
+        fromDate: LocalDate,
+        toDate: LocalDate,
+    ): List<VenueBookingDateOverride> =
+        connection.prepareStatement(
+            """
+            SELECT venue_id, service_date, opens_at, closes_at, is_closed, guest_note
+            FROM venue_booking_hours_overrides
+            WHERE venue_id = ? AND service_date BETWEEN ? AND ?
+            ORDER BY service_date
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setDate(2, SqlDate.valueOf(fromDate))
+            statement.setDate(3, SqlDate.valueOf(toDate))
+            statement.executeQuery().use { rs ->
+                val result = mutableListOf<VenueBookingDateOverride>()
+                while (rs.next()) {
+                    val date = rs.getDate("service_date")?.toLocalDate()
+                    val opensAt = rs.getTime("opens_at")?.toLocalTime()
+                    val closesAt = rs.getTime("closes_at")?.toLocalTime()
+                    if (date != null && opensAt != null && closesAt != null) {
+                        result +=
+                            VenueBookingDateOverride(
+                                venueId = rs.getLong("venue_id"),
+                                serviceDate = date,
+                                opensAt = opensAt,
+                                closesAt = closesAt,
+                                isClosed = rs.getBoolean("is_closed"),
+                                guestNote = rs.getString("guest_note"),
+                            )
+                    }
+                }
+                result
+            }
+        }
+
+    private fun isSingleOverrideGroup(overrides: List<VenueBookingDateOverride>): Boolean {
+        val first = overrides.firstOrNull() ?: return false
+        return overrides.all { override ->
+            override.opensAt == first.opensAt &&
+                override.closesAt == first.closesAt &&
+                override.isClosed == first.isClosed &&
+                override.guestNote == first.guestNote
+        }
+    }
+
+    private fun deleteDateOverrideRange(
+        connection: java.sql.Connection,
+        venueId: Long,
+        fromDate: LocalDate,
+        toDate: LocalDate,
+    ) {
+        connection.prepareStatement(
+            """
+            DELETE FROM venue_booking_hours_overrides
+            WHERE venue_id = ? AND service_date BETWEEN ? AND ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setDate(2, SqlDate.valueOf(fromDate))
+            statement.setDate(3, SqlDate.valueOf(toDate))
+            statement.executeUpdate()
         }
     }
 
