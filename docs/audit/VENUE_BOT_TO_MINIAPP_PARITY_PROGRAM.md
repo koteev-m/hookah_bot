@@ -394,6 +394,7 @@ Scope:
 - Product decision: despite the repository name, existing Bot/product behavior treats these rows as venue `Часы работы`; for launch they intentionally govern both public operating state and booking availability.
 - Owner/manager Venue Mini App APIs and UI manage weekly hours and date exceptions.
 - Date exceptions support inclusive single-day or multi-day closed/special-hours ranges; the current per-date override table remains canonical and ranges expand into per-date rows.
+- M9b.2 UX correction: after a closed-period or changed-hours-period save, Venue Mini App must show distinct success feedback, close/reset the form, open/refresh the compact exception list, and render changed-hours ranges with their guest comment.
 - Optional guest-facing reason/comment is stored as nullable override `guest_note` and may appear in guest booking rejection copy.
 - Keep weekly base schedule and concrete-date exceptions visually and semantically separate.
 - Guest-visible today schedule/open/closed fields are added to public guest read models without exposing unpublished/private venue state.
@@ -404,6 +405,7 @@ Scope:
 Definition of Done:
 
 - OWNER/MANAGER can save/reload weekly hours, closed weekdays and date exceptions in Venue Mini App.
+- OWNER/MANAGER can add another closed/special-hours exception immediately after save without stale form values.
 - STAFF cannot see or call schedule settings routes.
 - Guest catalog/card open/closed state uses the same venue timezone/date-override semantics as Bot slot generation.
 - Direct guest booking POST cannot bypass schedule rules.
@@ -413,7 +415,7 @@ Validation:
 
 - Backend schedule/RBAC, guest read-model and guest booking validation tests passed in focused runs.
 - Mini App production build and browser e2e smoke passed locally.
-- M9b.1 focused backend schedule, guest booking and Telegram closed-date tests passed locally; broad Telegram wildcard may still need splitting if local JVM stalls.
+- M9b.1/M9b.2 validation covers focused backend schedule, guest booking, Telegram closed-date and Mini App exception UX tests; broad Telegram wildcard may still need splitting if local JVM stalls.
 - Staging smoke is still required before marking M9b closed.
 
 ### Future — Promotions Read-Only Summary

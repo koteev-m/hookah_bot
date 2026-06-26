@@ -265,6 +265,7 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     text: 'Если выбрать одну и ту же дату, закроется только этот день.'
   })
   const overrideSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
+  overrideSaveButton.disabled = true
   const overrideCancelButton = el('button', {
     className: 'button-secondary',
     text: 'Отмена'
@@ -548,6 +549,18 @@ function formatScheduleLine(opensAt: string, closesAt: string, isClosed: boolean
   return `${opensAt}-${closesAt}`
 }
 
+function formatOverrideScheduleLine(opensAt: string, closesAt: string, isClosed: boolean): string {
+  if (isClosed) return 'Закрыто'
+  if (opensAt === closesAt) return 'Круглосуточно'
+  return `${opensAt}–${closesAt}`
+}
+
+function formatScheduleDate(value: string): string {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return value
+  return `${match[3]}.${match[2]}.${match[1]}`
+}
+
 function addIsoDays(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00Z`)
   date.setUTCDate(date.getUTCDate() + days)
@@ -587,7 +600,7 @@ function groupScheduleOverrides(overrides: VenueScheduleOverrideDto[]): Schedule
 }
 
 function formatDateRange(fromDate: string, toDate: string): string {
-  return fromDate === toDate ? fromDate : `${fromDate} — ${toDate}`
+  return fromDate === toDate ? formatScheduleDate(fromDate) : `${formatScheduleDate(fromDate)}–${formatScheduleDate(toDate)}`
 }
 
 function renderScheduleDay(
@@ -642,10 +655,16 @@ function renderScheduleOverrideGroup(
     className: 'venue-order-sub',
     text:
       `${formatDateRange(group.fromDate, group.toDate)} · ` +
-      formatScheduleLine(group.opensAt, group.closesAt, group.isClosed)
+      formatOverrideScheduleLine(group.opensAt, group.closesAt, group.isClosed)
   })
+  row.appendChild(summary)
   if (group.guestNote) {
-    summary.appendChild(el('span', { text: ` · ${group.guestNote}` }))
+    row.appendChild(
+      el('p', {
+        className: 'venue-order-sub',
+        text: `${group.isClosed ? 'Причина' : 'Комментарий'}: ${group.guestNote}`
+      })
+    )
   }
   const editButton = el('button', {
     className: 'button-secondary button-small',
@@ -657,7 +676,7 @@ function renderScheduleOverrideGroup(
   }) as HTMLButtonElement
   editButton.addEventListener('click', () => callbacks.onEditOverride(group))
   deleteButton.addEventListener('click', () => callbacks.onDeleteOverrideRange(group.fromDate, group.toDate))
-  append(row, summary, editButton, deleteButton)
+  append(row, editButton, deleteButton)
   return row
 }
 
@@ -741,8 +760,37 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let publicCardSavedTimer: number | null = null
   let currentScheduleSettings: VenueScheduleSettingsResponse | null = null
   let overrideFormMode: OverrideFormMode | null = null
+  let scheduleSaving = false
   let currentBookingSettings: VenueBookingSettingsResponse | null = null
   let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
+
+  const resetOverrideFormValues = () => {
+    refs.overrideFromDateInput.value = ''
+    refs.overrideToDateInput.value = ''
+    refs.overrideOpensInput.value = '18:00'
+    refs.overrideClosesInput.value = '00:00'
+    refs.overrideNoteInput.value = ''
+  }
+
+  const updateOverrideSaveButton = () => {
+    if (scheduleSaving) {
+      refs.overrideSaveButton.disabled = true
+      refs.overrideSaveButton.textContent = 'Сохраняем…'
+      return
+    }
+    refs.overrideSaveButton.textContent = 'Сохранить'
+    const mode = overrideFormMode
+    const fromDate = refs.overrideFromDateInput.value.trim()
+    const toDate = refs.overrideToDateInput.value.trim()
+    const datesValid =
+      /^\d{4}-\d{2}-\d{2}$/.test(fromDate) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(toDate) &&
+      toDate >= fromDate
+    const timesValid =
+      mode === 'closed' ||
+      (mode === 'hours' && isValidScheduleTime(refs.overrideOpensInput.value) && isValidScheduleTime(refs.overrideClosesInput.value))
+    refs.overrideSaveButton.disabled = !mode || !datesValid || !timesValid
+  }
 
   const syncOverrideFormMode = () => {
     const isHoursMode = overrideFormMode === 'hours'
@@ -754,6 +802,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.overrideHelper.textContent = isHoursMode
       ? 'Эти часы заменят обычный график только на выбранные даты.'
       : 'Если выбрать одну и ту же дату, закроется только этот день.'
+    updateOverrideSaveButton()
   }
 
   const openOverrideForm = (mode: OverrideFormMode, group: ScheduleOverrideGroup | null = null) => {
@@ -762,11 +811,15 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.overrideFormTitle.textContent = mode === 'closed' ? 'Закрыть период' : 'Изменить часы на период'
     refs.overrideFromDateInput.disabled = group != null
     refs.overrideToDateInput.disabled = group != null
-    refs.overrideFromDateInput.value = group?.fromDate ?? refs.overrideFromDateInput.value
-    refs.overrideToDateInput.value = group?.toDate ?? refs.overrideToDateInput.value
-    if (group?.opensAt) refs.overrideOpensInput.value = group.opensAt
-    if (group?.closesAt) refs.overrideClosesInput.value = group.closesAt
-    refs.overrideNoteInput.value = group?.guestNote ?? ''
+    if (group) {
+      refs.overrideFromDateInput.value = group.fromDate
+      refs.overrideToDateInput.value = group.toDate
+      refs.overrideOpensInput.value = group.opensAt
+      refs.overrideClosesInput.value = group.closesAt
+      refs.overrideNoteInput.value = group.guestNote ?? ''
+    } else {
+      resetOverrideFormValues()
+    }
     syncOverrideFormMode()
   }
 
@@ -775,7 +828,8 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.overrideForm.hidden = true
     refs.overrideFromDateInput.disabled = false
     refs.overrideToDateInput.disabled = false
-    refs.overrideNoteInput.value = ''
+    resetOverrideFormValues()
+    updateOverrideSaveButton()
   }
 
   const toggleOverrideList = () => {
@@ -854,7 +908,8 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const setScheduleBusy = (busy: boolean) => {
-    refs.overrideSaveButton.disabled = busy
+    scheduleSaving = busy
+    updateOverrideSaveButton()
     refs.overrideCancelButton.disabled = busy
     refs.closePeriodButton.disabled = busy
     refs.changeHoursPeriodButton.disabled = busy
@@ -1111,8 +1166,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.overrideList.hidden = false
     refs.showOverridesButton.textContent = 'Скрыть исключения'
     closeOverrideForm()
-    refs.status.textContent = 'Исключение сохранено.'
-    showToast('Исключение сохранено.')
+    const successMessage = isClosed ? 'Исключение сохранено.' : 'Особые часы сохранены.'
+    refs.status.textContent = successMessage
+    showToast(successMessage)
   }
 
   const deleteScheduleOverrideRange = async (fromDate: string, toDate: string, announce = true) => {
@@ -1414,6 +1470,15 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   disposables.push(on(refs.closePeriodButton, 'click', () => openOverrideForm('closed')))
   disposables.push(on(refs.changeHoursPeriodButton, 'click', () => openOverrideForm('hours')))
   disposables.push(on(refs.showOverridesButton, 'click', toggleOverrideList))
+  ;[
+    refs.overrideFromDateInput,
+    refs.overrideToDateInput,
+    refs.overrideOpensInput,
+    refs.overrideClosesInput,
+    refs.overrideNoteInput
+  ].forEach((input) => {
+    disposables.push(on(input, 'input', updateOverrideSaveButton))
+  })
   disposables.push(on(refs.overrideSaveButton, 'click', () => void saveScheduleOverride()))
   disposables.push(on(refs.overrideCancelButton, 'click', closeOverrideForm))
   disposables.push(on(refs.bookingSaveButton, 'click', () => void saveBookingSettings()))

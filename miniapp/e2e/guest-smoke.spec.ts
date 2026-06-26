@@ -3266,32 +3266,49 @@ test('venue manager configures working hours and date exceptions', async ({ page
   await expect(scheduleCard.getByTestId('schedule-exception-form')).toBeHidden()
   await scheduleCard.getByRole('button', { name: 'Закрыть период' }).click()
   let exceptionForm = scheduleCard.getByTestId('schedule-exception-form')
+  await expect(exceptionForm.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
   await exceptionForm.locator('input[type="date"]').nth(0).fill('2030-01-10')
   await exceptionForm.locator('input[type="date"]').nth(1).fill('2030-01-12')
   await exceptionForm.locator('textarea').fill('Санитарный день')
   await exceptionForm.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.locator('p.status')).toHaveText('Исключение сохранено.')
-  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText(
-    '2030-01-10 — 2030-01-12 · Закрыто · Санитарный день'
-  )
+  await expect(exceptionForm).toBeHidden()
+  await expect(scheduleCard.getByRole('button', { name: 'Скрыть исключения' })).toBeVisible()
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toBeVisible()
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('10.01.2030–12.01.2030 · Закрыто')
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('Причина: Санитарный день')
   expect(api.getScheduleSettings().dateOverrides).toHaveLength(3)
 
   await scheduleCard.getByRole('button', { name: 'Изменить часы на период' }).click()
   exceptionForm = scheduleCard.getByTestId('schedule-exception-form')
+  await expect(exceptionForm.locator('input[type="date"]').nth(0)).toHaveValue('')
+  await expect(exceptionForm.locator('input[type="date"]').nth(1)).toHaveValue('')
+  await expect(exceptionForm.locator('input[type="time"]').nth(0)).toHaveValue('18:00')
+  await expect(exceptionForm.locator('input[type="time"]').nth(1)).toHaveValue('00:00')
+  await expect(exceptionForm.locator('textarea')).toHaveValue('')
+  await expect(exceptionForm.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
   await exceptionForm.locator('input[type="date"]').nth(0).fill('2030-01-20')
   await exceptionForm.locator('input[type="date"]').nth(1).fill('2030-01-21')
   await exceptionForm.locator('input[type="time"]').nth(0).fill('12:00')
   await exceptionForm.locator('input[type="time"]').nth(1).fill('23:00')
   await exceptionForm.locator('textarea').fill('Праздничный график')
   await exceptionForm.getByRole('button', { name: 'Сохранить' }).click()
-  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText(
-    '2030-01-20 — 2030-01-21 · 12:00-23:00 · Праздничный график'
-  )
+  await expect(page.locator('p.status')).toHaveText('Особые часы сохранены.')
+  await expect(exceptionForm).toBeHidden()
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('20.01.2030–21.01.2030 · 12:00–23:00')
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('Комментарий: Праздничный график')
   expect(api.getScheduleSettings().dateOverrides).toHaveLength(5)
+
+  await scheduleCard.getByRole('button', { name: 'Изменить часы на период' }).click()
+  exceptionForm = scheduleCard.getByTestId('schedule-exception-form')
+  await expect(exceptionForm.locator('input[type="date"]').nth(0)).toHaveValue('')
+  await expect(exceptionForm.locator('input[type="date"]').nth(1)).toHaveValue('')
+  await expect(exceptionForm.locator('textarea')).toHaveValue('')
+  await exceptionForm.getByRole('button', { name: 'Отмена' }).click()
 
   await scheduleCard
     .getByTestId('schedule-exception-list')
-    .getByText('2030-01-10 — 2030-01-12 · Закрыто · Санитарный день')
+    .getByText('10.01.2030–12.01.2030 · Закрыто')
     .locator('xpath=..')
     .getByRole('button', { name: 'Изменить' })
     .click()
@@ -3299,13 +3316,12 @@ test('venue manager configures working hours and date exceptions', async ({ page
   await expect(exceptionForm.locator('input[type="date"]').nth(0)).toBeDisabled()
   await exceptionForm.locator('textarea').fill('Плановый выходной')
   await exceptionForm.getByRole('button', { name: 'Сохранить' }).click()
-  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText(
-    '2030-01-10 — 2030-01-12 · Закрыто · Плановый выходной'
-  )
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('10.01.2030–12.01.2030 · Закрыто')
+  await expect(scheduleCard.getByTestId('schedule-exception-list')).toContainText('Причина: Плановый выходной')
 
   await scheduleCard
     .getByTestId('schedule-exception-list')
-    .getByText('2030-01-20 — 2030-01-21 · 12:00-23:00 · Праздничный график')
+    .getByText('20.01.2030–21.01.2030 · 12:00–23:00')
     .locator('xpath=..')
     .getByRole('button', { name: 'Удалить' })
     .click()
