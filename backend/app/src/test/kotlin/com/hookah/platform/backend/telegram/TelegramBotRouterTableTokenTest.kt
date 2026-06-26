@@ -10469,6 +10469,57 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `booking date picker explains closed date with reason`() =
+        runBlocking {
+            val bookingDate = LocalDate.now(ZoneId.systemDefault()).plusDays(1)
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Микс",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.MIDNIGHT,
+                    closesAt = LocalTime.MIDNIGHT,
+                    isClosed = true,
+                    guestNote = "ремонт",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_101,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-date-closed",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_101, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_date:10:$bookingDate",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "На выбранную дату «Микс» не работает: ремонт.\nВыберите другую дату.",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "📅 К выбору дат" && it.callbackData == "bot_catalog_venue_book:10"
+                            } &&
+                            markup.inlineKeyboard.flatten().any {
+                                it.text == "🏠 В каталог" && it.callbackData == "bot_catalog_open"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
     fun `booking time picker keeps after midnight slots under selected service date`() =
         runBlocking {
             val bookingDate = LocalDate.now(ZoneId.systemDefault()).plusDays(1)

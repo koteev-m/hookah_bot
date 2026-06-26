@@ -2,6 +2,8 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.VenueBookingOutsideHoursException
+import com.hookah.platform.backend.api.VenueClosedOnSelectedDateException
 import com.hookah.platform.backend.api.VenueScheduleNotConfiguredException
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingCancelRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingConfirmRequest
@@ -18,7 +20,8 @@ import com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord
 import com.hookah.platform.backend.miniapp.guest.db.attendanceScheduleVersionEpochSeconds
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.BookingStartAvailability
-import com.hookah.platform.backend.miniapp.venue.checkBookingStartAvailability
+import com.hookah.platform.backend.miniapp.venue.checkBookingStart
+import com.hookah.platform.backend.miniapp.venue.formatScheduleTime
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.telegram.BookingStaffNotification
@@ -38,6 +41,8 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -387,19 +392,39 @@ private suspend fun requireBookingWithinVenueHours(
     scheduledAt: Instant,
     zoneId: ZoneId,
 ) {
-    when (
-        venueBookingHoursRepository.checkBookingStartAvailability(
+    val check =
+        venueBookingHoursRepository.checkBookingStart(
             venueId = venueId,
             scheduledAt = scheduledAt,
             zoneId = zoneId,
         )
-    ) {
+    when (check.availability) {
         BookingStartAvailability.ALLOWED -> Unit
         BookingStartAvailability.NOT_CONFIGURED -> throw VenueScheduleNotConfiguredException()
-        BookingStartAvailability.OUTSIDE_HOURS ->
-            throw InvalidInputException(
-                "scheduledAt is outside venue working hours",
+        BookingStartAvailability.CLOSED ->
+            throw VenueClosedOnSelectedDateException(
+                reason = check.hours?.guestNote,
+                details =
+                    buildJsonObject {
+                        check.serviceDate?.let { put("serviceDate", it.toString()) }
+                        check.hours?.guestNote?.let { put("guestNote", it) }
+                    },
             )
+        BookingStartAvailability.OUTSIDE_HOURS -> {
+            val hours =
+                check.hours
+                    ?: throw VenueScheduleNotConfiguredException()
+            throw VenueBookingOutsideHoursException(
+                opensAt = formatScheduleTime(hours.opensAt),
+                closesAt = formatScheduleTime(hours.closesAt),
+                details =
+                    buildJsonObject {
+                        check.serviceDate?.let { put("serviceDate", it.toString()) }
+                        put("opensAt", formatScheduleTime(hours.opensAt))
+                        put("closesAt", formatScheduleTime(hours.closesAt))
+                    },
+            )
+        }
     }
 }
 

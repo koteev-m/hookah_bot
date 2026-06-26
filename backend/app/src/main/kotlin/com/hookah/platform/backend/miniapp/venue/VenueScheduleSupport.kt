@@ -20,8 +20,15 @@ data class VenueScheduleWindow(
 enum class BookingStartAvailability {
     ALLOWED,
     NOT_CONFIGURED,
+    CLOSED,
     OUTSIDE_HOURS,
 }
+
+data class BookingStartCheck(
+    val availability: BookingStartAvailability,
+    val serviceDate: LocalDate? = null,
+    val hours: VenueBookingHours? = null,
+)
 
 fun formatScheduleTime(value: LocalTime): String = value.format(scheduleTimeFormatter)
 
@@ -80,21 +87,55 @@ suspend fun VenueBookingHoursRepository.checkBookingStartAvailability(
     scheduledAt: Instant,
     zoneId: ZoneId,
 ): BookingStartAvailability {
+    return checkBookingStart(
+        venueId = venueId,
+        scheduledAt = scheduledAt,
+        zoneId = zoneId,
+    ).availability
+}
+
+suspend fun VenueBookingHoursRepository.checkBookingStart(
+    venueId: Long,
+    scheduledAt: Instant,
+    zoneId: ZoneId,
+): BookingStartCheck {
     val scheduledLocalDateTime = LocalDateTime.ofInstant(scheduledAt, zoneId)
     val localDate = scheduledLocalDateTime.toLocalDate()
     val sameDateHours = findByVenueAndDate(venueId, localDate)
     if (sameDateHours?.containsBookingStart(localDate, scheduledLocalDateTime) == true) {
-        return BookingStartAvailability.ALLOWED
+        return BookingStartCheck(
+            availability = BookingStartAvailability.ALLOWED,
+            serviceDate = localDate,
+            hours = sameDateHours,
+        )
     }
     val previousDate = localDate.minusDays(1)
     val previousDateHours = findByVenueAndDate(venueId, previousDate)
     if (previousDateHours?.containsBookingStart(previousDate, scheduledLocalDateTime) == true) {
-        return BookingStartAvailability.ALLOWED
+        return BookingStartCheck(
+            availability = BookingStartAvailability.ALLOWED,
+            serviceDate = previousDate,
+            hours = previousDateHours,
+        )
     }
-    return if (sameDateHours == null) {
-        BookingStartAvailability.NOT_CONFIGURED
-    } else {
-        BookingStartAvailability.OUTSIDE_HOURS
+    return when {
+        sameDateHours == null ->
+            BookingStartCheck(
+                availability = BookingStartAvailability.NOT_CONFIGURED,
+                serviceDate = localDate,
+            )
+        sameDateHours.isClosed ->
+            BookingStartCheck(
+                availability = BookingStartAvailability.CLOSED,
+                serviceDate = localDate,
+                hours = sameDateHours,
+            )
+        else ->
+            BookingStartCheck(
+                availability = BookingStartAvailability.OUTSIDE_HOURS,
+                serviceDate = localDate,
+                hours = sameDateHours,
+            )
     }
 }
 

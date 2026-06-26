@@ -2,13 +2,13 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
-  venueDeleteScheduleOverride,
+  venueDeleteScheduleOverrideRange,
   venueGetBookingSettings,
   venueGetPublicCardSettings,
   venueGetScheduleSettings,
   venueGetShiftExtensionSettings,
   venueUpdateScheduleDay,
-  venueUpdateScheduleOverride,
+  venueUpdateScheduleOverrideRange,
   venueUpdateBookingSettings,
   venueUpdatePublicCardSettings,
   venueUpdateShiftExtensionSettings
@@ -55,11 +55,23 @@ type VenueSettingsRefs = {
   scheduleCard: HTMLElement
   scheduleSummary: HTMLParagraphElement
   weeklyScheduleList: HTMLDivElement
-  overrideDateInput: HTMLInputElement
-  overrideClosedInput: HTMLInputElement
+  overrideActions: HTMLDivElement
+  closePeriodButton: HTMLButtonElement
+  changeHoursPeriodButton: HTMLButtonElement
+  showOverridesButton: HTMLButtonElement
+  overrideForm: HTMLDivElement
+  overrideFormTitle: HTMLParagraphElement
+  overrideFromDateInput: HTMLInputElement
+  overrideToDateInput: HTMLInputElement
+  overrideNoteLabel: HTMLParagraphElement
+  overrideNoteInput: HTMLTextAreaElement
+  overrideHelper: HTMLParagraphElement
+  overrideOpensLabel: HTMLParagraphElement
   overrideOpensInput: HTMLInputElement
+  overrideClosesLabel: HTMLParagraphElement
   overrideClosesInput: HTMLInputElement
   overrideSaveButton: HTMLButtonElement
+  overrideCancelButton: HTMLButtonElement
   overrideList: HTMLDivElement
   bookingCard: HTMLElement
   bookingSummary: HTMLParagraphElement
@@ -203,42 +215,92 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   })
   const scheduleSummary = el('p', { className: 'venue-order-sub', text: '' })
   const weeklyScheduleList = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
-  const overridesTitle = el('p', { className: 'field-label', text: 'Исключения по датам' })
+  const overridesTitle = el('h4', { text: 'Исключения по датам' })
+  const overridesDescription = el('p', {
+    className: 'venue-order-sub',
+    text: 'Закрывайте отдельные даты или задавайте особые часы, например на праздники.'
+  })
+  const overrideActions = el('div', { className: 'button-row' }) as HTMLDivElement
+  const closePeriodButton = el('button', {
+    className: 'button-secondary button-small',
+    text: 'Закрыть период'
+  }) as HTMLButtonElement
+  const changeHoursPeriodButton = el('button', {
+    className: 'button-secondary button-small',
+    text: 'Изменить часы на период'
+  }) as HTMLButtonElement
+  const showOverridesButton = el('button', {
+    className: 'button-secondary button-small',
+    text: 'Показать исключения'
+  }) as HTMLButtonElement
+  append(overrideActions, closePeriodButton, changeHoursPeriodButton, showOverridesButton)
   const overrideForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
-  const overrideDateLabel = el('p', { className: 'field-label', text: 'Дата' })
-  const overrideDateInput = document.createElement('input')
-  overrideDateInput.className = 'venue-input'
-  overrideDateInput.type = 'date'
-  const overrideClosedLabel = document.createElement('label')
-  overrideClosedLabel.className = 'venue-settings-toggle'
-  const overrideClosedInput = document.createElement('input')
-  overrideClosedInput.type = 'checkbox'
-  const overrideClosedText = el('span', { text: 'Закрыто в эту дату' })
-  append(overrideClosedLabel, overrideClosedInput, overrideClosedText)
-  const overrideOpensLabel = el('p', { className: 'field-label', text: 'Открытие' })
+  overrideForm.dataset.testid = 'schedule-exception-form'
+  overrideForm.hidden = true
+  const overrideFormTitle = el('p', { className: 'field-label', text: 'Закрыть период' })
+  const overrideFromDateLabel = el('p', { className: 'field-label', text: 'С даты' })
+  const overrideFromDateInput = document.createElement('input')
+  overrideFromDateInput.className = 'venue-input'
+  overrideFromDateInput.type = 'date'
+  const overrideToDateLabel = el('p', { className: 'field-label', text: 'По дату' })
+  const overrideToDateInput = document.createElement('input')
+  overrideToDateInput.className = 'venue-input'
+  overrideToDateInput.type = 'date'
+  const overrideOpensLabel = el('p', { className: 'field-label', text: 'Открываемся' })
   const overrideOpensInput = document.createElement('input')
   overrideOpensInput.className = 'venue-input'
   overrideOpensInput.type = 'time'
   overrideOpensInput.value = '18:00'
-  const overrideClosesLabel = el('p', { className: 'field-label', text: 'Закрытие' })
+  const overrideClosesLabel = el('p', { className: 'field-label', text: 'Закрываемся' })
   const overrideClosesInput = document.createElement('input')
   overrideClosesInput.className = 'venue-input'
   overrideClosesInput.type = 'time'
   overrideClosesInput.value = '00:00'
-  const overrideSaveButton = el('button', { text: 'Сохранить исключение' }) as HTMLButtonElement
+  const overrideNoteLabel = el('p', { className: 'field-label', text: 'Причина' })
+  const overrideNoteInput = document.createElement('textarea')
+  overrideNoteInput.className = 'venue-input'
+  overrideNoteInput.rows = 2
+  const overrideHelper = el('p', {
+    className: 'venue-order-sub',
+    text: 'Если выбрать одну и ту же дату, закроется только этот день.'
+  })
+  const overrideSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
+  const overrideCancelButton = el('button', {
+    className: 'button-secondary',
+    text: 'Отмена'
+  }) as HTMLButtonElement
   append(
     overrideForm,
-    overrideDateLabel,
-    overrideDateInput,
-    overrideClosedLabel,
+    overrideFormTitle,
+    overrideFromDateLabel,
+    overrideFromDateInput,
+    overrideToDateLabel,
+    overrideToDateInput,
     overrideOpensLabel,
     overrideOpensInput,
     overrideClosesLabel,
     overrideClosesInput,
-    overrideSaveButton
+    overrideNoteLabel,
+    overrideNoteInput,
+    overrideHelper,
+    overrideSaveButton,
+    overrideCancelButton
   )
   const overrideList = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
-  append(scheduleCard, scheduleTitle, scheduleDescription, scheduleSummary, weeklyScheduleList, overridesTitle, overrideForm, overrideList)
+  overrideList.dataset.testid = 'schedule-exception-list'
+  overrideList.hidden = true
+  append(
+    scheduleCard,
+    scheduleTitle,
+    scheduleDescription,
+    scheduleSummary,
+    weeklyScheduleList,
+    overridesTitle,
+    overridesDescription,
+    overrideActions,
+    overrideForm,
+    overrideList
+  )
 
   const bookingCard = el('section', { className: 'card' })
   const bookingTitle = el('h3', { text: 'Настройки брони' })
@@ -321,11 +383,23 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     scheduleCard,
     scheduleSummary,
     weeklyScheduleList,
-    overrideDateInput,
-    overrideClosedInput,
+    overrideActions,
+    closePeriodButton,
+    changeHoursPeriodButton,
+    showOverridesButton,
+    overrideForm,
+    overrideFormTitle,
+    overrideFromDateInput,
+    overrideToDateInput,
+    overrideNoteLabel,
+    overrideNoteInput,
+    overrideHelper,
+    overrideOpensLabel,
     overrideOpensInput,
+    overrideClosesLabel,
     overrideClosesInput,
     overrideSaveButton,
+    overrideCancelButton,
     overrideList,
     bookingCard,
     bookingSummary,
@@ -449,7 +523,19 @@ function renderBookingSettings(refs: VenueSettingsRefs, settings: VenueBookingSe
 
 type ScheduleCallbacks = {
   onSaveDay: (weekday: number, isClosed: boolean, opensAt: string, closesAt: string) => void
-  onDeleteOverride: (serviceDate: string) => void
+  onEditOverride: (group: ScheduleOverrideGroup) => void
+  onDeleteOverrideRange: (fromDate: string, toDate: string) => void
+}
+
+type OverrideFormMode = 'closed' | 'hours'
+
+type ScheduleOverrideGroup = {
+  fromDate: string
+  toDate: string
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+  guestNote?: string | null
 }
 
 function isValidScheduleTime(value: string): boolean {
@@ -460,6 +546,48 @@ function formatScheduleLine(opensAt: string, closesAt: string, isClosed: boolean
   if (isClosed) return 'Закрыто'
   if (opensAt === closesAt) return 'Круглосуточно'
   return `${opensAt}-${closesAt}`
+}
+
+function addIsoDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+function sameOverrideGroup(left: ScheduleOverrideGroup, right: VenueScheduleOverrideDto): boolean {
+  return (
+    left.isClosed === right.isClosed &&
+    left.opensAt === right.opensAt &&
+    left.closesAt === right.closesAt &&
+    (left.guestNote ?? '') === (right.guestNote ?? '')
+  )
+}
+
+function groupScheduleOverrides(overrides: VenueScheduleOverrideDto[]): ScheduleOverrideGroup[] {
+  const groups: ScheduleOverrideGroup[] = []
+  overrides
+    .slice()
+    .sort((left, right) => left.serviceDate.localeCompare(right.serviceDate))
+    .forEach((override) => {
+      const previous = groups[groups.length - 1]
+      if (previous && addIsoDays(previous.toDate, 1) === override.serviceDate && sameOverrideGroup(previous, override)) {
+        previous.toDate = override.serviceDate
+        return
+      }
+      groups.push({
+        fromDate: override.serviceDate,
+        toDate: override.serviceDate,
+        opensAt: override.opensAt,
+        closesAt: override.closesAt,
+        isClosed: override.isClosed,
+        guestNote: override.guestNote
+      })
+    })
+  return groups
+}
+
+function formatDateRange(fromDate: string, toDate: string): string {
+  return fromDate === toDate ? fromDate : `${fromDate} — ${toDate}`
 }
 
 function renderScheduleDay(
@@ -505,21 +633,31 @@ function renderScheduleDay(
   return row
 }
 
-function renderScheduleOverride(
-  override: VenueScheduleOverrideDto,
+function renderScheduleOverrideGroup(
+  group: ScheduleOverrideGroup,
   callbacks: ScheduleCallbacks
 ): HTMLElement {
   const row = el('div', { className: 'venue-form-grid' })
   const summary = el('p', {
     className: 'venue-order-sub',
-    text: `${override.serviceDate} · ${formatScheduleLine(override.opensAt, override.closesAt, override.isClosed)}`
+    text:
+      `${formatDateRange(group.fromDate, group.toDate)} · ` +
+      formatScheduleLine(group.opensAt, group.closesAt, group.isClosed)
   })
+  if (group.guestNote) {
+    summary.appendChild(el('span', { text: ` · ${group.guestNote}` }))
+  }
+  const editButton = el('button', {
+    className: 'button-secondary button-small',
+    text: 'Изменить'
+  }) as HTMLButtonElement
   const deleteButton = el('button', {
     className: 'button-secondary button-small',
     text: 'Удалить'
   }) as HTMLButtonElement
-  deleteButton.addEventListener('click', () => callbacks.onDeleteOverride(override.serviceDate))
-  append(row, summary, deleteButton)
+  editButton.addEventListener('click', () => callbacks.onEditOverride(group))
+  deleteButton.addEventListener('click', () => callbacks.onDeleteOverrideRange(group.fromDate, group.toDate))
+  append(row, summary, editButton, deleteButton)
   return row
 }
 
@@ -537,11 +675,9 @@ function renderScheduleSettings(
   )
   refs.overrideList.replaceChildren(
     ...(settings.dateOverrides.length
-      ? settings.dateOverrides.map((override) => renderScheduleOverride(override, callbacks))
+      ? groupScheduleOverrides(settings.dateOverrides).map((group) => renderScheduleOverrideGroup(group, callbacks))
       : [el('p', { className: 'venue-order-sub', text: 'Исключения не настроены.' })])
   )
-  refs.overrideOpensInput.disabled = refs.overrideClosedInput.checked
-  refs.overrideClosesInput.disabled = refs.overrideClosedInput.checked
 }
 
 function renderPublicCardSettings(refs: VenueSettingsRefs, settings: VenuePublicCardSettingsResponse) {
@@ -604,8 +740,48 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let publicCardSaving = false
   let publicCardSavedTimer: number | null = null
   let currentScheduleSettings: VenueScheduleSettingsResponse | null = null
+  let overrideFormMode: OverrideFormMode | null = null
   let currentBookingSettings: VenueBookingSettingsResponse | null = null
   let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
+
+  const syncOverrideFormMode = () => {
+    const isHoursMode = overrideFormMode === 'hours'
+    refs.overrideOpensLabel.hidden = !isHoursMode
+    refs.overrideOpensInput.hidden = !isHoursMode
+    refs.overrideClosesLabel.hidden = !isHoursMode
+    refs.overrideClosesInput.hidden = !isHoursMode
+    refs.overrideNoteLabel.textContent = isHoursMode ? 'Комментарий для гостей' : 'Причина'
+    refs.overrideHelper.textContent = isHoursMode
+      ? 'Эти часы заменят обычный график только на выбранные даты.'
+      : 'Если выбрать одну и ту же дату, закроется только этот день.'
+  }
+
+  const openOverrideForm = (mode: OverrideFormMode, group: ScheduleOverrideGroup | null = null) => {
+    overrideFormMode = mode
+    refs.overrideForm.hidden = false
+    refs.overrideFormTitle.textContent = mode === 'closed' ? 'Закрыть период' : 'Изменить часы на период'
+    refs.overrideFromDateInput.disabled = group != null
+    refs.overrideToDateInput.disabled = group != null
+    refs.overrideFromDateInput.value = group?.fromDate ?? refs.overrideFromDateInput.value
+    refs.overrideToDateInput.value = group?.toDate ?? refs.overrideToDateInput.value
+    if (group?.opensAt) refs.overrideOpensInput.value = group.opensAt
+    if (group?.closesAt) refs.overrideClosesInput.value = group.closesAt
+    refs.overrideNoteInput.value = group?.guestNote ?? ''
+    syncOverrideFormMode()
+  }
+
+  const closeOverrideForm = () => {
+    overrideFormMode = null
+    refs.overrideForm.hidden = true
+    refs.overrideFromDateInput.disabled = false
+    refs.overrideToDateInput.disabled = false
+    refs.overrideNoteInput.value = ''
+  }
+
+  const toggleOverrideList = () => {
+    refs.overrideList.hidden = !refs.overrideList.hidden
+    refs.showOverridesButton.textContent = refs.overrideList.hidden ? 'Показать исключения' : 'Скрыть исключения'
+  }
 
   if (!canManagePublicCard) {
     refs.publicCard.remove()
@@ -679,7 +855,14 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const setScheduleBusy = (busy: boolean) => {
     refs.overrideSaveButton.disabled = busy
+    refs.overrideCancelButton.disabled = busy
+    refs.closePeriodButton.disabled = busy
+    refs.changeHoursPeriodButton.disabled = busy
+    refs.showOverridesButton.disabled = busy
     refs.weeklyScheduleList.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
+      button.disabled = busy
+    })
+    refs.overrideList.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
       button.disabled = busy
     })
   }
@@ -871,12 +1054,23 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const saveScheduleOverride = async () => {
     if (!canManageSchedule || !currentScheduleSettings) return
-    const serviceDate = refs.overrideDateInput.value.trim()
-    const isClosed = refs.overrideClosedInput.checked
+    const mode = overrideFormMode
+    const fromDate = refs.overrideFromDateInput.value.trim()
+    const toDate = refs.overrideToDateInput.value.trim()
+    const isClosed = mode === 'closed'
     const opensAt = refs.overrideOpensInput.value
     const closesAt = refs.overrideClosesInput.value
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate)) {
-      refs.status.textContent = 'Выберите дату исключения.'
+    const guestNote = refs.overrideNoteInput.value.trim() || null
+    if (!mode) {
+      refs.status.textContent = 'Выберите действие для исключения.'
+      return
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      refs.status.textContent = 'Выберите даты периода.'
+      return
+    }
+    if (toDate < fromDate) {
+      refs.status.textContent = 'Дата окончания должна быть не раньше даты начала.'
       return
     }
     if (!isClosed && (!isValidScheduleTime(opensAt) || !isValidScheduleTime(closesAt))) {
@@ -888,15 +1082,17 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     scheduleSaveAbort?.abort()
     const controller = new AbortController()
     scheduleSaveAbort = controller
-    const result = await venueUpdateScheduleOverride(
+    const result = await venueUpdateScheduleOverrideRange(
       backendUrl,
       {
         venueId,
-        serviceDate,
         body: {
+          fromDate,
+          toDate,
           isClosed,
           opensAt: isClosed ? null : opensAt,
-          closesAt: isClosed ? null : closesAt
+          closesAt: isClosed ? null : closesAt,
+          guestNote
         }
       },
       deps,
@@ -912,19 +1108,22 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
     currentScheduleSettings = result.data
     renderScheduleSettings(refs, currentScheduleSettings, scheduleCallbacks)
+    refs.overrideList.hidden = false
+    refs.showOverridesButton.textContent = 'Скрыть исключения'
+    closeOverrideForm()
     refs.status.textContent = 'Исключение сохранено.'
     showToast('Исключение сохранено.')
   }
 
-  const deleteScheduleOverride = async (serviceDate: string) => {
+  const deleteScheduleOverrideRange = async (fromDate: string, toDate: string, announce = true) => {
     if (!canManageSchedule || !currentScheduleSettings) return
     setScheduleBusy(true)
     scheduleSaveAbort?.abort()
     const controller = new AbortController()
     scheduleSaveAbort = controller
-    const result = await venueDeleteScheduleOverride(
+    const result = await venueDeleteScheduleOverrideRange(
       backendUrl,
-      { venueId, serviceDate },
+      { venueId, fromDate, toDate },
       deps,
       controller.signal
     )
@@ -938,14 +1137,21 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
     currentScheduleSettings = result.data
     renderScheduleSettings(refs, currentScheduleSettings, scheduleCallbacks)
-    refs.status.textContent = 'Исключение удалено.'
-    showToast('Исключение удалено.')
+    if (announce) {
+      refs.status.textContent = 'Исключение удалено.'
+      showToast('Исключение удалено.')
+    }
   }
 
   const scheduleCallbacks: ScheduleCallbacks = {
     onSaveDay: (weekday, isClosed, opensAt, closesAt) =>
       void saveScheduleDay(weekday, isClosed, opensAt, closesAt),
-    onDeleteOverride: (serviceDate) => void deleteScheduleOverride(serviceDate)
+    onEditOverride: (group) => {
+      openOverrideForm(group.isClosed ? 'closed' : 'hours', group)
+      refs.overrideList.hidden = false
+      refs.showOverridesButton.textContent = 'Скрыть исключения'
+    },
+    onDeleteOverrideRange: (fromDate, toDate) => void deleteScheduleOverrideRange(fromDate, toDate)
   }
 
   const saveBookingSettings = async () => {
@@ -1205,11 +1411,11 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
   document.addEventListener('click', handleDocumentClick)
   disposables.push(() => document.removeEventListener('click', handleDocumentClick))
-  disposables.push(on(refs.overrideClosedInput, 'change', () => {
-    refs.overrideOpensInput.disabled = refs.overrideClosedInput.checked
-    refs.overrideClosesInput.disabled = refs.overrideClosedInput.checked
-  }))
+  disposables.push(on(refs.closePeriodButton, 'click', () => openOverrideForm('closed')))
+  disposables.push(on(refs.changeHoursPeriodButton, 'click', () => openOverrideForm('hours')))
+  disposables.push(on(refs.showOverridesButton, 'click', toggleOverrideList))
   disposables.push(on(refs.overrideSaveButton, 'click', () => void saveScheduleOverride()))
+  disposables.push(on(refs.overrideCancelButton, 'click', closeOverrideForm))
   disposables.push(on(refs.bookingSaveButton, 'click', () => void saveBookingSettings()))
   disposables.push(on(refs.extensionSaveButton, 'click', () => void saveShiftExtensionSettings()))
   disposables.push(on(refs.backButton, 'click', () => {

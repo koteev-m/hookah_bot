@@ -447,6 +447,19 @@ class GuestBookingRoutesTest {
             )
             val closedWeekdayResponse = createResponse(venueId, "2030-01-10T18:00:00Z")
             assertEquals(HttpStatusCode.BadRequest, closedWeekdayResponse.status)
+            val closedWeekdayError =
+                json.parseToJsonElement(closedWeekdayResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("error")
+                    .jsonObject
+            assertEquals(
+                ApiErrorCodes.VENUE_CLOSED_ON_SELECTED_DATE,
+                closedWeekdayError.getValue("code").jsonPrimitive.content,
+            )
+            assertEquals(
+                "На выбранную дату заведение не работает. Выберите другую дату.",
+                closedWeekdayError.getValue("message").jsonPrimitive.content,
+            )
 
             setWeekdayHours(
                 jdbcUrl = jdbcUrl,
@@ -458,6 +471,19 @@ class GuestBookingRoutesTest {
             )
             val beforeOpenResponse = createResponse(venueId, "2030-01-10T17:30:00Z")
             assertEquals(HttpStatusCode.BadRequest, beforeOpenResponse.status)
+            val beforeOpenError =
+                json.parseToJsonElement(beforeOpenResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("error")
+                    .jsonObject
+            assertEquals(
+                ApiErrorCodes.VENUE_BOOKING_OUTSIDE_HOURS,
+                beforeOpenError.getValue("code").jsonPrimitive.content,
+            )
+            assertEquals(
+                "На выбранное время бронь недоступна. В этот день заведение работает с 18:00 до 22:00.",
+                beforeOpenError.getValue("message").jsonPrimitive.content,
+            )
             val inHoursResponse = createResponse(venueId, "2030-01-10T19:00:00Z")
             assertEquals(HttpStatusCode.OK, inHoursResponse.status)
 
@@ -469,9 +495,23 @@ class GuestBookingRoutesTest {
                 opensAt = "00:00:00",
                 closesAt = "00:00:00",
                 isClosed = true,
+                guestNote = "ремонт",
             )
             val closedOverrideResponse = createResponse(venueId, "2030-01-11T19:00:00Z")
             assertEquals(HttpStatusCode.BadRequest, closedOverrideResponse.status)
+            val closedOverrideError =
+                json.parseToJsonElement(closedOverrideResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("error")
+                    .jsonObject
+            assertEquals(
+                ApiErrorCodes.VENUE_CLOSED_ON_SELECTED_DATE,
+                closedOverrideError.getValue("code").jsonPrimitive.content,
+            )
+            assertEquals(
+                "На выбранную дату заведение не работает: ремонт. Выберите другую дату.",
+                closedOverrideError.getValue("message").jsonPrimitive.content,
+            )
 
             val openOverrideDate = LocalDate.of(2030, 1, 12)
             setDateOverrideHours(
@@ -484,6 +524,19 @@ class GuestBookingRoutesTest {
             )
             val overrideBeforeOpenResponse = createResponse(venueId, "2030-01-12T19:30:00Z")
             assertEquals(HttpStatusCode.BadRequest, overrideBeforeOpenResponse.status)
+            val overrideBeforeOpenError =
+                json.parseToJsonElement(overrideBeforeOpenResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("error")
+                    .jsonObject
+            assertEquals(
+                ApiErrorCodes.VENUE_BOOKING_OUTSIDE_HOURS,
+                overrideBeforeOpenError.getValue("code").jsonPrimitive.content,
+            )
+            assertEquals(
+                "На выбранное время бронь недоступна. В этот день заведение работает с 20:00 до 23:00.",
+                overrideBeforeOpenError.getValue("message").jsonPrimitive.content,
+            )
             val bookingId = createBooking(client, guestToken, venueId, "2030-01-12T20:30:00Z")
 
             val overnightDate = LocalDate.of(2030, 1, 13)
@@ -517,6 +570,15 @@ class GuestBookingRoutesTest {
                     setBody("""{"bookingId":$bookingId,"scheduledAt":"2030-01-11T19:00:00Z","partySize":2}""")
                 }
             assertEquals(HttpStatusCode.BadRequest, updateClosedOverrideResponse.status)
+            val updateClosedOverrideError =
+                json.parseToJsonElement(updateClosedOverrideResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("error")
+                    .jsonObject
+            assertEquals(
+                ApiErrorCodes.VENUE_CLOSED_ON_SELECTED_DATE,
+                updateClosedOverrideError.getValue("code").jsonPrimitive.content,
+            )
 
             val moscowVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue, name = "Moscow schedule")
             seedSubscription(jdbcUrl, moscowVenueId)
@@ -771,12 +833,14 @@ class GuestBookingRoutesTest {
         opensAt: String,
         closesAt: String,
         isClosed: Boolean,
+        guestNote: String? = null,
     ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                INSERT INTO venue_booking_hours_overrides (venue_id, service_date, opens_at, closes_at, is_closed)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO venue_booking_hours_overrides
+                    (venue_id, service_date, opens_at, closes_at, is_closed, guest_note)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, venueId)
@@ -784,6 +848,7 @@ class GuestBookingRoutesTest {
                 statement.setTime(3, java.sql.Time.valueOf(opensAt))
                 statement.setTime(4, java.sql.Time.valueOf(closesAt))
                 statement.setBoolean(5, isClosed)
+                statement.setString(6, guestNote)
                 statement.executeUpdate()
             }
         }

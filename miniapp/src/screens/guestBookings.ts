@@ -289,6 +289,16 @@ function renderApiError(status: HTMLParagraphElement, error: ApiErrorInfo, isDeb
     status.textContent = 'Заведение пока не настроило график бронирования.'
     return
   }
+  if (code === ApiErrorCodes.VENUE_CLOSED_ON_SELECTED_DATE) {
+    status.textContent =
+      error.message?.trim() || 'На выбранную дату заведение не работает. Выберите другую дату.'
+    return
+  }
+  if (code === ApiErrorCodes.VENUE_BOOKING_OUTSIDE_HOURS) {
+    status.textContent =
+      error.message?.trim() || 'На выбранное время бронь недоступна. Выберите другое время или дату.'
+    return
+  }
   status.textContent = isDebug ? `${error.message} (${error.code})` : error.message || 'Не удалось выполнить действие.'
 }
 

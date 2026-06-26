@@ -115,3 +115,27 @@ class VenueScheduleNotConfiguredException(
         message = "Заведение пока не настроило график бронирования.",
         details = details,
     )
+
+class VenueClosedOnSelectedDateException(
+    reason: String?,
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.VENUE_CLOSED_ON_SELECTED_DATE,
+        httpStatus = HttpStatusCode.BadRequest,
+        message =
+            reason?.takeIf { it.isNotBlank() }?.let {
+                "На выбранную дату заведение не работает: $it. Выберите другую дату."
+            } ?: "На выбранную дату заведение не работает. Выберите другую дату.",
+        details = details,
+    )
+
+class VenueBookingOutsideHoursException(
+    opensAt: String,
+    closesAt: String,
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.VENUE_BOOKING_OUTSIDE_HOURS,
+        httpStatus = HttpStatusCode.BadRequest,
+        message = "На выбранное время бронь недоступна. В этот день заведение работает с $opensAt до $closesAt.",
+        details = details,
+    )

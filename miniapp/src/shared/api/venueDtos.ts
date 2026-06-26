@@ -194,6 +194,7 @@ export type VenueScheduleOverrideDto = {
   opensAt: string
   closesAt: string
   isClosed: boolean
+  guestNote?: string | null
 }
 
 export type VenueScheduleSettingsResponse = {
@@ -212,6 +213,16 @@ export type VenueScheduleOverrideUpdateRequest = {
   opensAt?: string | null
   closesAt?: string | null
   isClosed?: boolean
+  guestNote?: string | null
+}
+
+export type VenueScheduleOverrideRangeUpdateRequest = {
+  fromDate: string
+  toDate: string
+  opensAt?: string | null
+  closesAt?: string | null
+  isClosed?: boolean
+  guestNote?: string | null
 }
 
 export type VenuePublicCardSettingsResponse = {

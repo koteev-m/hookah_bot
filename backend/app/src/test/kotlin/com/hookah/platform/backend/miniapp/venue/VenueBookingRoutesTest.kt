@@ -316,6 +316,104 @@ class VenueBookingRoutesTest {
                     .map { it.jsonObject.getValue("serviceDate").jsonPrimitive.content }
             assertEquals(listOf("2030-01-11"), remainingOverrideDates)
 
+            val closedRangeResponse =
+                client.post("/api/venue/$venueId/schedule/override-ranges") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $ownerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {"fromDate":"2030-01-12","toDate":"2030-01-14","isClosed":true,"guestNote":"санитарный день"}
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, closedRangeResponse.status)
+            val closedRangeOverrides =
+                json.parseToJsonElement(closedRangeResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("dateOverrides")
+                    .jsonArray
+                    .map { it.jsonObject }
+            assertEquals(
+                listOf("2030-01-11", "2030-01-12", "2030-01-13", "2030-01-14"),
+                closedRangeOverrides.map { it.getValue("serviceDate").jsonPrimitive.content },
+            )
+            val closedRangeItem =
+                closedRangeOverrides.single { it.getValue("serviceDate").jsonPrimitive.content == "2030-01-12" }
+            assertEquals("true", closedRangeItem.getValue("isClosed").jsonPrimitive.content)
+            assertEquals("санитарный день", closedRangeItem.getValue("guestNote").jsonPrimitive.content)
+
+            val changedHoursRangeResponse =
+                client.post("/api/venue/$venueId/schedule/override-ranges") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                            "fromDate":"2030-01-14",
+                            "toDate":"2030-01-15",
+                            "opensAt":"12:00",
+                            "closesAt":"23:00",
+                            "isClosed":false,
+                            "guestNote":"праздничный график"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, changedHoursRangeResponse.status)
+            val changedHoursOverrides =
+                json.parseToJsonElement(changedHoursRangeResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("dateOverrides")
+                    .jsonArray
+                    .map { it.jsonObject }
+            val overwrittenDate =
+                changedHoursOverrides.single { it.getValue("serviceDate").jsonPrimitive.content == "2030-01-14" }
+            assertEquals("false", overwrittenDate.getValue("isClosed").jsonPrimitive.content)
+            assertEquals("12:00", overwrittenDate.getValue("opensAt").jsonPrimitive.content)
+            assertEquals("23:00", overwrittenDate.getValue("closesAt").jsonPrimitive.content)
+            assertEquals("праздничный график", overwrittenDate.getValue("guestNote").jsonPrimitive.content)
+
+            val invalidRangeResponse =
+                client.post("/api/venue/$venueId/schedule/override-ranges") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"fromDate":"2030-01-20","toDate":"2030-01-19","isClosed":true}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, invalidRangeResponse.status)
+
+            val invalidTimeResponse =
+                client.post("/api/venue/$venueId/schedule/override-ranges") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {"fromDate":"2030-01-16","toDate":"2030-01-16","opensAt":"99:00","closesAt":"23:00"}
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, invalidTimeResponse.status)
+
+            val deleteRangeResponse =
+                client.delete("/api/venue/$venueId/schedule/override-ranges/2030-01-14/2030-01-15") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, deleteRangeResponse.status)
+            val afterRangeDeleteDates =
+                json.parseToJsonElement(deleteRangeResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("dateOverrides")
+                    .jsonArray
+                    .map { it.jsonObject.getValue("serviceDate").jsonPrimitive.content }
+            assertEquals(listOf("2030-01-11", "2030-01-12", "2030-01-13"), afterRangeDeleteDates)
+
             val staffReadResponse =
                 client.get("/api/venue/$venueId/schedule") {
                     headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
@@ -331,6 +429,16 @@ class VenueBookingRoutesTest {
                     setBody("""{"opensAt":"18:00","closesAt":"23:00","isClosed":false}""")
                 }
             assertEquals(HttpStatusCode.Forbidden, staffWriteResponse.status)
+
+            val staffRangeWriteResponse =
+                client.post("/api/venue/$venueId/schedule/override-ranges") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"fromDate":"2030-01-20","toDate":"2030-01-20","isClosed":true}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffRangeWriteResponse.status)
 
             val foreignReadResponse =
                 client.get("/api/venue/$foreignVenueId/schedule") {

@@ -32,6 +32,7 @@ import type {
   VenueReorderCategoriesRequest,
   VenueReorderItemsRequest,
   VenueScheduleDayUpdateRequest,
+  VenueScheduleOverrideRangeUpdateRequest,
   VenueScheduleOverrideUpdateRequest,
   VenueScheduleSettingsResponse,
   VenueStatsPeriod,
@@ -317,6 +318,25 @@ export async function venueUpdateScheduleOverride(
   )
 }
 
+export async function venueUpdateScheduleOverrideRange(
+  backendUrl: string,
+  params: { venueId: number; body: VenueScheduleOverrideRangeUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueScheduleSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/schedule/override-ranges`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
 export async function venueDeleteScheduleOverride(
   backendUrl: string,
   params: { venueId: number; serviceDate: string },
@@ -326,6 +346,22 @@ export async function venueDeleteScheduleOverride(
   return requestApi<VenueScheduleSettingsResponse>(
     backendUrl,
     `/api/venue/${params.venueId}/schedule/overrides/${encodeURIComponent(params.serviceDate)}`,
+    { method: 'DELETE', signal },
+    deps
+  )
+}
+
+export async function venueDeleteScheduleOverrideRange(
+  backendUrl: string,
+  params: { venueId: number; fromDate: string; toDate: string },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueScheduleSettingsResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/schedule/override-ranges/${encodeURIComponent(
+      params.fromDate
+    )}/${encodeURIComponent(params.toDate)}`,
     { method: 'DELETE', signal },
     deps
   )

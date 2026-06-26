@@ -3389,6 +3389,25 @@ object TelegramKeyboards {
                 },
         )
 
+    fun inlineBotVenueBookingClosedDateActions(venueId: Long): InlineKeyboardMarkup =
+        InlineKeyboardMarkup(
+            inlineKeyboard =
+                listOf(
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "📅 К выбору дат",
+                            callbackData = "bot_catalog_venue_book:$venueId",
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "🏠 В каталог",
+                            callbackData = "bot_catalog_open",
+                        ),
+                    ),
+                ),
+        )
+
     fun inlineBotVenueBookingTimeActions(
         venueId: Long,
         isoDate: String,

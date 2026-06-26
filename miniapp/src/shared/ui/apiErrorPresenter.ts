@@ -108,6 +108,16 @@ export function presentApiError(
       message = 'Заведение пока не настроило график бронирования.'
       severity = 'warn'
       break
+    case ApiErrorCodes.VENUE_CLOSED_ON_SELECTED_DATE:
+      title = 'Заведение не работает'
+      message = error.message?.trim() || 'На выбранную дату заведение не работает. Выберите другую дату.'
+      severity = 'warn'
+      break
+    case ApiErrorCodes.VENUE_BOOKING_OUTSIDE_HOURS:
+      title = 'Время недоступно'
+      message = error.message?.trim() || 'На выбранное время бронь недоступна. Выберите другое время или дату.'
+      severity = 'warn'
+      break
     default:
       title = 'Ошибка'
       message = 'Попробуйте ещё раз.'

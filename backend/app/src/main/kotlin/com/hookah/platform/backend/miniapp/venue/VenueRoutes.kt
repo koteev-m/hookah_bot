@@ -35,6 +35,7 @@ import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.temporal.ChronoUnit
 
 private val logger = LoggerFactory.getLogger("VenueRoutes")
 private const val PUBLIC_CARD_CITY_MAX_LENGTH = 120
@@ -45,6 +46,8 @@ private const val PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
 private const val LOCATION_QUERY_MAX_LENGTH = 120
 private const val LOCATION_CITY_MAX_LENGTH = 120
 private const val LOCATION_SESSION_TOKEN_MAX_LENGTH = 120
+private const val SCHEDULE_GUEST_NOTE_MAX_LENGTH = 240
+private const val MAX_SCHEDULE_RANGE_DAYS = 370L
 private val DEFAULT_SCHEDULE_OPENS_AT: LocalTime = LocalTime.of(18, 0)
 private val DEFAULT_SCHEDULE_CLOSES_AT: LocalTime = LocalTime.MIDNIGHT
 
@@ -172,6 +175,7 @@ data class VenueScheduleOverrideDto(
     val opensAt: String,
     val closesAt: String,
     val isClosed: Boolean,
+    val guestNote: String? = null,
 )
 
 @Serializable
@@ -179,6 +183,17 @@ data class VenueScheduleOverrideUpdateRequest(
     val opensAt: String? = null,
     val closesAt: String? = null,
     val isClosed: Boolean = false,
+    val guestNote: String? = null,
+)
+
+@Serializable
+data class VenueScheduleOverrideRangeUpdateRequest(
+    val fromDate: String,
+    val toDate: String,
+    val opensAt: String? = null,
+    val closesAt: String? = null,
+    val isClosed: Boolean = false,
+    val guestNote: String? = null,
 )
 
 fun Route.venueRoutes(
@@ -305,7 +320,7 @@ fun Route.venueRoutes(
             val serviceDate = parseScheduleDate(call.parameters["serviceDate"])
             requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
             val request = call.receive<VenueScheduleOverrideUpdateRequest>()
-            val update = normalizeScheduleUpdate(request.opensAt, request.closesAt, request.isClosed)
+            val update = normalizeScheduleUpdate(request.opensAt, request.closesAt, request.isClosed, request.guestNote)
             val updated =
                 venueBookingHoursRepository.upsertDateOverride(
                     venueId = venueId,
@@ -313,6 +328,30 @@ fun Route.venueRoutes(
                     opensAt = update.opensAt,
                     closesAt = update.closesAt,
                     isClosed = update.isClosed,
+                    guestNote = update.guestNote,
+                )
+            if (!updated) {
+                throw NotFoundException()
+            }
+            call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
+        }
+
+        post("/{venueId}/schedule/override-ranges") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
+            val request = call.receive<VenueScheduleOverrideRangeUpdateRequest>()
+            val (fromDate, toDate) = normalizeScheduleDateRange(request.fromDate, request.toDate)
+            val update = normalizeScheduleUpdate(request.opensAt, request.closesAt, request.isClosed, request.guestNote)
+            val updated =
+                venueBookingHoursRepository.upsertDateOverrideRange(
+                    venueId = venueId,
+                    fromDate = fromDate,
+                    toDate = toDate,
+                    opensAt = update.opensAt,
+                    closesAt = update.closesAt,
+                    isClosed = update.isClosed,
+                    guestNote = update.guestNote,
                 )
             if (!updated) {
                 throw NotFoundException()
@@ -327,6 +366,22 @@ fun Route.venueRoutes(
             requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
             ensureVenueExists(venueRepository, venueId)
             venueBookingHoursRepository.deleteDateOverride(venueId, serviceDate)
+            call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
+        }
+
+        delete("/{venueId}/schedule/override-ranges/{fromDate}/{toDate}") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val fromDate = parseScheduleDate(call.parameters["fromDate"])
+            val toDate = parseScheduleDate(call.parameters["toDate"])
+            requireScheduleSettingsPermission(venueAccessRepository, userId, venueId)
+            ensureVenueExists(venueRepository, venueId)
+            val normalizedRange = normalizeScheduleDateRange(fromDate.toString(), toDate.toString())
+            venueBookingHoursRepository.deleteDateOverrideRange(
+                venueId = venueId,
+                fromDate = normalizedRange.first,
+                toDate = normalizedRange.second,
+            )
             call.respond(buildVenueScheduleSettingsResponse(venueId, venueBookingHoursRepository))
         }
 
@@ -570,18 +625,22 @@ private data class NormalizedScheduleUpdate(
     val opensAt: LocalTime,
     val closesAt: LocalTime,
     val isClosed: Boolean,
+    val guestNote: String?,
 )
 
 private fun normalizeScheduleUpdate(
     opensAt: String?,
     closesAt: String?,
     isClosed: Boolean,
+    guestNote: String? = null,
 ): NormalizedScheduleUpdate {
+    val normalizedGuestNote = normalizeScheduleGuestNote(guestNote)
     if (isClosed) {
         return NormalizedScheduleUpdate(
             opensAt = LocalTime.MIDNIGHT,
             closesAt = LocalTime.MIDNIGHT,
             isClosed = true,
+            guestNote = normalizedGuestNote,
         )
     }
     val normalizedOpensAt =
@@ -594,6 +653,7 @@ private fun normalizeScheduleUpdate(
         opensAt = normalizedOpensAt,
         closesAt = normalizedClosesAt,
         isClosed = false,
+        guestNote = normalizedGuestNote,
     )
 }
 
@@ -601,6 +661,30 @@ private fun parseScheduleDate(value: String?): LocalDate =
     runCatching { LocalDate.parse(value?.trim().orEmpty()) }.getOrElse {
         throw InvalidInputException("serviceDate must be ISO date")
     }
+
+private fun normalizeScheduleDateRange(
+    fromDate: String?,
+    toDate: String?,
+): Pair<LocalDate, LocalDate> {
+    val parsedFromDate = parseScheduleDate(fromDate)
+    val parsedToDate = parseScheduleDate(toDate)
+    if (parsedToDate.isBefore(parsedFromDate)) {
+        throw InvalidInputException("toDate must be on or after fromDate")
+    }
+    val days = ChronoUnit.DAYS.between(parsedFromDate, parsedToDate) + 1
+    if (days > MAX_SCHEDULE_RANGE_DAYS) {
+        throw InvalidInputException("date range must be <= $MAX_SCHEDULE_RANGE_DAYS days")
+    }
+    return parsedFromDate to parsedToDate
+}
+
+private fun normalizeScheduleGuestNote(value: String?): String? {
+    val normalized = value?.trim().orEmpty()
+    if (normalized.length > SCHEDULE_GUEST_NOTE_MAX_LENGTH) {
+        throw InvalidInputException("guestNote length must be <= $SCHEDULE_GUEST_NOTE_MAX_LENGTH")
+    }
+    return normalized.ifBlank { null }
+}
 
 private suspend fun buildVenueScheduleSettingsResponse(
     venueId: Long,
@@ -640,6 +724,7 @@ private fun VenueBookingDateOverride.toDto(): VenueScheduleOverrideDto =
         opensAt = formatScheduleTime(opensAt),
         closesAt = formatScheduleTime(closesAt),
         isClosed = isClosed,
+        guestNote = guestNote,
     )
 
 private fun normalizePublicCardText(

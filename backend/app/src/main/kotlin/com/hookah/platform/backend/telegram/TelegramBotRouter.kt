@@ -2621,7 +2621,7 @@ class TelegramBotRouter(
         val venue = loadCatalogVenueById(chatId, venueId) ?: return
         val timeSlots = loadBookingTimeSlots(chatId, venue, date) ?: return
         if (time !in timeSlots) {
-            enqueueMessage(chatId, "Не удалось определить время бронирования. Попробуйте ещё раз.")
+            enqueueBookingOutsideHoursMessage(chatId)
             return
         }
         renderBotVenueBookingGuestCountPicker(
@@ -2650,7 +2650,7 @@ class TelegramBotRouter(
         val venue = loadCatalogVenueById(chatId, venueId) ?: return
         val timeSlots = loadBookingTimeSlots(chatId, venue, date) ?: return
         if (time !in timeSlots) {
-            enqueueMessage(chatId, "Не удалось определить время бронирования. Попробуйте ещё раз.")
+            enqueueBookingOutsideHoursMessage(chatId)
             return
         }
         renderBotVenueBookingCommentStep(
@@ -2691,7 +2691,7 @@ class TelegramBotRouter(
             return
         }
         if (draft.time !in timeSlots) {
-            enqueueMessage(chatId, "Не удалось определить время бронирования. Попробуйте ещё раз.")
+            enqueueBookingOutsideHoursMessage(chatId)
             return
         }
         botBookingCommentDrafts[chatId] = draft.copy(userId = userId)
@@ -2733,7 +2733,7 @@ class TelegramBotRouter(
             return
         }
         if (draft.time !in timeSlots) {
-            enqueueMessage(chatId, "Не удалось определить время бронирования. Попробуйте ещё раз.")
+            enqueueBookingOutsideHoursMessage(chatId)
             return
         }
         botBookingCommentDrafts.remove(chatId)
@@ -2827,7 +2827,7 @@ class TelegramBotRouter(
             return
         }
         if (draft.time !in timeSlots) {
-            enqueueMessage(chatId, "Выбранное время больше недоступно. Выберите время заново.")
+            enqueueBookingOutsideHoursMessage(chatId)
             return
         }
         val localTime = runCatching { LocalTime.parse(draft.time, bookingTimeFormatter) }.getOrNull()
@@ -25871,7 +25871,33 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "На выбранную дату в «${venue.name}» пока нет доступного времени.")
             return null
         }
+        if (bookingHours.isClosed) {
+            sendBotBookingClosedDateMessage(chatId, venue, bookingHours)
+            return null
+        }
         return bookingHours
+    }
+
+    private suspend fun sendBotBookingClosedDateMessage(
+        chatId: Long,
+        venue: CatalogVenueShort,
+        bookingHours: VenueBookingHours,
+    ) {
+        val reason = bookingHours.guestNote?.trim()?.takeIf { it.isNotBlank() }
+        val text =
+            reason?.let {
+                "На выбранную дату «${venue.name}» не работает: $it.\nВыберите другую дату."
+            } ?: "На выбранную дату «${venue.name}» не работает.\nВыберите другую дату."
+        sendBotBookingScreen(
+            chatId = chatId,
+            venueId = venue.id,
+            text = text,
+            replyMarkup = TelegramKeyboards.inlineBotVenueBookingClosedDateActions(venue.id),
+        )
+    }
+
+    private suspend fun enqueueBookingOutsideHoursMessage(chatId: Long) {
+        enqueueMessage(chatId, "На выбранное время бронь недоступна. Выберите другое время или дату.")
     }
 
     private suspend fun loadBookingTimeSlots(
