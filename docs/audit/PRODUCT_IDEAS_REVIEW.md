@@ -2,7 +2,7 @@
 
 Дата: 2026-04-28. Режим: read-only audit. Код, миграции и тесты не изменялись.
 
-> Current correction as of 2026-06-26: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed: Venue Mini App can edit weekly hours and inclusive date-exception ranges with optional guest-facing reason/comment, and guest/Bot booking rejection copy is human. Info/media editing and guest preview remain later. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed. Current code also implements Telegram multi-venue selected context; old "Telegram selector missing" notes below are historical, while chain/network entities remain future work.
+> Current correction as of 2026-06-29: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed: Venue Mini App can edit weekly hours and inclusive date-exception ranges with optional guest-facing reason/comment, and guest/Bot booking rejection copy is human. Platform Owner Invite / ADMIN Semantics Hardening and Platform Venue OWNER Revocation are CLOSED / staging smoke passed: config parity, no Platform Mini App `ADMIN` assignment, usable owner invite deep link/copy, owner invite create/accept audit, active OWNER membership list, last-owner-protected revoke, membership-based access loss and `VENUE_OWNER_REVOKE` audit are implemented. Info/media editing, guest preview, primary/legal/billing owner transfer helper, platform billing cockpit, support and analytics remain later. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed. Current code also implements Telegram multi-venue selected context; old "Telegram selector missing" notes below are historical, while chain/network entities remain future work.
 
 ## Executive summary
 
@@ -951,7 +951,7 @@ Tests/smoke checks:
 Продуктовая цель: show guests who is working today without exposing contacts.
 
 Текущее состояние в коде:
-- Roles: `OWNER`, `ADMIN`, `MANAGER`, `STAFF`.
+- Roles: `OWNER`, `ADMIN`, `MANAGER`, `STAFF`; current runtime maps `ADMIN` as a legacy alias to `MANAGER`, not a separate Venue Admin model.
 - Spec allows `staff_waiter`, `staff_hookah` or generic staff, but code uses generic staff.
 - No `staff_profile`, `subrole`, `shift` tables/files found.
 - Owner can add hookah master as `STAFF`, but cannot distinguish/display them as hookah master.
@@ -1064,12 +1064,12 @@ Tests/smoke checks:
 ### 18. Что делать не сейчас
 
 Делать сейчас:
-- Platform Owner Invite / ADMIN Semantics Hardening if following the current roadmap.
 - PostgreSQL/H2 active-order uniqueness fidelity as a release-confidence follow-up.
-- Platform onboarding/access hardening if prioritizing platform-owner correctness.
+- Platform Billing Cockpit / Owner Payment UX after core order/session/tab test fidelity.
+- Focused Mini App mutation/operational verification pack only if current smoke finds regressions in CORS, staff-call payload/notification or fallback chat order payload.
 - Keep booking lifecycle, notification reliability and multi-venue Telegram selector in regression smoke.
 
-Отложить до стабилизации post-M9a launch core:
+Отложить до стабилизации post-platform-owner launch core:
 - Visit_count, guest order history, repeat order, favorites, feedback trigger, preorder eligibility.
 
 Отложить до platform billing/analytics:
@@ -1089,12 +1089,12 @@ No current P0 is selected from this historical list. The original P0 order/sessi
 
 ### P1 Operational completeness
 
-1. Booking lifecycle: `EXPIRED/NO_SHOW/SEATED`, hold minutes, active visibility until deadline.
-2. Platform Owner Invite / ADMIN Semantics Hardening.
-3. Venue Mini App remaining profile setup parity through small backend-backed slices; public card/location basics are closed by M8a/M8b-Free and hours/exceptions are closed by M9b-M9b.3.
-4. Owner/manager working hours and exceptions UX polish only if new operator confusion appears in regression.
-5. Unified staff notifications for orders/reorders/calls/bookings/cancellations.
-6. Telegram multi-venue selector.
+1. H2/PostgreSQL active-order + personal-tab uniqueness fidelity.
+2. Platform Billing Cockpit / Owner Payment UX.
+3. Focused Mini App mutation/operational verification pack for CORS, staff-call payload/notification and fallback chat order payload; implementation only for confirmed regressions.
+4. Booking lifecycle, reminder rollout and multi-venue selector as regression smoke unless new gaps appear.
+5. Venue Mini App remaining profile setup parity through small backend-backed slices; public card/location basics are closed by M8a/M8b-Free and hours/exceptions are closed by M9b-M9b.3.
+6. Unified staff notifications beyond the closed core if personal subscriptions/history are needed.
 7. Owner description section defaults `Схема зала` and `Интерьер`; expose sections to guests.
 
 ### P2 Growth/retention

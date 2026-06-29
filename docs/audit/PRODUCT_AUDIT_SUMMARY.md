@@ -7,6 +7,8 @@
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
 >
 > Current checkpoint as of 2026-06-26: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual parity for Bot `/my` public label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are implemented, code/test-backed and passed one controlled real Telegram staging smoke; runtime remains disabled by default and staging is back to `BOOKING_REMINDER_WORKER_ENABLED=false`. M8a/M8b-Free public profile/card settings is CLOSED / staging smoke passed: Venue Mini App edits public location/contact/description with provider-free local country/city data and manual address fallback. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper completed a real staging deploy and endpoint smoke while the normal deploy command remains supported; the exact SSH/network root cause remains unconfirmed. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed. The latest enriched staff-chat attendance copy is code/test-backed but not manually re-smoked with a new booking. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call/schedule list; use the current roadmap for platform onboarding/access, H2/PostgreSQL fidelity, billing, support/growth and runtime regression priorities.
+>
+> Current checkpoint as of 2026-06-29: Platform Owner Invite / ADMIN Semantics Hardening and Platform Venue OWNER Revocation are CLOSED / staging smoke passed. Bot/API Platform Owner config parity is implemented, Platform Mini App does not offer `ADMIN`, owner invite returns usable Telegram deep link/copy text, invite accept grants OWNER for the intended venue, owner invite create/accept is audited, Platform Owner can list active OWNER memberships and revoke one OWNER while another remains, last-owner revoke is blocked server-side, revoked OWNER loses runtime access through `venue_members`, `owner_account_id` / primary-owner linkage is not relinked, and `VENUE_OWNER_REVOKE` audit evidence exists. Use the current roadmap for the ranked next candidates: H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Platform Billing Cockpit / Owner Payment UX, and a focused Mini App mutation/operational verification pack only if current smoke finds regressions.
 
 # Краткое резюме
 
@@ -50,26 +52,24 @@
 - Clear `venue_admin` behavior distinct from `manager`.
 - Wider frontend/browser e2e beyond current smoke harness.
 
-# Current top P0/P1/P2 gaps after post-M6 checkpoint
+# Current top P0/P1/P2 gaps after 2026-06-29 checkpoint
 
-No confirmed production P0 was found in the post-M9a checkpoint. Current priorities:
+No confirmed production P0 was found in the 2026-06-29 checkpoint after M9a/M9b and Platform Owner invite/revoke closure. Current priorities:
 
-1. **P1 / selected next**: Platform onboarding/access hardening: API and bot platform-owner config precedence can diverge if both legacy and new env vars are set differently; owner invite create/accept lacks audit events; Mini App owner assignment still exposes unsupported `ADMIN`; invite copy/deep link UX is weak.
-2. **P1 release/test-fidelity**: PostgreSQL/H2 active-order and personal-tab uniqueness fidelity. PostgreSQL has partial unique indexes by `table_session_id` and active personal tab owner/session, while H2 migrations have only non-unique indexes. This is not a confirmed PostgreSQL production P0, but it can hide concurrency/uniqueness regressions in local H2 tests.
-3. **P1/P2**: platform billing cockpit / owner payment UX. Backend invoice/payment routes and subscription settings exist, but Platform Mini App invoice operations and manual mark-paid UX are incomplete.
-4. **P1/P2**: keep M7b real two-account isolation, M7c opt-in reminder rollout and M9b schedule validation as release regression checks, not new implementation milestones unless a regression is found.
+1. **P1 release/test-fidelity / selected next**: PostgreSQL/H2 active-order and personal-tab uniqueness fidelity. PostgreSQL has partial unique indexes by `table_session_id` and active personal tab owner/session, while H2 migrations have only non-unique indexes. This is not a confirmed PostgreSQL production P0, but it can hide concurrency/uniqueness regressions in local H2 tests.
+2. **P1/P2**: Platform Billing Cockpit / Owner Payment UX. Backend invoice/payment routes and subscription settings exist, but Platform Mini App invoice operations and manual mark-paid UX are incomplete.
+3. **P1 verification, implementation only on regression**: Mini App mutation and operational fix pack for CORS, staff-call payload/notification and fallback chat order payload. The old issues are documented as fixed/superseded, so reopen only with current code/smoke evidence.
+4. **P1/P2**: keep M7b real two-account isolation, M7c opt-in reminder rollout, M9b schedule validation, Platform Owner invite and Platform OWNER revoke as release regression checks, not new implementation milestones unless a regression is found.
 5. **P2**: General guest support ticket creation beyond booking threads.
 6. **P2**: Guest Mini App repeat/favorite mutation parity and promotion/review surfaces.
 
 # Рекомендуемый порядок дальнейшей работы
 
-1. Stabilize order/session/tab core: active order per `table_session_id`, tab-scoped views, migration/tests.
-2. Fix broken Mini App flows: CORS methods, staff call payload, fallback chat order.
-3. Align permissions: `ADMIN/MANAGER`, staff stop-list, client nav by permissions.
-4. Complete operational venue Mini App: display number, full bill, discounts/exclusions, staff call ack/done, bookings queue.
-5. Complete menu MVP: options/modifiers persisted in order, photos/descriptions/top-list if still required by concept.
-6. Complete owner/platform cockpit: settings, stats, billing invoices, onboarding requests.
-7. Add support/tickets and growth features after core order/billing stability.
+1. Close H2/PostgreSQL active-order + personal-tab uniqueness fidelity so release tests catch launch-critical order/session/tab regressions.
+2. Build Platform Billing Cockpit / Owner Payment UX once core order/session/tab test fidelity is protected.
+3. Run focused Mini App mutation/operational verification for CORS, staff-call payload/notification and fallback chat order; implement only bounded fixes for confirmed regressions.
+4. Keep Platform Owner invite/revoke, M7b/M7c and M9b schedule paths in regression.
+5. Add support/tickets and growth features after core order/billing stability.
 
 # Какие функции лучше не трогать пока
 
@@ -100,8 +100,8 @@ No confirmed production P0 was found in the post-M9a checkpoint. Current priorit
 | Venue-side orders queue | PARTIAL | `VenueOrderRoutes`, `venueOrders.ts`, `venueOrderDetail.ts` | Display number/full bill/prices |
 | Full bill / счёт | PARTIAL | `TelegramBotRouter.showVenueStaffOrderFullDetails`, `VenueOrdersRepository` | Mini App implementation |
 | Discounts / excluded items | PARTIAL | `V57__order_batch_item_exclusions.sql`, `V58__order_batch_item_discounts.sql`, `VenueOrdersRepository` | API/UI exposure |
-| Staff calls | PARTIAL/BROKEN | `GuestStaffCallRoutes`, `StaffCallRepository`, `guestVenue.ts` | Fix payload, notify, ack/done |
-| Staff/manager/owner roles | PARTIAL/RISKY | `VenueRbac.kt`, `VenueRoleMapping.fromDb`, `TelegramBotRouter` mappings | Resolve `ADMIN`, staff stop-list |
+| Staff calls | DONE/PARTIAL | `GuestStaffCallRoutes`, `StaffCallRepository`, `guestVenue.ts`, `venueCalls.ts` | M5 lifecycle and notification parity are closed; keep real staff-chat notification smoke in regression |
+| Staff/manager/owner roles | DONE/PARTIAL | `VenueRbac.kt`, `VenueRoleMapping.fromDb`, `TelegramBotRouter` mappings | `ADMIN` is legacy alias to `MANAGER`; Platform Mini App no longer offers it; keep role smoke in regression |
 | Staff invites | PARTIAL | `VenueStaffRoutes`, `StaffInviteRepository`, tests | Audit and unified UX |
 | Menu constructor | PARTIAL | `VenueMenuRoutes`, `venueMenu.ts` | Options/photos/top-list |
 | Stop-list including options/flavors | PARTIAL/RISKY | `TelegramBotRouter` stop-list methods, `VenueMenuRepository` | Mini App option UI and permissions |
@@ -118,7 +118,7 @@ No confirmed production P0 was found in the post-M9a checkpoint. Current priorit
 | Analytics/events | PARTIAL | `AnalyticsEventRepository`, event writes | Add booking/support events and UI |
 | Staff chat notifications | PARTIAL | `StaffChatNotifier`, bot notify methods | Cover calls/bookings consistently |
 | Telegram commands | PARTIAL | `/start`, `/menu`, `/my`, `/help`, `/link`, `/unlink`, `/link_test` | Add support/help consistency and QR test mode |
-| Mini App env/CORS/initData | PARTIAL/RISKY | `Application.kt`, `TelegramInitDataValidator`, `miniapp/src/main.ts` | Fix CORS methods and env diagnostics |
+| Mini App env/CORS/initData | DONE/PARTIAL | `Application.kt`, `TelegramInitDataValidator`, `miniapp/src/main.ts` | CORS mutation methods are documented as fixed/superseded; keep preflight/env diagnostics in regression |
 
 # Технический долг
 
@@ -130,7 +130,7 @@ No confirmed production P0 was found in the post-M9a checkpoint. Current priorit
 - Callbacks/menu buttons without full implementation: platform owner Telegram sections, promotions, settings visibility.
 - SQL/migration risk: H2 and PostgreSQL active order uniqueness differ around partial index behavior.
 - Audit gaps for role/menu/stop-list changes.
-- Product terms drift: `ADMIN`, lifecycle statuses, platform owner config.
+- Product terms drift: lifecycle statuses and any future Venue Admin model. `ADMIN` is currently documented as a legacy alias to `MANAGER`, and Platform Owner config parity is implemented.
 
 # Тесты
 
@@ -153,10 +153,10 @@ No confirmed production P0 was found in the post-M9a checkpoint. Current priorit
 
 Ключевые сценарии без достаточного покрытия:
 - Mini App frontend end-to-end flows; frontend tests не найдены.
-- CORS preflight for `PATCH/DELETE/PUT`.
+- CORS preflight for `PATCH/DELETE/PUT` as regression coverage; the old mutation-method gap is documented as fixed/superseded.
 - H2/PostgreSQL active-order and personal-tab uniqueness fidelity.
-- Mini App staff call payload and notification.
-- Fallback chat order `CHAT_ORDER` payload.
+- Mini App staff call payload and notification regression smoke; M5 lifecycle is closed.
+- Fallback chat order `CHAT_ORDER` payload regression smoke if fallback chat ordering is touched.
 - Staff stop-list permission parity.
 - Display order number in Mini App.
 - Booking status analytics.

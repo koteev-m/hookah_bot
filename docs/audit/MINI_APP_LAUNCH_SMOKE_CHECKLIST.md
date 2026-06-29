@@ -162,6 +162,13 @@ Manual runtime coverage for each release batch:
   - non-owner denied;
   - platform owner can assign owner and publish only after owner membership;
   - owner invite creates owner access;
+  - owner invite create/accept audit exists;
+  - platform owner can revoke one OWNER when another active OWNER remains;
+  - last active OWNER revoke is blocked;
+  - non-platform user cannot revoke OWNER;
+  - revoked OWNER loses `/api/venue/me` access through `venue_members`;
+  - `venues.owner_account_id` is unchanged by membership revoke;
+  - `VENUE_OWNER_REVOKE` audit exists;
   - platform cockpit smoke: venue list/detail expose venue and subscription basics.
 - `PlatformSubscriptionRoutesTest`
   - subscription settings are platform-owner-only;
@@ -172,6 +179,16 @@ Manual runtime coverage for each release batch:
 
 - `#/venues` opens platform cockpit;
 - `PLATFORM_OWNER_TELEGRAM_ID` grants access without requiring a separate non-empty legacy owner id;
+- Platform Mini App owner assignment does not offer `ADMIN`;
+- owner invite returns usable Telegram deep link/copy text and Telegram `/start staff_invite_<code>` acceptance grants OWNER for the intended venue;
+- owner invite create/accept audit evidence exists;
+- venue detail owner list is active OWNER memberships from `venue_members`;
+- Platform Owner can revoke an old OWNER when another active OWNER remains;
+- revoked OWNER loses Venue Mini App access and Telegram Bot venue-owner access for that venue;
+- last OWNER revoke is blocked with safe copy;
+- non-platform user cannot create owner invite or revoke OWNER;
+- `owner_account_id` and `venue_owner_accounts.primary_owner_user_id` are not relinked by membership revoke;
+- `VENUE_OWNER_REVOKE` audit evidence exists;
 - safe sections `#/onboarding`, `#/placements`, `#/support`, `#/analytics` show explanations without fake data or dead-end controls.
 - requests/commercial terms/create-link venue, suspend/archive/delete and hidden deleted venues are smoke-tested in Telegram bot flow.
 

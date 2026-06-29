@@ -3,8 +3,8 @@
 ## Product summary
 A single Telegram bot + Telegram Mini App (WebApp) that serves many hookah lounges (“venues”) without code changes per new venue.
 Guests can browse a catalog, book a visit, and in-venue scan a table QR to open the Mini App, view menu, place orders and call staff.
-Venue owners/admins manage their own venue: tables/QRs, menu with photos/options, stop-list, bookings, staff roles, and order processing.
-Platform owner/admins manage onboarding of venues, lifecycle (publish/hide/suspend/archive/delete), subscriptions (trial/prices), support and analytics.
+Venue OWNER/MANAGER/STAFF users manage their own venue according to runtime `venue_members` permissions: tables/QRs, menu with photos/options, stop-list, bookings, staff roles, and order processing.
+Platform Owner manages onboarding of venues, venue OWNER invitations/revocation, lifecycle (publish/hide/suspend/archive/delete), subscriptions (trial/prices), support and analytics.
 
 ## Core surfaces
 - Telegram Bot (chat): navigation, fallback ordering, booking fallback
@@ -13,17 +13,16 @@ Platform owner/admins manage onboarding of venues, lifecycle (publish/hide/suspe
 
 ## Roles (RBAC)
 Platform:
-- platform_owner (super-admin), platform_admin (optional)
+- platform_owner (super-admin)
 Venue:
-- venue_owner (can grant roles), venue_admin, venue_manager
-Staff:
-- staff_waiter, staff_hookah (or generic staff)
+- OWNER, MANAGER, STAFF in `venue_members`
+- ADMIN is a legacy DB compatibility alias that maps to MANAGER; it is not a separate runtime permission model or selectable Platform Mini App assignment role.
 Guest:
 - guest (end users)
 
 ## Core entities (domain)
-- venue: id, name, structured public location (country/city/address/formatted address/optional coordinates), description, hours, status(lifecycle), owner_user_id, settings
-- user_role: (user_id, venue_id?, role)
+- venue: id, name, structured public location (country/city/address/formatted address/optional coordinates), description, hours, status(lifecycle), owner_account_id legacy/primary linkage, settings
+- venue_members: (user_id, venue_id, role) as the source of runtime venue access
 - menu_category, menu_item: name, price, description, photos, options (e.g., flavors), is_available (stop-list), is_featured (top list)
 - table: id, venue_id, name/number, qr_token, status
 - table_session: id, table_id, venue_id, started_at, ended_at, status
@@ -59,10 +58,11 @@ SHOULD:
 ## Block 2 — RBAC & permissions
 MUST:
 - Server-side RBAC checks on every admin/staff action.
-- Venue owner can grant/revoke roles inside its venue.
-- Platform owner can create venues and assign venue_owner.
+- Venue owner can grant/revoke supported staff/manager roles inside its venue with last-owner protection.
+- Platform Owner can create venues, invite/add venue OWNER users, list active OWNER memberships and revoke a venue OWNER only when another active OWNER remains.
+- Runtime venue ownership access is based on active `venue_members` rows with role `OWNER`; membership revoke does not relink `venues.owner_account_id` or legal/billing primary owner records.
 SHOULD:
-- Audit log for role changes.
+- Audit log for owner invite/revoke and role changes.
 
 ## Block 3 — Entry points & context (QR/deep links)
 MUST:
@@ -280,7 +280,7 @@ Bill/session rules:
 - `table_sessions.expires_at` is the current orderable-until/session window. Extension logic must not be shortened by normal session touch/restore operations.
 - Closed bills, closed tabs, ended sessions and unavailable/deleted/suspended venues cannot be extended.
 
-Current post-M6 checkpoint:
+Current checkpoint:
 - Backend data/API, Guest Mini App request UX, bill service charges, Venue Mini App order integration, staff-chat pending approve/reject actions and Guest Bot table-flow request entry are implemented.
 - Remaining parity gap in this block: Owner/Manager Bot settings closure for enabled/duration/price where still required by the active roadmap.
 
@@ -294,7 +294,8 @@ Implementation slices:
 
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
 MUST:
-- Platform owner can create venue and assign venue_owner without code changes.
+- Platform Owner can create venue, invite/add venue OWNER users, list active OWNER memberships and revoke one OWNER only when another active OWNER remains.
+- OWNER invite/revoke actions are audited; membership revoke does not relink primary/legal/billing owner linkage.
 - Lifecycle statuses: draft/onboarding/published/hidden/suspended/archived/deleted.
 - Ability to hide/archive/delete venues; clean inactive venues.
 SHOULD:
