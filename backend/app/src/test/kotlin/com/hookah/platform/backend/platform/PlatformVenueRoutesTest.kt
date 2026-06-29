@@ -291,6 +291,170 @@ class PlatformVenueRoutesTest {
         }
 
     @Test
+    fun `platform owner can revoke owner without changing owner account linkage`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-revoke")
+            val platformOwnerId = 7417L
+            val revokedOwnerId = 8551L
+            val remainingOwnerId = 8552L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, platformOwnerId)
+            seedUser(jdbcUrl, revokedOwnerId)
+            seedUser(jdbcUrl, remainingOwnerId)
+            val venueId = seedVenue(jdbcUrl)
+            val otherVenueId = seedVenue(jdbcUrl)
+            val ownerAccountId = seedOwnerAccount(jdbcUrl, revokedOwnerId, allowedVenuesCount = 3)
+            linkVenueToOwnerAccount(jdbcUrl, venueId, ownerAccountId)
+            seedOwnerMembership(jdbcUrl, venueId, revokedOwnerId)
+            seedOwnerMembership(jdbcUrl, venueId, remainingOwnerId)
+            seedOwnerMembership(jdbcUrl, otherVenueId, revokedOwnerId)
+            val token = issueToken(config, userId = platformOwnerId)
+
+            val beforeDetailResponse =
+                client.get("/api/platform/venues/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, beforeDetailResponse.status)
+            val beforeDetail =
+                json.decodeFromString(
+                    PlatformVenueDetailResponse.serializer(),
+                    beforeDetailResponse.bodyAsText(),
+                )
+            assertEquals(setOf(revokedOwnerId, remainingOwnerId), beforeDetail.owners.map { it.userId }.toSet())
+
+            val response =
+                client.post("/api/platform/venues/$venueId/owners/$revokedOwnerId/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload =
+                json.decodeFromString(
+                    PlatformOwnerRevokeResponse.serializer(),
+                    response.bodyAsText(),
+                )
+            assertEquals(true, payload.ok)
+            assertEquals(revokedOwnerId, payload.revokedUserId)
+            assertEquals("OWNER", payload.previousRole)
+            assertEquals(1, payload.remainingOwnersCount)
+            assertEquals(ownerAccountId, loadVenueOwnerAccountId(jdbcUrl, venueId))
+            assertEquals(null, loadVenueMemberRole(jdbcUrl, venueId, revokedOwnerId))
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, remainingOwnerId))
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, otherVenueId, revokedOwnerId))
+
+            val afterDetailResponse =
+                client.get("/api/platform/venues/$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, afterDetailResponse.status)
+            val afterDetail =
+                json.decodeFromString(
+                    PlatformVenueDetailResponse.serializer(),
+                    afterDetailResponse.bodyAsText(),
+                )
+            assertEquals(listOf(remainingOwnerId), afterDetail.owners.map { it.userId })
+
+            val revokedOwnerToken = issueToken(config, userId = revokedOwnerId)
+            val venueMeResponse =
+                client.get("/api/venue/me") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $revokedOwnerToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, venueMeResponse.status)
+            val venueMePayload =
+                json.decodeFromString(
+                    VenueMeResponse.serializer(),
+                    venueMeResponse.bodyAsText(),
+                )
+            assertEquals(listOf(otherVenueId), venueMePayload.venues.map { it.venueId })
+            assertEquals("OWNER", venueMePayload.venues.single().role)
+
+            val auditPayloads = loadAuditPayloads(jdbcUrl, "VENUE_OWNER_REVOKE")
+            assertEquals(1, auditPayloads.size)
+            val auditPayload = auditPayloads.single()
+            assertTrue(auditPayload.contains("\"actorUserId\":$platformOwnerId"))
+            assertTrue(auditPayload.contains("\"venueId\":$venueId"))
+            assertTrue(auditPayload.contains("\"revokedUserId\":$revokedOwnerId"))
+            assertTrue(auditPayload.contains("\"previousRole\":\"OWNER\""))
+            assertTrue(auditPayload.contains("\"remainingOwnersCount\":1"))
+            assertTrue(auditPayload.contains("\"timestamp\":"))
+        }
+
+    @Test
+    fun `platform owner cannot revoke last owner`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-revoke-last")
+            val platformOwnerId = 7517L
+            val venueOwnerId = 8661L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, platformOwnerId)
+            seedUser(jdbcUrl, venueOwnerId)
+            val venueId = seedVenue(jdbcUrl)
+            seedOwnerMembership(jdbcUrl, venueId, venueOwnerId)
+            val token = issueToken(config, userId = platformOwnerId)
+
+            val response =
+                client.post("/api/platform/venues/$venueId/owners/$venueOwnerId/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, venueOwnerId))
+            assertEquals(emptyList(), loadAuditPayloads(jdbcUrl, "VENUE_OWNER_REVOKE"))
+        }
+
+    @Test
+    fun `non platform user cannot revoke owner`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-revoke-forbidden")
+            val platformOwnerId = 7617L
+            val nonPlatformUserId = 7618L
+            val revokedOwnerId = 8771L
+            val remainingOwnerId = 8772L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            seedUser(jdbcUrl, platformOwnerId)
+            seedUser(jdbcUrl, nonPlatformUserId)
+            seedUser(jdbcUrl, revokedOwnerId)
+            seedUser(jdbcUrl, remainingOwnerId)
+            val venueId = seedVenue(jdbcUrl)
+            seedOwnerMembership(jdbcUrl, venueId, revokedOwnerId)
+            seedOwnerMembership(jdbcUrl, venueId, remainingOwnerId)
+            val token = issueToken(config, userId = nonPlatformUserId)
+
+            val response =
+                client.post("/api/platform/venues/$venueId/owners/$revokedOwnerId/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, revokedOwnerId))
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, remainingOwnerId))
+            assertEquals(emptyList(), loadAuditPayloads(jdbcUrl, "VENUE_OWNER_REVOKE"))
+        }
+
+    @Test
     fun `platform cockpit can list venue open detail and see subscription basics`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-cockpit-smoke")
@@ -677,6 +841,44 @@ class PlatformVenueRoutesTest {
         }
     }
 
+    private fun loadVenueOwnerAccountId(
+        jdbcUrl: String,
+        venueId: Long,
+    ): Long? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT owner_account_id FROM venues WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    return if (rs.next()) rs.getLong("owner_account_id").takeIf { !rs.wasNull() } else null
+                }
+            }
+        }
+    }
+
+    private fun loadVenueMemberRole(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+    ): String? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT role
+                FROM venue_members
+                WHERE venue_id = ? AND user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, userId)
+                statement.executeQuery().use { rs ->
+                    return if (rs.next()) rs.getString("role") else null
+                }
+            }
+        }
+    }
+
     private fun loadPrimaryOwnerForVenueAccount(
         jdbcUrl: String,
         venueId: Long,
@@ -781,6 +983,14 @@ class PlatformVenueRoutesTest {
     )
 
     @Serializable
+    private data class PlatformOwnerRevokeResponse(
+        val ok: Boolean,
+        val revokedUserId: Long,
+        val previousRole: String,
+        val remainingOwnersCount: Int,
+    )
+
+    @Serializable
     private data class PlatformOwnerInviteRequest(
         val ttlSeconds: Long? = null,
     )
@@ -812,5 +1022,21 @@ class PlatformVenueRoutesTest {
         val role: String,
         val createdAt: String,
         val invitedByUserId: Long? = null,
+    )
+
+    @Serializable
+    private data class VenueMeResponse(
+        val userId: Long,
+        val venues: List<VenueAccessDto>,
+    )
+
+    @Serializable
+    private data class VenueAccessDto(
+        val venueId: Long,
+        val venueName: String? = null,
+        val venueCity: String? = null,
+        val venueStatus: String? = null,
+        val role: String,
+        val permissions: List<String>,
     )
 }

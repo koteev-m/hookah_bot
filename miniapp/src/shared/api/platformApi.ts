@@ -5,6 +5,7 @@ import type {
   PlatformOwnerAssignResponse,
   PlatformOwnerInviteRequest,
   PlatformOwnerInviteResponse,
+  PlatformOwnerRevokeResponse,
   PlatformPriceScheduleResponse,
   PlatformPriceScheduleUpdateRequest,
   PlatformSubscriptionSettingsResponse,
@@ -130,6 +131,23 @@ export async function platformAssignOwner(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params)
+    },
+    deps
+  )
+}
+
+export async function platformRevokeOwner(
+  backendUrl: string,
+  venueId: number,
+  userId: number,
+  deps: RequestDependencies
+) {
+  return requestApi<PlatformOwnerRevokeResponse>(
+    backendUrl,
+    `/api/platform/venues/${venueId}/owners/${userId}/revoke`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
     },
     deps
   )

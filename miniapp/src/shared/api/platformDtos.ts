@@ -129,6 +129,13 @@ export type PlatformOwnerAssignResponse = {
   role: string
 }
 
+export type PlatformOwnerRevokeResponse = {
+  ok: boolean
+  revokedUserId: number
+  previousRole: string
+  remainingOwnersCount: number
+}
+
 export type PlatformOwnerInviteRequest = {
   ttlSeconds?: number | null
 }

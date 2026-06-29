@@ -8,6 +8,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteCreateAuditBestEffort
 import com.hookah.platform.backend.telegram.buildTelegramStartUrl
+import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -158,6 +159,14 @@ data class PlatformOwnerAssignResponse(
     val ok: Boolean,
     val alreadyMember: Boolean,
     val role: String,
+)
+
+@Serializable
+data class PlatformOwnerRevokeResponse(
+    val ok: Boolean,
+    val revokedUserId: Long,
+    val previousRole: String,
+    val remainingOwnersCount: Int,
 )
 
 @Serializable
@@ -466,6 +475,67 @@ fun Route.platformVenueRoutes(
                 )
                 PlatformOwnerAssignmentResult.NotFound -> throw NotFoundException()
                 PlatformOwnerAssignmentResult.DatabaseError ->
+                    throw com.hookah.platform.backend.api.DatabaseUnavailableException()
+            }
+        }
+
+        post("/{venueId}/owners/{userId}/revoke") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val venueId =
+                call.parameters["venueId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("venueId must be a number")
+            val revokedUserId =
+                call.parameters["userId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("userId must be a number")
+            when (
+                val result =
+                    platformVenueMemberRepository.revokeOwner(
+                        venueId = venueId,
+                        userId = revokedUserId,
+                    )
+            ) {
+                is PlatformOwnerRevokeResult.Success -> {
+                    val timestamp = Instant.now().toString()
+                    runCatching {
+                        auditLogRepository.appendJson(
+                            actorUserId = actorUserId,
+                            action = "VENUE_OWNER_REVOKE",
+                            entityType = "venue",
+                            entityId = venueId,
+                            payload =
+                                buildJsonObject {
+                                    put("actorUserId", actorUserId)
+                                    put("venueId", venueId)
+                                    put("revokedUserId", revokedUserId)
+                                    put("previousRole", result.revokedMember.role)
+                                    put("remainingOwnersCount", result.remainingOwnersCount)
+                                    put("timestamp", timestamp)
+                                },
+                        )
+                    }.onFailure { error ->
+                        logger.warn(
+                            "Failed to append owner revoke audit venueId={} actorUserId={} revokedUserId={}: {}",
+                            venueId,
+                            actorUserId,
+                            revokedUserId,
+                            sanitizeTelegramForLog(error.message),
+                        )
+                    }
+                    call.respond(
+                        PlatformOwnerRevokeResponse(
+                            ok = true,
+                            revokedUserId = revokedUserId,
+                            previousRole = result.revokedMember.role,
+                            remainingOwnersCount = result.remainingOwnersCount,
+                        ),
+                    )
+                }
+                PlatformOwnerRevokeResult.NotFound -> throw NotFoundException()
+                PlatformOwnerRevokeResult.NotOwner -> throw InvalidInputException("User is not an active venue owner")
+                PlatformOwnerRevokeResult.LastOwner -> throw InvalidInputException(
+                    "Cannot revoke the last venue owner",
+                )
+                PlatformOwnerRevokeResult.DatabaseError ->
                     throw com.hookah.platform.backend.api.DatabaseUnavailableException()
             }
         }

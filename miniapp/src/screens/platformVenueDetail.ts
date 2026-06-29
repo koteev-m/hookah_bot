@@ -7,6 +7,7 @@ import {
   platformCreateOwnerInvite,
   platformGetSubscription,
   platformGetVenue,
+  platformRevokeOwner,
   platformSearchUsers,
   platformUpdatePriceSchedule,
   platformUpdateSubscription
@@ -308,6 +309,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   let isUpdatingSchedule = false
   let isUpdatingStatus = false
   let isInviting = false
+  let isRevokingOwner = false
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -347,6 +349,10 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.statusButtons.querySelectorAll('button').forEach((button) => {
       button.disabled = isLoading || isUpdatingStatus
     })
+    const canRevokeOwner = (currentVenue?.owners.length ?? 0) > 1
+    refs.ownersList.querySelectorAll<HTMLButtonElement>('[data-role="owner-revoke"]').forEach((button) => {
+      button.disabled = isLoading || isRevokingOwner || !canRevokeOwner
+    })
   }
 
   const renderSummary = () => {
@@ -363,6 +369,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     if (!currentVenue.owners.length) {
       refs.ownersList.appendChild(el('p', { className: 'venue-empty', text: 'Владельцы не назначены.' }))
     } else {
+      const canRevokeOwner = currentVenue.owners.length > 1
       currentVenue.owners.forEach((owner) => {
         const row = el('div', { className: 'venue-staff-row' })
         const info = el('div', { className: 'venue-staff-info' })
@@ -371,7 +378,19 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
           el('strong', { text: formatOwnerName(owner) }),
           el('p', { className: 'venue-order-sub', text: `User #${owner.userId} · ${owner.role}` })
         )
-        append(row, info)
+        const actions = el('div', { className: 'venue-staff-actions' })
+        const revokeButton = el('button', {
+          className: 'button-small button-secondary',
+          text: 'Отозвать'
+        }) as HTMLButtonElement
+        revokeButton.dataset.role = 'owner-revoke'
+        revokeButton.disabled = isLoading || isRevokingOwner || !canRevokeOwner
+        revokeButton.title = canRevokeOwner
+          ? 'Отозвать OWNER доступ'
+          : 'Нельзя отозвать последнего владельца'
+        revokeButton.addEventListener('click', () => void handleRevokeOwner(owner))
+        append(actions, revokeButton)
+        append(row, info, actions)
         refs.ownersList.appendChild(row)
       })
     }
@@ -601,6 +620,29 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       return
     }
     showToast(result.data.alreadyMember ? 'Владелец уже назначен' : 'Владелец назначен')
+    await loadVenue()
+  }
+
+  const handleRevokeOwner = async (owner: PlatformVenueDetailResponse['owners'][number]) => {
+    if (isRevokingOwner) return
+    if ((currentVenue?.owners.length ?? 0) <= 1) {
+      showToast('Нельзя отозвать последнего владельца')
+      return
+    }
+    const ok = window.confirm(`Отозвать OWNER доступ у ${formatOwnerName(owner)} (#${owner.userId})?`)
+    if (!ok) return
+    isRevokingOwner = true
+    updateActionButtons()
+    hideError()
+    const result = await platformRevokeOwner(backendUrl, venueId, owner.userId, deps)
+    isRevokingOwner = false
+    updateActionButtons()
+    if (disposed) return
+    if (!result.ok) {
+      showError(result.error, () => void handleRevokeOwner(owner))
+      return
+    }
+    showToast('Владелец отозван')
     await loadVenue()
   }
 

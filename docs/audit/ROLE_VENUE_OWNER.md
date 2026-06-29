@@ -88,6 +88,8 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Menu options/photos/descriptions/top-list richness may still be partial depending on guest surface.
 - Multi-venue owner selector/entry should be smoke-tested if owner has several memberships.
 - Platform owner invite/venue owner assignment belongs to Platform Owner flow, not this role doc.
+- Primary/legal/billing owner relink and a full ownership transfer helper are separate Platform Owner milestones;
+  current runtime access is controlled by active `venue_members` OWNER memberships.
 
 ## Smoke-critical checks
 

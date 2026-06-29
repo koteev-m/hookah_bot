@@ -117,6 +117,74 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun revokeOwner(
+        venueId: Long,
+        userId: Long,
+    ): PlatformOwnerRevokeResult {
+        val ds = dataSource ?: return PlatformOwnerRevokeResult.DatabaseError
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val initialAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val members = loadMembersForOwnerRevoke(connection, venueId, userId)
+                        val currentMember =
+                            members.firstOrNull { it.userId == userId }
+                                ?: return@use rollbackAndReturn(connection) {
+                                    PlatformOwnerRevokeResult.NotFound
+                                }
+                        if (!currentMember.role.equals("OWNER", ignoreCase = true)) {
+                            return@use rollbackAndReturn(connection) { PlatformOwnerRevokeResult.NotOwner }
+                        }
+                        val ownersCount = members.count { it.role.equals("OWNER", ignoreCase = true) }
+                        if (ownersCount <= 1) {
+                            return@use rollbackAndReturn(connection) { PlatformOwnerRevokeResult.LastOwner }
+                        }
+                        connection.prepareStatement(
+                            """
+                            DELETE FROM venue_members
+                            WHERE venue_id = ? AND user_id = ? AND UPPER(role) = 'OWNER'
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, userId)
+                            if (statement.executeUpdate() == 0) {
+                                return@use rollbackAndReturn(connection) {
+                                    PlatformOwnerRevokeResult.NotFound
+                                }
+                            }
+                        }
+                        connection.commit()
+                        PlatformOwnerRevokeResult.Success(
+                            revokedMember = currentMember,
+                            remainingOwnersCount = ownersCount - 1,
+                        )
+                    } catch (e: CancellationException) {
+                        rollbackBestEffort(connection)
+                        throw e
+                    } catch (e: Exception) {
+                        rollbackBestEffort(connection)
+                        logger.warn(
+                            "Failed to revoke venue owner venueId={} userId={}: {}",
+                            venueId,
+                            userId,
+                            sanitizeTelegramForLog(e.message),
+                        )
+                        logger.debugTelegramException(e) { "revokeOwner exception venueId=$venueId userId=$userId" }
+                        PlatformOwnerRevokeResult.DatabaseError
+                    } finally {
+                        runCatching { connection.autoCommit = initialAutoCommit }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                PlatformOwnerRevokeResult.DatabaseError
+            }
+        }
+    }
+
     private fun venueExists(
         connection: Connection,
         venueId: Long,
@@ -153,6 +221,40 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                 } else {
                     null
                 }
+            }
+        }
+    }
+
+    private fun loadMembersForOwnerRevoke(
+        connection: Connection,
+        venueId: Long,
+        userId: Long,
+    ): List<PlatformVenueMember> {
+        return connection.prepareStatement(
+            """
+            SELECT user_id, role, created_at, invited_by_user_id
+            FROM venue_members
+            WHERE venue_id = ? AND (user_id = ? OR UPPER(role) = 'OWNER')
+            ORDER BY user_id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, userId)
+            statement.executeQuery().use { rs ->
+                val members = mutableListOf<PlatformVenueMember>()
+                while (rs.next()) {
+                    members.add(
+                        PlatformVenueMember(
+                            venueId = venueId,
+                            userId = rs.getLong("user_id"),
+                            role = rs.getString("role"),
+                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                            invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() },
+                        ),
+                    )
+                }
+                members
             }
         }
     }
@@ -259,4 +361,19 @@ sealed interface PlatformOwnerAssignmentResult {
     data object NotFound : PlatformOwnerAssignmentResult
 
     data object DatabaseError : PlatformOwnerAssignmentResult
+}
+
+sealed interface PlatformOwnerRevokeResult {
+    data class Success(
+        val revokedMember: PlatformVenueMember,
+        val remainingOwnersCount: Int,
+    ) : PlatformOwnerRevokeResult
+
+    data object NotFound : PlatformOwnerRevokeResult
+
+    data object NotOwner : PlatformOwnerRevokeResult
+
+    data object LastOwner : PlatformOwnerRevokeResult
+
+    data object DatabaseError : PlatformOwnerRevokeResult
 }
