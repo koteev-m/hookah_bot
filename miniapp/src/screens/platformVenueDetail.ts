@@ -111,7 +111,6 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   const ownerRoleSelect = document.createElement('select')
   ownerRoleSelect.className = 'venue-select'
   ownerRoleSelect.appendChild(new Option('OWNER', 'OWNER'))
-  ownerRoleSelect.appendChild(new Option('ADMIN', 'ADMIN'))
 
   const assignButton = el('button', { text: 'Назначить владельца' }) as HTMLButtonElement
   const assignRow = el('div', { className: 'venue-inline-actions' })
@@ -635,9 +634,8 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
 
   const handleCopyInvite = async () => {
     if (!currentInvite) return
-    const payload = currentInvite.deepLink ?? currentInvite.code
     try {
-      await navigator.clipboard.writeText(payload)
+      await navigator.clipboard.writeText(currentInvite.copyText)
       showToast('Скопировано')
     } catch {
       showToast('Не удалось скопировать')

@@ -51,6 +51,7 @@ fun Route.platformRoutes(
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository,
     staffInviteConfig: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig,
+    telegramBotUsername: String? = null,
 ) {
     route("/platform") {
         get("/me") {
@@ -78,6 +79,7 @@ fun Route.platformRoutes(
         venueOwnerAccountRepository = venueOwnerAccountRepository,
         staffInviteRepository = staffInviteRepository,
         staffInviteConfig = staffInviteConfig,
+        telegramBotUsername = telegramBotUsername,
     )
     platformBillingRoutes(
         platformConfig = platformConfig,

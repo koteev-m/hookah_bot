@@ -137,5 +137,6 @@ export type PlatformOwnerInviteResponse = {
   code: string
   expiresAt: string
   instructions: string
+  copyText: string
   deepLink?: string | null
 }

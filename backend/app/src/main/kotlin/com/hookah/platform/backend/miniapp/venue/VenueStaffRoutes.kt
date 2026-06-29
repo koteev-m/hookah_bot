@@ -11,6 +11,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
+import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteAcceptAuditBestEffort
 import com.hookah.platform.backend.platform.OwnerAccountAssignmentPreparationResult
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
@@ -24,6 +25,7 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
+import org.slf4j.LoggerFactory
 
 @Serializable
 data class VenueStaffListResponse(
@@ -80,7 +82,9 @@ fun Route.venueStaffRoutes(
     staffInviteRepository: StaffInviteRepository,
     staffInviteConfig: StaffInviteConfig,
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
+    auditLogRepository: AuditLogRepository = AuditLogRepository(null),
 ) {
+    val logger = LoggerFactory.getLogger("VenueStaffRoutes")
     route("/venue") {
         get("/{venueId}/staff") {
             val userId = call.requireUserId()
@@ -163,6 +167,7 @@ fun Route.venueStaffRoutes(
                 )
             when (result) {
                 is StaffInviteAcceptResult.Success -> {
+                    appendOwnerInviteAcceptAuditBestEffort(auditLogRepository, result, logger)
                     call.respond(
                         StaffInviteAcceptResponse(
                             venueId = result.member.venueId,

@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.config.PlatformOwnerIdResolver
 import io.ktor.server.config.ApplicationConfig
 import org.slf4j.LoggerFactory
 import java.util.Locale
@@ -27,6 +28,7 @@ data class TelegramBotConfig(
         fun from(
             config: ApplicationConfig,
             appEnv: String,
+            environment: Map<String, String> = System.getenv(),
         ): TelegramBotConfig {
             val section = config.config("telegram")
             val enabled = section.propertyOrNull("enabled")?.getString()?.toBoolean() ?: false
@@ -58,9 +60,7 @@ data class TelegramBotConfig(
                 section.propertyOrNull(
                     "botUsername",
                 )?.getString()?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
-            val configuredPlatformOwnerId = section.propertyOrNull("platformOwnerId")?.getString()?.toLongOrNull()
-            val ownerTelegramIdFromEnv = System.getenv("OWNER_TELEGRAM_ID")?.trim()?.toLongOrNull()
-            val platformOwnerId = ownerTelegramIdFromEnv ?: configuredPlatformOwnerId
+            val platformOwnerId = PlatformOwnerIdResolver.resolve(config, environment)
             val longPollingTimeoutSeconds =
                 section.propertyOrNull("longPollingTimeoutSeconds")?.getString()?.toIntOrNull() ?: 25
             val staffChatLinkTtlSeconds =

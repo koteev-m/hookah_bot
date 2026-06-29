@@ -148,6 +148,8 @@ class StaffInviteRepository(
                             return@use StaffInviteAcceptResult.Success(
                                 member = updatedMember,
                                 alreadyMember = true,
+                                invitedRole = invite.role,
+                                inviteCreatedByUserId = invite.createdByUserId,
                                 roleChanged = true,
                             )
                         }
@@ -156,6 +158,8 @@ class StaffInviteRepository(
                         return@use StaffInviteAcceptResult.Success(
                             member = normalizedExistingMember,
                             alreadyMember = true,
+                            invitedRole = invite.role,
+                            inviteCreatedByUserId = invite.createdByUserId,
                             keptHigherRole = existingRank > invitedRank,
                         )
                     }
@@ -165,13 +169,23 @@ class StaffInviteRepository(
                         if (existingAfterInsert != null) {
                             markInviteUsed(connection, codeHash, nowTs, userId)
                             connection.commit()
-                            return@use StaffInviteAcceptResult.Success(existingAfterInsert, alreadyMember = true)
+                            return@use StaffInviteAcceptResult.Success(
+                                member = existingAfterInsert,
+                                alreadyMember = true,
+                                invitedRole = invite.role,
+                                inviteCreatedByUserId = invite.createdByUserId,
+                            )
                         }
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
                     }
                     markInviteUsed(connection, codeHash, nowTs, userId)
                     connection.commit()
-                    StaffInviteAcceptResult.Success(member, alreadyMember = false)
+                    StaffInviteAcceptResult.Success(
+                        member = member,
+                        alreadyMember = false,
+                        invitedRole = invite.role,
+                        inviteCreatedByUserId = invite.createdByUserId,
+                    )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
                     logger.warn(
@@ -394,6 +408,8 @@ sealed interface StaffInviteAcceptResult {
     data class Success(
         val member: VenueStaffMember,
         val alreadyMember: Boolean,
+        val invitedRole: String,
+        val inviteCreatedByUserId: Long,
         val roleChanged: Boolean = false,
         val keptHigherRole: Boolean = false,
     ) : StaffInviteAcceptResult

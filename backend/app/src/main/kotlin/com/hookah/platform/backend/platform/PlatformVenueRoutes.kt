@@ -6,6 +6,8 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteCreateAuditBestEffort
+import com.hookah.platform.backend.telegram.buildTelegramStartUrl
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -168,6 +170,7 @@ data class PlatformOwnerInviteResponse(
     val code: String,
     val expiresAt: String,
     val instructions: String,
+    val copyText: String,
     val deepLink: String?,
 )
 
@@ -211,7 +214,9 @@ fun Route.platformVenueRoutes(
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: StaffInviteRepository,
     staffInviteConfig: StaffInviteConfig,
+    telegramBotUsername: String? = null,
 ) {
+    val logger = org.slf4j.LoggerFactory.getLogger("PlatformVenueRoutes")
     route("/platform/venues") {
         get {
             call.requirePlatformOwner(platformConfig)
@@ -479,12 +484,31 @@ fun Route.platformVenueRoutes(
                     role = "OWNER",
                     ttlSeconds = ttlSeconds,
                 ) ?: throw com.hookah.platform.backend.api.DatabaseUnavailableException()
+            val startPayload = buildStaffInviteStartPayload(result.code)
+            val deepLink =
+                telegramBotUsername
+                    ?.trim()
+                    ?.removePrefix("@")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { buildTelegramStartUrl(it, startPayload) }
+            val copyText = deepLink ?: "/start $startPayload"
+            appendOwnerInviteCreateAuditBestEffort(
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                venueId = venueId,
+                ttlSeconds = result.ttlSeconds,
+                expiresAt = result.expiresAt,
+                deepLinkAvailable = deepLink != null,
+                logger = logger,
+            )
             call.respond(
                 PlatformOwnerInviteResponse(
                     code = result.code,
                     expiresAt = result.expiresAt.toString(),
-                    instructions = "Передайте владельцу команду для бота: /start staff_invite_${result.code}.",
-                    deepLink = null,
+                    instructions =
+                        "Передайте владельцу команду для бота: /start $startPayload.",
+                    copyText = copyText,
+                    deepLink = deepLink,
                 ),
             )
         }
@@ -745,6 +769,8 @@ private fun parseOwnerRole(rawRole: String?): String {
         else -> throw InvalidInputException("role must be OWNER")
     }
 }
+
+private fun buildStaffInviteStartPayload(code: String): String = "staff_invite_$code"
 
 private fun resolveInviteTtl(
     requestedTtl: Long?,

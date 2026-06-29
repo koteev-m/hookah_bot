@@ -71,6 +71,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
+import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteAcceptAuditBestEffort
 import com.hookah.platform.backend.miniapp.venue.tables.TableNumberConflictException
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableOwnerSummary
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
@@ -16186,12 +16187,14 @@ class TelegramBotRouter(
                 },
             )
         when (result) {
-            is StaffInviteAcceptResult.Success ->
+            is StaffInviteAcceptResult.Success -> {
+                appendOwnerInviteAcceptAuditBestEffort(auditLogRepository, result, logger)
                 enqueueMessage(
                     chatId,
                     buildStaffInviteAcceptedText(result),
                     resolvePostInviteReplyMarkup(chatId, userId),
                 )
+            }
             StaffInviteAcceptResult.InvalidOrExpired ->
                 enqueueMessage(chatId, "Приглашение недействительно или истекло.")
             StaffInviteAcceptResult.DatabaseError ->

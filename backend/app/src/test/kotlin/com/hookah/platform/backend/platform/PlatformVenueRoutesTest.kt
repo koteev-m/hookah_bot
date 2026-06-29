@@ -28,6 +28,7 @@ import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -69,6 +70,16 @@ class PlatformVenueRoutesTest {
 
             assertEquals(HttpStatusCode.Forbidden, statusResponse.status)
             assertApiErrorEnvelope(statusResponse, ApiErrorCodes.FORBIDDEN)
+
+            val inviteResponse =
+                client.post("/api/platform/venues/$venueId/owner-invite") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"ttlSeconds":120}""")
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, inviteResponse.status)
+            assertApiErrorEnvelope(inviteResponse, ApiErrorCodes.FORBIDDEN)
         }
 
     @Test
@@ -387,12 +398,52 @@ class PlatformVenueRoutesTest {
         }
 
     @Test
+    fun `owner invite returns fallback copy without bot username`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-invite-fallback")
+            val ownerId = 9011L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, ownerId)
+            val token = issueToken(config, userId = ownerId)
+
+            val inviteResponse =
+                client.post("/api/platform/venues/$venueId/owner-invite") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformOwnerInviteRequest.serializer(),
+                            PlatformOwnerInviteRequest(ttlSeconds = 120),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, inviteResponse.status)
+            val invitePayload =
+                json.decodeFromString(
+                    PlatformOwnerInviteResponse.serializer(),
+                    inviteResponse.bodyAsText(),
+                )
+            val startPayload = "staff_invite_${invitePayload.code}"
+            assertEquals(null, invitePayload.deepLink)
+            assertEquals("/start $startPayload", invitePayload.copyText)
+            assertTrue(invitePayload.instructions.contains(invitePayload.copyText))
+        }
+
+    @Test
     fun `owner invite creates invite and accept makes owner`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-owner-invite")
             val ownerId = 9009L
             val inviteeId = 9010L
-            val config = buildConfig(jdbcUrl, ownerId)
+            val config = buildConfig(jdbcUrl, ownerId, botUsername = "HookahInviteBot")
 
             environment { this.config = config }
             application { module() }
@@ -424,6 +475,17 @@ class PlatformVenueRoutesTest {
                 )
             assertTrue(invitePayload.code.isNotBlank())
             assertTrue(Instant.parse(invitePayload.expiresAt).isAfter(Instant.now()))
+            val startPayload = "staff_invite_${invitePayload.code}"
+            assertTrue(startPayload.matches(Regex("[A-Za-z0-9_-]+")))
+            assertTrue(startPayload.length <= 64)
+            assertEquals("https://t.me/HookahInviteBot?start=$startPayload", invitePayload.deepLink)
+            assertEquals(invitePayload.deepLink, invitePayload.copyText)
+            assertTrue(invitePayload.instructions.contains("/start $startPayload"))
+            val createAuditPayloads = loadAuditPayloads(jdbcUrl, "VENUE_OWNER_INVITE_CREATE")
+            assertEquals(1, createAuditPayloads.size)
+            assertTrue(createAuditPayloads.single().contains("\"venueId\":$venueId"))
+            assertTrue(createAuditPayloads.single().contains("\"role\":\"OWNER\""))
+            assertFalse(createAuditPayloads.single().contains(invitePayload.code))
 
             val inviteeToken = issueToken(config, userId = inviteeId)
             val acceptResponse =
@@ -447,6 +509,12 @@ class PlatformVenueRoutesTest {
             assertEquals(venueId, acceptPayload.venueId)
             assertEquals("OWNER", acceptPayload.member.role)
             assertEquals(inviteeId, loadPrimaryOwnerForVenueAccount(jdbcUrl, venueId))
+            val acceptAuditPayloads = loadAuditPayloads(jdbcUrl, "VENUE_OWNER_INVITE_ACCEPT")
+            assertEquals(1, acceptAuditPayloads.size)
+            assertTrue(acceptAuditPayloads.single().contains("\"venueId\":$venueId"))
+            assertTrue(acceptAuditPayloads.single().contains("\"acceptedUserId\":$inviteeId"))
+            assertTrue(acceptAuditPayloads.single().contains("\"role\":\"OWNER\""))
+            assertFalse(acceptAuditPayloads.single().contains(invitePayload.code))
         }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -457,16 +525,22 @@ class PlatformVenueRoutesTest {
     private fun buildConfig(
         jdbcUrl: String,
         ownerId: Long,
+        botUsername: String? = null,
     ): MapApplicationConfig {
-        return MapApplicationConfig(
-            "app.env" to appEnv,
-            "api.session.jwtSecret" to "test-secret",
-            "db.jdbcUrl" to jdbcUrl,
-            "db.user" to "sa",
-            "db.password" to "",
-            "platform.ownerUserId" to ownerId.toString(),
-            "venue.staffInviteSecretPepper" to "invite-pepper",
-        )
+        val entries =
+            mutableListOf(
+                "app.env" to appEnv,
+                "api.session.jwtSecret" to "test-secret",
+                "db.jdbcUrl" to jdbcUrl,
+                "db.user" to "sa",
+                "db.password" to "",
+                "platform.ownerUserId" to ownerId.toString(),
+                "venue.staffInviteSecretPepper" to "invite-pepper",
+            )
+        if (botUsername != null) {
+            entries.add("telegram.botUsername" to botUsername)
+        }
+        return MapApplicationConfig(*entries.toTypedArray())
     }
 
     private fun issueToken(
@@ -624,6 +698,31 @@ class PlatformVenueRoutesTest {
         }
     }
 
+    private fun loadAuditPayloads(
+        jdbcUrl: String,
+        action: String,
+    ): List<String> {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT payload_json
+                FROM audit_log
+                WHERE action = ?
+                ORDER BY created_at
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, action)
+                statement.executeQuery().use { rs ->
+                    val result = mutableListOf<String>()
+                    while (rs.next()) {
+                        result.add(rs.getString("payload_json"))
+                    }
+                    return result
+                }
+            }
+        }
+    }
+
     @Serializable
     private data class PlatformVenueResponse(
         val venue: PlatformVenueDetailDto,
@@ -691,6 +790,7 @@ class PlatformVenueRoutesTest {
         val code: String,
         val expiresAt: String,
         val instructions: String,
+        val copyText: String,
         val deepLink: String?,
     )
 
