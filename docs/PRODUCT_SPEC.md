@@ -78,9 +78,11 @@ MUST:
 - Booking: user selects venue + date/time; venue confirms/changes/cancels.
 - Booking status notifications (within Telegram constraints).
 - Guest booking parity: Telegram Bot `/my` and Guest Mini App `Мои брони` show the same active/upcoming booking identity, venue-local time, status, party size and `Держим до HH:mm` deadline when applicable.
+- Guest table context must survive normal Telegram/Mini App refreshes during a visit, but must not trap the guest forever. Mini App and Bot expose `Завершить визит` for the current guest/table context.
 SHOULD:
 - Favorites and history (Block 15) integrate with catalog.
-- Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR, and the context resets after bill close.
+- Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR. Manual `Завершить визит` stores a user-scoped exit marker so that guest no longer restores the table context; scanning the table QR again explicitly re-enters and clears that marker.
+- Manual guest exit is blocked only for that guest's obligations in the current `table_session`: active order/bill batches or active `NEW`/`ACK` staff calls created by the guest. Empty personal tabs and another guest's order/call at the same table do not block exit.
 - Adaptive booking reminders are implemented as M7c code/test-backed behavior and passed one controlled real Telegram staging smoke; runtime remains disabled by default and requires explicit opt-in. MVP sends at most one transactional reminder for `CONFIRMED`/`CHANGED` bookings, calculated in venue-local time with a 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Legacy reminder rows are preserved but isolated by policy version; legacy unsent rows are reconciled to canceled by migration and cannot be claimed by the M7c worker. Outbox enqueue means `QUEUED`, not Telegram-delivered. `Да, буду` / `Я приду` records guest attendance intent separately from venue-controlled booking status, edits the guest reminder state, and exposes the response in Bot `/my`, Guest Mini App `Мои брони` and Venue Mini App booking queue. The latest enriched staff-chat attendance copy is code/test-backed but has not been manually re-smoked with a new booking.
 
 ## Block 5 — Orders (one active order per table_session + batches)
@@ -177,7 +179,8 @@ MUST:
 - Table CRUD; unique QR per table.
 - QR token rotation/reissue.
 - Print/export QR for venues.
-- Table sessions: created on scan; TTL/closing rules.
+- Table sessions: created on scan; TTL/closing rules. Current `table_sessions` are shared by physical table, so a guest-level exit must not close the shared row.
+- Per-guest visit exit is represented by a user-scoped marker keyed by Telegram user and `table_session_id`; restore ignores exited markers for that user, and explicit QR resolve clears that user's marker.
 SHOULD:
 - “Table code” confirmation for high-risk actions (optional anti-photo-QR).
 

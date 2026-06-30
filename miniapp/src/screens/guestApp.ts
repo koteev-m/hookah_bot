@@ -1,6 +1,9 @@
 import { getBackendBaseUrl } from '../shared/api/backend'
+import { clearSession, getAccessToken } from '../shared/api/auth'
+import { guestEndTableSession } from '../shared/api/guestApi'
 import { isDebugEnabled } from '../shared/debug'
 import {
+  clearCurrentTableContext,
   formatTableStatus,
   getTableContext,
   initTableContext,
@@ -27,7 +30,7 @@ type GuestAppOptions = {
 }
 
 type RouteName = 'catalog' | 'venue' | 'cart' | 'order' | 'bookings' | 'account' | 'support'
-type GuestActionId = 'catalog' | 'qr' | 'menu' | 'cart' | 'order' | 'staff' | 'account' | 'support' | 'refresh'
+type GuestActionId = 'catalog' | 'qr' | 'menu' | 'cart' | 'order' | 'staff' | 'leave' | 'account' | 'support' | 'refresh'
 type GuestTableMode = 'no-table' | 'active-table' | 'ended-table'
 
 type Route = {
@@ -46,10 +49,11 @@ type GuestRefs = {
 }
 
 const scannedTokenQueryParamKeys = ['table_token', 'tableToken', 'tgWebAppStartParam', 'startapp', 'start_param'] as const
+const tableContextQueryParamKeys = [...scannedTokenQueryParamKeys, 'tableSessionId', 'table_session_id'] as const
 const primaryActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
   'no-table': ['qr'],
   'ended-table': ['qr', 'catalog', 'refresh'],
-  'active-table': ['staff']
+  'active-table': ['staff', 'leave']
 }
 const navActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
   'no-table': ['catalog', 'qr', 'account', 'support'],
@@ -135,6 +139,20 @@ function extractTableTokenFromScannedText(scannedText: string): string | null {
     return extractTokenFromSearchParams(url.searchParams)
   } catch {
     return normalizeTableToken(scannedText)
+  }
+}
+
+function clearTableContextSearchParams() {
+  const nextUrl = new URL(window.location.href)
+  tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
+  window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+}
+
+function showTelegramAlert(message: string) {
+  try {
+    getTelegramContext().webApp?.showAlert?.(message)
+  } catch {
+    // Telegram alert availability differs between browser shims and real clients.
   }
 }
 
@@ -306,6 +324,8 @@ function formatActionLabel(
         return 'Вызов активен'
       }
       return '🛎 Вызвать персонал'
+    case 'leave':
+      return '🚪 Завершить визит'
     case 'account':
       return variant === 'nav' ? 'Профиль' : '👤 Профиль'
     case 'support':
@@ -576,12 +596,7 @@ export function mountGuestApp(options: GuestAppOptions) {
           // ignore scanner close errors
         }
         const nextUrl = new URL(window.location.href)
-        nextUrl.searchParams.delete('tableToken')
-        nextUrl.searchParams.delete('tableSessionId')
-        nextUrl.searchParams.delete('table_session_id')
-        nextUrl.searchParams.delete('tgWebAppStartParam')
-        nextUrl.searchParams.delete('startapp')
-        nextUrl.searchParams.delete('start_param')
+        tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
         nextUrl.searchParams.set('table_token', token)
         window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
         void refreshTableContext({ forceResolveSession: true })
@@ -601,6 +616,69 @@ export function mountGuestApp(options: GuestAppOptions) {
       refs.statusDetails.textContent = fallbackMessage
       webApp?.showAlert?.('Не удалось открыть QR-сканер.')
     }
+  }
+  const endTableVisit = () => {
+    const snapshot = tableSnapshot
+    if (
+      resolveTableMode(snapshot) !== 'active-table' ||
+      !snapshot.tableToken ||
+      !snapshot.tableSessionId ||
+      snapshot.tableSessionId <= 0
+    ) {
+      clearTableContextSearchParams()
+      clearCurrentTableContext()
+      setCartTableToken(null)
+      staffCallActive = false
+      navigate('#/catalog', { replace: true })
+      return
+    }
+    refs.statusDetails.textContent = 'Завершаем визит…'
+    void guestEndTableSession(
+      backendUrl,
+      {
+        tableToken: snapshot.tableToken,
+        tableSessionId: snapshot.tableSessionId
+      },
+      { isDebug, getAccessToken, clearSession }
+    )
+      .then((result) => {
+        if (!result.ok) {
+          if (result.error.status === 403 || result.error.status === 404) {
+            const message = 'Контекст стола уже недоступен. Отсканируйте QR заново.'
+            refs.statusDetails.textContent = message
+            showTelegramAlert(message)
+            clearTableContextSearchParams()
+            clearCurrentTableContext()
+            setCartTableToken(null)
+            staffCallActive = false
+            navigate('#/catalog', { replace: true })
+            return
+          }
+          const message = result.error.message || 'Не удалось завершить визит. Попробуйте позже.'
+          refs.statusDetails.textContent = message
+          showTelegramAlert(message)
+          return
+        }
+        if (!result.data.ended) {
+          const message = result.data.message || 'Сейчас визит нельзя завершить.'
+          refs.statusDetails.textContent = message
+          showTelegramAlert(message)
+          return
+        }
+        const message = result.data.message || 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
+        refs.statusDetails.textContent = message
+        showTelegramAlert(message)
+        clearTableContextSearchParams()
+        clearCurrentTableContext()
+        setCartTableToken(null)
+        staffCallActive = false
+        navigate('#/catalog', { replace: true })
+      })
+      .catch(() => {
+        const message = 'Не удалось завершить визит. Попробуйте позже.'
+        refs.statusDetails.textContent = message
+        showTelegramAlert(message)
+      })
   }
   handleGuestAction = (action) => {
     switch (action) {
@@ -623,6 +701,9 @@ export function mountGuestApp(options: GuestAppOptions) {
           return
         }
         navigate('#/catalog', { replace: true })
+        return
+      case 'leave':
+        endTableVisit()
         return
       case 'account':
         navigateSecondaryGuestScreen('#/account')

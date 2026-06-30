@@ -5,7 +5,7 @@ import { guestResolveTable, guestRestoreTable } from '../api/guestApi'
 import type { TableResolveResponse } from '../api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../api/types'
 import { isDebugEnabled } from '../debug'
-import { getTelegramContext, rememberTableToken } from '../telegram'
+import { forgetTableToken, getTelegramContext, rememberTableToken } from '../telegram'
 import { setSelectedGuestTabId } from './guestTabSelection'
 
 export type TableContextStatus =
@@ -128,6 +128,41 @@ function rememberTableSessionContext(tableToken: string, tableSessionId: number)
   } catch {
     // ignore session storage errors
   }
+}
+
+function forgetTableSessionContext(tableToken?: string | null) {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    const key = resolveTableSessionStorageKey()
+    const raw = window.sessionStorage.getItem(key)
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<StoredTableSessionContext>
+      if (!tableToken || parsed.tableToken === tableToken) {
+        if (
+          typeof parsed.tableSessionId === 'number' &&
+          Number.isFinite(parsed.tableSessionId) &&
+          parsed.tableSessionId > 0
+        ) {
+          setSelectedGuestTabId(parsed.tableSessionId, null)
+        }
+        window.sessionStorage.removeItem(key)
+      }
+    }
+  } catch {
+    // ignore stale storage
+  }
+}
+
+export function clearCurrentTableContext(): void {
+  const tableToken = currentSnapshot.tableToken
+  if (currentSnapshot.tableSessionId) {
+    setSelectedGuestTabId(currentSnapshot.tableSessionId, null)
+  }
+  forgetTableSessionContext(tableToken)
+  forgetTableToken(tableToken)
+  updateSnapshot(buildEmptySnapshot('missing'))
 }
 
 function buildEmptySnapshot(
@@ -263,8 +298,12 @@ export async function refresh(options?: { forceResolveSession?: boolean }): Prom
       return
     }
 
-    rememberTableToken(nextToken)
-    rememberTableSessionContext(nextToken, result.data.tableSessionId)
+    if (result.data.tableSessionActive) {
+      rememberTableToken(nextToken)
+      rememberTableSessionContext(nextToken, result.data.tableSessionId)
+    } else {
+      forgetTableSessionContext(nextToken)
+    }
     updateSnapshot(buildResolvedSnapshot(result.data, nextToken))
   })
 
@@ -298,6 +337,7 @@ async function restoreActiveContext(): Promise<void> {
 
     const restored = result.data.context
     if (!restored) {
+      forgetTableSessionContext()
       updateSnapshot(buildEmptySnapshot('missing'))
       return
     }

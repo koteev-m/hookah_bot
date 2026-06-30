@@ -19,6 +19,20 @@ data class TableResolveResponse(
 )
 
 @Serializable
+data class TableSessionEndRequest(
+    val tableToken: String,
+    val tableSessionId: Long,
+)
+
+@Serializable
+data class TableSessionEndResponse(
+    val ended: Boolean,
+    val tableSessionId: Long,
+    val blockedReason: String?,
+    val message: String?,
+)
+
+@Serializable
 data class TableRestoreResponse(
     val context: RestoredTableContextResponse?,
 )

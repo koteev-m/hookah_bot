@@ -24,6 +24,7 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVisitHistoryItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageSender
@@ -776,6 +777,7 @@ class TelegramBotRouter(
                 text == "🛎️ Вызов персонала" ||
                 text == "🛎 Вызвать персонал" ->
                 showStaffCallReasons(chatId)
+            text == "🚪 Завершить визит" -> handleEndTableVisitRequest(chatId)
             text == "🚪 Сменить стол" || text == "🔁 Сменить стол" -> handleChangeTableRequest(chatId)
             text == "🏠 В каталог" -> showMainMenu(chatId, from)
             state.state == DialogStateType.VENUE_CONNECT_WAIT_NAME && !text.isNullOrBlank() ->
@@ -25317,6 +25319,7 @@ class TelegramBotRouter(
                 "🛎 Вызвать персонал",
                 "🚪 Сменить стол",
                 "🔁 Сменить стол",
+                "🚪 Завершить визит",
                 "🏠 В каталог",
                 "📨 Заявки на подключение",
                 "🏢 Кальянные",
@@ -25850,6 +25853,7 @@ class TelegramBotRouter(
                 "🛎 Вызвать персонал",
                 "🚪 Сменить стол",
                 "🔁 Сменить стол",
+                "🚪 Завершить визит",
                 "🍽 Каталог кальянных",
                 "🍽️ Каталог кальянных",
                 "🗺️ Каталог кальянных",
@@ -26102,6 +26106,13 @@ class TelegramBotRouter(
             } catch (e: DatabaseUnavailableException) {
                 return ApplyTableTokenResult.DatabaseUnavailable
             }
+        try {
+            tableSessionRepository.clearUserExit(userId, activeSession.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            return ApplyTableTokenResult.DatabaseUnavailable
+        }
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.tableToken)
         clearBotDraftStateForChatExceptTableToken(chatId, context.tableToken)
         val previousSessionId = botDraftCartSessionIds[key]
@@ -31706,6 +31717,72 @@ class TelegramBotRouter(
         )
     }
 
+    private suspend fun handleEndTableVisitRequest(chatId: Long) {
+        val context = resolveGuestContext(chatId) ?: return
+        val restored =
+            try {
+                guestTabsRepository.findLatestRestorableTableContext(
+                    userId = context.userId,
+                    tableToken = context.table.tableToken,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            }
+        if (restored == null) {
+            clearContextAndAskRescan(
+                chatId = chatId,
+                message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+            )
+            return
+        }
+        val result =
+            try {
+                tableSessionRepository.endUserTableSession(
+                    userId = context.userId,
+                    tableToken = context.table.tableToken,
+                    venueId = context.table.venueId,
+                    tableId = context.table.tableId,
+                    tableSessionId = restored.tableSessionId,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            }
+        if (result == null) {
+            clearContextAndAskRescan(
+                chatId = chatId,
+                message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+            )
+            return
+        }
+        val blockedReason = result.blockedReason
+        if (!result.ended || blockedReason != null) {
+            enqueueMessage(
+                chatId,
+                blockedReason.endVisitMessage() ?: "Сейчас визит нельзя завершить.",
+                tableContextBotKeyboard(context.table),
+            )
+            return
+        }
+        clearContextAndAskRescan(
+            chatId = chatId,
+            message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+        )
+    }
+
+    private fun TableSessionEndBlockedReason?.endVisitMessage(): String? =
+        when (this) {
+            TableSessionEndBlockedReason.ACTIVE_ORDER -> "Сначала закройте счёт. После этого визит можно завершить."
+            TableSessionEndBlockedReason.ACTIVE_STAFF_CALL ->
+                "Дождитесь завершения вызова персонала или обратитесь к сотруднику."
+            null -> null
+        }
+
     private suspend fun createRelocationStaffCall(chatId: Long) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
@@ -31890,7 +31967,10 @@ class TelegramBotRouter(
         }
     }
 
-    private suspend fun clearContextAndAskRescan(chatId: Long) {
+    private suspend fun clearContextAndAskRescan(
+        chatId: Long,
+        message: String = "Контекст сброшен. Отсканируйте QR на столе или откройте каталог.",
+    ) {
         val storedContext = chatContextRepository.get(chatId)
         chatContextRepository.clear(chatId)
         clearAllBotDraftCartsForChat(chatId)
@@ -31912,14 +31992,14 @@ class TelegramBotRouter(
                         VenueBotRole.MANAGER -> venueManagerMenu(access.venueId)
                         VenueBotRole.STAFF -> venueStaffMenu(access.venueId)
                     }
-                enqueueMessage(chatId, "Контекст сброшен.", menu)
+                enqueueMessage(chatId, message, menu)
                 return
             }
         }
         val hasVenueRole = userId?.let { venueAccessRepository.hasVenueRole(it) } ?: false
         enqueueMessage(
             chatId,
-            "Контекст сброшен. Отсканируйте QR на столе или откройте каталог.",
+            message,
             TelegramKeyboards.mainMenu(
                 hasVenueRole = hasVenueRole,
                 isPlatformOwner = false,

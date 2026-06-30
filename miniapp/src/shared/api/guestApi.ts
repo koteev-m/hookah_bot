@@ -31,6 +31,8 @@ import type {
   StaffCallStatusResponse,
   TableResolveResponse,
   TableRestoreResponse,
+  TableSessionEndRequest,
+  TableSessionEndResponse,
   VenueInfoSectionsResponse,
   VenueResponse
 } from './guestDtos'
@@ -371,6 +373,34 @@ export async function guestRestoreTable(
     backendUrl,
     '/api/guest/table/restore',
     { signal },
+    deps
+  )
+}
+
+export async function guestEndTableSession(
+  backendUrl: string,
+  request: TableSessionEndRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<TableSessionEndResponse>> {
+  const normalizedToken = normalizeTableToken(request.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  if (!Number.isFinite(request.tableSessionId) || !Number.isInteger(request.tableSessionId) || request.tableSessionId <= 0) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  return requestApi<TableSessionEndResponse>(
+    backendUrl,
+    '/api/guest/table/session/end',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        tableToken: normalizedToken,
+        tableSessionId: request.tableSessionId
+      }),
+      signal
+    },
     deps
   )
 }

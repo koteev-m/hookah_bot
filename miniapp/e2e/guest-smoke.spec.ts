@@ -68,6 +68,13 @@ type ApiErrorFixture = {
   message?: string
 }
 
+type TableSessionEndResponseFixture = {
+  ended: boolean
+  tableSessionId: number
+  blockedReason: 'ACTIVE_ORDER' | 'ACTIVE_STAFF_CALL' | null
+  message: string | null
+}
+
 type ServiceCharge = {
   id: number
   source: string
@@ -605,6 +612,7 @@ async function mockGuestApi(
     menuCategories?: GuestMenuCategory[]
     bookings?: GuestBookingFixture[]
     bookingCreateError?: { code: string; message: string }
+    tableSessionEndResponse?: TableSessionEndResponseFixture
   } = {}
 ) {
   let structuredMenuCalls = 0
@@ -614,11 +622,20 @@ async function mockGuestApi(
   const menuCategories = options.menuCategories ?? buildDefaultGuestMenu()
   let bookings = options.bookings ?? []
   let bookingCreateError = options.bookingCreateError ?? null
+  let tableSessionEndResponse =
+    options.tableSessionEndResponse ??
+    {
+      ended: true,
+      tableSessionId: 77,
+      blockedReason: null,
+      message: 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
+    }
   let createExtensionRequestCalls = 0
   let nextBookingId = 9000
   let activeOrderServiceCharges: ServiceCharge[] = []
   const previewRequests: Array<{ items: AddBatchItemPayload[] }> = []
   const addBatchRequests: AddBatchPayload[] = []
+  const tableSessionEndRequests: Array<{ tableToken: string; tableSessionId: number }> = []
   let submittedOrderItems: AddBatchItemPayload[] = []
   const bookingUpdateRequests: Array<{ venueId: number; bookingId: number; scheduledAt: string; partySize?: number | null; comment?: string | null }> = []
   const bookingCancelRequests: Array<{ venueId: number; bookingId: number }> = []
@@ -901,6 +918,15 @@ async function mockGuestApi(
     await route.fulfill(jsonResponse({ context: restoreContext }))
   })
 
+  await page.route('**/api/guest/table/session/end', async (route) => {
+    const body = (await route.request().postDataJSON()) as { tableToken: string; tableSessionId: number }
+    tableSessionEndRequests.push(body)
+    if (tableSessionEndResponse.ended) {
+      restoreContext = null
+    }
+    await route.fulfill(jsonResponse(tableSessionEndResponse))
+  })
+
   await page.route('**/api/guest/venue/1/menu', async (route) => {
     structuredMenuCalls += 1
     await route.fulfill(
@@ -1062,6 +1088,7 @@ async function mockGuestApi(
     getGuestBookings: () => bookings,
     getPreviewRequests: () => previewRequests,
     getAddBatchRequests: () => addBatchRequests,
+    getTableSessionEndRequests: () => tableSessionEndRequests,
     getStaffCallRequests: () => staffCallRequests,
     setStaffCallStatuses: (items: typeof staffCallStatuses) => {
       staffCallStatuses = items
@@ -1071,6 +1098,9 @@ async function mockGuestApi(
     },
     setBookingCreateError: (error: { code: string; message: string } | null) => {
       bookingCreateError = error
+    },
+    setTableSessionEndResponse: (response: TableSessionEndResponseFixture) => {
+      tableSessionEndResponse = response
     },
     setExtensionOptions: (options: ShiftExtensionOptions) => {
       extensionOptionsError = null
@@ -2772,6 +2802,45 @@ test('table context without active order hides pre-visit actions and extension e
   await expect(page.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toHaveCount(0)
   await expect(page.getByText('Активного счёта нет. Продление недоступно.')).toHaveCount(0)
+})
+
+test('table context leave session clears current guest restore state', async ({ page }) => {
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
+
+  expect(api.getTableSessionEndRequests()).toEqual([{ tableToken, tableSessionId: 77 }])
+  await expect(page.getByText('Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.')).toBeVisible()
+  await expect(page.getByText('Вы за столом №4 · Микс')).toHaveCount(0)
+
+  await page.reload()
+  await expect(page.getByText('Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.')).toBeVisible()
+  await expect(page.getByText('Вы за столом №4 · Микс')).toHaveCount(0)
+})
+
+test('table context leave session keeps context when active order blocks exit', async ({ page }) => {
+  const api = await mockGuestApi(page, {
+    restoreContext: buildRestoreContext(),
+    tableSessionEndResponse: {
+      ended: false,
+      tableSessionId: 77,
+      blockedReason: 'ACTIVE_ORDER',
+      message: 'Сначала закройте счёт. После этого визит можно завершить.'
+    }
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
+
+  expect(api.getTableSessionEndRequests()).toEqual([{ tableToken, tableSessionId: 77 }])
+  await expect(page.getByText('Сначала закройте счёт. После этого визит можно завершить.')).toBeVisible()
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Мой заказ' })).toBeVisible()
 })
 
 test('guest fallback chat order sends supported quick order payload through Telegram sendData', async ({ page }) => {

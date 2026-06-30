@@ -1854,7 +1854,12 @@ object TelegramKeyboards {
                         KeyboardButton(text = "👤 Профиль"),
                     ),
                 )
-                add(listOf(KeyboardButton(text = "🚪 Сменить стол")))
+                add(
+                    listOf(
+                        KeyboardButton(text = "🔁 Сменить стол"),
+                        KeyboardButton(text = "🚪 Завершить визит"),
+                    ),
+                )
             }
         return ReplyKeyboardMarkup(keyboard = keyboard)
     }

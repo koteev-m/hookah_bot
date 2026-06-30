@@ -129,6 +129,20 @@ export type TableRestoreResponse = {
   context: TableRestoreContextResponse | null
 }
 
+export type TableSessionEndBlockedReason = 'ACTIVE_ORDER' | 'ACTIVE_STAFF_CALL'
+
+export type TableSessionEndRequest = {
+  tableToken: string
+  tableSessionId: number
+}
+
+export type TableSessionEndResponse = {
+  ended: boolean
+  tableSessionId: number
+  blockedReason: TableSessionEndBlockedReason | null
+  message: string | null
+}
+
 export type ActiveOrderResponse = {
   order: ActiveOrderDto | null
 }

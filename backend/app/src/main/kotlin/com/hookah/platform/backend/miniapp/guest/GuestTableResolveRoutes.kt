@@ -5,8 +5,11 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.RestoredTableContextResponse
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.guest.api.TableRestoreResponse
+import com.hookah.platform.backend.miniapp.guest.api.TableSessionEndRequest
+import com.hookah.platform.backend.miniapp.guest.api.TableSessionEndResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.VenueAvailabilityResolver
@@ -15,9 +18,11 @@ import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.telegram.TableContext
 import io.ktor.server.application.call
+import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import java.time.Instant
 
 fun Route.guestTableResolveRoutes(
@@ -85,6 +90,7 @@ fun Route.guestTableResolveRoutes(
     }
 
     get("/table/resolve") {
+        val userId = call.requireUserId()
         val rawToken = call.request.queryParameters["tableToken"]
         val token = validateTableToken(rawToken)
         val requestedTableSessionId =
@@ -149,8 +155,9 @@ fun Route.guestTableResolveRoutes(
             guestTabsRepository.ensurePersonalTab(
                 venueId = table.venueId,
                 tableSessionId = sessionState.tableSessionId,
-                userId = call.requireUserId(),
+                userId = userId,
             )
+            tableSessionRepository.clearUserExit(userId, sessionState.tableSessionId)
         }
 
         call.respond(
@@ -167,6 +174,33 @@ fun Route.guestTableResolveRoutes(
                 subscriptionStatus = availability.subscriptionStatus,
                 available = availability.available,
                 unavailableReason = availability.reason,
+            ),
+        )
+    }
+
+    post("/table/session/end") {
+        val userId = call.requireUserId()
+        val request = call.receive<TableSessionEndRequest>()
+        val token = validateTableToken(request.tableToken)
+        val tableSessionId =
+            request.tableSessionId.takeIf { it > 0 }
+                ?: throw InvalidInputException("tableSessionId must be a positive number")
+        val table = tableTokenResolver(token) ?: throw NotFoundException()
+        val result =
+            tableSessionRepository.endUserTableSession(
+                userId = userId,
+                tableToken = token,
+                venueId = table.venueId,
+                tableId = table.tableId,
+                tableSessionId = tableSessionId,
+            ) ?: throw NotFoundException()
+
+        call.respond(
+            TableSessionEndResponse(
+                ended = result.ended,
+                tableSessionId = result.tableSessionId,
+                blockedReason = result.blockedReason?.name,
+                message = result.blockedReason.endVisitMessage(result.ended),
             ),
         )
     }
@@ -193,3 +227,11 @@ private fun TableSessionRecord.inactiveReason(now: Instant): String =
 private suspend fun io.ktor.server.application.ApplicationCall.respondNoRestoredTableContext() {
     respond(TableRestoreResponse(context = null))
 }
+
+private fun TableSessionEndBlockedReason?.endVisitMessage(ended: Boolean): String? =
+    when (this) {
+        TableSessionEndBlockedReason.ACTIVE_ORDER -> "Сначала закройте счёт. После этого визит можно завершить."
+        TableSessionEndBlockedReason.ACTIVE_STAFF_CALL ->
+            "Дождитесь завершения вызова персонала или обратитесь к сотруднику."
+        null -> if (ended) "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR." else null
+    }

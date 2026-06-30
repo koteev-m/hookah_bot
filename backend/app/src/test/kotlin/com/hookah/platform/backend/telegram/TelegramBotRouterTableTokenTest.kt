@@ -11,6 +11,7 @@ import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderScheduleResult
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
+import com.hookah.platform.backend.miniapp.guest.db.EndUserTableSessionResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationStatus
@@ -27,6 +28,8 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
+import com.hookah.platform.backend.miniapp.guest.db.RestorableTableContext
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
@@ -661,6 +664,7 @@ class TelegramBotRouterTableTokenTest {
                 endedAt = null,
                 status = TableSessionStatus.ACTIVE,
             )
+        coEvery { tableSessionRepository.clearUserExit(any(), any()) } returns Unit
         coEvery {
             guestTabsRepository.ensurePersonalTab(
                 venueId = any(),
@@ -23638,6 +23642,181 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `end table visit records user exit and clears only current chat context`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { chatContextRepository.get(101) } returns StoredChatContext(userId = 201, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery {
+                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
+            } returns restorableTableContext(tableToken = "TOKEN", tableSessionId = 55L)
+            coEvery {
+                tableSessionRepository.endUserTableSession(
+                    userId = 200L,
+                    tableToken = "TOKEN",
+                    venueId = 10L,
+                    tableId = 11L,
+                    tableSessionId = 55L,
+                    now = any(),
+                )
+            } returns EndUserTableSessionResult(ended = true, tableSessionId = 55L, blockedReason = null)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 304,
+                    message =
+                        Message(
+                            messageId = 404,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🚪 Завершить визит",
+                        ),
+                ),
+            )
+
+            coVerify {
+                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
+                tableSessionRepository.endUserTableSession(
+                    userId = 200L,
+                    tableToken = "TOKEN",
+                    venueId = 10L,
+                    tableId = 11L,
+                    tableSessionId = 55L,
+                    now = any(),
+                )
+                chatContextRepository.clear(100)
+                dialogStateRepository.clear(100)
+            }
+            coVerify(exactly = 0) { chatContextRepository.clear(101) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `end table visit with active order keeps bot context and explains block`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery {
+                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
+            } returns restorableTableContext(tableToken = "TOKEN", tableSessionId = 55L)
+            coEvery {
+                tableSessionRepository.endUserTableSession(
+                    userId = 200L,
+                    tableToken = "TOKEN",
+                    venueId = 10L,
+                    tableId = 11L,
+                    tableSessionId = 55L,
+                    now = any(),
+                )
+            } returns
+                EndUserTableSessionResult(
+                    ended = false,
+                    tableSessionId = 55L,
+                    blockedReason = TableSessionEndBlockedReason.ACTIVE_ORDER,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 305,
+                    message =
+                        Message(
+                            messageId = 405,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🚪 Завершить визит",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { chatContextRepository.clear(100) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Сначала закройте счёт. После этого визит можно завершить.",
+                    match { it == TelegramKeyboards.tableContextBotFlow(context) },
+                )
+            }
+        }
+
+    @Test
+    fun `end table visit without user tab clears current chat context only`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery {
+                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
+            } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 306,
+                    message =
+                        Message(
+                            messageId = 406,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🚪 Завершить визит",
+                        ),
+                ),
+            )
+
+            coVerify { chatContextRepository.clear(100) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.endUserTableSession(
+                    userId = any(),
+                    tableToken = any(),
+                    venueId = any(),
+                    tableId = any(),
+                    tableSessionId = any(),
+                    now = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
     fun `relocation staff call creates other staff call with table session context`() =
         runBlocking {
             val context =
@@ -26014,6 +26193,21 @@ class TelegramBotRouterTableTokenTest {
             tableNumber = 5,
             tableToken = "TOKEN",
             staffChatId = null,
+        )
+
+    private fun restorableTableContext(
+        tableToken: String,
+        tableSessionId: Long,
+    ): RestorableTableContext =
+        RestorableTableContext(
+            tableToken = tableToken,
+            tabId = 1L,
+            venueId = 10L,
+            venueName = "Venue",
+            tableId = 11L,
+            tableSessionId = tableSessionId,
+            tableSessionStatus = "ACTIVE",
+            tableNumber = 5,
         )
 
     private fun repeatMenu(

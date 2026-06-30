@@ -115,6 +115,32 @@ export function rememberTableToken(token: string): void {
   setLocalStorageToken(validation.value)
 }
 
+function removeStoredToken(storage: Storage, key: string, token: string | null): void {
+  const stored = storage.getItem(key)
+  if (token && stored !== token) {
+    return
+  }
+  storage.removeItem(key)
+}
+
+export function forgetTableToken(token?: string | null): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  const validation = token ? validateTableToken(token) : null
+  const normalizedToken = validation?.ok ? validation.value : null
+  try {
+    removeStoredToken(window.sessionStorage, tableTokenSessionStorageKey, normalizedToken)
+  } catch {
+    // ignore session storage errors
+  }
+  try {
+    removeStoredToken(window.localStorage, tableTokenLocalStorageKey, normalizedToken)
+  } catch {
+    // ignore local storage errors
+  }
+}
+
 function normalizeNonEmpty(value: string | null | undefined): string | null {
   if (value === null || value === undefined) {
     return null

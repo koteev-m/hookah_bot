@@ -73,11 +73,15 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun findLatestRestorableTableContext(userId: Long): RestorableTableContext? {
+    suspend fun findLatestRestorableTableContext(
+        userId: Long,
+        tableToken: String? = null,
+    ): RestorableTableContext? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
+                    val tokenFilter = if (tableToken != null) "AND tt.token = ?" else ""
                     connection.prepareStatement(
                         """
                         SELECT
@@ -102,6 +106,13 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                           AND ts.expires_at > now()
                           AND vt.is_active = TRUE
                           AND tt.is_active = TRUE
+                          $tokenFilter
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM guest_table_session_exits gtse
+                              WHERE gtse.user_id = tm.user_id
+                                AND gtse.table_session_id = ts.id
+                          )
                           AND (
                               NOT EXISTS (
                                   SELECT 1
@@ -143,6 +154,9 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
+                        if (tableToken != null) {
+                            statement.setString(2, tableToken)
+                        }
                         statement.executeQuery().use { rs ->
                             if (rs.next()) {
                                 RestorableTableContext(

@@ -4,6 +4,7 @@ import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.guest.api.TableRestoreResponse
+import com.hookah.platform.backend.miniapp.guest.api.TableSessionEndResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -12,9 +13,13 @@ import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
@@ -457,6 +462,319 @@ class GuestTableResolveRoutesTest {
             assertEquals(secondTabId, context.tabId)
             assertEquals(secondSessionId, context.tableSessionId)
             assertEquals("22", context.tableNumber)
+        }
+
+    @Test
+    fun `end table session with empty personal tab exits only current user and qr can reenter`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-end-empty-tab")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val guestA = TELEGRAM_USER_ID
+            val guestB = 789L
+            val tokenValue = "end-empty-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 31)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            seedUser(jdbcUrl, guestA)
+            seedUser(jdbcUrl, guestB)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            seedTab(jdbcUrl, venueId, tableSessionId, guestA)
+            val guestBTabId = seedTab(jdbcUrl, venueId, tableSessionId, guestB)
+            val guestAToken = issueToken(config, guestA)
+            val guestBToken = issueToken(config, guestB)
+
+            val endResponse =
+                client.post("/api/guest/table/session/end") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, endResponse.status)
+            val endPayload = json.decodeFromString(TableSessionEndResponse.serializer(), endResponse.bodyAsText())
+            assertEquals(true, endPayload.ended)
+            assertEquals(tableSessionId, endPayload.tableSessionId)
+            assertNull(endPayload.blockedReason)
+            assertEquals(1, countUserTableSessionExits(jdbcUrl, guestA, tableSessionId))
+            assertEquals(0, countUserTableSessionExits(jdbcUrl, guestB, tableSessionId))
+            assertEquals("ACTIVE", fetchTableSessionStatus(jdbcUrl, tableSessionId))
+
+            val guestARestore =
+                client.get("/api/guest/table/restore") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            val guestARestorePayload =
+                json.decodeFromString(
+                    TableRestoreResponse.serializer(),
+                    guestARestore.bodyAsText(),
+                )
+            assertNull(guestARestorePayload.context)
+
+            val guestBRestore =
+                client.get("/api/guest/table/restore") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestBToken") }
+                }
+            val guestBRestorePayload =
+                json.decodeFromString(
+                    TableRestoreResponse.serializer(),
+                    guestBRestore.bodyAsText(),
+                )
+            val guestBContext = guestBRestorePayload.context ?: error("Expected guest B context to remain restorable")
+            assertEquals(guestBTabId, guestBContext.tabId)
+            assertEquals(tableSessionId, guestBContext.tableSessionId)
+
+            val reenterResponse =
+                client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, reenterResponse.status)
+            val reenterPayload = json.decodeFromString(TableResolveResponse.serializer(), reenterResponse.bodyAsText())
+            assertEquals(tableSessionId, reenterPayload.tableSessionId)
+            assertEquals(true, reenterPayload.tableSessionActive)
+            assertEquals(0, countUserTableSessionExits(jdbcUrl, guestA, tableSessionId))
+        }
+
+    @Test
+    fun `end table session returns not found when session belongs to another user at same table`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-end-other-user")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val guestA = TELEGRAM_USER_ID
+            val guestB = 789L
+            val tokenValue = "end-other-user-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 32)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            seedUser(jdbcUrl, guestA)
+            seedUser(jdbcUrl, guestB)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            seedTab(jdbcUrl, venueId, tableSessionId, guestB)
+            val guestAToken = issueToken(config, guestA)
+
+            val endResponse =
+                client.post("/api/guest/table/session/end") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                }
+
+            assertEquals(HttpStatusCode.NotFound, endResponse.status)
+            assertApiErrorEnvelope(endResponse, ApiErrorCodes.NOT_FOUND)
+            assertEquals(0, countUserTableSessionExits(jdbcUrl, guestA, tableSessionId))
+            assertEquals("ACTIVE", fetchTableSessionStatus(jdbcUrl, tableSessionId))
+        }
+
+    @Test
+    fun `end table session blocks active order for current user`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-end-active-order")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val tokenValue = "end-order-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 33)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            val tabId = seedTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedOrder(jdbcUrl, venueId, tableId, tableSessionId, tabId, "ACTIVE", authorUserId = TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            val endResponse =
+                client.post("/api/guest/table/session/end") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, endResponse.status)
+            val payload = json.decodeFromString(TableSessionEndResponse.serializer(), endResponse.bodyAsText())
+            assertEquals(false, payload.ended)
+            assertEquals("ACTIVE_ORDER", payload.blockedReason)
+            assertEquals("Сначала закройте счёт. После этого визит можно завершить.", payload.message)
+            assertEquals(0, countUserTableSessionExits(jdbcUrl, TELEGRAM_USER_ID, tableSessionId))
+        }
+
+    @Test
+    fun `another guest active order at same table does not block current user exit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-end-foreign-order")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val guestA = TELEGRAM_USER_ID
+            val guestB = 789L
+            val tokenValue = "end-foreign-order-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 34)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            seedUser(jdbcUrl, guestA)
+            seedUser(jdbcUrl, guestB)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            seedTab(jdbcUrl, venueId, tableSessionId, guestA)
+            val guestBTabId = seedTab(jdbcUrl, venueId, tableSessionId, guestB)
+            seedOrder(jdbcUrl, venueId, tableId, tableSessionId, guestBTabId, "ACTIVE", authorUserId = guestB)
+            val guestAToken = issueToken(config, guestA)
+
+            val endResponse =
+                client.post("/api/guest/table/session/end") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, endResponse.status)
+            val payload = json.decodeFromString(TableSessionEndResponse.serializer(), endResponse.bodyAsText())
+            assertEquals(true, payload.ended)
+            assertNull(payload.blockedReason)
+            assertEquals(1, countUserTableSessionExits(jdbcUrl, guestA, tableSessionId))
+            assertEquals(0, countUserTableSessionExits(jdbcUrl, guestB, tableSessionId))
+        }
+
+    @Test
+    fun `end table session blocks active staff call for current user`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-end-active-staff-call")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val tokenValue = "end-staff-call-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 35)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            seedTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedStaffCall(jdbcUrl, venueId, tableId, tableSessionId, TELEGRAM_USER_ID, "ACK")
+            val token = issueToken(config)
+
+            val endResponse =
+                client.post("/api/guest/table/session/end") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, endResponse.status)
+            val payload = json.decodeFromString(TableSessionEndResponse.serializer(), endResponse.bodyAsText())
+            assertEquals(false, payload.ended)
+            assertEquals("ACTIVE_STAFF_CALL", payload.blockedReason)
+            assertEquals("Дождитесь завершения вызова персонала или обратитесь к сотруднику.", payload.message)
+            assertEquals(0, countUserTableSessionExits(jdbcUrl, TELEGRAM_USER_ID, tableSessionId))
+        }
+
+    @Test
+    fun `done own staff call and another guest active staff call do not block current user exit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-end-done-foreign-staff-call")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val guestA = TELEGRAM_USER_ID
+            val guestB = 789L
+            val tokenValue = "end-done-staff-call-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 36)
+            seedTableToken(jdbcUrl, tableId, tokenValue)
+            seedUser(jdbcUrl, guestA)
+            seedUser(jdbcUrl, guestB)
+            val tableSessionId =
+                seedTableSession(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    status = "ACTIVE",
+                    expiresAt = Instant.now().plus(1, ChronoUnit.HOURS),
+                    endedAt = null,
+                )
+            seedTab(jdbcUrl, venueId, tableSessionId, guestA)
+            seedTab(jdbcUrl, venueId, tableSessionId, guestB)
+            seedStaffCall(jdbcUrl, venueId, tableId, tableSessionId, guestA, "DONE")
+            seedStaffCall(jdbcUrl, venueId, tableId, tableSessionId, guestB, "NEW")
+            val guestAToken = issueToken(config, guestA)
+
+            val endResponse =
+                client.post("/api/guest/table/session/end") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, endResponse.status)
+            val payload = json.decodeFromString(TableSessionEndResponse.serializer(), endResponse.bodyAsText())
+            assertEquals(true, payload.ended)
+            assertNull(payload.blockedReason)
+            assertEquals(1, countUserTableSessionExits(jdbcUrl, guestA, tableSessionId))
         }
 
     @Test
@@ -917,6 +1235,7 @@ class GuestTableResolveRoutesTest {
         tabId: Long,
         status: String,
         updatedAt: Instant = Instant.now(),
+        authorUserId: Long = TELEGRAM_USER_ID,
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val orderId =
@@ -951,11 +1270,45 @@ class GuestTableResolveRoutesTest {
             ).use { statement ->
                 statement.setLong(1, orderId)
                 statement.setLong(2, tabId)
-                statement.setLong(3, TELEGRAM_USER_ID)
+                statement.setLong(3, authorUserId)
                 statement.setString(4, "[]")
                 statement.executeUpdate()
             }
             return orderId
+        }
+    }
+
+    private fun seedStaffCall(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO staff_calls (
+                    venue_id,
+                    table_id,
+                    table_session_id,
+                    created_by_user_id,
+                    reason,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, 'COME', ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableId)
+                statement.setLong(3, tableSessionId)
+                statement.setLong(4, userId)
+                statement.setString(5, status)
+                statement.setTimestamp(6, Timestamp.from(Instant.now()))
+                statement.executeUpdate()
+            }
         }
     }
 
@@ -970,6 +1323,49 @@ class GuestTableResolveRoutesTest {
             }
         }
         return 0
+    }
+
+    private fun countUserTableSessionExits(
+        jdbcUrl: String,
+        userId: Long,
+        tableSessionId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM guest_table_session_exits
+                WHERE user_id = ?
+                  AND table_session_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.setLong(2, tableSessionId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt(1)
+                    }
+                }
+            }
+        }
+        return 0
+    }
+
+    private fun fetchTableSessionStatus(
+        jdbcUrl: String,
+        tableSessionId: Long,
+    ): String? {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT status FROM table_sessions WHERE id = ?").use { statement ->
+                statement.setLong(1, tableSessionId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getString("status")
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun countAnalyticsEvents(
