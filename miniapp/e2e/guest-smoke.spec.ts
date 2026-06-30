@@ -62,6 +62,12 @@ type ShiftExtensionOptions = {
   pendingRequest?: ShiftExtensionRequest | null
 }
 
+type ApiErrorFixture = {
+  status: number
+  code?: string
+  message?: string
+}
+
 type ServiceCharge = {
   id: number
   source: string
@@ -594,7 +600,8 @@ async function mockGuestApi(
   page: Page,
   options: {
     restoreContext?: RestoreContext | null
-    extensionOptions?: ShiftExtensionOptions | null
+    extensionOptions?: ShiftExtensionOptions
+    extensionOptionsError?: ApiErrorFixture | null
     menuCategories?: GuestMenuCategory[]
     bookings?: GuestBookingFixture[]
     bookingCreateError?: { code: string; message: string }
@@ -603,6 +610,7 @@ async function mockGuestApi(
   let structuredMenuCalls = 0
   let restoreContext = options.restoreContext ?? null
   let extensionOptions = options.extensionOptions ?? buildShiftExtensionOptions()
+  let extensionOptionsError = options.extensionOptionsError ?? null
   const menuCategories = options.menuCategories ?? buildDefaultGuestMenu()
   let bookings = options.bookings ?? []
   let bookingCreateError = options.bookingCreateError ?? null
@@ -677,6 +685,9 @@ async function mockGuestApi(
             name: 'Микс',
             city: 'Москва',
             address: 'Пилотная, 1',
+            countryCode: 'RU',
+            displayAddress: 'Москва, Пилотная, 1',
+            routeUrl: buildTextRouteUrl('Микс', 'RU', 'Москва', 'Пилотная, 1'),
             cardDescription: 'Тестовая карточка',
             todaySchedule: {
               date: '2030-01-10',
@@ -700,6 +711,9 @@ async function mockGuestApi(
           name: 'Микс',
           city: 'Москва',
           address: 'Пилотная, 1',
+          countryCode: 'RU',
+          displayAddress: 'Москва, Пилотная, 1',
+          routeUrl: buildTextRouteUrl('Микс', 'RU', 'Москва', 'Пилотная, 1'),
           guestContact: '+7 000 000-00-00',
           cardDescription: 'Текстовая информация о заведении',
           todaySchedule: {
@@ -1009,6 +1023,19 @@ async function mockGuestApi(
   })
 
   await page.route('**/api/guest/table/extension-options?**', async (route) => {
+    if (extensionOptionsError) {
+      await route.fulfill({
+        status: extensionOptionsError.status,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: {
+            code: extensionOptionsError.code,
+            message: extensionOptionsError.message
+          }
+        })
+      })
+      return
+    }
     await route.fulfill(jsonResponse(extensionOptions))
   })
 
@@ -1046,7 +1073,11 @@ async function mockGuestApi(
       bookingCreateError = error
     },
     setExtensionOptions: (options: ShiftExtensionOptions) => {
+      extensionOptionsError = null
       extensionOptions = options
+    },
+    setExtensionOptionsError: (error: ApiErrorFixture | null) => {
+      extensionOptionsError = error
     },
     setActiveOrderServiceCharges: (charges: ServiceCharge[]) => {
       activeOrderServiceCharges = charges
@@ -2565,6 +2596,9 @@ test('pre-QR guest card shows info/photo menu and hides structured order menu', 
   await expect(page.getByRole('heading', { name: 'ℹ️ Информация' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '📖 Фото-меню' })).toBeVisible()
   await expect(page.getByText('Заказное меню и корзина доступны после сканирования QR-кода на столе.')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Забронировать' })).toBeVisible()
   await expect(page.getByAltText('📖 Фото-меню 1')).toBeVisible()
   await expect(page.getByText('Кальянное меню')).toHaveCount(0)
   expect(api.getStructuredMenuCalls()).toBe(0)
@@ -2696,7 +2730,7 @@ test('guest opens my bookings from profile and manages booking actions', async (
   await expect(rows.filter({ hasText: 'Микс' })).toHaveCount(0)
 })
 
-test('table context opens category-first order menu and cart action', async ({ page }) => {
+test('table context with active order opens category-first order menu and hides pre-visit actions', async ({ page }) => {
   await mockGuestApi(page)
 
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -2704,6 +2738,11 @@ test('table context opens category-first order menu and cart action', async ({ p
   await page.getByRole('button', { name: 'Меню', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(page.getByText('Вы за столом №4').last()).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toHaveCount(0)
   await expect(page.getByText('Double Apple')).toHaveCount(0)
   await page.getByRole('button', { name: /Кальянное меню/ }).click()
 
@@ -2712,6 +2751,27 @@ test('table context opens category-first order menu and cart action', async ({ p
   await page.getByRole('button', { name: 'Добавить' }).click()
 
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+})
+
+test('table context without active order hides pre-visit actions and extension entry', async ({ page }) => {
+  await mockGuestApi(page, {
+    extensionOptionsError: {
+      status: 404,
+      code: 'NOT_FOUND',
+      message: 'Active order not found'
+    }
+  })
+
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(page.getByText('Вы за столом №4').last()).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toHaveCount(0)
+  await expect(page.getByText('Активного счёта нет. Продление недоступно.')).toHaveCount(0)
 })
 
 test('guest fallback chat order sends supported quick order payload through Telegram sendData', async ({ page }) => {
@@ -2953,6 +3013,9 @@ test('guest creates shift extension request and sees pending then confirmed stat
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toBeVisible()
   await page.getByRole('button', { name: /Продление работы заведения/ }).click()
 

@@ -646,6 +646,13 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     Boolean(tableSnapshot.tableToken) &&
     tableSnapshot.venueId === venueId &&
     tableSnapshot.orderAllowed
+  const isTableVenueContext = () =>
+    tableSnapshot.status === 'resolved' &&
+    tableSnapshot.venueId === venueId &&
+    Boolean(tableSnapshot.tableToken) &&
+    typeof tableSnapshot.tableSessionId === 'number' &&
+    Number.isFinite(tableSnapshot.tableSessionId) &&
+    tableSnapshot.tableSessionId > 0
   const shouldShowOrderMenu = () => canPlaceOrders()
 
   const currentStaffStatusParams = () => {
@@ -796,7 +803,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const updateBookingButtonVisibility = () => {
-    const inTableContext = tableSnapshot.status === 'resolved' && tableSnapshot.venueId === venueId
+    const inTableContext = isTableVenueContext()
     refs.bookingButton.hidden = inTableContext || !onBookVenue
     refs.bookingButton.disabled = !venueId || inTableContext
   }
@@ -859,20 +866,25 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.venueTitle.textContent = venue.name
     const fallbackParts = [venue.city, venue.address].filter(Boolean)
     const displayAddress = venue.displayAddress?.trim() || (fallbackParts.length ? fallbackParts.join(', ') : '')
-    refs.venueLocation.textContent = displayAddress || 'Адрес не указан'
+    const inTableContext = isTableVenueContext()
+    refs.venueLocation.textContent = inTableContext
+      ? tableSnapshot.tableNumber
+        ? `Вы за столом №${tableSnapshot.tableNumber}`
+        : 'Вы за столом'
+      : displayAddress || 'Адрес не указан'
     const scheduleText = formatTodaySchedule(venue.todaySchedule)
     refs.venueSchedule.textContent = scheduleText
     refs.venueSchedule.hidden = !scheduleText
-    refs.copyAddressButton.hidden = !displayAddress
-    refs.copyAddressButton.onclick = displayAddress
+    refs.copyAddressButton.hidden = inTableContext || !displayAddress
+    refs.copyAddressButton.onclick = !inTableContext && displayAddress
       ? () => {
           void navigator.clipboard?.writeText(displayAddress)
           showToast('Адрес скопирован.')
         }
       : null
     const routeUrl = venue.routeUrl?.trim()
-    refs.routeLink.hidden = !routeUrl
-    if (routeUrl) {
+    refs.routeLink.hidden = inTableContext || !routeUrl
+    if (!inTableContext && routeUrl) {
       refs.routeLink.href = routeUrl
     } else {
       refs.routeLink.removeAttribute('href')

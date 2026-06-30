@@ -181,15 +181,6 @@ function optionCopy(option: GuestShiftExtensionOptionsResponse): string {
   return `Продление на ${duration} — ${price}. Персонал подтвердит возможность продления.`
 }
 
-function unavailableCopy(reason: string | null | undefined): string {
-  switch (reason) {
-    case 'EXTENSION_NOT_CONFIGURED':
-      return 'Продление сейчас недоступно: цена или длительность не настроены.'
-    default:
-      return 'Продление сейчас недоступно.'
-  }
-}
-
 function isKnownAuthError(error: ApiErrorInfo): boolean {
   const code = normalizeErrorCode(error)
   return code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID
@@ -251,6 +242,12 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     root.replaceChildren()
   }
 
+  const hideCard = (unavailableReason: string | null = null) => {
+    clearCard()
+    currentPendingRequest = null
+    emitAvailability({ visible: false, enabled: false, pending: false, unavailableReason })
+  }
+
   const ensureRefs = () => {
     if (!refs) {
       refs = buildDom(root, mode)
@@ -290,23 +287,6 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     currentRefs.button.disabled = true
     currentRefs.button.textContent = 'Загрузка…'
     currentRefs.message.hidden = true
-  }
-
-  const renderUnavailable = (text: string) => {
-    const currentRefs = ensureRefs()
-    currentRefs.body.textContent = text
-    currentRefs.meta.textContent = ''
-    currentRefs.button.textContent = 'Продлить на 1 час'
-    currentRefs.button.disabled = true
-    currentPendingRequest = null
-    setMessage('', 'info')
-    emitAvailability({
-      visible: true,
-      enabled: false,
-      pending: false,
-      unavailableText: text,
-      unavailableReason: currentOption?.unavailableReason ?? null
-    })
   }
 
   const renderAvailable = (option: GuestShiftExtensionOptionsResponse) => {
@@ -444,12 +424,12 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
       if (isKnownAuthError(tabsResult.error)) {
         clearSession()
       }
-      renderUnavailable('Не удалось определить счёт для продления.')
+      hideCard('TAB_LOOKUP_UNAVAILABLE')
       return null
     }
     const selectedTab = chooseTab(tabsResult.data.tabs, baseScope.tableSessionId)
     if (!selectedTab) {
-      renderUnavailable('Активный счёт не найден. Продление недоступно.')
+      hideCard('ACTIVE_TAB_NOT_FOUND')
       return null
     }
     setSelectedGuestTabId(baseScope.tableSessionId, selectedTab.id)
@@ -506,10 +486,10 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
         clearSession()
       }
       if (normalizeErrorCode(optionResult.error) === ApiErrorCodes.NOT_FOUND) {
-        renderUnavailable('Активного счёта нет. Продление недоступно.')
+        hideCard('ACTIVE_ORDER_NOT_FOUND')
         return
       }
-      renderUnavailable('Не удалось проверить продление. Обновите экран позже.')
+      hideCard('EXTENSION_OPTIONS_UNAVAILABLE')
       return
     }
     currentOption = optionResult.data
@@ -524,17 +504,7 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
       return
     }
     if (!optionResult.data.available || optionResult.data.priceMinor == null) {
-      if (optionResult.data.unavailableReason === 'EXTENSION_DISABLED') {
-        clearCard()
-        emitAvailability({
-          visible: false,
-          enabled: false,
-          pending: false,
-          unavailableReason: optionResult.data.unavailableReason
-        })
-        return
-      }
-      renderUnavailable(unavailableCopy(optionResult.data.unavailableReason))
+      hideCard(optionResult.data.unavailableReason ?? null)
       return
     }
     renderAvailable(optionResult.data)
