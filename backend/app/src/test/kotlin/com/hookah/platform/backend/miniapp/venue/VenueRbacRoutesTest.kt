@@ -34,6 +34,9 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
@@ -973,6 +976,19 @@ class VenueRbacRoutesTest {
             val ackPayload = json.decodeFromString(VenueStaffCallActionResponse.serializer(), ackResponse.bodyAsText())
             assertTrue(ackPayload.applied)
             assertEquals("ACK", ackPayload.call.status)
+            val ackAudit = fetchStaffCallAuditRows(jdbcUrl)
+            assertEquals(1, ackAudit.size)
+            assertStaffCallAuditRow(
+                row = ackAudit.single(),
+                expectedActorUserId = TELEGRAM_USER_ID,
+                expectedAction = STAFF_CALL_ACK_AUDIT_ACTION,
+                expectedVenueId = venueId,
+                expectedStaffCallId = staffCallId,
+                expectedFromStatus = "NEW",
+                expectedToStatus = "ACK",
+                expectedSource = STAFF_CALL_AUDIT_SOURCE_VENUE_MINIAPP,
+                expectedTableNumber = 12,
+            )
 
             val doneResponse =
                 client.post("/api/venue/$venueId/staff-calls/$staffCallId/done") {
@@ -987,6 +1003,19 @@ class VenueRbacRoutesTest {
                 )
             assertTrue(donePayload.applied)
             assertEquals("DONE", donePayload.call.status)
+            val doneAudit = fetchStaffCallAuditRows(jdbcUrl)
+            assertEquals(2, doneAudit.size)
+            assertStaffCallAuditRow(
+                row = doneAudit[1],
+                expectedActorUserId = TELEGRAM_USER_ID,
+                expectedAction = STAFF_CALL_DONE_AUDIT_ACTION,
+                expectedVenueId = venueId,
+                expectedStaffCallId = staffCallId,
+                expectedFromStatus = "ACK",
+                expectedToStatus = "DONE",
+                expectedSource = STAFF_CALL_AUDIT_SOURCE_VENUE_MINIAPP,
+                expectedTableNumber = 12,
+            )
 
             val listAfterDoneResponse =
                 client.get("/api/venue/$venueId/staff-calls") {
@@ -1040,10 +1069,11 @@ class VenueRbacRoutesTest {
             assertEquals(HttpStatusCode.OK, listResponse.status)
             val listPayload = json.decodeFromString(VenueStaffCallsResponse.serializer(), listResponse.bodyAsText())
             assertEquals(listOf(staffCallId), listPayload.items.map { it.id })
+            assertEquals(emptyList(), fetchStaffCallAuditRows(jdbcUrl))
         }
 
     @Test
-    fun `staff cannot access staff calls from another venue`() =
+    fun `staff cannot access or audit staff calls from another venue`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-staff-calls-forbidden")
             val config = buildConfig(jdbcUrl)
@@ -1055,6 +1085,7 @@ class VenueRbacRoutesTest {
 
             seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
             val foreignVenueId = seedVenueMembership(jdbcUrl, 777L, "STAFF")
+            val foreignStaffCallId = seedStaffCall(jdbcUrl, foreignVenueId, status = "NEW")
             val token = issueToken(config)
 
             val response =
@@ -1064,6 +1095,15 @@ class VenueRbacRoutesTest {
 
             assertEquals(HttpStatusCode.Forbidden, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+
+            val ackResponse =
+                client.post("/api/venue/$foreignVenueId/staff-calls/$foreignStaffCallId/ack") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, ackResponse.status)
+            assertApiErrorEnvelope(ackResponse, ApiErrorCodes.FORBIDDEN)
+            assertEquals(emptyList(), fetchStaffCallAuditRows(jdbcUrl))
         }
 
     @Test
@@ -1269,6 +1309,71 @@ class VenueRbacRoutesTest {
             }
         }
     }
+
+    private fun fetchStaffCallAuditRows(jdbcUrl: String): List<AuditRow> {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE action IN (?, ?)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, STAFF_CALL_ACK_AUDIT_ACTION)
+                statement.setString(2, STAFF_CALL_DONE_AUDIT_ACTION)
+                statement.executeQuery().use { rs ->
+                    val rows = mutableListOf<AuditRow>()
+                    while (rs.next()) {
+                        rows +=
+                            AuditRow(
+                                actorUserId = rs.getLong("actor_user_id"),
+                                action = rs.getString("action"),
+                                entityType = rs.getString("entity_type"),
+                                entityId = rs.getLong("entity_id"),
+                                payload =
+                                    json.parseToJsonElement(rs.getString("payload_json"))
+                                        .jsonObject,
+                            )
+                    }
+                    return rows
+                }
+            }
+        }
+    }
+
+    private fun assertStaffCallAuditRow(
+        row: AuditRow,
+        expectedActorUserId: Long,
+        expectedAction: String,
+        expectedVenueId: Long,
+        expectedStaffCallId: Long,
+        expectedFromStatus: String,
+        expectedToStatus: String,
+        expectedSource: String,
+        expectedTableNumber: Int,
+    ) {
+        assertEquals(expectedActorUserId, row.actorUserId)
+        assertEquals(expectedAction, row.action)
+        assertEquals("venue", row.entityType)
+        assertEquals(expectedVenueId, row.entityId)
+        assertEquals(expectedVenueId.toString(), row.payload.getValue("venueId").jsonPrimitive.content)
+        assertEquals(expectedStaffCallId.toString(), row.payload.getValue("staffCallId").jsonPrimitive.content)
+        assertEquals(expectedFromStatus, row.payload.getValue("fromStatus").jsonPrimitive.content)
+        assertEquals(expectedToStatus, row.payload.getValue("toStatus").jsonPrimitive.content)
+        assertEquals(expectedSource, row.payload.getValue("source").jsonPrimitive.content)
+        assertEquals(expectedTableNumber.toString(), row.payload.getValue("tableNumber").jsonPrimitive.content)
+        assertFalse("comment" in row.payload)
+        assertFalse("guestDisplayName" in row.payload)
+    }
+
+    private data class AuditRow(
+        val actorUserId: Long,
+        val action: String,
+        val entityType: String,
+        val entityId: Long,
+        val payload: JsonObject,
+    )
 
     @Serializable
     private data class StaffChatLinkCodeResponse(

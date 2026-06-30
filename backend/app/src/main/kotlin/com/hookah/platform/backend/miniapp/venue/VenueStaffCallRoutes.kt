@@ -15,10 +15,12 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import org.slf4j.LoggerFactory
 import java.util.Locale
 
 private const val DEFAULT_STAFF_CALL_LIMIT = 20
 private const val MAX_STAFF_CALL_LIMIT = 100
+private val staffCallAuditLogger = LoggerFactory.getLogger("StaffCallAudit")
 
 @kotlinx.serialization.Serializable
 data class VenueStaffCallDto(
@@ -48,6 +50,7 @@ data class VenueStaffCallActionResponse(
 fun Route.venueStaffCallRoutes(
     venueAccessRepository: VenueAccessRepository,
     staffCallRepository: StaffCallRepository,
+    auditLogRepository: AuditLogRepository,
 ) {
     route("/venue") {
         get("/{venueId}/staff-calls") {
@@ -71,6 +74,7 @@ fun Route.venueStaffCallRoutes(
             call.updateStaffCall(
                 venueAccessRepository = venueAccessRepository,
                 staffCallRepository = staffCallRepository,
+                auditLogRepository = auditLogRepository,
                 action = StaffCallAction.ACK,
             )
         }
@@ -79,20 +83,24 @@ fun Route.venueStaffCallRoutes(
             call.updateStaffCall(
                 venueAccessRepository = venueAccessRepository,
                 staffCallRepository = staffCallRepository,
+                auditLogRepository = auditLogRepository,
                 action = StaffCallAction.DONE,
             )
         }
     }
 }
 
-private enum class StaffCallAction {
-    ACK,
-    DONE,
+private enum class StaffCallAction(
+    val expectedStatus: StaffCallStatus,
+) {
+    ACK(StaffCallStatus.NEW),
+    DONE(StaffCallStatus.ACK),
 }
 
 private suspend fun io.ktor.server.application.ApplicationCall.updateStaffCall(
     venueAccessRepository: VenueAccessRepository,
     staffCallRepository: StaffCallRepository,
+    auditLogRepository: AuditLogRepository,
     action: StaffCallAction,
 ) {
     val actorUserId = requireUserId()
@@ -121,6 +129,15 @@ private suspend fun io.ktor.server.application.ApplicationCall.updateStaffCall(
                     actorUserId = actorUserId,
                 )
         } ?: throw NotFoundException()
+    appendStaffCallStatusAuditBestEffort(
+        auditLogRepository = auditLogRepository,
+        actorUserId = actorUserId,
+        venueId = venueId,
+        source = STAFF_CALL_AUDIT_SOURCE_VENUE_MINIAPP,
+        fromStatus = action.expectedStatus,
+        result = result,
+        logger = staffCallAuditLogger,
+    )
     respond(VenueStaffCallActionResponse(call = result.toDto(), applied = result.applied))
 }
 

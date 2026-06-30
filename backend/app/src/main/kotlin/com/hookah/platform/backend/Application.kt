@@ -1166,6 +1166,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueStaffCallRoutes(
                     venueAccessRepository = venueAccessRepository,
                     staffCallRepository = staffCallRepository,
+                    auditLogRepository = auditLogRepository,
                 )
                 venueTableRoutes(
                     venueAccessRepository = venueAccessRepository,

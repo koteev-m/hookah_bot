@@ -41,10 +41,12 @@ import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionSettings
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.appendStaffCallStatusAuditBestEffort
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileService
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
@@ -21356,6 +21358,15 @@ class TelegramBotRouter(
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Уже обработано")
             return
         }
+        appendStaffCallStatusAuditBestEffort(
+            auditLogRepository = auditLogRepository,
+            actorUserId = user.id,
+            venueId = venueId,
+            source = STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT,
+            fromStatus = expectedStatus,
+            result = result,
+            logger = logger,
+        )
         val actor = formatStaffChatActionActor(user)
         val statusLine =
             when (nextStatus) {

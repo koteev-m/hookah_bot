@@ -49,6 +49,10 @@ import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestStatus
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionSettings
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_ACK_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT
+import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_DONE_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
@@ -188,6 +192,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -246,6 +251,7 @@ class TelegramBotRouterTableTokenTest {
     private val venueStaffRepository: VenueStaffRepository = mockk(relaxed = true)
     private val staffInviteRepositoryForRouter: StaffInviteRepository = mockk(relaxed = true)
     private val supportThreadRepository: SupportThreadRepository = mockk()
+    private val auditLogRepository: AuditLogRepository = mockk(relaxed = true)
     private val router = routerWithWebAppPublicUrl(null)
 
     private fun routerWithWebAppPublicUrl(webAppPublicUrl: String?): TelegramBotRouter =
@@ -309,6 +315,7 @@ class TelegramBotRouterTableTokenTest {
             loyaltyRepository = loyaltyRepository,
             aiAssistantService = aiAssistantService,
             staffChatNotifier = staffChatNotifier,
+            auditLogRepository = auditLogRepository,
             venueStaffRepository = venueStaffRepository,
             staffInviteRepository = staffInviteRepositoryForRouter,
             shiftExtensionRepository = shiftExtensionRepository,
@@ -323,6 +330,7 @@ class TelegramBotRouterTableTokenTest {
         coEvery { dialogStateRepository.get(any()) } returns DialogState(DialogStateType.NONE)
         coEvery { dialogStateRepository.set(any(), any()) } returns Unit
         coEvery { dialogStateRepository.clear(any()) } returns Unit
+        coEvery { auditLogRepository.appendJson(any(), any(), any(), any(), any()) } returns Unit
         coEvery { chatContextRepository.saveContext(any(), any(), any()) } returns Unit
         coEvery { chatContextRepository.get(any()) } returns null
         coEvery { chatContextRepository.clear(any()) } returns Unit
@@ -25178,6 +25186,46 @@ class TelegramBotRouterTableTokenTest {
                             text.contains("✅ Выполнено: @waiter")
                     },
                     null,
+                )
+            }
+            coVerify {
+                auditLogRepository.appendJson(
+                    actorUserId = 501L,
+                    action = STAFF_CALL_ACK_AUDIT_ACTION,
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload =
+                        match { payload ->
+                            payload["venueId"]?.jsonPrimitive?.content == "10" &&
+                                payload["staffCallId"]?.jsonPrimitive?.content == "6" &&
+                                payload["fromStatus"]?.jsonPrimitive?.content == "NEW" &&
+                                payload["toStatus"]?.jsonPrimitive?.content == "ACK" &&
+                                payload["source"]?.jsonPrimitive?.content ==
+                                STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT &&
+                                payload["tableNumber"]?.jsonPrimitive?.content == "105" &&
+                                "comment" !in payload &&
+                                "guestDisplayName" !in payload
+                        },
+                )
+            }
+            coVerify {
+                auditLogRepository.appendJson(
+                    actorUserId = 501L,
+                    action = STAFF_CALL_DONE_AUDIT_ACTION,
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload =
+                        match { payload ->
+                            payload["venueId"]?.jsonPrimitive?.content == "10" &&
+                                payload["staffCallId"]?.jsonPrimitive?.content == "6" &&
+                                payload["fromStatus"]?.jsonPrimitive?.content == "ACK" &&
+                                payload["toStatus"]?.jsonPrimitive?.content == "DONE" &&
+                                payload["source"]?.jsonPrimitive?.content ==
+                                STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT &&
+                                payload["tableNumber"]?.jsonPrimitive?.content == "105" &&
+                                "comment" !in payload &&
+                                "guestDisplayName" !in payload
+                        },
                 )
             }
         }

@@ -13,6 +13,8 @@
 > Current checkpoint as of 2026-06-30: H2/PostgreSQL active-order + personal-tab uniqueness fidelity is CLOSED / validation passed and commit `a4a2d71` is on `origin/main`. H2 V112 now mirrors the existing PostgreSQL predicates for one `ACTIVE` order per `table_session_id` and one active `PERSONAL` tab per `table_session_id + owner_user_id`; PostgreSQL already had those constraints, no PostgreSQL production migration was added, runtime API/routes/Mini App/Bot behavior did not change, and no staging deploy was required. Validation passed with split lower-memory Gradle commands and no test XML failure/error markers; PostgreSQL/Testcontainers-backed checks were skipped where Docker was unavailable.
 >
 > Current checkpoint as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. Current tests verify actual Mini App PUT/PATCH/DELETE CORS preflights with `Content-Type` and `Authorization`, Mini App staff-call `tableSessionId` persistence and staff-chat event payload, linked staff-chat staff-call notification enqueue, and Guest Mini App fallback quick-order `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this checkpoint.
+>
+> Current checkpoint as of 2026-06-30: Staff Call Lifecycle ACK/DONE audit hardening: CLOSED / code-test verification passed. Successful applied staff-call ACK/DONE transitions now write `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit evidence from both Venue Mini App routes and Telegram staff-chat callbacks with top-level `actorUserId`, venue/call/status/source payload and no guest comment/display-name or secrets. Audit remains best-effort after the operational transition; no staging smoke is claimed by this checkpoint.
 
 # Краткое резюме
 
@@ -102,7 +104,7 @@ No confirmed production P0 was found in the 2026-06-30 checkpoint after M9a/M9b,
 | Venue-side orders queue | PARTIAL | `VenueOrderRoutes`, `venueOrders.ts`, `venueOrderDetail.ts` | Display number/full bill/prices |
 | Full bill / счёт | PARTIAL | `TelegramBotRouter.showVenueStaffOrderFullDetails`, `VenueOrdersRepository` | Mini App implementation |
 | Discounts / excluded items | PARTIAL | `V57__order_batch_item_exclusions.sql`, `V58__order_batch_item_discounts.sql`, `VenueOrdersRepository` | API/UI exposure |
-| Staff calls | DONE/PARTIAL | `GuestStaffCallRoutes`, `StaffCallRepository`, `guestVenue.ts`, `venueCalls.ts` | M5 lifecycle and notification parity are CLOSED / code-test verification passed; keep real staff-chat notification smoke in regression |
+| Staff calls | DONE/PARTIAL | `GuestStaffCallRoutes`, `StaffCallRepository`, `guestVenue.ts`, `venueCalls.ts` | M5 lifecycle, notification parity and ACK/DONE audit hardening are CLOSED / code-test verification passed; keep real staff-chat notification smoke in regression |
 | Staff/manager/owner roles | DONE/PARTIAL | `VenueRbac.kt`, `VenueRoleMapping.fromDb`, `TelegramBotRouter` mappings | `ADMIN` is legacy alias to `MANAGER`; Platform Mini App no longer offers it; keep role smoke in regression |
 | Staff invites | PARTIAL | `VenueStaffRoutes`, `StaffInviteRepository`, tests | Audit and unified UX |
 | Menu constructor | PARTIAL | `VenueMenuRoutes`, `venueMenu.ts` | Options/photos/top-list |
