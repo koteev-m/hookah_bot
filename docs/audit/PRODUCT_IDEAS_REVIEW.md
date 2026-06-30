@@ -2,7 +2,7 @@
 
 Дата: 2026-04-28. Режим: read-only audit. Код, миграции и тесты не изменялись.
 
-> Current correction as of 2026-06-29: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed: Venue Mini App can edit weekly hours and inclusive date-exception ranges with optional guest-facing reason/comment, and guest/Bot booking rejection copy is human. Platform Owner Invite / ADMIN Semantics Hardening and Platform Venue OWNER Revocation are CLOSED / staging smoke passed: config parity, no Platform Mini App `ADMIN` assignment, usable owner invite deep link/copy, owner invite create/accept audit, active OWNER membership list, last-owner-protected revoke, membership-based access loss and `VENUE_OWNER_REVOKE` audit are implemented. Info/media editing, guest preview, primary/legal/billing owner transfer helper, platform billing cockpit, support and analytics remain later. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed. Current code also implements Telegram multi-venue selected context; old "Telegram selector missing" notes below are historical, while chain/network entities remain future work.
+> Current correction as of 2026-06-30: this file remains a historical product-ideas audit. Booking-related rows were updated for M3/M7a/M7b/M7c: Venue Mini App booking queue/lifecycle exists, booking hold settings are CLOSED / staging smoke passed, `arrival_deadline_at` is a persisted booking snapshot, Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline, and M7c adaptive reminders passed one controlled real Telegram staging smoke while remaining disabled by default for rollout. M8a/M8b-Free public profile/card basics are also CLOSED / staging smoke passed: Venue Mini App can edit provider-free public location/contact/description. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed: Venue Mini App can edit weekly hours and inclusive date-exception ranges with optional guest-facing reason/comment, and guest/Bot booking rejection copy is human. Platform Owner Invite / ADMIN Semantics Hardening and Platform Venue OWNER Revocation are CLOSED / staging smoke passed: config parity, no Platform Mini App `ADMIN` assignment, usable owner invite deep link/copy, owner invite create/accept audit, active OWNER membership list, last-owner-protected revoke, membership-based access loss and `VENUE_OWNER_REVOKE` audit are implemented. H2/PostgreSQL active-order + personal-tab uniqueness fidelity is CLOSED / validation passed: H2 now mirrors PostgreSQL active-order and active personal-tab uniqueness predicates, PostgreSQL already had the intended constraints, no production PostgreSQL migration/runtime change/staging deploy was required, and commit `a4a2d71` is on `origin/main`. Info/media editing, guest preview, primary/legal/billing owner transfer helper, platform billing cockpit, support and analytics remain later. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed. Current code also implements Telegram multi-venue selected context; old "Telegram selector missing" notes below are historical, while chain/network entities remain future work.
 
 ## Executive summary
 
@@ -13,7 +13,7 @@
 Отсутствует: post-visit feedback/reviews, Yandex review link, paid placement, promotions/coupons/campaigns, promotion boosting, favorites/repeat templates, preorder, cashback/points/flexible loyalty rules, hookah master subrole/profile/shift schedule, network/group entity for venue chains. M7c reminder rollout remains opt-in disabled, not absent.
 
 Главные зависимости:
-- Core order/session/tab scoping is no longer the old April P0; current code scopes active orders by table session/tab and PostgreSQL has the active-order uniqueness constraint. Remaining related work is a P1 release/test-fidelity gap where H2 does not enforce the same uniqueness.
+- Core order/session/tab scoping is no longer the old April P0; current code scopes active orders by table session/tab, PostgreSQL has the intended active-order and active personal-tab uniqueness constraints, and H2 now mirrors those predicates for local/test schema fidelity.
 - P1 ops: booking lifecycle and notifications need venue settings, scheduler/outbox, status events, Mini App screens.
 - P2 growth: favorites/history/repeat/promotions/reviews need stable visit/order history.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.
@@ -1055,7 +1055,7 @@ Tests/smoke checks:
 - Multiple guests in shared tab counted correctly.
 
 Риски:
-- H2/PostgreSQL uniqueness fidelity can hide active-order concurrency regressions in tests if not fixed.
+- H2/PostgreSQL uniqueness fidelity is now closed; remaining schema follow-ups are narrower: PostgreSQL permits active `PERSONAL` tabs with `owner_user_id NULL`, shared-tab uniqueness is repository-idempotent rather than DB-enforced, and one active table session per table is handled by runtime locking rather than a DB uniqueness constraint.
 
 Рекомендованный приоритет: core notification path is regression; personal subscriptions/unified notification history are **P2**.
 
@@ -1064,9 +1064,9 @@ Tests/smoke checks:
 ### 18. Что делать не сейчас
 
 Делать сейчас:
-- PostgreSQL/H2 active-order uniqueness fidelity as a release-confidence follow-up.
-- Platform Billing Cockpit / Owner Payment UX after core order/session/tab test fidelity.
-- Focused Mini App mutation/operational verification pack only if current smoke finds regressions in CORS, staff-call payload/notification or fallback chat order payload.
+- Focused Mini App mutation/operational verification pack first; implement only if current smoke finds regressions in CORS, staff-call payload/notification or fallback chat order payload.
+- Platform Billing Cockpit / Owner Payment UX after operational smoke remains green.
+- Guest-facing bill/display-number/full-bill parity verification before growth polish.
 - Keep booking lifecycle, notification reliability and multi-venue Telegram selector in regression smoke.
 
 Отложить до стабилизации post-platform-owner launch core:
@@ -1089,9 +1089,9 @@ No current P0 is selected from this historical list. The original P0 order/sessi
 
 ### P1 Operational completeness
 
-1. H2/PostgreSQL active-order + personal-tab uniqueness fidelity.
+1. Focused Mini App mutation/operational verification pack for CORS, staff-call payload/notification and fallback chat order payload; implementation only for confirmed regressions.
 2. Platform Billing Cockpit / Owner Payment UX.
-3. Focused Mini App mutation/operational verification pack for CORS, staff-call payload/notification and fallback chat order payload; implementation only for confirmed regressions.
+3. Guest-facing bill/display-number/full-bill parity verification.
 4. Booking lifecycle, reminder rollout and multi-venue selector as regression smoke unless new gaps appear.
 5. Venue Mini App remaining profile setup parity through small backend-backed slices; public card/location basics are closed by M8a/M8b-Free and hours/exceptions are closed by M9b-M9b.3.
 6. Unified staff notifications beyond the closed core if personal subscriptions/history are needed.

@@ -83,12 +83,13 @@ SHOULD:
 - Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR, and the context resets after bill close.
 - Adaptive booking reminders are implemented as M7c code/test-backed behavior and passed one controlled real Telegram staging smoke; runtime remains disabled by default and requires explicit opt-in. MVP sends at most one transactional reminder for `CONFIRMED`/`CHANGED` bookings, calculated in venue-local time with a 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Legacy reminder rows are preserved but isolated by policy version; legacy unsent rows are reconciled to canceled by migration and cannot be claimed by the M7c worker. Outbox enqueue means `QUEUED`, not Telegram-delivered. `Да, буду` / `Я приду` records guest attendance intent separately from venue-controlled booking status, edits the guest reminder state, and exposes the response in Bot `/my`, Guest Mini App `Мои брони` and Venue Mini App booking queue. The latest enriched staff-chat attendance copy is code/test-backed but has not been manually re-smoked with a new booking.
 
-## Block 5 — Orders (one active order per table + batches)
+## Block 5 — Orders (one active order per table_session + batches)
 MUST:
-- One active order per table_session; multiple batches (dosa orders).
+- One active order per `table_session_id`; multiple batches (dosa orders).
 - Guest: browse menu, add to cart, submit batch with notes.
 - Staff: receive and process batches with statuses.
 - Staff assignment optional; prevent double-accept conflicts.
+- PostgreSQL and the H2 test schema both enforce one `ACTIVE` order per `table_session_id`; the H2/PostgreSQL fidelity milestone is CLOSED / validation passed and did not change runtime API/routes/Mini App/Bot behavior.
 SHOULD:
 - Out-of-stock handling via stop-list, not via last-minute rejects.
 - Staff-facing live order messages keep the main order and every add-batch/doporder visually separated, with batch status/action context clear to operators. Order/bill totals still come from the canonical backend bill snapshot.
@@ -98,6 +99,7 @@ MUST:
 - Default personal tab per user in a table_session.
 - Shared tab creation; join requires explicit consent/invite.
 - Prevent ordering on another user’s tab without permission.
+- PostgreSQL and the H2 test schema both enforce one active `PERSONAL` tab per `table_session_id + owner_user_id`.
 SHOULD:
 - Show clearly “which tab you’re ordering to” in UI.
 
