@@ -28,7 +28,7 @@
 - M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper opened one authenticated persistent connection after a bounded retry, reused that connection for rsync/plain SSH through the existing deployment script, completed image build/upload and backend recreate, and passed local/public health, DB health and Mini App static checks. The normal `./scripts/deploy-staging.sh hookah-staging` path remains supported and unchanged. The exact fresh SSH connection failure cause remains unconfirmed.
 - M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges/rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing is CLOSED / staging smoke passed: OWNER/MANAGER can manage weekly hours, inclusive closed/special-hours exception ranges and optional guest-facing reasons/comments in Venue Mini App; successful exception saves close/reset the form and reveal the saved row in the compact list; existing closed and changed-hours exceptions can be edited to a new inclusive date range; STAFF is hidden/forbidden; guest catalog/card read models expose safe today schedule/open state; and direct Guest Mini App booking create/update validates configured venue hours with human schedule errors. Missing schedule setup shows `График не указан` / `Заведение пока не настроило график бронирования.`, not `Закрыто`.
 - Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed: actual Mini App PUT/PATCH/DELETE CORS preflights allow `Content-Type` and `Authorization`, Guest Mini App staff-call payload/backend row/staff-chat event include `tableSessionId`, linked staff-chat staff-call notification enqueue is covered, and fallback quick order emits `Telegram.WebApp.sendData` with `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this item.
-- Staff Call Lifecycle ACK/DONE audit hardening: CLOSED / code-test verification passed. Successful applied ACK/DONE transitions from Venue Mini App routes and Telegram staff-chat callbacks write audit rows with top-level actor evidence and minimal safe venue/call/status/source payload. No staging smoke is claimed by this item.
+- Staff Call Lifecycle ACK/DONE audit hardening: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, and Guest ability to create a new call after DONE. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, CANCELLED UI/lifecycle, staff-call UX polish and guest table-context cleanup remain separate follow-ups.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -323,7 +323,7 @@ Steps:
 
 ### M5 staff calls lifecycle smoke status
 
-Status: CLOSED / staging smoke passed for lifecycle UI and CLOSED / code-test verification passed for `tableSessionId` payload plus staff-chat notification event/enqueue. Manual Telegram staff-chat runtime smoke remains per-venue regression.
+Status: CLOSED / staging smoke passed for lifecycle UI, `tableSessionId` payload, staff-chat notification delivery, Telegram staff-chat ACK/DONE callbacks and ACK/DONE audit hardening across Venue Mini App and Telegram staff-chat surfaces.
 
 Automated smoke target:
 
@@ -339,6 +339,9 @@ Per-venue regression smoke:
 
 1. Linked staff Telegram chat receives Mini App-created staff call notification.
 2. Staff chat inline `Принять` / `Выполнено` callbacks still edit the group message and do not diverge from Venue Mini App queue state.
+3. Applied Venue Mini App ACK/DONE transitions write `STAFF_CALL_ACK` / `STAFF_CALL_DONE` with actor evidence and `source=venue_miniapp`.
+4. Applied Telegram staff-chat ACK/DONE callbacks write `STAFF_CALL_ACK` / `STAFF_CALL_DONE` with callback actor evidence and `source=telegram_staff_chat`.
+5. Repeated/stale transitions do not create false audit rows; audit insert remains best-effort and must not roll back an already-applied operational transition.
 
 ### STAFF booking RBAC split smoke status
 

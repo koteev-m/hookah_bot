@@ -86,7 +86,8 @@ Manager Mini App areas:
 - Some Telegram manager flows may still be richer than Mini App equivalents.
 - Menu options/photos/descriptions/top-list parity may still be partial.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
-- Mini App-created staff-call `tableSessionId` and linked staff-chat notification enqueue are CLOSED / code-test verification passed; real linked Telegram staff group delivery remains per-venue smoke.
+- Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
+- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle, staff-call UX polish and guest table-context cleanup are not implemented in this milestone.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 
 ## Smoke-critical checks
@@ -100,4 +101,4 @@ Manager Mini App areas:
 7. Manager can manage menu/availability and tables according to permissions.
 8. Manager cannot enter platform owner mode.
 9. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
-10. Linked Telegram staff group receives Mini App-created staff-call notification during per-venue smoke.
+10. Linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
