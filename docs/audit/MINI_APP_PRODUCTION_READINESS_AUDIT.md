@@ -5,6 +5,8 @@
 > Historical audit snapshot. Some P0/P1 findings below were fixed after this read-only audit.
 >
 > Current correction as of 2026-06-03: CORS methods, Mini App staff call `tableSessionId`, fallback WebApp command contract, active order session/tab scoping, Venue Mini App full bill parity, bookings screens, and STAFF close bill/order policy have been addressed in code. Use `docs/UPDATED_PRODUCT_AI_ROADMAP.md` and `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` for current release status.
+>
+> Current correction as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. The old CORS mutation-method, Mini App staff-call `tableSessionId`, Mini App staff-call staff-chat notification, and fallback quick-order payload claims below are stale/superseded by current code and focused regression coverage. No staging smoke is claimed by this correction.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -43,8 +45,8 @@ Status: `PARTIAL`.
 
 Риски:
 
-- staff call frontend payload does not include `tableSessionId`;
-- fallback chat order sends payload not handled by `TelegramBotRouter`;
+- stale/superseded: staff call frontend payload now includes `tableSessionId` and has code-test coverage;
+- stale/superseded: fallback chat order now sends the router-supported `cmd=start_quick_order` payload and has Mini App e2e coverage;
 - active order scoping by `tableSessionId/tabId` needs launch regression coverage;
 - guest booking/profile/history/support UI parity needs a dedicated pass;
 - promotions/loyalty display must be smoke-tested against bot output.
@@ -106,12 +108,14 @@ Main risks:
 - Telegram bot has richer money/full bill/promo/loyalty formatting than Mini App detail.
 - Backend DTOs/repositories contain fields Mini App UI does not display.
 - Bot and Mini App permissions need role-by-role smoke for OWNER/MANAGER/STAFF.
-- CORS currently does not cover all Mini App mutation methods.
+- stale/superseded: CORS mutation methods are covered for actual Mini App PUT/PATCH/DELETE preflights.
 - Backend tests exist, but Mini App e2e/browser smoke coverage is not obvious.
 
 ## 3. P0 Launch Blockers
 
 ### P0.1 — CORS/preflight не покрывает Mini App mutation routes
+
+Status: CLOSED / code-test verification passed as of 2026-06-30. Historical claim is stale/superseded: current `Application.kt` allows PUT/PATCH/DELETE plus `Content-Type` and `Authorization`, and `CorsPreflightMiniAppRoutesTest` covers representative actual Mini App mutation paths.
 
 Why it matters:
 
@@ -141,6 +145,8 @@ Tests to add/update:
 
 ### P0.2 — Mini App staff call frontend не передаёт `tableSessionId`
 
+Status: CLOSED / code-test verification passed as of 2026-06-30. Historical claim is stale/superseded: Guest Mini App e2e asserts the staff-call request includes `tableSessionId`, backend tests assert the row is stored with `table_session_id`, and the staff-chat event carries the same session id.
+
 Why it matters:
 
 Backend `StaffCallRequest` requires `tableSessionId`, and backend already creates the call and notifies staff chat after success. Current `guestVenue.ts` payload contains only `tableToken`, `reason`, `comment`, so guest staff call can fail before reaching the working backend path.
@@ -169,6 +175,8 @@ Tests to add/update:
 - UI/API payload smoke if frontend test harness is available.
 
 ### P0.3 — Fallback chat order contract не совпадает с router
+
+Status: CLOSED / code-test verification passed as of 2026-06-30. Historical claim is stale/superseded: Mini App fallback sends `Telegram.WebApp.sendData` JSON `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`, and the e2e smoke asserts it is emitted instead of silently no-oping.
 
 Why it matters:
 
@@ -404,9 +412,9 @@ Tests to add/update:
 
 ## 7. Recommended Implementation Order
 
-1. CORS/preflight methods.
-2. Mini App staff call `tableSessionId` payload + notification smoke.
-3. Fallback chat order contract.
+1. CORS/preflight methods — CLOSED / code-test verification passed.
+2. Mini App staff call `tableSessionId` payload + notification smoke — CLOSED / code-test verification passed.
+3. Fallback chat order contract — CLOSED / code-test verification passed.
 4. Full bill/discount/exclusion/promo/loyalty display in venue order detail.
 5. Display number in queue/detail.
 6. Venue settings: make real or hide.
@@ -419,6 +427,7 @@ Tests to add/update:
 - `CorsPreflightMiniAppRoutesTest`.
 - `GuestStaffCallRoutesTest`: table session required, success path, notifier called.
 - `TelegramBotRouterTableTokenTest`: supported `web_app_data` fallback command.
+- `miniapp/e2e/guest-smoke.spec.ts`: fallback quick-order `sendData` payload.
 - `GuestOrderRoutesTest`: active order scoped by `tableSessionId/tabId`.
 - `VenueOrderRoutesTest`: full bill DTO includes gross/manual/promo/loyalty/exclusions/final.
 - UI smoke/e2e: guest QR -> menu -> cart -> order -> staff call.

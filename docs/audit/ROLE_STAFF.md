@@ -1,6 +1,6 @@
 # Staff
 
-Дата актуализации: 2026-06-18.
+Дата актуализации: 2026-06-30.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
 
@@ -105,6 +105,7 @@ STAFF Mini App behavior:
 
 - Telegram and Mini App staff entries must both use inline `web_app` as runtime Mini App opener.
 - Staff multi-venue selector needs smoke if a staff user belongs to more than one venue.
+- Mini App-created staff-call `tableSessionId` and linked staff-chat notification enqueue are CLOSED / code-test verification passed; real linked Telegram staff group delivery remains per-venue smoke.
 - Direct API denial tests remain critical: UI hiding is not a security boundary.
 
 ## Smoke-critical checks
@@ -116,7 +117,7 @@ STAFF Mini App behavior:
 5. Direct STAFF bill-edit/menu/table/staff/settings mutations return 403.
 6. STAFF sees menu content and tables read-only, but can toggle menu item and option/flavor availability for operational stop-list.
 7. STAFF dashboard has call counters and no staff chat status row.
-8. STAFF can accept/close staff calls.
+8. STAFF can accept/close staff calls; linked Telegram staff group receives Mini App-created staff-call notification during per-venue smoke.
 9. STAFF sees bookings and can mark arrived/no-show only.
 10. Direct STAFF confirm/cancel/change/message/settings booking attempts are denied.
 11. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.

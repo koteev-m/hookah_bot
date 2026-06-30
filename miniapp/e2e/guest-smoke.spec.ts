@@ -292,6 +292,8 @@ type TestTelegramWindow = Window & {
       ready?: () => void
       expand?: () => void
       close?: () => void
+      sendData?: (data: string) => void
+      openTelegramLink?: (url: string) => void
       BackButton?: {
         show?: () => void
         hide?: () => void
@@ -301,6 +303,8 @@ type TestTelegramWindow = Window & {
     }
   }
   __e2eTelegramBackButtonVisible?: boolean
+  __e2eTelegramSendDataPayloads?: string[]
+  __e2eTelegramOpenedLinks?: string[]
 }
 
 function jsonResponse(data: unknown) {
@@ -525,6 +529,8 @@ async function installTelegramWebApp(page: Page, userId: number) {
         const nextInitData = window.localStorage.getItem('__e2e_telegram_init_data') || defaultInitData;
         const backCallbacks = [];
         window.__e2eTelegramBackButtonVisible = false;
+        window.__e2eTelegramSendDataPayloads = [];
+        window.__e2eTelegramOpenedLinks = [];
         const telegramApi = {
           WebApp: {
             initData: nextInitData,
@@ -532,6 +538,12 @@ async function installTelegramWebApp(page: Page, userId: number) {
             ready: () => undefined,
             expand: () => undefined,
             close: () => undefined,
+            sendData: (data) => {
+              window.__e2eTelegramSendDataPayloads.push(String(data));
+            },
+            openTelegramLink: (url) => {
+              window.__e2eTelegramOpenedLinks.push(String(url));
+            },
             BackButton: {
               show: () => {
                 window.__e2eTelegramBackButtonVisible = true;
@@ -2700,6 +2712,35 @@ test('table context opens category-first order menu and cart action', async ({ p
   await page.getByRole('button', { name: 'Добавить' }).click()
 
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+})
+
+test('guest fallback chat order sends supported quick order payload through Telegram sendData', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+
+  await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await expect(page.getByText('Выберите счёт (tab) для заказа.')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Оформить в чате' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Оформить в чате' }).click()
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() => ((window as TestTelegramWindow).__e2eTelegramSendDataPayloads ?? []).length)
+    )
+    .toBe(1)
+  const payloads = await page.evaluate(() => (window as TestTelegramWindow).__e2eTelegramSendDataPayloads ?? [])
+  expect(JSON.parse(payloads[0])).toEqual({
+    cmd: 'start_quick_order',
+    table_token: tableToken
+  })
+  await expect(page.getByText('Откройте чат с ботом вручную.')).toHaveCount(0)
+  await expect(page.getByText('Откройте чат с ботом и отправьте заказ там.')).toHaveCount(0)
 })
 
 test('guest creates staff call from active table and sees lifecycle status', async ({ page }) => {

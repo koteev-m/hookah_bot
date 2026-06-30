@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-06-18.
+Дата актуализации: 2026-06-30.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -86,6 +86,7 @@ Manager Mini App areas:
 - Some Telegram manager flows may still be richer than Mini App equivalents.
 - Menu options/photos/descriptions/top-list parity may still be partial.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
+- Mini App-created staff-call `tableSessionId` and linked staff-chat notification enqueue are CLOSED / code-test verification passed; real linked Telegram staff group delivery remains per-venue smoke.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 
 ## Smoke-critical checks
@@ -99,3 +100,4 @@ Manager Mini App areas:
 7. Manager can manage menu/availability and tables according to permissions.
 8. Manager cannot enter platform owner mode.
 9. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
+10. Linked Telegram staff group receives Mini App-created staff-call notification during per-venue smoke.

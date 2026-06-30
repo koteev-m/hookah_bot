@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
 
 class CorsPreflightMiniAppRoutesTest {
     @Test
-    fun `mini app mutation preflight allows used methods from dev tunnel`() =
+    fun `mini app mutation preflight allows actual mutation routes from dev tunnel`() =
         testApplication {
             val devTunnelOrigin = "https://miniapp-dev-tunnel.example.test"
 
@@ -28,36 +28,97 @@ class CorsPreflightMiniAppRoutesTest {
             }
             application { module() }
 
-            val methods =
+            val cases =
                 listOf(
-                    HttpMethod.Patch,
-                    HttpMethod.Put,
-                    HttpMethod.Delete,
-                    HttpMethod.Post,
-                    HttpMethod.Get,
+                    MutationPreflightCase(
+                        path = "/api/venue/menu/categories/10?venueId=1",
+                        method = HttpMethod.Patch,
+                        label = "venue menu category update",
+                    ),
+                    MutationPreflightCase(
+                        path = "/api/venue/menu/options/20?venueId=1",
+                        method = HttpMethod.Delete,
+                        label = "venue menu option delete",
+                    ),
+                    MutationPreflightCase(
+                        path = "/api/venue/1/staff/456",
+                        method = HttpMethod.Patch,
+                        label = "venue staff role update",
+                    ),
+                    MutationPreflightCase(
+                        path = "/api/venue/1/staff/456",
+                        method = HttpMethod.Delete,
+                        label = "venue staff remove",
+                    ),
+                    MutationPreflightCase(
+                        path = "/api/venue/1/schedule/weekly/1",
+                        method = HttpMethod.Put,
+                        label = "venue schedule update",
+                    ),
+                    MutationPreflightCase(
+                        path = "/api/platform/venues/1/subscription",
+                        method = HttpMethod.Put,
+                        label = "platform subscription update",
+                    ),
                 )
 
-            methods.forEach { method ->
+            cases.forEach { case ->
                 val response =
-                    client.options("/api/guest/staff-call") {
+                    client.options(case.path) {
                         headers {
                             append(HttpHeaders.Origin, devTunnelOrigin)
-                            append("Access-Control-Request-Method", method.value)
-                            append("Access-Control-Request-Headers", "content-type,authorization")
+                            append("Access-Control-Request-Method", case.method.value)
+                            append(
+                                "Access-Control-Request-Headers",
+                                "${HttpHeaders.ContentType},${HttpHeaders.Authorization}",
+                            )
                         }
                     }
 
-                assertEquals(HttpStatusCode.OK, response.status, "preflight failed for ${method.value}")
+                assertEquals(
+                    HttpStatusCode.OK,
+                    response.status,
+                    "preflight failed for ${case.label}",
+                )
                 assertEquals(
                     devTunnelOrigin,
                     response.headers[HttpHeaders.AccessControlAllowOrigin],
                 )
-                if (method in setOf(HttpMethod.Patch, HttpMethod.Put, HttpMethod.Delete)) {
-                    assertTrue(
-                        response.headers[HttpHeaders.AccessControlAllowMethods].orEmpty().contains(method.value),
-                        "allowed methods should include ${method.value}",
-                    )
-                }
+                assertHeaderContains(
+                    response.headers[HttpHeaders.AccessControlAllowMethods],
+                    case.method.value,
+                    "${case.label} allowed methods",
+                )
+                assertHeaderContains(
+                    response.headers[HttpHeaders.AccessControlAllowHeaders],
+                    HttpHeaders.ContentType,
+                    "${case.label} allowed headers",
+                )
+                assertHeaderContains(
+                    response.headers[HttpHeaders.AccessControlAllowHeaders],
+                    HttpHeaders.Authorization,
+                    "${case.label} allowed headers",
+                )
             }
         }
+
+    private fun assertHeaderContains(
+        header: String?,
+        expected: String,
+        messagePrefix: String,
+    ) {
+        assertTrue(
+            header.orEmpty()
+                .split(",")
+                .map { it.trim() }
+                .any { it.equals(expected, ignoreCase = true) },
+            "$messagePrefix should include $expected, was ${header.orEmpty()}",
+        )
+    }
+
+    private data class MutationPreflightCase(
+        val path: String,
+        val method: HttpMethod,
+        val label: String,
+    )
 }

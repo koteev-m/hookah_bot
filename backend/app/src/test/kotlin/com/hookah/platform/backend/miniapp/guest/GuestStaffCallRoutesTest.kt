@@ -171,6 +171,7 @@ class GuestStaffCallRoutesTest {
             assertNotNull(stored)
             assertEquals("BILL", stored.reason)
             assertEquals("Нужны угли", stored.comment)
+            assertEquals(tableSessionId, stored.tableSessionId)
             assertEquals(TELEGRAM_USER_ID, stored.createdByUserId)
 
             val statusResponse =
@@ -227,7 +228,7 @@ class GuestStaffCallRoutesTest {
         }
 
     @Test
-    fun `api staff call notification uses readable staff call event`() =
+    fun `api staff call notification includes table session id in staff chat event`() =
         testApplication {
             val config =
                 MapApplicationConfig(
@@ -765,7 +766,7 @@ class GuestStaffCallRoutesTest {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                SELECT reason, comment, created_by_user_id
+                SELECT reason, comment, table_session_id, created_by_user_id
                 FROM staff_calls
                 WHERE id = ?
                 """.trimIndent(),
@@ -776,6 +777,7 @@ class GuestStaffCallRoutesTest {
                         return StaffCallRecord(
                             reason = rs.getString("reason"),
                             comment = rs.getString("comment"),
+                            tableSessionId = rs.getLong("table_session_id"),
                             createdByUserId = rs.getLong("created_by_user_id").let { if (rs.wasNull()) null else it },
                         )
                     }
@@ -802,6 +804,7 @@ class GuestStaffCallRoutesTest {
     private data class StaffCallRecord(
         val reason: String,
         val comment: String?,
+        val tableSessionId: Long,
         val createdByUserId: Long?,
     )
 

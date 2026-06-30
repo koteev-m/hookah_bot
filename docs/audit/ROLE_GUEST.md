@@ -1,6 +1,6 @@
 # Guest
 
-Дата актуализации: 2026-06-18.
+Дата актуализации: 2026-06-30.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл фиксирует текущее поведение Guest в Telegram bot и Mini App после последних parity/fix-pack'ов.
 
@@ -47,6 +47,7 @@ QR/table Guest Mini App:
 - option/flavor picker for configured item-scoped options and line-level `preferenceNote`;
 - cart preview backend-owned;
 - submit order/add batch;
+- fallback chat order emits `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`;
 - active order screen с refresh/polling;
 - staff call flow as transient compose + compact NEW/ACK/DONE status;
 - закрытый счёт больше не должен выглядеть активным.
@@ -87,7 +88,8 @@ Account/bookings:
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
 - Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
-- M5 staff-call compact UX staging smoke passed; linked Telegram staff-chat runtime notification remains per-venue regression.
+- M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Linked Telegram staff-chat runtime notification remains per-venue regression.
+- Fallback quick-order payload is CLOSED / code-test verification passed; real Telegram client fallback remains part of release smoke.
 - Media proxy требует ручной проверки для image/PDF и скрытых/удалённых sections.
 - QR/table order flow должен smoke-тестироваться отдельно от pre-QR catalog flow.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
@@ -101,6 +103,7 @@ Account/bookings:
 5. Добавить item в cart, отправить order/add batch.
 6. Выбрать configured flavor/option and optional preference note; confirm active order/bill preserves it.
 7. Вызвать персонал из active table; форма закрывается, status card показывает NEW/ACK/DONE.
-8. Открыть `Сообщения`; проверить список тредов, unread, active/resolved filters and resolve/reopen.
-9. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
-10. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
+8. Нажать fallback `Оформить в чате`; payload должен быть `cmd=start_quick_order` with current `table_token`.
+9. Открыть `Сообщения`; проверить список тредов, unread, active/resolved filters and resolve/reopen.
+10. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
+11. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.

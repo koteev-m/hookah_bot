@@ -661,6 +661,65 @@ class StaffChatNotifierTest {
         }
 
     @Test
+    fun `notifyStaffCall queues staff chat notification when linked chat and setting enabled`() =
+        runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns
+                VenueSettings(
+                    venueId = 1L,
+                    notifyOrdersEnabled = true,
+                    notifyStaffCallsEnabled = true,
+                    notifyCancellationsEnabled = true,
+                    timezone = "Europe/Moscow",
+                )
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(
+                    id = 1L,
+                    name = "Mix",
+                    staffChatId = 777L,
+                )
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.tryClaimAndEnqueue(
+                    -1_000_000_000_008L,
+                    777L,
+                    "sendMessage",
+                    capture(payloadSlot),
+                )
+            } returns StaffChatNotificationClaim.CLAIMED
+
+            val result =
+                notifier.notifyStaffCallNow(
+                    StaffCallNotification(
+                        venueId = 1L,
+                        staffCallId = 8L,
+                        tableLabel = "4",
+                        reason = StaffCallReason.COALS,
+                        comment = "Поменяйте угли",
+                        tableSessionId = 77L,
+                        guestDisplayName = "Мария",
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("🛎 Вызов персонала"), payload)
+            assertTrue(payload.contains("Mix · Стол 4"), payload)
+            assertTrue(payload.contains("Гость: Мария"), payload)
+            assertTrue(payload.contains("Причина: Заменить угли"), payload)
+            assertTrue(payload.contains("Комментарий: Поменяйте угли"), payload)
+            assertTrue(payload.contains("✅ Принять вызов"), payload)
+            assertTrue(payload.contains("sc_call_ack:1:8"), payload)
+            coVerify {
+                notificationRepository.tryClaimAndEnqueue(
+                    -1_000_000_000_008L,
+                    777L,
+                    "sendMessage",
+                    any(),
+                )
+            }
+        }
+
+    @Test
     fun `notifyStaffCall formats relocation without exposing technical context`() =
         runBlocking {
             coEvery { venueSettingsRepository.find(1L) } returns null

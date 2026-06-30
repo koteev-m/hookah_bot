@@ -11,6 +11,8 @@
 > Current checkpoint as of 2026-06-29: Platform Owner Invite / ADMIN Semantics Hardening and Platform Venue OWNER Revocation are CLOSED / staging smoke passed. Bot/API Platform Owner config parity is implemented, Platform Mini App does not offer `ADMIN`, owner invite returns usable Telegram deep link/copy text, invite accept grants OWNER for the intended venue, owner invite create/accept is audited, Platform Owner can list active OWNER memberships and revoke one OWNER while another remains, last-owner revoke is blocked server-side, revoked OWNER loses runtime access through `venue_members`, `owner_account_id` / primary-owner linkage is not relinked, and `VENUE_OWNER_REVOKE` audit evidence exists.
 >
 > Current checkpoint as of 2026-06-30: H2/PostgreSQL active-order + personal-tab uniqueness fidelity is CLOSED / validation passed and commit `a4a2d71` is on `origin/main`. H2 V112 now mirrors the existing PostgreSQL predicates for one `ACTIVE` order per `table_session_id` and one active `PERSONAL` tab per `table_session_id + owner_user_id`; PostgreSQL already had those constraints, no PostgreSQL production migration was added, runtime API/routes/Mini App/Bot behavior did not change, and no staging deploy was required. Validation passed with split lower-memory Gradle commands and no test XML failure/error markers; PostgreSQL/Testcontainers-backed checks were skipped where Docker was unavailable.
+>
+> Current checkpoint as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. Current tests verify actual Mini App PUT/PATCH/DELETE CORS preflights with `Content-Type` and `Authorization`, Mini App staff-call `tableSessionId` persistence and staff-chat event payload, linked staff-chat staff-call notification enqueue, and Guest Mini App fallback quick-order `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this checkpoint.
 
 # Краткое резюме
 
@@ -56,22 +58,20 @@
 
 # Current top P0/P1/P2 gaps after 2026-06-30 checkpoint
 
-No confirmed production P0 was found in the 2026-06-30 checkpoint after M9a/M9b, Platform Owner invite/revoke closure and H2/PostgreSQL uniqueness fidelity validation. Current priorities:
+No confirmed production P0 was found in the 2026-06-30 checkpoint after M9a/M9b, Platform Owner invite/revoke closure, H2/PostgreSQL uniqueness fidelity validation and the Mini App mutation/operational verification pack. Current priorities:
 
-1. **P1 verification, implementation only on regression / selected next**: Mini App mutation and operational fix pack for CORS, staff-call payload/notification and fallback chat order payload. The old issues are documented as fixed/superseded, so start with current code/smoke verification and implement only bounded fixes for confirmed regressions.
-2. **P1/P2**: Platform Billing Cockpit / Owner Payment UX. Backend invoice/payment routes and subscription settings exist, but Platform Mini App invoice operations and manual mark-paid UX are incomplete.
-3. **P1/P2 verification**: Guest-facing bill/display-number/full-bill parity. Existing bill snapshot automation exists; keep guest/staff money and display-number surfaces aligned before polishing bookings/growth.
-4. **P1/P2**: keep M7b real two-account isolation, M7c opt-in reminder rollout, M9b schedule validation, Platform Owner invite and Platform OWNER revoke as release regression checks, not new implementation milestones unless a regression is found.
-5. **P2**: General guest support ticket creation beyond booking threads.
-6. **P2**: Guest Mini App repeat/favorite mutation parity and promotion/review surfaces.
+1. **P1/P2**: Platform Billing Cockpit / Owner Payment UX. Backend invoice/payment routes and subscription settings exist, but Platform Mini App invoice operations and manual mark-paid UX are incomplete.
+2. **P1/P2 verification**: Guest-facing bill/display-number/full-bill parity. Existing bill snapshot automation exists; keep guest/staff money and display-number surfaces aligned before polishing bookings/growth.
+3. **P1/P2**: keep M7b real two-account isolation, M7c opt-in reminder rollout, M9b schedule validation, Platform Owner invite, Platform OWNER revoke and Mini App mutation/staff-call/fallback payload checks as release regression checks, not new implementation milestones unless a regression is found.
+4. **P2**: General guest support ticket creation beyond booking threads.
+5. **P2**: Guest Mini App repeat/favorite mutation parity and promotion/review surfaces.
 
 # Рекомендуемый порядок дальнейшей работы
 
-1. Run focused Mini App mutation/operational verification for CORS, staff-call payload/notification and fallback chat order; implement only bounded fixes for confirmed regressions.
-2. Build Platform Billing Cockpit / Owner Payment UX once operational smoke remains green.
-3. Verify Guest-facing bill/display-number/full-bill parity across Bot/Mini App/staff views before growth polish.
-4. Keep Platform Owner invite/revoke, M7b/M7c and M9b schedule paths in regression.
-5. Add support/tickets and growth features after core order/billing stability.
+1. Build Platform Billing Cockpit / Owner Payment UX once operational smoke remains green.
+2. Verify Guest-facing bill/display-number/full-bill parity across Bot/Mini App/staff views before growth polish.
+3. Keep Platform Owner invite/revoke, M7b/M7c, M9b schedule and Mini App mutation/staff-call/fallback payload paths in regression.
+4. Add support/tickets and growth features after core order/billing stability.
 
 # Какие функции лучше не трогать пока
 
@@ -102,7 +102,7 @@ No confirmed production P0 was found in the 2026-06-30 checkpoint after M9a/M9b,
 | Venue-side orders queue | PARTIAL | `VenueOrderRoutes`, `venueOrders.ts`, `venueOrderDetail.ts` | Display number/full bill/prices |
 | Full bill / счёт | PARTIAL | `TelegramBotRouter.showVenueStaffOrderFullDetails`, `VenueOrdersRepository` | Mini App implementation |
 | Discounts / excluded items | PARTIAL | `V57__order_batch_item_exclusions.sql`, `V58__order_batch_item_discounts.sql`, `VenueOrdersRepository` | API/UI exposure |
-| Staff calls | DONE/PARTIAL | `GuestStaffCallRoutes`, `StaffCallRepository`, `guestVenue.ts`, `venueCalls.ts` | M5 lifecycle and notification parity are closed; keep real staff-chat notification smoke in regression |
+| Staff calls | DONE/PARTIAL | `GuestStaffCallRoutes`, `StaffCallRepository`, `guestVenue.ts`, `venueCalls.ts` | M5 lifecycle and notification parity are CLOSED / code-test verification passed; keep real staff-chat notification smoke in regression |
 | Staff/manager/owner roles | DONE/PARTIAL | `VenueRbac.kt`, `VenueRoleMapping.fromDb`, `TelegramBotRouter` mappings | `ADMIN` is legacy alias to `MANAGER`; Platform Mini App no longer offers it; keep role smoke in regression |
 | Staff invites | PARTIAL | `VenueStaffRoutes`, `StaffInviteRepository`, tests | Audit and unified UX |
 | Menu constructor | PARTIAL | `VenueMenuRoutes`, `venueMenu.ts` | Options/photos/top-list |
@@ -118,9 +118,9 @@ No confirmed production P0 was found in the 2026-06-30 checkpoint after M9a/M9b,
 | Subscriptions/billing | PARTIAL | `SubscriptionRepository`, `SubscriptionBillingEngine`, `PlatformBillingRoutes` | Checkout and UI |
 | Support/tickets | MISSING | No product routes/tables found | Design MVP |
 | Analytics/events | PARTIAL | `AnalyticsEventRepository`, event writes | Add booking/support events and UI |
-| Staff chat notifications | PARTIAL | `StaffChatNotifier`, bot notify methods | Cover calls/bookings consistently |
+| Staff chat notifications | PARTIAL | `StaffChatNotifier`, bot notify methods | Mini App staff-call notification path is CLOSED / code-test verification passed; keep orders/bookings/shift-extension runtime delivery in regression |
 | Telegram commands | PARTIAL | `/start`, `/menu`, `/my`, `/help`, `/link`, `/unlink`, `/link_test` | Add support/help consistency and QR test mode |
-| Mini App env/CORS/initData | DONE/PARTIAL | `Application.kt`, `TelegramInitDataValidator`, `miniapp/src/main.ts` | CORS mutation methods are documented as fixed/superseded; keep preflight/env diagnostics in regression |
+| Mini App env/CORS/initData | DONE/PARTIAL | `Application.kt`, `TelegramInitDataValidator`, `miniapp/src/main.ts` | CORS mutation methods are CLOSED / code-test verification passed; keep preflight/env diagnostics in regression |
 
 # Технический долг
 
