@@ -115,6 +115,7 @@ import com.hookah.platform.backend.support.SupportThreadStatus
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
+import com.hookah.platform.backend.telegram.db.CompletedStaffCallStatusUpdate
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
@@ -334,6 +335,7 @@ class TelegramBotRouterTableTokenTest {
         coEvery { dialogStateRepository.set(any(), any()) } returns Unit
         coEvery { dialogStateRepository.clear(any()) } returns Unit
         coEvery { auditLogRepository.appendJson(any(), any(), any(), any(), any()) } returns Unit
+        coEvery { staffCallRepository.completeActiveBillRequestsForOrder(any(), any()) } returns emptyList()
         coEvery { chatContextRepository.saveContext(any(), any(), any()) } returns Unit
         coEvery { chatContextRepository.get(any()) } returns null
         coEvery { chatContextRepository.clear(any()) } returns Unit
@@ -24548,6 +24550,22 @@ class TelegramBotRouterTableTokenTest {
                     updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
                     applied = true,
                 )
+            coEvery { staffCallRepository.completeActiveBillRequestsForOrder(10L, 19L) } returns
+                listOf(
+                    CompletedStaffCallStatusUpdate(
+                        fromStatus = StaffCallStatus.ACK,
+                        result =
+                            StaffCallStatusUpdateResult(
+                                staffCallId = 6L,
+                                status = StaffCallStatus.DONE,
+                                applied = true,
+                                tableNumber = 105,
+                                reason = StaffCallReason.BILL,
+                                comment = null,
+                                orderId = 19L,
+                            ),
+                    ),
+                )
             coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
 
             router.process(
@@ -24595,6 +24613,27 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-close-confirm", "Счёт закрыт", false)
+            }
+            coVerify {
+                staffCallRepository.completeActiveBillRequestsForOrder(10L, 19L)
+            }
+            coVerify {
+                auditLogRepository.appendJson(
+                    actorUserId = 501L,
+                    action = STAFF_CALL_DONE_AUDIT_ACTION,
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload =
+                        match { payload ->
+                            payload["venueId"]?.jsonPrimitive?.content == "10" &&
+                                payload["staffCallId"]?.jsonPrimitive?.content == "6" &&
+                                payload["fromStatus"]?.jsonPrimitive?.content == "ACK" &&
+                                payload["toStatus"]?.jsonPrimitive?.content == "DONE" &&
+                                payload["source"]?.jsonPrimitive?.content ==
+                                STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT &&
+                                payload["tableNumber"]?.jsonPrimitive?.content == "105"
+                        },
+                )
             }
         }
 

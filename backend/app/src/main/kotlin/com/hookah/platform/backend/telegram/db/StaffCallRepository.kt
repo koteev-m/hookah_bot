@@ -377,6 +377,128 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun completeActiveBillRequestsForOrder(
+        venueId: Long,
+        orderId: Long,
+    ): List<CompletedStaffCallStatusUpdate> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    try {
+                        connection.autoCommit = false
+                        val forUpdateClause =
+                            if (connection.metaData.databaseProductName.contains("H2", ignoreCase = true)) {
+                                "FOR UPDATE"
+                            } else {
+                                "FOR UPDATE OF sc"
+                            }
+                        val activeBillRequests =
+                            connection.prepareStatement(
+                                """
+                                SELECT sc.id,
+                                       sc.status,
+                                       sc.comment,
+                                       sc.order_id,
+                                       sc.tab_id,
+                                       sc.payment_method,
+                                       o.display_number,
+                                       t.type AS tab_type,
+                                       vt.table_number,
+                                       u.guest_display_name
+                                FROM staff_calls sc
+                                JOIN venue_tables vt ON vt.id = sc.table_id
+                                LEFT JOIN orders o ON o.id = sc.order_id
+                                LEFT JOIN tab t ON t.id = sc.tab_id
+                                LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
+                                WHERE sc.venue_id = ?
+                                  AND sc.order_id = ?
+                                  AND sc.reason = 'BILL'
+                                  AND sc.status IN ('NEW', 'ACK')
+                                ORDER BY sc.created_at DESC, sc.id DESC
+                                $forUpdateClause
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.setLong(2, orderId)
+                                statement.executeQuery().use { rs ->
+                                    buildList {
+                                        while (rs.next()) {
+                                            val fromStatus =
+                                                StaffCallStatus.fromDb(rs.getString("status"))
+                                                    ?: StaffCallStatus.NEW
+                                            add(
+                                                CompletedStaffCallStatusUpdate(
+                                                    fromStatus = fromStatus,
+                                                    result =
+                                                        StaffCallStatusUpdateResult(
+                                                            staffCallId = rs.getLong("id"),
+                                                            status = StaffCallStatus.DONE,
+                                                            applied = true,
+                                                            tableNumber = rs.getInt("table_number"),
+                                                            reason = StaffCallReason.BILL,
+                                                            comment = rs.getString("comment"),
+                                                            orderId = rs.getNullableLong("order_id"),
+                                                            tabId = rs.getNullableLong("tab_id"),
+                                                            paymentMethod =
+                                                                rs.getString("payment_method")
+                                                                    ?.toBillPaymentMethod(),
+                                                            orderDisplayLabel =
+                                                                orderDisplayLabel(
+                                                                    displayNumber =
+                                                                        rs.getNullableInt("display_number"),
+                                                                    orderId = rs.getNullableLong("order_id"),
+                                                                ),
+                                                            tabDisplayLabel = tabDisplayLabel(rs.getString("tab_type")),
+                                                            guestDisplayName = rs.getString("guest_display_name"),
+                                                        ),
+                                                ),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        if (activeBillRequests.isEmpty()) {
+                            connection.commit()
+                            return@use emptyList()
+                        }
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE staff_calls
+                                SET status = 'DONE'
+                                WHERE venue_id = ?
+                                  AND order_id = ?
+                                  AND reason = 'BILL'
+                                  AND status IN ('NEW', 'ACK')
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.setLong(2, orderId)
+                                statement.executeUpdate()
+                            }
+                        if (updated != activeBillRequests.size) {
+                            runCatching { connection.rollback() }
+                            throw DatabaseUnavailableException()
+                        }
+                        connection.commit()
+                        activeBillRequests
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun createGuestBillRequest(
         venueId: Long,
         tableId: Long,
@@ -831,6 +953,11 @@ data class StaffCallStatusUpdateResult(
     val orderDisplayLabel: String? = null,
     val tabDisplayLabel: String? = null,
     val guestDisplayName: String? = null,
+)
+
+data class CompletedStaffCallStatusUpdate(
+    val fromStatus: StaffCallStatus,
+    val result: StaffCallStatusUpdateResult,
 )
 
 private fun ResultSet.toStaffCallQueueItem(): StaffCallQueueItem {

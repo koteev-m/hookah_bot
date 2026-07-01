@@ -21218,6 +21218,11 @@ class TelegramBotRouter(
             return
         }
         if (detailBeforeUpdate.status == OrderWorkflowStatus.CLOSED) {
+            completeBillRequestsForClosedOrderFromStaffChat(
+                venueId = action.venueId,
+                orderId = action.orderId,
+                actorUserId = user.id,
+            )
             editStaffChatOrderBatchMessage(
                 chatId = chatId,
                 messageId = messageId,
@@ -21248,6 +21253,11 @@ class TelegramBotRouter(
         }
         if (!updated.applied) {
             if (updated.status == OrderWorkflowStatus.CLOSED) {
+                completeBillRequestsForClosedOrderFromStaffChat(
+                    venueId = action.venueId,
+                    orderId = action.orderId,
+                    actorUserId = user.id,
+                )
                 editStaffChatOrderBatchMessage(
                     chatId = chatId,
                     messageId = messageId,
@@ -21263,6 +21273,11 @@ class TelegramBotRouter(
             }
             return
         }
+        completeBillRequestsForClosedOrderFromStaffChat(
+            venueId = action.venueId,
+            orderId = action.orderId,
+            actorUserId = user.id,
+        )
         notifyGuestsAboutOrderClosed(detailBeforeUpdate)
         editStaffChatOrderBatchMessage(
             chatId = chatId,
@@ -21274,6 +21289,40 @@ class TelegramBotRouter(
             replyMarkup = null,
         )
         enqueueCallbackAnswer(chatId, callbackQueryId, text = "Счёт закрыт")
+    }
+
+    private suspend fun completeBillRequestsForClosedOrderFromStaffChat(
+        venueId: Long,
+        orderId: Long,
+        actorUserId: Long,
+    ) {
+        val completed =
+            try {
+                staffCallRepository.completeActiveBillRequestsForOrder(
+                    venueId = venueId,
+                    orderId = orderId,
+                )
+            } catch (e: DatabaseUnavailableException) {
+                logger.warn(
+                    "Failed to complete bill requests after staff-chat order close venue_id={} order_id={}: {}",
+                    venueId,
+                    orderId,
+                    sanitizeTelegramForLog(e.message),
+                )
+                logger.debugTelegramException(e) { "complete bill requests after staff-chat order close" }
+                emptyList()
+            }
+        completed.forEach { completion ->
+            appendStaffCallStatusAuditBestEffort(
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                venueId = venueId,
+                source = STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT,
+                fromStatus = completion.fromStatus,
+                result = completion.result,
+                logger = logger,
+            )
+        }
     }
 
     private suspend fun handleStaffChatStaffCallAction(

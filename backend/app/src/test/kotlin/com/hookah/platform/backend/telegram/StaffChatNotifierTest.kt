@@ -938,10 +938,10 @@ class StaffChatNotifierTest {
             val payload = payloadSlot.captured
             assertTrue(payload.contains("\"message_id\":55"), payload)
             assertTrue(payload.contains("Оперативно"), payload)
-            assertTrue(payload.contains("Запрос счёта: Личный счёт"), payload)
-            assertTrue(payload.contains("Картой на месте"), payload)
+            assertTrue(payload.contains("🧾 Запрос счёта: Личный счёт"), payload)
+            assertTrue(payload.contains("💳 Картой на месте"), payload)
             assertTrue(payload.contains("к оплате 30 ₽"), payload)
-            assertTrue(payload.contains("✅ Принять счёт"), payload)
+            assertTrue(payload.contains("✅ Принял запрос счёта"), payload)
             assertTrue(payload.contains("sc_call_ack:1:6"), payload)
             coVerify(exactly = 0) { notificationRepository.tryClaimAndEnqueue(any(), any(), any(), any()) }
         }
@@ -1003,7 +1003,7 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("Вызов: Консультация"), payload)
+            assertTrue(payload.contains("🚨 Вызов персонала: Консультация"), payload)
             assertTrue(payload.contains("Подойдите"), payload)
             assertTrue(payload.contains("✅ Принять вызов"), payload)
             assertTrue(payload.contains("sc_call_ack:1:8"), payload)
@@ -1086,11 +1086,159 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("Запрос счёта: Личный счёт"), payload)
-            assertTrue(payload.contains("Вызов: Консультация"), payload)
+            assertTrue(payload.contains("🧾 Запрос счёта: Личный счёт"), payload)
+            assertTrue(payload.contains("🚨 Вызов персонала: Консультация"), payload)
             assertFalse(payload.contains("sc_call_ack:1:6"), payload)
             assertFalse(payload.contains("sc_call_ack:1:8"), payload)
             assertTrue(payload.contains("sc_ob_a:1:10"), payload)
+        }
+
+    @Test
+    fun `acked bill request omits done button when close bill action is available`() =
+        runBlocking {
+            val staffCallRepository: StaffCallRepository = mockk()
+            val notifier = notifierWithActivity(staffCallRepository = staffCallRepository)
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns VenueShort(1L, "Venue", 777L)
+            coEvery {
+                staffCallRepository.listOrderActivity(1L, 2L, null, 5)
+            } returns
+                listOf(
+                    StaffOrderActivityItem(
+                        staffCallId = 6L,
+                        reason = StaffCallReason.BILL,
+                        comment = null,
+                        status = StaffCallStatus.ACK,
+                        createdAt = Instant.parse("2026-06-05T12:35:00Z"),
+                        tabId = 91L,
+                        paymentMethod = BillPaymentMethod.CASH,
+                        tabDisplayLabel = "Личный счёт",
+                    ),
+                )
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(orderId = 2L, venueId = 1L, chatId = 777L, messageId = 55L)
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.enqueueOrderMessage(2L, 1L, 777L, "editMessageText", capture(payloadSlot))
+            } returns true
+
+            val result =
+                notifier.notifyBillUpdatedNow(
+                    StaffBillUpdatedNotification(
+                        venueId = 1L,
+                        orderId = 2L,
+                        displayNumber = 12,
+                        tableLabel = "7",
+                        change = StaffBillUpdateChange.STATUS_UPDATED,
+                        status = OrderWorkflowStatus.DELIVERED,
+                        actionBatchId = 10L,
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+                        bill =
+                            billSnapshot(
+                                grossTotalMinor = 3_000,
+                                finalPayableTotalMinor = 3_000,
+                                activeItems =
+                                    listOf(
+                                        activeItemSnapshot(
+                                            batchId = 10L,
+                                            name = "Чай",
+                                            lineGrossMinor = 3_000,
+                                            linePayableMinor = 3_000,
+                                        ),
+                                    ),
+                            ),
+                        batches =
+                            listOf(
+                                StaffOrderBatchLiveBlock(
+                                    batchId = 10L,
+                                    label = "Основной заказ",
+                                    status = OrderWorkflowStatus.DELIVERED,
+                                    comment = null,
+                                    tabId = 91L,
+                                ),
+                            ),
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("🧾 Запрос счёта: Личный счёт"), payload)
+            assertTrue(payload.contains("💵 Наличными"), payload)
+            assertTrue(payload.contains("🧾 Закрыть счёт"), payload)
+            assertTrue(payload.contains("sc_oc_ask:1:2:a"), payload)
+            assertFalse(payload.contains("sc_call_done:1:6"), payload)
+            assertFalse(payload.contains("Счёт вынесен"), payload)
+        }
+
+    @Test
+    fun `acked generic staff call keeps done button on live order card`() =
+        runBlocking {
+            val staffCallRepository: StaffCallRepository = mockk()
+            val notifier = notifierWithActivity(staffCallRepository = staffCallRepository)
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns VenueShort(1L, "Venue", 777L)
+            coEvery {
+                staffCallRepository.listOrderActivity(1L, 2L, null, 5)
+            } returns
+                listOf(
+                    StaffOrderActivityItem(
+                        staffCallId = 8L,
+                        reason = StaffCallReason.COME,
+                        comment = "Подойдите",
+                        status = StaffCallStatus.ACK,
+                        createdAt = Instant.parse("2026-06-05T12:35:00Z"),
+                    ),
+                )
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(orderId = 2L, venueId = 1L, chatId = 777L, messageId = 55L)
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.enqueueOrderMessage(2L, 1L, 777L, "editMessageText", capture(payloadSlot))
+            } returns true
+
+            val result =
+                notifier.notifyBillUpdatedNow(
+                    StaffBillUpdatedNotification(
+                        venueId = 1L,
+                        orderId = 2L,
+                        displayNumber = 12,
+                        tableLabel = "7",
+                        change = StaffBillUpdateChange.STATUS_UPDATED,
+                        status = OrderWorkflowStatus.ACCEPTED,
+                        actionBatchId = 10L,
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+                        bill =
+                            billSnapshot(
+                                grossTotalMinor = 3_000,
+                                finalPayableTotalMinor = 3_000,
+                                activeItems =
+                                    listOf(
+                                        activeItemSnapshot(
+                                            batchId = 10L,
+                                            name = "Чай",
+                                            lineGrossMinor = 3_000,
+                                            linePayableMinor = 3_000,
+                                        ),
+                                    ),
+                            ),
+                        batches =
+                            listOf(
+                                StaffOrderBatchLiveBlock(
+                                    batchId = 10L,
+                                    label = "Основной заказ",
+                                    status = OrderWorkflowStatus.ACCEPTED,
+                                    comment = null,
+                                    tabId = 91L,
+                                ),
+                            ),
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("🚨 Вызов персонала: Консультация"), payload)
+            assertTrue(payload.contains("✅ Выполнено"), payload)
+            assertTrue(payload.contains("sc_call_done:1:8"), payload)
         }
 
     @Test

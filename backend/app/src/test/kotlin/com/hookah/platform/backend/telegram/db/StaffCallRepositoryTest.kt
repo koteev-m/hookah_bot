@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.telegram.BillPaymentMethod
 import com.hookah.platform.backend.telegram.StaffCallReason
 import kotlinx.coroutines.runBlocking
 import org.flywaydb.core.Flyway
@@ -110,6 +111,63 @@ class StaffCallRepositoryTest {
             assertEquals(fixture.staffCallId, calls.single().id)
             assertEquals("DONE", calls.single().status)
             assertEquals(fixture.tableId, calls.single().tableId)
+        }
+
+    @Test
+    fun `completeActiveBillRequestsForOrder marks only related active bill requests done`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-complete-bill")
+            val fixture = seedStaffCall(jdbcUrl, status = "DONE")
+            val repository = StaffCallRepository(dataSource(jdbcUrl))
+            val orderId = seedOrder(jdbcUrl, fixture)
+            val otherOrderId = seedOrder(jdbcUrl, fixture, status = "CLOSED")
+            val newBillCallId =
+                seedLinkedStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    orderId = orderId,
+                    reason = StaffCallReason.BILL,
+                    status = "NEW",
+                )
+            val ackBillCallId =
+                seedLinkedStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    orderId = orderId,
+                    reason = StaffCallReason.BILL,
+                    status = "ACK",
+                )
+            val genericCallId =
+                seedLinkedStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    orderId = orderId,
+                    reason = StaffCallReason.COME,
+                    status = "ACK",
+                )
+            val otherOrderBillCallId =
+                seedLinkedStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    orderId = otherOrderId,
+                    reason = StaffCallReason.BILL,
+                    status = "ACK",
+                )
+
+            val completed = repository.completeActiveBillRequestsForOrder(fixture.venueId, orderId)
+
+            assertEquals(setOf(newBillCallId, ackBillCallId), completed.map { it.result.staffCallId }.toSet())
+            assertEquals(setOf(StaffCallStatus.NEW, StaffCallStatus.ACK), completed.map { it.fromStatus }.toSet())
+            completed.forEach { completion ->
+                assertTrue(completion.result.applied)
+                assertEquals(StaffCallStatus.DONE, completion.result.status)
+                assertEquals(StaffCallReason.BILL, completion.result.reason)
+                assertEquals(orderId, completion.result.orderId)
+            }
+            assertEquals("DONE", fetchStaffCallStatus(jdbcUrl, newBillCallId))
+            assertEquals("DONE", fetchStaffCallStatus(jdbcUrl, ackBillCallId))
+            assertEquals("ACK", fetchStaffCallStatus(jdbcUrl, genericCallId))
+            assertEquals("ACK", fetchStaffCallStatus(jdbcUrl, otherOrderBillCallId))
         }
 
     private fun migratedJdbcUrl(prefix: String): String {
@@ -233,6 +291,69 @@ class StaffCallRepositoryTest {
             )
         }
     }
+
+    private fun seedOrder(
+        jdbcUrl: String,
+        fixture: StaffCallFixture,
+        status: String = "ACTIVE",
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO orders (venue_id, table_id, table_session_id, status)
+                VALUES (?, ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, fixture.venueId)
+                statement.setLong(2, fixture.tableId)
+                statement.setLong(3, fixture.tableSessionId)
+                statement.setString(4, status)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert order")
+                }
+            }
+        }
+
+    private fun seedLinkedStaffCall(
+        jdbcUrl: String,
+        fixture: StaffCallFixture,
+        orderId: Long,
+        reason: StaffCallReason,
+        status: String,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO staff_calls (
+                    venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, order_id,
+                    payment_method, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, fixture.venueId)
+                statement.setLong(2, fixture.tableId)
+                statement.setLong(3, fixture.tableSessionId)
+                statement.setLong(4, GUEST_USER_ID)
+                statement.setString(5, reason.name)
+                statement.setString(6, "Комментарий")
+                statement.setString(7, status)
+                statement.setLong(8, orderId)
+                if (reason == StaffCallReason.BILL) {
+                    statement.setString(9, BillPaymentMethod.CARD.name)
+                } else {
+                    statement.setNull(9, java.sql.Types.VARCHAR)
+                }
+                statement.setTimestamp(10, Timestamp.from(Instant.now()))
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert linked staff call")
+                }
+            }
+        }
 
     private fun fetchStaffCallStatus(
         jdbcUrl: String,

@@ -516,7 +516,11 @@ class StaffChatNotifier(
                 webAppUrl = venueMiniAppUrl(event.venueId),
                 batchLabel = actionTarget.label,
                 pendingShiftExtensionRequestId = event.pendingShiftExtension?.requestId,
-                staffCallAction = staffOrderActivityInlineAction(event.venueId, activities),
+                staffCallAction =
+                    staffOrderActivityInlineAction(
+                        venueId = event.venueId,
+                        activities = activities,
+                    ),
             )
         val existingMessage = notificationRepository.findOrderMessage(event.orderId)
         val (method, payloadJson) =
@@ -651,12 +655,21 @@ class StaffChatNotifier(
         val target = active.singleOrNull() ?: return null
         val (text, callbackPrefix) =
             when (target.status) {
-                StaffCallStatus.NEW ->
-                    (if (target.reason == StaffCallReason.BILL) "✅ Принять счёт" else "✅ Принять вызов") to
-                        "sc_call_ack"
-                StaffCallStatus.ACK ->
-                    (if (target.reason == StaffCallReason.BILL) "✅ Счёт вынесен" else "✅ Выполнено") to
-                        "sc_call_done"
+                StaffCallStatus.NEW -> {
+                    val text =
+                        if (target.reason == StaffCallReason.BILL) {
+                            "✅ Принял запрос счёта"
+                        } else {
+                            "✅ Принять вызов"
+                        }
+                    text to "sc_call_ack"
+                }
+                StaffCallStatus.ACK -> {
+                    if (target.reason == StaffCallReason.BILL) {
+                        return null
+                    }
+                    "✅ Выполнено" to "sc_call_done"
+                }
                 else -> return null
             }
         return StaffChatStaffCallInlineAction(
@@ -1027,11 +1040,11 @@ private fun formatStaffOrderActivities(activities: List<StaffOrderActivityBlock>
 
 private fun formatStaffOrderBillRequestActivity(activity: StaffOrderActivityBlock): String =
     buildString {
-        append("• Запрос счёта")
+        append("• 🧾 Запрос счёта")
         activity.accountLabel?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
         append(" — ").append(staffCallStatusLabel(activity.status))
         activity.paymentMethod?.let { method ->
-            append(", ").append(billPaymentMethodLabel(method))
+            append(", ").append(staffOrderActivityPaymentMethodLabel(method))
         }
         if (activity.billTotalMinor != null && !activity.billCurrency.isNullOrBlank()) {
             append(", к оплате ").append(formatStaffChatMoney(activity.billTotalMinor, activity.billCurrency))
@@ -1043,7 +1056,7 @@ private fun formatStaffOrderBillRequestActivity(activity: StaffOrderActivityBloc
 
 private fun formatStaffOrderStaffCallActivity(activity: StaffOrderActivityBlock): String =
     buildString {
-        append("• Вызов: ").append(staffCallReasonLabel(activity.reason))
+        append("• 🚨 Вызов персонала: ").append(staffCallReasonLabel(activity.reason))
         append(" — ").append(staffCallStatusLabel(activity.status))
         staffCallUserFacingComment(activity.comment)?.let { comment ->
             append(", ").append(comment.take(120))
@@ -1051,6 +1064,13 @@ private fun formatStaffOrderStaffCallActivity(activity: StaffOrderActivityBlock)
         activity.guestDisplayName?.takeIf { it.isNotBlank() }?.let { guest ->
             append(", гость ").append(guest)
         }
+    }
+
+private fun staffOrderActivityPaymentMethodLabel(method: BillPaymentMethod): String =
+    when (method) {
+        BillPaymentMethod.CARD -> "💳 Картой на месте"
+        BillPaymentMethod.CASH -> "💵 Наличными"
+        BillPaymentMethod.UNKNOWN -> "❓ Пока не знаю"
     }
 
 private fun staffCallStatusLabel(status: StaffCallStatus): String =

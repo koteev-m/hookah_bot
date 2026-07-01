@@ -1187,6 +1187,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueOrdersRepository = venueOrdersRepository,
                     outboxEnqueuer = telegramOutboxEnqueuer,
                     staffBillUpdateNotifier = overrides.staffBillUpdateNotifier ?: staffChatNotifier,
+                    staffCallRepository = staffCallRepository,
+                    auditLogRepository = auditLogRepository,
                 )
                 venueBookingRoutes(
                     venueAccessRepository = venueAccessRepository,

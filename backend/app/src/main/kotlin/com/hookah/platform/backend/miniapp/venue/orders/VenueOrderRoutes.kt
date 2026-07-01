@@ -3,9 +3,12 @@ package com.hookah.platform.backend.miniapp.venue.orders
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_VENUE_MINIAPP
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.VenueRole
+import com.hookah.platform.backend.miniapp.venue.appendStaffCallStatusAuditBestEffort
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
@@ -13,7 +16,9 @@ import com.hookah.platform.backend.telegram.StaffBillUpdateChange
 import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffBillUpdatedNotification
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import com.hookah.platform.backend.telegram.toStaffOrderBatchLiveBlocks
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -22,6 +27,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import org.slf4j.LoggerFactory
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
@@ -29,12 +35,15 @@ private const val DEFAULT_QUEUE_LIMIT = 20
 private const val MAX_QUEUE_LIMIT = 100
 private const val DEFAULT_CURRENCY = "RUB"
 private val instantFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+private val venueOrderRoutesLogger = LoggerFactory.getLogger("VenueOrderRoutes")
 
 fun Route.venueOrderRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueOrdersRepository: VenueOrdersRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer? = null,
     staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
+    staffCallRepository: StaffCallRepository? = null,
+    auditLogRepository: AuditLogRepository? = null,
 ) {
     route("/venue") {
         get("/orders/queue") {
@@ -201,6 +210,13 @@ fun Route.venueOrderRoutes(
                 throw InvalidInputException("Invalid status transition")
             }
             if (nextStatus == OrderWorkflowStatus.CLOSED) {
+                completeBillRequestsForClosedOrder(
+                    staffCallRepository = staffCallRepository,
+                    auditLogRepository = auditLogRepository,
+                    venueId = venueId,
+                    orderId = orderId,
+                    actorUserId = userId,
+                )
                 notifyGuestsAboutOrderClosed(outboxEnqueuer, detailBeforeUpdate)
             } else {
                 notifyGuestAboutOrderStatusChange(outboxEnqueuer, detailBeforeUpdate, nextStatus)
@@ -282,6 +298,13 @@ fun Route.venueOrderRoutes(
             if (!result.applied) {
                 throw InvalidInputException("Invalid status transition")
             }
+            completeBillRequestsForClosedOrder(
+                staffCallRepository = staffCallRepository,
+                auditLogRepository = auditLogRepository,
+                venueId = venueId,
+                orderId = orderId,
+                actorUserId = userId,
+            )
             notifyGuestsAboutOrderClosed(outboxEnqueuer, detailBeforeUpdate)
             notifyStaffChatOrderLiveMessage(
                 staffBillUpdateNotifier = staffBillUpdateNotifier,
@@ -842,6 +865,42 @@ private fun OrderBillSelectedOptionSnapshot.toDto(): OrderItemSelectedOptionDto 
         name = name,
         priceDeltaMinor = priceDeltaMinor,
     )
+
+private suspend fun completeBillRequestsForClosedOrder(
+    staffCallRepository: StaffCallRepository?,
+    auditLogRepository: AuditLogRepository?,
+    venueId: Long,
+    orderId: Long,
+    actorUserId: Long,
+) {
+    val repository = staffCallRepository ?: return
+    val completed =
+        runCatching {
+            repository.completeActiveBillRequestsForOrder(
+                venueId = venueId,
+                orderId = orderId,
+            )
+        }.onFailure { error ->
+            venueOrderRoutesLogger.warn(
+                "Failed to complete bill requests for closed order venue_id={} order_id={}: {}",
+                venueId,
+                orderId,
+                sanitizeTelegramForLog(error.message),
+            )
+        }.getOrDefault(emptyList())
+    val auditRepository = auditLogRepository ?: return
+    completed.forEach { completion ->
+        appendStaffCallStatusAuditBestEffort(
+            auditLogRepository = auditRepository,
+            actorUserId = actorUserId,
+            venueId = venueId,
+            source = STAFF_CALL_AUDIT_SOURCE_VENUE_MINIAPP,
+            fromStatus = completion.fromStatus,
+            result = completion.result,
+            logger = venueOrderRoutesLogger,
+        )
+    }
+}
 
 private fun formatInstant(value: java.time.Instant): String {
     return instantFormatter.format(value.atOffset(ZoneOffset.UTC))
