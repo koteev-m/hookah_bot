@@ -40,7 +40,7 @@ Venue Owner открывает Venue Mini App через inline `web_app` entry,
 Доступные owner areas:
 - dashboard;
 - orders queue/detail;
-- full bill;
+- full bill with human order display label, personal/shared account context, discounts, service charges and excluded/non-payable items;
 - bill controls: manual item discount, exclude/restore item;
 - close bill/order;
 - bookings queue/actions;

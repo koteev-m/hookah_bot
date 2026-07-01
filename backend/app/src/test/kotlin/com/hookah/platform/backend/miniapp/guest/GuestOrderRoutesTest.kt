@@ -162,6 +162,8 @@ class GuestOrderRoutesTest {
             val activePayload = json.decodeFromString(ActiveOrderResponse.serializer(), activeResponse.bodyAsText())
             val order = activePayload.order
             assertNotNull(order)
+            assertEquals(1, order.displayNumber)
+            assertNotNull(order.displayDate)
             assertEquals(tableSessionId, order.tableSessionId)
             assertEquals(personalTabId, order.tabId)
             assertEquals(1, order.batches.size)
@@ -2030,6 +2032,8 @@ class GuestOrderRoutesTest {
             val payload = json.decodeFromString(ActiveOrderResponse.serializer(), afterJoinResponse.bodyAsText())
             val order = payload.order
             assertNotNull(order)
+            assertEquals(1, order.displayNumber)
+            assertNotNull(order.displayDate)
             assertEquals(tableSessionId, order.tableSessionId)
             assertEquals(sharedTabId, order.tabId)
             assertEquals(1, order.batches.size)

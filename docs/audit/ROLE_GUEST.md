@@ -50,11 +50,12 @@ QR/table Guest Mini App:
 - cart preview backend-owned;
 - submit order/add batch;
 - fallback chat order emits `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`;
-- active order screen с refresh/polling;
+- active order screen с refresh/polling, human order label `Заказ №...`, selected account label `Личный счёт` / `Общий счёт`, selected-tab bill totals, discounts and service charges;
 - staff call flow as transient compose + compact NEW/ACK/DONE status;
 - `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when current active order/bill state makes it actionable, and hidden again after bill/order close;
 - `🚪 Завершить визит` в active table context очищает только текущий guest restore/local context и возвращает в обычный каталог. Empty personal tab/no order allows exit; active order/bill or active `NEW`/`ACK` staff call blocks with clear copy.
 - закрытый счёт больше не должен выглядеть активным.
+- Guest-visible account labels must not expose raw `tabId`; technical ids remain internal/request-only.
 
 Account/bookings:
 - guest booking MVP присутствует: create/list active bookings/status refresh, cancel/accept changed time where supported;

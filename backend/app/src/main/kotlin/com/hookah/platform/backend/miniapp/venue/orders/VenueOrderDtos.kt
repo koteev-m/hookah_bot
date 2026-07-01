@@ -64,6 +64,9 @@ data class OrderPendingShiftExtensionDto(
 @Serializable
 data class OrderBatchDto(
     val batchId: Long,
+    val tabId: Long? = null,
+    val tabType: String? = null,
+    val tabDisplayLabel: String? = null,
     val status: String,
     val source: String,
     val comment: String?,
@@ -147,6 +150,9 @@ data class OrderBillServiceChargeDto(
 data class OrderBillExcludedItemDto(
     val batchId: Long,
     val batchLabel: String,
+    val tabId: Long? = null,
+    val tabType: String? = null,
+    val tabDisplayLabel: String? = null,
     val batchItemId: Long,
     val itemId: Long,
     val name: String,

@@ -601,7 +601,9 @@ class VenueOrderRoutesTest {
             val canceledItemId = seedMenu(jdbcUrl, venueId, "Лимонад", 40_000)
             val rejectedItemId = seedMenu(jdbcUrl, venueId, "Закуска", 70_000)
             val orderId = seedOrder(jdbcUrl, venueId, tableId, "ACTIVE", displayNumber = 42)
-            val activeBatchId = seedBatch(jdbcUrl, orderId, "NEW", Instant.now())
+            val personalTabId = seedTab(jdbcUrl, venueId, orderId, "PERSONAL", GUEST_USER_ID)
+            val sharedTabId = seedTab(jdbcUrl, venueId, orderId, "SHARED", GUEST_USER_ID + 1)
+            val activeBatchId = seedBatch(jdbcUrl, orderId, "NEW", Instant.now(), tabId = personalTabId)
             val normalBatchItemId =
                 seedBatchItem(
                     jdbcUrl = jdbcUrl,
@@ -629,7 +631,8 @@ class VenueOrderRoutesTest {
                 itemStatus = "CANCELED",
                 canceledReasonText = "Нет в наличии",
             )
-            val rejectedBatchId = seedBatch(jdbcUrl, orderId, "REJECTED", Instant.now().plusSeconds(1))
+            val rejectedBatchId =
+                seedBatch(jdbcUrl, orderId, "REJECTED", Instant.now().plusSeconds(1), tabId = sharedTabId)
             markBatchRejected(jdbcUrl, rejectedBatchId, "NO_STOCK", "Нет позиции")
             seedBatchItem(
                 jdbcUrl = jdbcUrl,
@@ -672,6 +675,14 @@ class VenueOrderRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
             val payload = json.decodeFromString(OrderDetailResponse.serializer(), response.bodyAsText())
             assertEquals(42, payload.order.displayNumber)
+            val activeBatch = payload.order.batches.first { it.batchId == activeBatchId }
+            assertEquals(personalTabId, activeBatch.tabId)
+            assertEquals("PERSONAL", activeBatch.tabType)
+            assertEquals("Личный счёт гостя", activeBatch.tabDisplayLabel)
+            val rejectedBatch = payload.order.batches.first { it.batchId == rejectedBatchId }
+            assertEquals(sharedTabId, rejectedBatch.tabId)
+            assertEquals("SHARED", rejectedBatch.tabType)
+            assertEquals("Общий счёт", rejectedBatch.tabDisplayLabel)
             val bill = payload.order.bill
             assertEquals(160_000, bill.grossTotalMinor)
             assertEquals(11_000, bill.manualDiscountTotalMinor)
@@ -689,17 +700,19 @@ class VenueOrderRoutesTest {
             assertEquals("Чай", excludedItem.name)
             assertEquals(30_000, excludedItem.lineGrossMinor)
             assertEquals("Не учитывать", excludedItem.reason)
+            assertEquals("Личный счёт гостя", excludedItem.tabDisplayLabel)
             val canceledItem = assertNotNull(excludedByStatus["canceled"])
             assertEquals("Лимонад", canceledItem.name)
             assertEquals(40_000, canceledItem.lineGrossMinor)
             assertEquals("Нет в наличии", canceledItem.reason)
+            assertEquals("Личный счёт гостя", canceledItem.tabDisplayLabel)
             val rejectedItem = assertNotNull(excludedByStatus["rejected_batch"])
             assertEquals("Закуска", rejectedItem.name)
             assertEquals(70_000, rejectedItem.lineGrossMinor)
             assertEquals("Нет позиции", rejectedItem.reason)
+            assertEquals("Общий счёт", rejectedItem.tabDisplayLabel)
             val normalItem =
-                payload.order.batches.first { it.batchId == activeBatchId }
-                    .items.first { it.itemId == normalItemId }
+                activeBatch.items.first { it.itemId == normalItemId }
             assertEquals(110_000, normalItem.priceMinor)
             assertEquals("RUB", normalItem.currency)
             assertEquals(110_000, normalItem.lineGrossMinor)
@@ -708,8 +721,7 @@ class VenueOrderRoutesTest {
             assertEquals(88_000, normalItem.linePayableMinor)
             assertEquals(10, normalItem.discountPercent)
             val loyaltyItem =
-                payload.order.batches.first { it.batchId == activeBatchId }
-                    .items.first { it.itemId == loyaltyItemId }
+                activeBatch.items.first { it.itemId == loyaltyItemId }
             assertEquals(50_000, loyaltyItem.lineGrossMinor)
             assertEquals(0, loyaltyItem.manualDiscountMinor)
             assertEquals(50_000, loyaltyItem.promoDiscountMinor)
@@ -1531,31 +1543,87 @@ class VenueOrderRoutesTest {
         status: String,
         createdAt: Instant,
         authorUserId: Long? = null,
+        tabId: Long? = null,
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             return connection.prepareStatement(
                 """
                 INSERT INTO order_batches (
-                    order_id, created_at, updated_at, author_user_id, source, status, guest_comment
-                ) VALUES (?, ?, ?, ?, 'MINIAPP', ?, NULL)
+                    order_id, tab_id, created_at, updated_at, author_user_id, source, status, guest_comment
+                ) VALUES (?, ?, ?, ?, ?, 'MINIAPP', ?, NULL)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
                 val ts = Timestamp.from(createdAt)
                 statement.setLong(1, orderId)
-                statement.setTimestamp(2, ts)
-                statement.setTimestamp(3, ts)
-                if (authorUserId == null) {
-                    statement.setNull(4, java.sql.Types.BIGINT)
+                if (tabId == null) {
+                    statement.setNull(2, java.sql.Types.BIGINT)
                 } else {
-                    statement.setLong(4, authorUserId)
+                    statement.setLong(2, tabId)
                 }
-                statement.setString(5, status)
+                statement.setTimestamp(3, ts)
+                statement.setTimestamp(4, ts)
+                if (authorUserId == null) {
+                    statement.setNull(5, java.sql.Types.BIGINT)
+                } else {
+                    statement.setLong(5, authorUserId)
+                }
+                statement.setString(6, status)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) rs.getLong(1) else error("Failed to insert batch")
                 }
             }
+        }
+    }
+
+    private fun seedTab(
+        jdbcUrl: String,
+        venueId: Long,
+        orderId: Long,
+        type: String,
+        ownerUserId: Long,
+    ): Long {
+        seedUser(jdbcUrl, ownerUserId)
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val tableSessionId =
+                connection.prepareStatement(
+                    "SELECT table_session_id FROM orders WHERE id = ? AND venue_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, orderId)
+                    statement.setLong(2, venueId)
+                    statement.executeQuery().use { rs ->
+                        if (rs.next()) rs.getLong("table_session_id") else error("Missing order session")
+                    }
+                }
+            val tabId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
+                    VALUES (?, ?, ?, ?, 'ACTIVE')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableSessionId)
+                    statement.setString(3, type)
+                    statement.setLong(4, ownerUserId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert tab")
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO tab_member (tab_id, user_id, role)
+                VALUES (?, ?, 'OWNER')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tabId)
+                statement.setLong(2, ownerUserId)
+                statement.executeUpdate()
+            }
+            return tabId
         }
     }
 
@@ -1970,6 +2038,9 @@ class VenueOrderRoutesTest {
     @Serializable
     private data class OrderBatchDto(
         val batchId: Long,
+        val tabId: Long? = null,
+        val tabType: String? = null,
+        val tabDisplayLabel: String? = null,
         val promotionDiscounts: List<OrderBillDiscountDto> = emptyList(),
         val items: List<OrderBatchItemDto>,
     )
@@ -2020,6 +2091,9 @@ class VenueOrderRoutesTest {
     private data class OrderBillExcludedItemDto(
         val batchItemId: Long = 0,
         val itemId: Long = 0,
+        val tabId: Long? = null,
+        val tabType: String? = null,
+        val tabDisplayLabel: String? = null,
         val status: String,
         val name: String,
         val qty: Int = 0,

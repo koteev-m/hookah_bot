@@ -284,16 +284,25 @@ function renderBill(container: HTMLElement, order: OrderDetailDto) {
     appendBillRow(container, charge.label, formatMoney(charge.totalMinor, charge.currency))
   })
   appendBillRow(container, 'К оплате', formatMoney(bill.finalPayableTotalMinor, bill.currency), true)
+  if (order.status === 'closed') {
+    container.appendChild(
+      el('p', {
+        className: 'venue-order-sub',
+        text: 'Счёт закрыт. Состав и итог доступны только для просмотра.'
+      })
+    )
+  }
 
   if (bill.excludedItems.length) {
     const excluded = el('div', { className: 'order-excluded-list' })
     excluded.appendChild(el('p', { className: 'order-batch-comment', text: 'Не входят в оплату' }))
     bill.excludedItems.forEach((item) => {
       const reason = item.reason ? ` · ${item.reason}` : ''
+      const tabLabel = item.tabDisplayLabel ? `${item.tabDisplayLabel} · ` : ''
       excluded.appendChild(
         el('p', {
           className: 'venue-order-sub',
-          text: `${item.batchLabel}: ${item.name} ×${item.qty} — ${formatMoney(item.lineGrossMinor, item.currency)} · ${nonPayableStatusLabel(item.status)}${reason}`
+          text: `${tabLabel}${item.batchLabel}: ${item.name} ×${item.qty} — ${formatMoney(item.lineGrossMinor, item.currency)} · ${nonPayableStatusLabel(item.status)}${reason}`
         })
       )
     })
@@ -421,6 +430,9 @@ function renderBatches(
       el('strong', { text: index === 0 ? 'Основная заявка' : `Дозаказ ${index}` }),
       el('span', { text: orderStatusLabel(batch.status) })
     )
+    const tabContext = batch.tabDisplayLabel
+      ? el('p', { className: 'venue-order-sub', text: batch.tabDisplayLabel })
+      : null
     const comment = el('p', { className: 'order-batch-comment', text: batch.comment ?? 'Комментарий: —' })
     const list = el('div', { className: 'order-items' })
     batch.items.forEach((item) => {
@@ -447,7 +459,7 @@ function renderBatches(
       }
       list.appendChild(row)
     })
-    append(card, header, comment, list)
+    append(card, header, tabContext, comment, list)
     if (batch.rejectedReasonCode) {
       const rejectMeta = el('p', { className: 'venue-order-sub', text: `Отказ: ${batch.rejectedReasonCode}${batch.rejectedReasonText ? ` · ${batch.rejectedReasonText}` : ''}` })
       card.appendChild(rejectMeta)

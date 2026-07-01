@@ -96,6 +96,7 @@ MUST:
 SHOULD:
 - Out-of-stock handling via stop-list, not via last-minute rejects.
 - Staff-facing live order messages keep the main order and every add-batch/doporder visually separated, with batch status/action context clear to operators. Order/bill totals still come from the canonical backend bill snapshot.
+- Guest/staff bill identity parity is code-test-backed as of 2026-07-01: Guest Mini App, Venue Mini App and Telegram staff full-bill surfaces use human order labels (`Заказ №<display_number>`) when present. Guest Mini App shows the selected/current tab bill with a human account label (`Личный счёт` / `Общий счёт`) and does not use raw `tabId` or technical `orderId` as the primary visible identity. Venue Mini App full bill shows included/excluded/discounted items, service charges, closed-state copy and human personal/shared account context for batches and non-payable rows.
 
 ## Block 6 — Split bill (personal/shared) with anti-abuse
 MUST:
@@ -105,6 +106,7 @@ MUST:
 - PostgreSQL and the H2 test schema both enforce one active `PERSONAL` tab per `table_session_id + owner_user_id`.
 SHOULD:
 - Show clearly “which tab you’re ordering to” in UI.
+- Visible account labels must be human-readable. Raw `tabId` may stay in API payloads, selectors, internal state and debug logs, but not as customer/staff-facing account copy.
 
 ## Block 7 — Venue onboarding & settings
 MUST:

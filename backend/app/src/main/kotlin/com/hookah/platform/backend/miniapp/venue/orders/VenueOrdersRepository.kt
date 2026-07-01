@@ -111,6 +111,9 @@ data class OrderPendingShiftExtension(
 
 data class OrderBatchDetail(
     val batchId: Long,
+    val tabId: Long? = null,
+    val tabType: String? = null,
+    val tabOwnerUserId: Long? = null,
     val status: OrderWorkflowStatus,
     val source: String,
     val comment: String?,
@@ -705,6 +708,9 @@ class VenueOrdersRepository(
                         connection.prepareStatement(
                             """
                             SELECT ob.id,
+                                   ob.tab_id,
+                                   t.type AS tab_type,
+                                   t.owner_user_id AS tab_owner_user_id,
                                    ob.status,
                                    ob.source,
                                    ob.guest_comment,
@@ -724,6 +730,7 @@ class VenueOrdersRepository(
                                    ) AS guest_user_id,
                                    u.guest_display_name AS guest_display_name
                             FROM order_batches ob
+                            LEFT JOIN tab t ON t.id = ob.tab_id
                             LEFT JOIN users u
                               ON u.telegram_user_id = COALESCE(
                                   ob.author_user_id,
@@ -749,6 +756,17 @@ class VenueOrdersRepository(
                                     result.add(
                                         OrderBatchDetail(
                                             batchId = rs.getLong("id"),
+                                            tabId =
+                                                rs.getLong("tab_id").let {
+                                                        value ->
+                                                    if (rs.wasNull()) null else value
+                                                },
+                                            tabType = rs.getString("tab_type"),
+                                            tabOwnerUserId =
+                                                rs.getLong("tab_owner_user_id").let {
+                                                        value ->
+                                                    if (rs.wasNull()) null else value
+                                                },
                                             status = batchStatus,
                                             source = rs.getString("source"),
                                             comment = rs.getString("guest_comment"),

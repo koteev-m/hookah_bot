@@ -1230,17 +1230,33 @@ async function mockVenueShiftExtensionApi(
     const serviceChargeTotal = orderServiceCharges.reduce((sum, charge) => sum + charge.totalMinor, 0)
     return {
       grossTotalMinor: 120000,
-      manualDiscountTotalMinor: 0,
+      manualDiscountTotalMinor: 12000,
       promoDiscountTotalMinor: 0,
       loyaltyDiscountTotalMinor: 0,
-      excludedTotalMinor: 0,
+      excludedTotalMinor: 30000,
       canceledTotalMinor: 0,
       rejectedTotalMinor: 0,
-      finalPayableTotalMinor: 120000 + serviceChargeTotal,
+      finalPayableTotalMinor: 108000 + serviceChargeTotal,
       currency: 'RUB',
       promoDiscounts: [],
       loyaltyDiscounts: [],
-      excludedItems: [],
+      excludedItems: [
+        {
+          batchId: 300,
+          batchLabel: 'Основной заказ',
+          tabId: 88,
+          tabType: 'PERSONAL',
+          tabDisplayLabel: 'Личный счёт гостя',
+          batchItemId: 701,
+          itemId: 101,
+          name: 'Чай',
+          qty: 1,
+          lineGrossMinor: 30000,
+          currency: 'RUB',
+          status: 'excluded',
+          reason: 'Не учитывать'
+        }
+      ],
       serviceCharges: orderServiceCharges
     }
   }
@@ -1286,6 +1302,9 @@ async function mockVenueShiftExtensionApi(
           batches: [
             {
               batchId: 300,
+              tabId: 88,
+              tabType: 'PERSONAL',
+              tabDisplayLabel: 'Личный счёт гостя',
               status: 'accepted',
               source: 'MINIAPP',
               comment: null,
@@ -1301,10 +1320,26 @@ async function mockVenueShiftExtensionApi(
                   priceMinor: 120000,
                   currency: 'RUB',
                   lineGrossMinor: 120000,
+                  manualDiscountMinor: 12000,
+                  promoDiscountMinor: 0,
+                  linePayableMinor: 108000,
+                  isExcluded: false,
+                  discountPercent: 10,
+                  itemStatus: 'active'
+                },
+                {
+                  batchItemId: 701,
+                  itemId: 101,
+                  name: 'Чай',
+                  qty: 1,
+                  priceMinor: 30000,
+                  currency: 'RUB',
+                  lineGrossMinor: 30000,
                   manualDiscountMinor: 0,
                   promoDiscountMinor: 0,
-                  linePayableMinor: 120000,
-                  isExcluded: false,
+                  linePayableMinor: 0,
+                  isExcluded: true,
+                  excludedReasonText: 'Не учитывать',
                   itemStatus: 'active'
                 }
               ]
@@ -3060,10 +3095,14 @@ test('guest mini app selects item flavor and submits structured selected option'
 
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
   await expect(page.getByText('Вкус: Яблоко')).toHaveCount(3)
   await expect(page.getByText('Вкус: Мята')).toBeVisible()
   await expect(page.getByText('Пожелание: поменьше холодка')).toBeVisible()
   await expect(page.getByText('Пожелание: без мяты')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заказ №900' })).toHaveCount(0)
+  await expect(page.getByText('Заявка №333')).toHaveCount(0)
+  await expect(page.getByText('Общий счёт #88')).toHaveCount(0)
   await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
 
   expect(api.getAddBatchRequests()).toHaveLength(1)
@@ -3164,7 +3203,15 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await expect(page.getByText('Запрос на продление')).toBeVisible()
   await page.getByRole('button', { name: 'Заказы' }).click()
   await expect(page.getByText('Запрос на продление')).toBeVisible()
+  await expect(page.getByText('Заказ №42')).toBeVisible()
   await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByRole('heading', { name: 'Заказ №42' })).toBeVisible()
+  await expect(page.getByText('Личный счёт гостя', { exact: true })).toBeVisible()
+  await expect(page.getByText('Ручная скидка 10%')).toBeVisible()
+  await expect(page.getByText('Исключено из счёта')).toBeVisible()
+  await expect(page.getByText(/Личный счёт гостя · Основной заказ: Чай ×1/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заказ №900' })).toHaveCount(0)
+  await expect(page.getByText('Общий счёт #88')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Запрос на продление работы заведения' })).toBeVisible()
   await expect(page.getByText(/На 1 час/)).toBeVisible()
   await expect(page.getByText('Гость ожидает подтверждения')).toBeVisible()
@@ -4248,7 +4295,12 @@ test('my order after restored table context keeps table scope', async ({ page })
   await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
+  await expect(page.getByText('Показаны только позиции этого счёта. Исключённые и чужие позиции не входят в сумму.')).toBeVisible()
   await expect(page.getByText('Double Apple')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заказ №900' })).toHaveCount(0)
+  await expect(page.getByText('Заявка №333')).toHaveCount(0)
+  await expect(page.getByText('Общий счёт #88')).toHaveCount(0)
   await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
   await expect(page.getByText('Корзина и заказ доступны после сканирования QR-кода стола.')).toHaveCount(0)
 

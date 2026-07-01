@@ -501,6 +501,9 @@ export type OrderBillServiceChargeDto = {
 export type OrderBillExcludedItemDto = {
   batchId: number
   batchLabel: string
+  tabId?: number | null
+  tabType?: 'PERSONAL' | 'SHARED' | string | null
+  tabDisplayLabel?: string | null
   batchItemId: number
   itemId: number
   name: string
@@ -537,6 +540,9 @@ export type OrderBillDto = {
 
 export type OrderBatchDto = {
   batchId: number
+  tabId?: number | null
+  tabType?: 'PERSONAL' | 'SHARED' | string | null
+  tabDisplayLabel?: string | null
   status: 'new' | 'accepted' | 'cooking' | 'delivering' | 'delivered' | 'closed'
   source: string
   comment?: string | null

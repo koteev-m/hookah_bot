@@ -25542,7 +25542,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     501L,
                     match { text ->
-                        text.contains("📋 Счёт по столу #105") &&
+                        text.contains("📋 Заказ №12 · счёт по столу #105") &&
                             text.contains("Гость: Максим") &&
                             text.contains("Статус: Доставлен")
                     },

@@ -10,6 +10,7 @@ import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { formatPrice } from '../shared/ui/price'
+import { formatGuestTabLabel } from '../shared/utils/guestTabLabels'
 
 const POLL_INTERVAL_MS = 12000
 
@@ -24,6 +25,8 @@ type OrderRefs = {
   header: HTMLDivElement
   title: HTMLHeadingElement
   statusValue: HTMLParagraphElement
+  accountValue: HTMLParagraphElement
+  scopeValue: HTMLParagraphElement
   hint: HTMLParagraphElement
   refreshPanel: HTMLDivElement
   updatedAt: HTMLParagraphElement
@@ -126,13 +129,15 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
   header.hidden = true
   const title = el('h3', { text: 'Мой заказ' })
   const statusValue = el('p', { className: 'order-status', text: '' })
+  const accountValue = el('p', { className: 'order-status', text: '' })
+  const scopeValue = el('p', { className: 'order-status', text: '' })
   const hint = el('p', { className: 'order-hint', text: '' })
   hint.hidden = true
 
   const buttonRow = el('div', { className: 'button-row order-actions' })
   const addButton = el('button', { className: 'button-small', text: 'Добавить к заказу' }) as HTMLButtonElement
   append(buttonRow, addButton)
-  append(header, title, statusValue, hint, buttonRow)
+  append(header, title, statusValue, accountValue, scopeValue, hint, buttonRow)
 
   const refreshPanel = el('div', { className: 'button-row order-refresh-panel' }) as HTMLDivElement
   const refreshButton = el('button', { className: 'button-small', text: '🔄 Обновить' }) as HTMLButtonElement
@@ -160,6 +165,8 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
     header,
     title,
     statusValue,
+    accountValue,
+    scopeValue,
     hint,
     refreshPanel,
     updatedAt,
@@ -255,7 +262,7 @@ function renderBatches(container: HTMLElement, batches: OrderBatchDto[]) {
     const card = el('div', { className: 'order-batch' })
     const header = el('div', { className: 'order-batch-header' })
     const batchTitle = el('strong', { text: index === 0 ? 'Состав заказа' : `Дозаказ ${index}` })
-    const batchMeta = el('span', { text: `Заявка №${batch.batchId}` })
+    const batchMeta = el('span', { text: index === 0 ? 'Текущий счёт' : 'Добавлено к счёту' })
     append(header, batchTitle, batchMeta)
     if (batch.comment) {
       const comment = el('p', { className: 'order-batch-comment', text: batch.comment })
@@ -301,6 +308,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   let pollTimer: number | null = null
   let inFlight = false
   let currentOrder: ActiveOrderDto | null = null
+  let currentAccountLabel: string | null = null
   let lastError: ApiErrorInfo | null = null
   let hadLoadedOrder = false
   let emptyStateReason: 'none' | 'closed' = 'none'
@@ -390,7 +398,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
           className: 'order-empty',
           text:
             emptyStateReason === 'closed'
-              ? 'Счёт закрыт. Активного заказа по этому счёту больше нет.'
+              ? 'Счёт закрыт. Активного заказа по этому счёту больше нет. Если нужен новый заказ, обратитесь к персоналу.'
               : 'Активного заказа нет.'
         })
       )
@@ -398,8 +406,15 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     }
     refs.title.textContent = currentOrder.displayNumber ? `Заказ №${currentOrder.displayNumber}` : 'Мой заказ'
     refs.statusValue.textContent = `Статус: ${orderStatusLabel(currentOrder.status)}`
+    refs.accountValue.textContent = currentAccountLabel ? `Счёт: ${currentAccountLabel}` : ''
+    refs.scopeValue.textContent = 'Показаны только позиции этого счёта. Исключённые и чужие позиции не входят в сумму.'
     if (currentOrder.status.toLowerCase() === 'closed') {
-      refs.content.appendChild(el('p', { className: 'order-empty', text: 'Счёт закрыт.' }))
+      refs.content.appendChild(
+        el('p', {
+          className: 'order-empty',
+          text: 'Счёт закрыт. Состав и итог доступны только для просмотра.'
+        })
+      )
     }
     renderBatches(refs.content, currentOrder.batches ?? [])
     renderOrderBill(refs.content, currentOrder)
@@ -416,6 +431,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
         orderAbort = null
       }
       currentOrder = null
+      currentAccountLabel = null
       lastError = null
       inFlight = false
       emptyStateReason = 'none'
@@ -455,6 +471,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       inFlight = false
       orderAbort = null
       currentOrder = null
+      currentAccountLabel = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -465,6 +482,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     if (!tabsResult.ok) {
       lastError = tabsResult.error
       currentOrder = null
+      currentAccountLabel = null
       inFlight = false
       orderAbort = null
       emptyStateReason = 'none'
@@ -478,6 +496,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       inFlight = false
       orderAbort = null
       currentOrder = null
+      currentAccountLabel = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -487,6 +506,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       return
     }
     setSelectedGuestTabId(tableScope.tableSessionId, selectedTab.id)
+    currentAccountLabel = formatGuestTabLabel(selectedTab, tabsResult.data.tabs)
 
     const result = await guestGetActiveOrder(
       backendUrl,
@@ -514,6 +534,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       inFlight = false
       orderAbort = null
       currentOrder = null
+      currentAccountLabel = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -526,6 +547,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     if (!result.ok) {
       lastError = result.error
       currentOrder = null
+      currentAccountLabel = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
       renderState()
@@ -538,6 +560,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       (activeOrder.tableSessionId !== tableScope.tableSessionId || activeOrder.tabId !== selectedTab.id)
     ) {
       currentOrder = null
+      currentAccountLabel = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -610,6 +633,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       }
       inFlight = false
       currentOrder = null
+      currentAccountLabel = null
       lastError = null
       emptyStateReason = 'none'
       lastSuccessfulRefreshAt = null

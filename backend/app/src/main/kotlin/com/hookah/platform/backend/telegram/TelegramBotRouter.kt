@@ -24096,7 +24096,9 @@ class TelegramBotRouter(
                 }
         val billSnapshot = detail.toOrderBillSnapshot()
         return buildString {
-            append("📋 Счёт по столу #${detail.tableNumber}")
+            append("📋 ")
+            append(formatTelegramOrderDisplayLabel(detail.orderId, detail.displayNumber, detail.displayDate))
+            append(" · счёт по столу #${detail.tableNumber}")
             append("\n")
             append("Статус: ${humanizeVenueOrderWorkflowStatus(detail.status)}")
             append('\n').append(orderDetailGuestSummaryLine(detail))

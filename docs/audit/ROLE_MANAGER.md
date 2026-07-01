@@ -38,7 +38,7 @@ Manager opens Venue Mini App through inline `web_app` entry, so Telegram initDat
 Manager Mini App areas:
 - dashboard;
 - orders queue/detail;
-- full bill;
+- full bill with human order display label, personal/shared account context, discounts, service charges and excluded/non-payable items;
 - bill controls: manual discount, exclude/restore item;
 - close bill/order;
 - bookings;

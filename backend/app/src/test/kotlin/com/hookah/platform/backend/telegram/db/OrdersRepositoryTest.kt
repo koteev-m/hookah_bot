@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram.db
 import kotlinx.coroutines.runBlocking
 import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
+import java.sql.Date
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
@@ -22,6 +23,65 @@ class OrdersRepositoryTest {
             val fixture = seedVenueTableSession(jdbcUrl)
             val repository = OrdersRepository(dataSource(jdbcUrl))
             val venueZone = ZoneId.of("Pacific/Honolulu")
+
+            val orderId =
+                repository.getOrCreateActiveOrderId(
+                    tableId = fixture.tableId,
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    venueZoneId = venueZone,
+                )
+
+            assertNotNull(orderId)
+            val display = fetchOrderDisplay(jdbcUrl, orderId)
+            assertEquals(LocalDate.now(venueZone), display.displayDate)
+            assertEquals(1, display.displayNumber)
+        }
+
+    @Test
+    fun `new active order display number increments within venue display date`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("order-display-increment")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val secondFixture = seedAdditionalTableSession(jdbcUrl, fixture.venueId, tableNumber = 11)
+            val repository = OrdersRepository(dataSource(jdbcUrl))
+            val venueZone = ZoneId.of("Europe/Moscow")
+
+            val firstOrderId =
+                repository.getOrCreateActiveOrderId(
+                    tableId = fixture.tableId,
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    venueZoneId = venueZone,
+                )
+            val secondOrderId =
+                repository.getOrCreateActiveOrderId(
+                    tableId = secondFixture.tableId,
+                    venueId = secondFixture.venueId,
+                    tableSessionId = secondFixture.tableSessionId,
+                    venueZoneId = venueZone,
+                )
+
+            assertNotNull(firstOrderId)
+            assertNotNull(secondOrderId)
+            assertEquals(1, fetchOrderDisplay(jdbcUrl, firstOrderId).displayNumber)
+            assertEquals(2, fetchOrderDisplay(jdbcUrl, secondOrderId).displayNumber)
+            assertEquals(LocalDate.now(venueZone), fetchOrderDisplay(jdbcUrl, secondOrderId).displayDate)
+        }
+
+    @Test
+    fun `new active order display number ignores previous venue display date`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("order-display-date-reset")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val repository = OrdersRepository(dataSource(jdbcUrl))
+            val venueZone = ZoneId.of("Europe/Moscow")
+            seedClosedOrderDisplay(
+                jdbcUrl = jdbcUrl,
+                fixture = fixture,
+                displayDate = LocalDate.now(venueZone).minusDays(1),
+                displayNumber = 9,
+            )
 
             val orderId =
                 repository.getOrCreateActiveOrderId(
@@ -105,6 +165,75 @@ class OrdersRepositoryTest {
                     }
                 }
             return OrderFixture(venueId = venueId, tableId = tableId, tableSessionId = tableSessionId)
+        }
+    }
+
+    private fun seedAdditionalTableSession(
+        jdbcUrl: String,
+        venueId: Long,
+        tableNumber: Int,
+    ): OrderFixture {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val tableId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_tables (venue_id, table_number, is_active)
+                    VALUES (?, ?, true)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setInt(2, tableNumber)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert table")
+                    }
+                }
+            val tableSessionId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO table_sessions (venue_id, table_id, started_at, last_activity_at, expires_at, status)
+                    VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    val now = Instant.now()
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableId)
+                    statement.setTimestamp(3, Timestamp.from(now))
+                    statement.setTimestamp(4, Timestamp.from(now))
+                    statement.setTimestamp(5, Timestamp.from(now.plusSeconds(7200)))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert table session")
+                    }
+                }
+            return OrderFixture(venueId = venueId, tableId = tableId, tableSessionId = tableSessionId)
+        }
+    }
+
+    private fun seedClosedOrderDisplay(
+        jdbcUrl: String,
+        fixture: OrderFixture,
+        displayDate: LocalDate,
+        displayNumber: Int,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO orders (
+                    venue_id, table_id, table_session_id, status, display_number, display_date
+                )
+                VALUES (?, ?, ?, 'CLOSED', ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, fixture.venueId)
+                statement.setLong(2, fixture.tableId)
+                statement.setLong(3, fixture.tableSessionId)
+                statement.setInt(4, displayNumber)
+                statement.setDate(5, Date.valueOf(displayDate))
+                statement.executeUpdate()
+            }
         }
     }
 

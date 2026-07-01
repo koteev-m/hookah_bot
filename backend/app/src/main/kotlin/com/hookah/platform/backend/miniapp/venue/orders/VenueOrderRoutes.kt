@@ -620,6 +620,7 @@ private fun isCurrentBatchFirstInOrder(
 }
 
 private fun OrderDetail.toDto(includePendingShiftExtension: Boolean = true): OrderDetailDto {
+    val tabLabels = tabDisplayLabelsById(batches)
     return OrderDetailDto(
         orderId = orderId,
         displayNumber = displayNumber,
@@ -636,6 +637,9 @@ private fun OrderDetail.toDto(includePendingShiftExtension: Boolean = true): Ord
             batches.map { batch ->
                 OrderBatchDto(
                     batchId = batch.batchId,
+                    tabId = batch.tabId,
+                    tabType = batch.tabType,
+                    tabDisplayLabel = batch.tabId?.let { tabLabels[it] } ?: batch.fallbackTabDisplayLabel(),
                     status = batch.status.toApi(),
                     source = batch.source,
                     comment = batch.comment,
@@ -699,6 +703,8 @@ private fun OrderBatchItemDetail.toDto(batch: OrderBatchDetail): OrderBatchItemD
 
 private fun OrderDetail.buildBillDto(): OrderBillDto {
     val snapshot = toOrderBillSnapshot(DEFAULT_CURRENCY)
+    val tabLabels = tabDisplayLabelsById(batches)
+    val tabsByBatchId = batches.associateBy { it.batchId }
     return OrderBillDto(
         grossTotalMinor = snapshot.grossTotalMinor,
         manualDiscountTotalMinor = snapshot.manualDiscountTotalMinor,
@@ -711,7 +717,14 @@ private fun OrderDetail.buildBillDto(): OrderBillDto {
         currency = snapshot.currency,
         promoDiscounts = snapshot.promoDiscounts.map { it.toDto() },
         loyaltyDiscounts = snapshot.loyaltyDiscounts.map { it.toDto() },
-        excludedItems = snapshot.excludedItems.map { it.toDto() },
+        excludedItems =
+            snapshot.excludedItems.map { item ->
+                val batch = tabsByBatchId[item.batchId]
+                item.toDto(
+                    batch = batch,
+                    tabDisplayLabel = batch?.tabId?.let { tabLabels[it] },
+                )
+            },
         serviceCharges =
             snapshot.serviceCharges.map { charge ->
                 OrderBillServiceChargeDto(
@@ -759,10 +772,16 @@ private fun OrderBillDiscountSnapshot.toDto(): OrderBillDiscountDto =
         ruleType = ruleType,
     )
 
-private fun OrderBillExcludedItemSnapshot.toDto(): OrderBillExcludedItemDto =
+private fun OrderBillExcludedItemSnapshot.toDto(
+    batch: OrderBatchDetail?,
+    tabDisplayLabel: String?,
+): OrderBillExcludedItemDto =
     OrderBillExcludedItemDto(
         batchId = batchId,
         batchLabel = batchLabel,
+        tabId = batch?.tabId,
+        tabType = batch?.tabType,
+        tabDisplayLabel = tabDisplayLabel ?: batch?.fallbackTabDisplayLabel(),
         batchItemId = batchItemId,
         itemId = itemId,
         name = name,
@@ -774,6 +793,41 @@ private fun OrderBillExcludedItemSnapshot.toDto(): OrderBillExcludedItemDto =
         status = status,
         reason = reason,
     )
+
+private fun tabDisplayLabelsById(batches: List<OrderBatchDetail>): Map<Long, String> {
+    val sharedTabIds =
+        batches
+            .asSequence()
+            .filter { batch -> batch.tabType.equals("SHARED", ignoreCase = true) }
+            .mapNotNull { it.tabId }
+            .distinct()
+            .toList()
+    return batches
+        .asSequence()
+        .mapNotNull { batch ->
+            val tabId = batch.tabId ?: return@mapNotNull null
+            val label =
+                when (batch.tabType?.uppercase()) {
+                    "PERSONAL" -> "Личный счёт гостя"
+                    "SHARED" ->
+                        if (sharedTabIds.size <= 1) {
+                            "Общий счёт"
+                        } else {
+                            "Общий счёт ${sharedTabIds.indexOf(tabId) + 1}"
+                        }
+                    else -> return@mapNotNull null
+                }
+            tabId to label
+        }
+        .toMap()
+}
+
+private fun OrderBatchDetail.fallbackTabDisplayLabel(): String? =
+    when (tabType?.uppercase()) {
+        "PERSONAL" -> "Личный счёт гостя"
+        "SHARED" -> "Общий счёт"
+        else -> null
+    }
 
 private fun OrderBatchItemSelectedOption.toDto(): OrderItemSelectedOptionDto =
     OrderItemSelectedOptionDto(

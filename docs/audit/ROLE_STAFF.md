@@ -51,7 +51,7 @@ STAFF opens Venue Mini App through inline `web_app` entry (`📱 Открыть 
 STAFF Mini App behavior:
 - dashboard shows operational counters, not staff chat diagnostics;
 - order queue/detail;
-- full bill read-only;
+- full bill read-only with human order display label, personal/shared account context, discounts, service charges and excluded/non-payable items;
 - accept/deliver allowed statuses;
 - close bill/order;
 - staff calls view/accept/close;

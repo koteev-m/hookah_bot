@@ -23,6 +23,7 @@ import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPrese
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
+import { formatGuestTabLabel } from '../shared/utils/guestTabLabels'
 
 const MAX_ITEMS = 50
 const MAX_ITEM_QTY = 50
@@ -529,13 +530,6 @@ export function renderCartScreen(options: CartScreenOptions) {
     return { personalTab, sharedTab: sharedTabs[0] }
   }
 
-  const formatTabTitle = (tab: GuestTabDto): string => {
-    if (tab.type === 'PERSONAL') {
-      return 'Личный счёт'
-    }
-    return `Общий счёт #${tab.id}`
-  }
-
   const updateTabsUi = () => {
     const activeTabs = getActiveTabs()
     if (!hasSharedAccess) {
@@ -556,7 +550,9 @@ export function renderCartScreen(options: CartScreenOptions) {
     if (!activeTabs.length) {
       refs.tabSelector.appendChild(new Option('Сначала загрузите стол', ''))
     } else {
-      activeTabs.forEach((tab) => refs.tabSelector.appendChild(new Option(formatTabTitle(tab), String(tab.id))))
+      activeTabs.forEach((tab) =>
+        refs.tabSelector.appendChild(new Option(formatGuestTabLabel(tab, activeTabs), String(tab.id)))
+      )
     }
     refs.tabSelector.value = selectedTab ? String(selectedTab.id) : ''
     const summary =
