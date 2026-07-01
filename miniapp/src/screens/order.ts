@@ -1,8 +1,8 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestGetActiveOrder, guestGetTabs } from '../shared/api/guestApi'
+import { guestGetActiveOrder, guestGetTabs, guestRequestBill } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { ActiveOrderDto, GuestTabDto, OrderBatchDto } from '../shared/api/guestDtos'
+import type { ActiveOrderDto, BillPaymentMethod, GuestTabDto, OrderBatchDto } from '../shared/api/guestDtos'
 import { getItemMeta } from '../shared/state/itemCache'
 import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
@@ -38,6 +38,7 @@ type OrderRefs = {
   errorDetails: HTMLDivElement
   refreshButton: HTMLButtonElement
   addButton: HTMLButtonElement
+  billButton: HTMLButtonElement
   content: HTMLDivElement
 }
 
@@ -130,6 +131,19 @@ function appendBillRow(container: HTMLElement, label: string, value: string, isT
   container.appendChild(row)
 }
 
+function paymentMethodLabel(method: BillPaymentMethod): string {
+  switch (method) {
+    case 'CARD':
+      return 'Картой на месте'
+    case 'CASH':
+      return 'Наличными'
+    case 'UNKNOWN':
+      return 'Пока не знаю'
+    default:
+      return method
+  }
+}
+
 function formatRefreshTime(date: Date): string {
   return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
@@ -157,7 +171,8 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
 
   const buttonRow = el('div', { className: 'button-row order-actions' })
   const addButton = el('button', { className: 'button-small', text: 'Добавить к заказу' }) as HTMLButtonElement
-  append(buttonRow, addButton)
+  const billButton = el('button', { className: 'button-small button-secondary', text: 'Попросить счёт' }) as HTMLButtonElement
+  append(buttonRow, addButton, billButton)
   append(header, title, statusValue, accountValue, scopeValue, hint, buttonRow)
 
   const refreshPanel = el('div', { className: 'button-row order-refresh-panel' }) as HTMLDivElement
@@ -199,6 +214,7 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
     errorDetails,
     refreshButton,
     addButton,
+    billButton,
     content
   }
 }
@@ -330,6 +346,31 @@ function renderBatches(container: HTMLElement, batches: OrderBatchDto[]) {
   container.appendChild(list)
 }
 
+function renderBillRequestChooser(
+  container: HTMLElement,
+  isSubmitting: boolean,
+  onChoose: (method: BillPaymentMethod) => void
+) {
+  const panel = el('div', { className: 'card order-bill-request' })
+  panel.appendChild(el('h3', { text: 'Как будете оплачивать?' }))
+  const actions = el('div', { className: 'button-row order-actions' })
+  const methods: BillPaymentMethod[] = ['CARD', 'CASH', 'UNKNOWN']
+  methods.forEach((method) => {
+    const button = el('button', {
+      className: method === 'UNKNOWN' ? 'button-small button-secondary' : 'button-small',
+      text: paymentMethodLabel(method)
+    }) as HTMLButtonElement
+    button.disabled = isSubmitting
+    button.addEventListener('click', () => onChoose(method))
+    actions.appendChild(button)
+  })
+  panel.appendChild(actions)
+  if (isSubmitting) {
+    panel.appendChild(el('p', { className: 'order-empty', text: 'Отправляем запрос…' }))
+  }
+  container.appendChild(panel)
+}
+
 export function renderOrderScreen(options: OrderScreenOptions) {
   const { root, backendUrl, isDebug, onNavigateMenu } = options
   if (!root) return () => undefined
@@ -338,8 +379,11 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   let disposed = false
   let tableSnapshot = getTableContext()
   let orderAbort: AbortController | null = null
+  let billAbort: AbortController | null = null
   let pollTimer: number | null = null
   let inFlight = false
+  let billRequestInFlight = false
+  let billChoiceVisible = false
   let currentOrder: ActiveOrderDto | null = null
   let currentAccountLabel: string | null = null
   let currentAccountType: string | null = null
@@ -348,8 +392,9 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   let emptyStateReason: 'none' | 'closed' = 'none'
   let lastSuccessfulRefreshAt: Date | null = null
 
-  const setMessage = (text: string | null) => {
+  const setMessage = (text: string | null, tone: 'info' | 'success' | 'error' = 'error') => {
     refs.message.textContent = text ?? ''
+    refs.message.dataset.tone = tone
     refs.message.hidden = !text
   }
 
@@ -408,6 +453,8 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     const blocked = Boolean(hintText) || !tableScope
     refs.refreshButton.disabled = blocked || inFlight
     refs.addButton.disabled = blocked
+    refs.billButton.disabled =
+      blocked || inFlight || billRequestInFlight || !currentOrder || isClosedOrderStatus(currentOrder.status)
     refs.updatedAt.textContent = lastSuccessfulRefreshAt ? `Обновлено ${formatRefreshTime(lastSuccessfulRefreshAt)}` : ''
     refs.updatedAt.hidden = !lastSuccessfulRefreshAt
   }
@@ -427,6 +474,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       return
     }
     if (!currentOrder) {
+      refs.billButton.hidden = true
       refs.content.appendChild(
         el('p', {
           className: 'order-empty',
@@ -438,6 +486,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       )
       return
     }
+    refs.billButton.hidden = false
     refs.title.textContent = currentOrder.displayNumber ? `Заказ №${currentOrder.displayNumber}` : 'Мой заказ'
     refs.statusValue.textContent = `Статус: ${orderStatusLabel(resolveGuestOrderStatus(currentOrder))}`
     refs.accountValue.textContent = currentAccountLabel ? `Счёт: ${currentAccountLabel}` : ''
@@ -451,7 +500,54 @@ export function renderOrderScreen(options: OrderScreenOptions) {
         })
       )
     }
+    if (billChoiceVisible && !isClosedOrderStatus(currentOrder.status)) {
+      renderBillRequestChooser(refs.content, billRequestInFlight, (method) => void requestBill(method))
+    }
     renderOrderBill(refs.content, currentOrder)
+  }
+
+  const requestBill = async (paymentMethod: BillPaymentMethod) => {
+    if (billRequestInFlight) {
+      return
+    }
+    const tableScope = getTableScope()
+    const order = currentOrder
+    if (!tableScope || !order?.tabId) {
+      setMessage('Не удалось определить счёт для запроса. Обновите заказ и попробуйте снова.')
+      renderState()
+      return
+    }
+    billAbort?.abort()
+    const controller = new AbortController()
+    billAbort = controller
+    billRequestInFlight = true
+    setMessage(null)
+    hideError()
+    renderState()
+    const result = await guestRequestBill(
+      backendUrl,
+      {
+        tableToken: tableScope.tableToken,
+        tableSessionId: tableScope.tableSessionId,
+        tabId: order.tabId,
+        paymentMethod
+      },
+      buildApiDeps(isDebug),
+      controller.signal
+    )
+    if (disposed || billAbort !== controller) {
+      return
+    }
+    billAbort = null
+    billRequestInFlight = false
+    if (!result.ok) {
+      renderState()
+      showError(result.error)
+      return
+    }
+    billChoiceVisible = false
+    setMessage(result.data.message || 'Персонал получил запрос на счёт.', 'success')
+    renderState()
   }
 
   const loadOrder = async () => {
@@ -697,6 +793,11 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     }),
     on(refs.addButton, 'click', () => {
       onNavigateMenu(tableSnapshot.status === 'resolved' ? tableSnapshot.venueId : null)
+    }),
+    on(refs.billButton, 'click', () => {
+      billChoiceVisible = !billChoiceVisible
+      setMessage(null)
+      renderState()
     })
   )
 
@@ -710,6 +811,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   return () => {
     disposed = true
     orderAbort?.abort()
+    billAbort?.abort()
     if (pollTimer) {
       window.clearInterval(pollTimer)
     }

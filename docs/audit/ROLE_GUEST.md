@@ -51,6 +51,7 @@ QR/table Guest Mini App:
 - submit order/add batch;
 - fallback chat order emits `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`;
 - active order screen с refresh/polling, human order label `Заказ №...`, selected account label `Личный счёт` / `Общий счёт`, selected-tab bill totals, discounts and service charges;
+- active order screen exposes `Попросить счёт` with on-site operational payment note choices `Картой на месте`, `Наличными`, `Пока не знаю`; backend dedupes active `NEW`/`ACK` bill requests for the current user/tab and staff receives a separate bill-request notification with order/account/total/payment context. This is not online payment/acquiring/Telegram Payments/Stars and does not close the bill automatically;
 - staff call flow as transient compose + compact NEW/ACK/DONE status;
 - `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when current active order/bill state makes it actionable, and hidden again after bill/order close;
 - `🚪 Завершить визит` в active table context очищает только текущий guest restore/local context и возвращает в обычный каталог. Empty personal tab/no order allows exit; active order/bill or active `NEW`/`ACK` staff call blocks with clear copy.
@@ -75,6 +76,7 @@ Account/bookings:
 - Вызывать персонал из active table context.
 - Читать и отвечать на свои support/booking threads.
 - Смотреть свой active/current order и backend-owned счёт.
+- Запросить счёт по своему active order/tab and choose an on-site payment note for staff.
 - Завершать свой table context, если нет активного счёта/обязательств и активного вызова персонала.
 - Пользоваться account/favorites/history baseline, где он доступен.
 
@@ -101,6 +103,7 @@ Account/bookings:
 - Media proxy требует ручной проверки для image/PDF и скрытых/удалённых sections.
 - QR/table order flow должен smoke-тестироваться отдельно от pre-QR catalog flow.
 - QR/table exit flow is CLOSED / staging smoke passed and should stay in regression: one guest exits, another guest at the same physical table remains in their own context; explicit QR scan re-enters after exit.
+- Guest bill request / payment method UX is implemented / code-test verification passed; manual staging smoke remains recommended before launch sign-off.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 
 ## Smoke-critical checks
@@ -118,3 +121,4 @@ Account/bookings:
 11. Открыть `Сообщения`; проверить список тредов, unread, active/resolved filters and resolve/reopen.
 12. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
 13. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
+14. На active order screen нажать `Попросить счёт`, выбрать `Картой на месте` / `Наличными` / `Пока не знаю`, проверить JSON request contract, guest confirmation, duplicate active request copy and staff notification context.

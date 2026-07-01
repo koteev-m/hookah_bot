@@ -1092,6 +1092,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestMenuRepository = guestMenuRepository,
                         subscriptionRepository = subscriptionRepository,
                         ordersRepository = ordersRepository,
+                        staffCallRepository = staffCallRepository,
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
                         guestTabsRepository = guestTabsRepository,

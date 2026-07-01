@@ -105,6 +105,12 @@ export type VenueStaffCallDto = {
   reason: string
   reasonLabel: string
   comment?: string | null
+  orderId?: number | null
+  tabId?: number | null
+  paymentMethod?: string | null
+  paymentMethodLabel?: string | null
+  orderDisplayLabel?: string | null
+  tabDisplayLabel?: string | null
   status: 'NEW' | 'ACK' | 'DONE' | 'CANCELLED' | string
   statusLabel: string
   createdAt?: string | null

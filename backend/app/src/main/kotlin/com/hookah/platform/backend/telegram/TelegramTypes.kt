@@ -18,6 +18,19 @@ enum class StaffCallReason {
     OTHER,
 }
 
+enum class BillPaymentMethod {
+    CARD,
+    CASH,
+    UNKNOWN,
+}
+
+fun billPaymentMethodLabel(method: BillPaymentMethod): String =
+    when (method) {
+        BillPaymentMethod.CARD -> "Картой на месте"
+        BillPaymentMethod.CASH -> "Наличными"
+        BillPaymentMethod.UNKNOWN -> "Пока не знаю"
+    }
+
 enum class DialogStateType {
     NONE,
     QUICK_ORDER_WAIT_TEXT,

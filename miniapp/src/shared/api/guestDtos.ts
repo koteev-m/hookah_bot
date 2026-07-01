@@ -328,6 +328,26 @@ export type StaffCallResponse = {
   statusLabel: string
 }
 
+export type BillPaymentMethod = 'CARD' | 'CASH' | 'UNKNOWN'
+
+export type GuestBillRequestRequest = {
+  tableToken: string
+  tableSessionId: number
+  tabId: number
+  paymentMethod: BillPaymentMethod
+}
+
+export type GuestBillRequestResponse = {
+  staffCallId: number
+  createdAtEpochSeconds: number
+  status: string
+  statusLabel: string
+  paymentMethod: BillPaymentMethod | string
+  paymentMethodLabel: string
+  alreadyActive: boolean
+  message: string
+}
+
 export type StaffCallStatusResponse = {
   items: StaffCallStatusDto[]
 }

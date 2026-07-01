@@ -8,6 +8,8 @@ import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewRequest
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
+import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -17,6 +19,7 @@ import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
 import com.hookah.platform.backend.telegram.NewBatchNotification
+import com.hookah.platform.backend.telegram.StaffBillRequestNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.OrdersRepository
@@ -474,6 +477,212 @@ class GuestOrderRoutesTest {
             assertEquals("Дозаказ №1", secondNotification.batches[1].label)
             assertEquals(secondPayload.batchId, secondNotification.batches[1].batchId)
             assertEquals(OrderWorkflowStatus.NEW, secondNotification.batches[1].status)
+        }
+
+    @Test
+    fun `bill-request stores context notifies once and allows new request after done`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-bill-request")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val notifications = mutableListOf<StaffBillRequestNotification>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } returns StaffChatNotificationResult.SENT_OR_QUEUED
+            coEvery { staffChatNotifier.notifyBillRequestNow(any()) } answers {
+                notifications += invocation.args[0] as StaffBillRequestNotification
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            }
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 21)
+            seedTableToken(jdbcUrl, tableId, "bill-request-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Bill item", priceMinor = 1_500)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val addResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "bill-request-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "bill-request-order-1",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 2)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, addResponse.status)
+            val addPayload = json.decodeFromString(AddBatchResponse.serializer(), addResponse.bodyAsText())
+
+            val billRequest =
+                GuestBillRequestRequest(
+                    tableToken = "bill-request-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    paymentMethod = "CARD",
+                )
+            val firstResponse =
+                client.post("/api/guest/order/bill-request") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(GuestBillRequestRequest.serializer(), billRequest))
+                }
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            val firstPayload =
+                json.decodeFromString(GuestBillRequestResponse.serializer(), firstResponse.bodyAsText())
+            assertFalse(firstPayload.alreadyActive)
+            assertEquals("CARD", firstPayload.paymentMethod)
+            assertEquals("Картой на месте", firstPayload.paymentMethodLabel)
+            assertEquals("Персонал получил запрос на счёт.", firstPayload.message)
+
+            val duplicateResponse =
+                client.post("/api/guest/order/bill-request") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            GuestBillRequestRequest.serializer(),
+                            billRequest.copy(paymentMethod = "CASH"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, duplicateResponse.status)
+            val duplicatePayload =
+                json.decodeFromString(GuestBillRequestResponse.serializer(), duplicateResponse.bodyAsText())
+            assertTrue(duplicatePayload.alreadyActive)
+            assertEquals(firstPayload.staffCallId, duplicatePayload.staffCallId)
+            assertEquals("CARD", duplicatePayload.paymentMethod)
+            assertEquals("Запрос на счёт уже отправлен. Персонал скоро подойдёт.", duplicatePayload.message)
+            assertEquals(1, notifications.size)
+            assertEquals(1, countBillRequests(jdbcUrl, venueId, tableSessionId, personalTabId))
+
+            val row = fetchBillRequestRow(jdbcUrl, firstPayload.staffCallId)
+            assertEquals(addPayload.orderId, row.orderId)
+            assertEquals(personalTabId, row.tabId)
+            assertEquals("CARD", row.paymentMethod)
+            assertEquals(addPayload.orderId, notifications.single().orderId)
+            assertEquals("Заказ №1", notifications.single().orderDisplayLabel)
+            assertEquals("Личный счёт", notifications.single().accountLabel)
+            assertEquals(3_000, notifications.single().billTotalMinor)
+            assertEquals("CARD", notifications.single().paymentMethod.name)
+
+            markStaffCallDone(jdbcUrl, firstPayload.staffCallId)
+            val nextResponse =
+                client.post("/api/guest/order/bill-request") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            GuestBillRequestRequest.serializer(),
+                            billRequest.copy(paymentMethod = "CASH"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, nextResponse.status)
+            val nextPayload = json.decodeFromString(GuestBillRequestResponse.serializer(), nextResponse.bodyAsText())
+            assertFalse(nextPayload.alreadyActive)
+            assertTrue(nextPayload.staffCallId != firstPayload.staffCallId)
+            assertEquals("CASH", nextPayload.paymentMethod)
+            assertEquals(2, notifications.size)
+            assertEquals(2, countBillRequests(jdbcUrl, venueId, tableSessionId, personalTabId))
+        }
+
+    @Test
+    fun `bill-request rejects invalid payment method`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-bill-request-invalid-payment")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 22)
+            seedTableToken(jdbcUrl, tableId, "bill-invalid-payment-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            val response =
+                client.post("/api/guest/order/bill-request") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        """
+                        {
+                          "tableToken": "bill-invalid-payment-token",
+                          "tableSessionId": $tableSessionId,
+                          "tabId": $personalTabId,
+                          "paymentMethod": "ONLINE"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(0, countBillRequests(jdbcUrl, venueId, tableSessionId, personalTabId))
+        }
+
+    @Test
+    fun `bill-request rejects another user tab`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-bill-request-foreign-tab")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 23)
+            seedTableToken(jdbcUrl, tableId, "bill-foreign-tab-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val foreignTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, 987_654L)
+            val token = issueToken(config)
+
+            val response =
+                client.post("/api/guest/order/bill-request") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            GuestBillRequestRequest.serializer(),
+                            GuestBillRequestRequest(
+                                tableToken = "bill-foreign-tab-token",
+                                tableSessionId = tableSessionId,
+                                tabId = foreignTabId,
+                                paymentMethod = "UNKNOWN",
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            assertEquals(0, countBillRequests(jdbcUrl, venueId, tableSessionId, foreignTabId))
         }
 
     @Test
@@ -3302,9 +3511,84 @@ class GuestOrderRoutesTest {
         return null
     }
 
+    private fun countBillRequests(
+        jdbcUrl: String,
+        venueId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM staff_calls
+                WHERE venue_id = ?
+                  AND table_session_id = ?
+                  AND tab_id = ?
+                  AND reason = 'BILL'
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, tabId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return rs.getInt(1)
+                    }
+                }
+            }
+        }
+        return 0
+    }
+
+    private fun fetchBillRequestRow(
+        jdbcUrl: String,
+        staffCallId: Long,
+    ): BillRequestRow {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT order_id, tab_id, payment_method
+                FROM staff_calls
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, staffCallId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        return BillRequestRow(
+                            orderId = rs.getLong("order_id"),
+                            tabId = rs.getLong("tab_id"),
+                            paymentMethod = rs.getString("payment_method"),
+                        )
+                    }
+                }
+            }
+        }
+        error("Missing staff call $staffCallId")
+    }
+
+    private fun markStaffCallDone(
+        jdbcUrl: String,
+        staffCallId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("UPDATE staff_calls SET status = 'DONE' WHERE id = ?").use { statement ->
+                statement.setLong(1, staffCallId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private companion object {
         const val TELEGRAM_USER_ID: Long = 456L
     }
+
+    private data class BillRequestRow(
+        val orderId: Long,
+        val tabId: Long,
+        val paymentMethod: String,
+    )
 
     private data class LinkedStaffChatOutboxRow(
         val method: String,

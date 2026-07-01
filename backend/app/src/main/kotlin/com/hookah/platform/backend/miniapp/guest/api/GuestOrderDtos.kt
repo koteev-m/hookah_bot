@@ -105,6 +105,26 @@ data class AddBatchResponse(
 )
 
 @Serializable
+data class GuestBillRequestRequest(
+    val tableToken: String,
+    val tableSessionId: Long,
+    val tabId: Long,
+    val paymentMethod: String,
+)
+
+@Serializable
+data class GuestBillRequestResponse(
+    val staffCallId: Long,
+    val createdAtEpochSeconds: Long,
+    val status: String,
+    val statusLabel: String,
+    val paymentMethod: String,
+    val paymentMethodLabel: String,
+    val alreadyActive: Boolean,
+    val message: String,
+)
+
+@Serializable
 data class CartPreviewRequest(
     val tableToken: String,
     val tableSessionId: Long,

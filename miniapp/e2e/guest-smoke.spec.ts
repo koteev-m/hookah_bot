@@ -300,6 +300,21 @@ type AddBatchPayload = {
   comment?: string | null
 }
 
+type BillRequestPayload = {
+  tableToken: string
+  tableSessionId: number
+  tabId: number
+  paymentMethod: string
+}
+
+type BillRequestCapture = {
+  url: string
+  method: string
+  contentType: string | undefined
+  authorization: string | undefined
+  body: BillRequestPayload
+}
+
 type TestTelegramWindow = Window & {
   Telegram?: {
     WebApp?: {
@@ -644,6 +659,7 @@ async function mockGuestApi(
   let activeOrderServiceCharges: ServiceCharge[] = []
   const previewRequests: Array<{ items: AddBatchItemPayload[] }> = []
   const addBatchRequests: AddBatchPayload[] = []
+  const billRequestRequests: BillRequestCapture[] = []
   const tableSessionEndRequests: Array<{
     url: string
     method: string
@@ -651,6 +667,7 @@ async function mockGuestApi(
     body: { tableToken: string; tableSessionId: number }
   }> = []
   let submittedOrderItems: AddBatchItemPayload[] = []
+  let activeBillRequestId: number | null = null
   const bookingUpdateRequests: Array<{ venueId: number; bookingId: number; scheduledAt: string; partySize?: number | null; comment?: string | null }> = []
   const bookingCancelRequests: Array<{ venueId: number; bookingId: number }> = []
   const staffCallRequests: Array<{ tableToken: string; tableSessionId: number; reason: string; comment?: string | null }> = []
@@ -1067,6 +1084,51 @@ async function mockGuestApi(
     await route.fulfill(jsonResponse({ orderId: 900, batchId: 444 }))
   })
 
+  await page.route('**/api/guest/order/bill-request', async (route) => {
+    const request = route.request()
+    const body = (await request.postDataJSON()) as BillRequestPayload
+    billRequestRequests.push({
+      url: request.url(),
+      method: request.method(),
+      contentType: request.headers()['content-type'],
+      authorization: request.headers()['authorization'],
+      body
+    })
+    if (activeBillRequestId != null) {
+      await route.fulfill(
+        jsonResponse({
+          staffCallId: activeBillRequestId,
+          createdAtEpochSeconds: 1894302000,
+          status: 'NEW',
+          statusLabel: 'Запрос на счёт отправлен',
+          paymentMethod: 'CARD',
+          paymentMethodLabel: 'Картой на месте',
+          alreadyActive: true,
+          message: 'Запрос на счёт уже отправлен. Персонал скоро подойдёт.'
+        })
+      )
+      return
+    }
+    activeBillRequestId = 902
+    await route.fulfill(
+      jsonResponse({
+        staffCallId: activeBillRequestId,
+        createdAtEpochSeconds: 1894302000,
+        status: 'NEW',
+        statusLabel: 'Запрос на счёт отправлен',
+        paymentMethod: body.paymentMethod,
+        paymentMethodLabel:
+          body.paymentMethod === 'CASH'
+            ? 'Наличными'
+            : body.paymentMethod === 'UNKNOWN'
+              ? 'Пока не знаю'
+              : 'Картой на месте',
+        alreadyActive: false,
+        message: 'Персонал получил запрос на счёт.'
+      })
+    )
+  })
+
   await page.route('**/api/guest/staff-call/status?**', async (route) => {
     await route.fulfill(jsonResponse({ items: staffCallStatuses }))
   })
@@ -1140,6 +1202,7 @@ async function mockGuestApi(
     getGuestBookings: () => bookings,
     getPreviewRequests: () => previewRequests,
     getAddBatchRequests: () => addBatchRequests,
+    getBillRequestRequests: () => billRequestRequests,
     getTableSessionEndRequests: () => tableSessionEndRequests,
     getStaffCallRequests: () => staffCallRequests,
     setStaffCallStatuses: (items: typeof staffCallStatuses) => {
@@ -1837,6 +1900,7 @@ async function mockVenueStaffCallsApi(
   options: {
     role?: 'OWNER' | 'MANAGER' | 'STAFF'
     permissions?: string[]
+    includeBillRequest?: boolean
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
@@ -1854,6 +1918,12 @@ async function mockVenueStaffCallsApi(
     statusLabel: string
     createdAt: string
     guestDisplayName: string | null
+    orderId?: number | null
+    tabId?: number | null
+    paymentMethod?: string | null
+    paymentMethodLabel?: string | null
+    orderDisplayLabel?: string | null
+    tabDisplayLabel?: string | null
   }> = [
     {
       id: 901,
@@ -1868,6 +1938,26 @@ async function mockVenueStaffCallsApi(
       guestDisplayName: 'Алексей'
     }
   ]
+  if (options.includeBillRequest) {
+    calls.push({
+      id: 902,
+      tableId: 7,
+      tableNumber: 4,
+      reason: 'BILL',
+      reasonLabel: 'Запрос счёта',
+      comment: null,
+      status: 'NEW',
+      statusLabel: 'Новый',
+      createdAt: '2030-01-10T18:31:00Z',
+      guestDisplayName: 'Мария',
+      orderId: 900,
+      tabId: 88,
+      paymentMethod: 'CARD',
+      paymentMethodLabel: 'Картой на месте',
+      orderDisplayLabel: 'Заказ №123',
+      tabDisplayLabel: 'Личный счёт'
+    })
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -3307,6 +3397,28 @@ test('venue staff accepts and closes staff calls queue', async ({ page }) => {
   expect(api.getDoneCalls()).toBe(1)
 })
 
+test('venue staff sees bill request context in calls queue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffCallsApi(page, { includeBillRequest: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Вызовы', exact: true }).click()
+  const billCard = page.locator('.venue-call-card').filter({ hasText: 'Причина: Запрос счёта' })
+  await expect(billCard).toBeVisible()
+  await expect(billCard).toContainText('Гость: Мария')
+  await expect(billCard).toContainText('Заказ: Заказ №123')
+  await expect(billCard).toContainText('Счёт: Личный счёт')
+  await expect(billCard).toContainText('Оплата: Картой на месте')
+
+  await billCard.getByRole('button', { name: 'Принять' }).click()
+  await expect(billCard).toContainText('В работе')
+  await billCard.getByRole('button', { name: 'Закрыть' }).click()
+
+  expect(api.getAckCalls()).toBe(1)
+  expect(api.getDoneCalls()).toBe(1)
+})
+
 test('venue owner links tests and unlinks staff chat from mini app', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
@@ -4365,6 +4477,40 @@ test('my order after restored table context keeps table scope', async ({ page })
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toHaveCount(0)
   await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
+})
+
+test('guest bill request payment method posts json from order screen and shows duplicate copy', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await page.getByRole('button', { name: 'Попросить счёт' }).click()
+  await expect(page.getByRole('heading', { name: 'Как будете оплачивать?' })).toBeVisible()
+  await page.getByRole('button', { name: 'Картой на месте' }).click()
+
+  await expect(page.getByText('Персонал получил запрос на счёт.')).toBeVisible()
+  await expect.poll(() => api.getBillRequestRequests()).toHaveLength(1)
+  const firstRequest = api.getBillRequestRequests()[0]
+  expect(firstRequest.url).toContain('/api/guest/order/bill-request')
+  expect(firstRequest.method).toBe('POST')
+  expect(firstRequest.contentType).toContain('application/json')
+  expect(firstRequest.authorization).toBe('Bearer e2e-session-token')
+  expect(firstRequest.body).toEqual({
+    tableToken,
+    tableSessionId: 77,
+    tabId: 88,
+    paymentMethod: 'CARD'
+  })
+
+  await page.getByRole('button', { name: 'Попросить счёт' }).click()
+  await page.getByRole('button', { name: 'Наличными' }).click()
+
+  await expect(page.getByText('Запрос на счёт уже отправлен. Персонал скоро подойдёт.')).toBeVisible()
+  await expect.poll(() => api.getBillRequestRequests()).toHaveLength(2)
+  expect(api.getBillRequestRequests()[1].body.paymentMethod).toBe('CASH')
 })
 
 test('guest bill with discount shows useful breakdown and human discount copy', async ({ page }) => {

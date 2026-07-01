@@ -14,10 +14,13 @@ import com.hookah.platform.backend.miniapp.guest.api.CartPreviewDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewItemDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewRequest
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
+import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchDto
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.api.SelectedOrderItemOptionDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabModel
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
@@ -26,16 +29,21 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.requireUserId
+import com.hookah.platform.backend.telegram.BillPaymentMethod
 import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.NewBatchPromotionDiscount
+import com.hookah.platform.backend.telegram.StaffBillRequestNotification
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
+import com.hookah.platform.backend.telegram.billPaymentMethodLabel
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.GuestOrderCartPreview
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrderItemSelectedOptionDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.toStaffOrderBatchLiveBlocks
@@ -66,6 +74,7 @@ fun Route.guestOrderRoutes(
     guestMenuRepository: GuestMenuRepository,
     subscriptionRepository: SubscriptionRepository,
     ordersRepository: OrdersRepository,
+    staffCallRepository: StaffCallRepository,
     tableSessionRepository: TableSessionRepository,
     tableSessionConfig: TableSessionConfig,
     guestTabsRepository: GuestTabsRepository,
@@ -189,6 +198,97 @@ fun Route.guestOrderRoutes(
         call.respond(CartPreviewResponse(preview = preview.toDto()))
     }
 
+    post("/order/bill-request") {
+        val request = call.receive<GuestBillRequestRequest>()
+        val token = validateTableToken(request.tableToken)
+        val tabId = normalizeTabId(request.tabId)
+        val paymentMethod = normalizeBillPaymentMethod(request.paymentMethod)
+        val table = tableTokenResolver(token) ?: throw NotFoundException()
+        val tableSession =
+            tableSessionRepository.touchActiveSession(
+                tableSessionId = request.tableSessionId,
+                venueId = table.venueId,
+                tableId = table.tableId,
+                ttl = tableSessionConfig.ttl,
+            ) ?: throw NotFoundException()
+        val userId = call.requireUserId()
+        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+        val member =
+            guestTabsRepository.isTabMember(
+                tabId = tabId,
+                venueId = table.venueId,
+                tableSessionId = tableSession.id,
+                userId = userId,
+            )
+        if (!member) {
+            throw ForbiddenException("Tab access denied")
+        }
+        val activeOrder =
+            ordersRepository.findActiveOrderDetailsForTab(
+                tableSessionId = tableSession.id,
+                tabId = tabId,
+            ) ?: throw NotFoundException()
+        val activeOrderDto =
+            activeOrder.toDto(
+                table = table,
+                tableSessionId = tableSession.id,
+                tabId = tabId,
+            )
+        val tabs =
+            guestTabsRepository.listTabsForUser(
+                venueId = table.venueId,
+                tableSessionId = tableSession.id,
+                userId = userId,
+            )
+        val accountLabel = guestBillRequestAccountLabel(tabId = tabId, tabs = tabs)
+        val created =
+            staffCallRepository.createGuestBillRequest(
+                venueId = table.venueId,
+                tableId = table.tableId,
+                tableSessionId = tableSession.id,
+                tabId = tabId,
+                orderId = activeOrder.orderId,
+                createdByUserId = userId,
+                paymentMethod = paymentMethod,
+            )
+        if (!created.alreadyActive) {
+            staffChatNotifier?.notifyBillRequestNow(
+                StaffBillRequestNotification(
+                    venueId = table.venueId,
+                    staffCallId = created.id,
+                    tableLabel = table.tableNumber.toString(),
+                    orderId = activeOrder.orderId,
+                    orderDisplayLabel = orderDisplayLabel(activeOrder.displayNumber, activeOrder.orderId),
+                    accountLabel = accountLabel,
+                    billTotalMinor = activeOrderDto.finalPayableTotalMinor,
+                    billCurrency = activeOrderDto.currency,
+                    paymentMethod = created.paymentMethod,
+                    guestDisplayName =
+                        runCatching { userRepository.findGuestProfile(userId)?.guestDisplayName }
+                            .getOrNull(),
+                ),
+            )
+        }
+        val message =
+            if (created.alreadyActive) {
+                "Запрос на счёт уже отправлен. Персонал скоро подойдёт."
+            } else {
+                "Персонал получил запрос на счёт."
+            }
+        call.respond(
+            GuestBillRequestResponse(
+                staffCallId = created.id,
+                createdAtEpochSeconds = created.createdAt.epochSecond,
+                status = created.status.dbValue,
+                statusLabel = guestBillRequestStatusLabel(created.status),
+                paymentMethod = created.paymentMethod.name,
+                paymentMethodLabel = billPaymentMethodLabel(created.paymentMethod),
+                alreadyActive = created.alreadyActive,
+                message = message,
+            ),
+        )
+    }
+
     route("/order/add-batch") {
         installGuestAddBatchRateLimit(
             endpoint = "guest.order.add-batch",
@@ -298,6 +398,52 @@ private fun parseOptionalPositiveLong(
     }
     return parsed
 }
+
+private fun normalizeBillPaymentMethod(raw: String): BillPaymentMethod {
+    val normalized = raw.trim().uppercase(Locale.ROOT)
+    if (normalized.isBlank()) {
+        throw InvalidInputException("paymentMethod is required")
+    }
+    return runCatching { BillPaymentMethod.valueOf(normalized) }
+        .getOrElse {
+            throw InvalidInputException(
+                "paymentMethod must be one of ${BillPaymentMethod.values().joinToString { it.name }}",
+            )
+        }
+}
+
+private fun guestBillRequestAccountLabel(
+    tabId: Long,
+    tabs: List<GuestTabModel>,
+): String {
+    val tab = tabs.firstOrNull { it.id == tabId }
+    return when (tab?.type?.uppercase(Locale.ROOT)) {
+        "PERSONAL" -> "Личный счёт"
+        "SHARED" -> {
+            val sharedTabs = tabs.filter { it.type.equals("SHARED", ignoreCase = true) && it.status == "ACTIVE" }
+            if (sharedTabs.size <= 1) {
+                "Общий счёт"
+            } else {
+                val index = sharedTabs.indexOfFirst { it.id == tabId }
+                if (index >= 0) "Общий счёт ${index + 1}" else "Общий счёт"
+            }
+        }
+        else -> "Счёт #$tabId"
+    }
+}
+
+private fun orderDisplayLabel(
+    displayNumber: Int?,
+    orderId: Long,
+): String = displayNumber?.let { "Заказ №$it" } ?: "Заказ #$orderId"
+
+private fun guestBillRequestStatusLabel(status: StaffCallStatus): String =
+    when (status) {
+        StaffCallStatus.NEW -> "Запрос на счёт отправлен"
+        StaffCallStatus.ACK -> "Персонал принял запрос"
+        StaffCallStatus.DONE -> "Запрос на счёт закрыт"
+        StaffCallStatus.CANCELLED -> "Запрос на счёт отменён"
+    }
 
 private fun normalizeIdempotencyKey(idempotencyKey: String): String {
     val normalized = idempotencyKey.trim()

@@ -1,13 +1,18 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.telegram.BillPaymentMethod
 import com.hookah.platform.backend.telegram.StaffCallReason
+import com.hookah.platform.backend.telegram.billPaymentMethodLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Duration
 import java.time.Instant
+import java.util.Locale
 import javax.sql.DataSource
 
 private val ACTIVE_STAFF_CALL_WINDOW: Duration = Duration.ofHours(24)
@@ -31,9 +36,16 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                                sc.comment,
                                sc.status,
                                sc.created_at,
+                               sc.order_id,
+                               sc.tab_id,
+                               sc.payment_method,
+                               o.display_number,
+                               t.type AS tab_type,
                                u.guest_display_name
                         FROM staff_calls sc
                         JOIN venue_tables vt ON vt.id = sc.table_id
+                        LEFT JOIN orders o ON o.id = sc.order_id
+                        LEFT JOIN tab t ON t.id = sc.tab_id
                         LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
                         WHERE sc.venue_id = ?
                           AND sc.status IN ('NEW', 'ACK')
@@ -48,18 +60,7 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                         statement.executeQuery().use { rs ->
                             val result = mutableListOf<StaffCallQueueItem>()
                             while (rs.next()) {
-                                result.add(
-                                    StaffCallQueueItem(
-                                        id = rs.getLong("id"),
-                                        tableId = rs.getLong("table_id"),
-                                        tableNumber = rs.getInt("table_number"),
-                                        reason = rs.getString("reason"),
-                                        comment = rs.getString("comment"),
-                                        status = rs.getString("status"),
-                                        createdAt = rs.getTimestamp("created_at").toInstant(),
-                                        guestDisplayName = rs.getString("guest_display_name"),
-                                    ),
-                                )
+                                result.add(rs.toStaffCallQueueItem())
                             }
                             result
                         }
@@ -92,9 +93,16 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                                sc.comment,
                                sc.status,
                                sc.created_at,
+                               sc.order_id,
+                               sc.tab_id,
+                               sc.payment_method,
+                               o.display_number,
+                               t.type AS tab_type,
                                u.guest_display_name
                         FROM staff_calls sc
                         JOIN venue_tables vt ON vt.id = sc.table_id
+                        LEFT JOIN orders o ON o.id = sc.order_id
+                        LEFT JOIN tab t ON t.id = sc.tab_id
                         LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
                         WHERE sc.venue_id = ?
                           AND sc.table_id = ?
@@ -115,18 +123,7 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                         statement.executeQuery().use { rs ->
                             val result = mutableListOf<StaffCallQueueItem>()
                             while (rs.next()) {
-                                result.add(
-                                    StaffCallQueueItem(
-                                        id = rs.getLong("id"),
-                                        tableId = rs.getLong("table_id"),
-                                        tableNumber = rs.getInt("table_number"),
-                                        reason = rs.getString("reason"),
-                                        comment = rs.getString("comment"),
-                                        status = rs.getString("status"),
-                                        createdAt = rs.getTimestamp("created_at").toInstant(),
-                                        guestDisplayName = rs.getString("guest_display_name"),
-                                    ),
-                                )
+                                result.add(rs.toStaffCallQueueItem())
                             }
                             result
                         }
@@ -265,6 +262,221 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun createGuestBillRequest(
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+        orderId: Long,
+        createdByUserId: Long,
+        paymentMethod: BillPaymentMethod,
+    ): CreatedGuestBillRequest {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val isH2 = connection.metaData.databaseProductName.contains("H2", ignoreCase = true)
+                    try {
+                        connection.autoCommit = false
+                        ensureUserExists(connection, createdByUserId, isH2)
+                        connection.prepareStatement(
+                            """
+                            SELECT id
+                            FROM table_sessions
+                            WHERE id = ?
+                              AND venue_id = ?
+                              AND table_id = ?
+                            FOR UPDATE
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, tableSessionId)
+                            statement.setLong(2, venueId)
+                            statement.setLong(3, tableId)
+                            statement.executeQuery().use { rs ->
+                                if (!rs.next()) {
+                                    connection.rollback()
+                                    throw DatabaseUnavailableException()
+                                }
+                            }
+                        }
+                        val existing =
+                            connection.prepareStatement(
+                                """
+                                SELECT id, created_at, status, payment_method
+                                FROM staff_calls
+                                WHERE venue_id = ?
+                                  AND table_session_id = ?
+                                  AND tab_id = ?
+                                  AND reason = 'BILL'
+                                  AND status IN ('NEW', 'ACK')
+                                ORDER BY created_at DESC, id DESC
+                                LIMIT 1
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.setLong(2, tableSessionId)
+                                statement.setLong(3, tabId)
+                                statement.executeQuery().use { rs ->
+                                    if (rs.next()) {
+                                        CreatedGuestBillRequest(
+                                            id = rs.getLong("id"),
+                                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                                            status =
+                                                StaffCallStatus.fromDb(rs.getString("status"))
+                                                    ?: StaffCallStatus.NEW,
+                                            paymentMethod =
+                                                rs.getString("payment_method")?.toBillPaymentMethod()
+                                                    ?: paymentMethod,
+                                            alreadyActive = true,
+                                        )
+                                    } else {
+                                        null
+                                    }
+                                }
+                            }
+                        if (existing != null) {
+                            connection.commit()
+                            return@withContext existing
+                        }
+                        val created =
+                            if (isH2) {
+                                insertGuestBillRequestH2(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    tableId = tableId,
+                                    tableSessionId = tableSessionId,
+                                    tabId = tabId,
+                                    orderId = orderId,
+                                    createdByUserId = createdByUserId,
+                                    paymentMethod = paymentMethod,
+                                )
+                            } else {
+                                insertGuestBillRequestPostgres(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    tableId = tableId,
+                                    tableSessionId = tableSessionId,
+                                    tabId = tabId,
+                                    orderId = orderId,
+                                    createdByUserId = createdByUserId,
+                                    paymentMethod = paymentMethod,
+                                )
+                            }
+                        connection.commit()
+                        created
+                    } catch (e: SQLException) {
+                        runCatching { connection.rollback() }
+                        throw DatabaseUnavailableException()
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = true }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    private fun insertGuestBillRequestPostgres(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+        orderId: Long,
+        createdByUserId: Long,
+        paymentMethod: BillPaymentMethod,
+    ): CreatedGuestBillRequest {
+        val sql =
+            """
+            INSERT INTO staff_calls (
+                venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
+                order_id, tab_id, payment_method
+            )
+            VALUES (?, ?, ?, ?, 'BILL', NULL, 'NEW', ?, ?, ?)
+            RETURNING id, created_at
+            """.trimIndent()
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableId)
+            statement.setLong(3, tableSessionId)
+            statement.setLong(4, createdByUserId)
+            statement.setLong(5, orderId)
+            statement.setLong(6, tabId)
+            statement.setString(7, paymentMethod.name)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    CreatedGuestBillRequest(
+                        id = rs.getLong("id"),
+                        createdAt = rs.getTimestamp("created_at").toInstant(),
+                        status = StaffCallStatus.NEW,
+                        paymentMethod = paymentMethod,
+                        alreadyActive = false,
+                    )
+                } else {
+                    throw DatabaseUnavailableException()
+                }
+            }
+        }
+    }
+
+    private fun insertGuestBillRequestH2(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+        orderId: Long,
+        createdByUserId: Long,
+        paymentMethod: BillPaymentMethod,
+    ): CreatedGuestBillRequest {
+        val sql =
+            """
+            INSERT INTO staff_calls (
+                venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
+                order_id, tab_id, payment_method
+            )
+            VALUES (?, ?, ?, ?, 'BILL', NULL, 'NEW', ?, ?, ?)
+            """.trimIndent()
+        return connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableId)
+            statement.setLong(3, tableSessionId)
+            statement.setLong(4, createdByUserId)
+            statement.setLong(5, orderId)
+            statement.setLong(6, tabId)
+            statement.setString(7, paymentMethod.name)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                if (!keys.next()) {
+                    throw DatabaseUnavailableException()
+                }
+                val id = keys.getLong(1)
+                val createdAt =
+                    connection.prepareStatement("SELECT created_at FROM staff_calls WHERE id = ?").use { select ->
+                        select.setLong(1, id)
+                        select.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                rs.getTimestamp("created_at")?.toInstant() ?: Instant.now()
+                            } else {
+                                Instant.now()
+                            }
+                        }
+                    }
+                CreatedGuestBillRequest(
+                    id = id,
+                    createdAt = createdAt,
+                    status = StaffCallStatus.NEW,
+                    paymentMethod = paymentMethod,
+                    alreadyActive = false,
+                )
+            }
+        }
+    }
+
     private fun ensureUserExists(
         connection: java.sql.Connection,
         userId: Long,
@@ -341,10 +553,17 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                                 SELECT sc.status,
                                        sc.reason,
                                        sc.comment,
+                                       sc.order_id,
+                                       sc.tab_id,
+                                       sc.payment_method,
+                                       o.display_number,
+                                       t.type AS tab_type,
                                        vt.table_number,
                                        u.guest_display_name
                                 FROM staff_calls sc
                                 JOIN venue_tables vt ON vt.id = sc.table_id
+                                LEFT JOIN orders o ON o.id = sc.order_id
+                                LEFT JOIN tab t ON t.id = sc.tab_id
                                 LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
                                 WHERE sc.id = ?
                                   AND sc.venue_id = ?
@@ -368,6 +587,15 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                                         tableNumber = rs.getInt("table_number"),
                                         reason = reason,
                                         comment = rs.getString("comment"),
+                                        orderId = rs.getNullableLong("order_id"),
+                                        tabId = rs.getNullableLong("tab_id"),
+                                        paymentMethod = rs.getString("payment_method")?.toBillPaymentMethod(),
+                                        orderDisplayLabel =
+                                            orderDisplayLabel(
+                                                displayNumber = rs.getNullableInt("display_number"),
+                                                orderId = rs.getNullableLong("order_id"),
+                                            ),
+                                        tabDisplayLabel = tabDisplayLabel(rs.getString("tab_type")),
                                         guestDisplayName = rs.getString("guest_display_name"),
                                     )
                                 }
@@ -423,6 +651,14 @@ data class CreatedStaffCall(
     val createdAt: Instant,
 )
 
+data class CreatedGuestBillRequest(
+    val id: Long,
+    val createdAt: Instant,
+    val status: StaffCallStatus,
+    val paymentMethod: BillPaymentMethod,
+    val alreadyActive: Boolean,
+)
+
 data class StaffCallQueueItem(
     val id: Long,
     val tableId: Long,
@@ -431,6 +667,12 @@ data class StaffCallQueueItem(
     val comment: String?,
     val status: String,
     val createdAt: Instant,
+    val orderId: Long? = null,
+    val tabId: Long? = null,
+    val paymentMethod: BillPaymentMethod? = null,
+    val paymentMethodLabel: String? = paymentMethod?.let { billPaymentMethodLabel(it) },
+    val orderDisplayLabel: String? = null,
+    val tabDisplayLabel: String? = null,
     val guestDisplayName: String? = null,
 )
 
@@ -456,5 +698,65 @@ data class StaffCallStatusUpdateResult(
     val tableNumber: Int,
     val reason: StaffCallReason,
     val comment: String?,
+    val orderId: Long? = null,
+    val tabId: Long? = null,
+    val paymentMethod: BillPaymentMethod? = null,
+    val orderDisplayLabel: String? = null,
+    val tabDisplayLabel: String? = null,
     val guestDisplayName: String? = null,
 )
+
+private fun ResultSet.toStaffCallQueueItem(): StaffCallQueueItem {
+    val orderId = getNullableLong("order_id")
+    val tabType = getString("tab_type")
+    val paymentMethod = getString("payment_method")?.toBillPaymentMethod()
+    return StaffCallQueueItem(
+        id = getLong("id"),
+        tableId = getLong("table_id"),
+        tableNumber = getInt("table_number"),
+        reason = getString("reason"),
+        comment = getString("comment"),
+        status = getString("status"),
+        createdAt = getTimestamp("created_at").toInstant(),
+        orderId = orderId,
+        tabId = getNullableLong("tab_id"),
+        paymentMethod = paymentMethod,
+        orderDisplayLabel =
+            orderDisplayLabel(
+                displayNumber = getNullableInt("display_number"),
+                orderId = orderId,
+            ),
+        tabDisplayLabel = tabDisplayLabel(tabType),
+        guestDisplayName = getString("guest_display_name"),
+    )
+}
+
+private fun ResultSet.getNullableLong(column: String): Long? {
+    val value = getLong(column)
+    return if (wasNull()) null else value
+}
+
+private fun ResultSet.getNullableInt(column: String): Int? {
+    val value = getInt(column)
+    return if (wasNull()) null else value
+}
+
+private fun String.toBillPaymentMethod(): BillPaymentMethod? =
+    runCatching { BillPaymentMethod.valueOf(trim().uppercase(Locale.ROOT)) }.getOrNull()
+
+private fun orderDisplayLabel(
+    displayNumber: Int?,
+    orderId: Long?,
+): String? =
+    when {
+        displayNumber != null -> "Заказ №$displayNumber"
+        orderId != null -> "Заказ #$orderId"
+        else -> null
+    }
+
+private fun tabDisplayLabel(tabType: String?): String? =
+    when (tabType?.uppercase(Locale.ROOT)) {
+        "PERSONAL" -> "Личный счёт"
+        "SHARED" -> "Общий счёт"
+        else -> null
+    }

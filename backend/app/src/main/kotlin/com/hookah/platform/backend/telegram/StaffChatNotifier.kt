@@ -62,6 +62,19 @@ data class StaffCallNotification(
     val guestDisplayName: String? = null,
 )
 
+data class StaffBillRequestNotification(
+    val venueId: Long,
+    val staffCallId: Long,
+    val tableLabel: String,
+    val orderId: Long,
+    val orderDisplayLabel: String,
+    val accountLabel: String,
+    val billTotalMinor: Long,
+    val billCurrency: String,
+    val paymentMethod: BillPaymentMethod,
+    val guestDisplayName: String? = null,
+)
+
 enum class StaffCallNotificationType {
     NORMAL,
     RELOCATION,
@@ -240,6 +253,26 @@ class StaffChatNotifier(
                     reason = event.reason,
                     comment = event.comment,
                     type = event.type,
+                    guestDisplayName = event.guestDisplayName,
+                )
+            },
+            replyMarkup = TelegramKeyboards.inlineStaffChatStaffCallAck(event.venueId, event.staffCallId),
+        )
+
+    suspend fun notifyBillRequestNow(event: StaffBillRequestNotification): StaffChatNotificationResult =
+        notifyTextNow(
+            venueId = event.venueId,
+            notificationKey = staffCallNotificationKey(event.staffCallId),
+            setting = StaffChatNotificationSetting.STAFF_CALLS,
+            messageBuilder = { venue ->
+                buildStaffBillRequestNotificationText(
+                    venueName = venue.name,
+                    tableLabel = event.tableLabel,
+                    orderDisplayLabel = event.orderDisplayLabel,
+                    accountLabel = event.accountLabel,
+                    billTotalMinor = event.billTotalMinor,
+                    billCurrency = event.billCurrency,
+                    paymentMethod = event.paymentMethod,
                     guestDisplayName = event.guestDisplayName,
                 )
             },
@@ -1076,6 +1109,36 @@ private fun formatStaffChatMoney(
         else -> String.format(Locale.US, "%.2f %s", amount, normalizedCurrency)
     }
 }
+
+internal fun buildStaffBillRequestNotificationText(
+    venueName: String,
+    tableLabel: String,
+    orderDisplayLabel: String?,
+    accountLabel: String?,
+    billTotalMinor: Long?,
+    billCurrency: String?,
+    paymentMethod: BillPaymentMethod?,
+    statusLine: String? = null,
+    guestDisplayName: String? = null,
+): String =
+    buildString {
+        append("🧾 Запрос счёта\n")
+        append("Заведение: ").append(venueName).append('\n')
+        append("Стол: ").append(tableLabel).append('\n')
+        append("Гость: ").append(guestDisplayNameOrFallback(guestDisplayName)).append('\n')
+        append("Заказ: ").append(orderDisplayLabel?.takeIf { it.isNotBlank() } ?: "активный заказ").append('\n')
+        append("Счёт: ").append(accountLabel?.takeIf { it.isNotBlank() } ?: "активный счёт").append('\n')
+        if (billTotalMinor != null && !billCurrency.isNullOrBlank()) {
+            append("К оплате: ").append(formatStaffChatMoney(billTotalMinor, billCurrency)).append('\n')
+        } else {
+            append("К оплате: уточните в Venue Mode").append('\n')
+        }
+        append("Оплата: ")
+            .append(paymentMethod?.let(::billPaymentMethodLabel) ?: "Не указано")
+        statusLine?.takeIf { it.isNotBlank() }?.let {
+            append("\n\n").append(it)
+        }
+    }
 
 internal fun buildStaffCallNotificationText(
     venueName: String,

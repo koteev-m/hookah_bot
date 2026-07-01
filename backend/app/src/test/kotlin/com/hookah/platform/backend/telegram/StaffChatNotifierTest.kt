@@ -428,6 +428,46 @@ class StaffChatNotifierTest {
     }
 
     @Test
+    fun `bill request notification text includes operational context and status`() {
+        val accepted =
+            buildStaffBillRequestNotificationText(
+                venueName = "Mix",
+                tableLabel = "105",
+                orderDisplayLabel = "Заказ №12",
+                accountLabel = "Личный счёт",
+                billTotalMinor = 3_000,
+                billCurrency = "RUB",
+                paymentMethod = BillPaymentMethod.CARD,
+                statusLine = "✅ Принял запрос: @waiter",
+                guestDisplayName = "Максим",
+            )
+        val done =
+            buildStaffBillRequestNotificationText(
+                venueName = "Mix",
+                tableLabel = "105",
+                orderDisplayLabel = "Заказ №12",
+                accountLabel = "Личный счёт",
+                billTotalMinor = 3_000,
+                billCurrency = "RUB",
+                paymentMethod = BillPaymentMethod.CASH,
+                statusLine = "✅ Выполнено: @waiter",
+                guestDisplayName = "Максим",
+            )
+
+        assertTrue(accepted.contains("Запрос счёта"), accepted)
+        assertTrue(accepted.contains("Заведение: Mix"), accepted)
+        assertTrue(accepted.contains("Стол: 105"), accepted)
+        assertTrue(accepted.contains("Гость: Максим"), accepted)
+        assertTrue(accepted.contains("Заказ: Заказ №12"), accepted)
+        assertTrue(accepted.contains("Счёт: Личный счёт"), accepted)
+        assertTrue(accepted.contains("К оплате: 30 ₽"), accepted)
+        assertTrue(accepted.contains("Оплата: Картой на месте"), accepted)
+        assertTrue(accepted.contains("✅ Принял запрос: @waiter"), accepted)
+        assertTrue(done.contains("Оплата: Наличными"), done)
+        assertTrue(done.contains("✅ Выполнено: @waiter"), done)
+    }
+
+    @Test
     fun `staff-facing notifications fall back to guest label`() {
         val orderText =
             buildNewBatchNotificationText(

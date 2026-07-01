@@ -189,7 +189,6 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const staffReason = document.createElement('select')
   staffReason.className = 'staff-select'
   staffReason.appendChild(new Option('Замена углей', 'COALS'))
-  staffReason.appendChild(new Option('Счёт', 'BILL'))
   staffReason.appendChild(new Option('Консультация', 'COME'))
   staffReason.appendChild(new Option('Другое', 'OTHER'))
   const staffCommentLabel = el('p', { className: 'field-label', text: 'Комментарий (необязательно)' })

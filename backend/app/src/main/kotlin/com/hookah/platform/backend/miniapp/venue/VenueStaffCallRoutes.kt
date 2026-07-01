@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.telegram.StaffCallReason
+import com.hookah.platform.backend.telegram.billPaymentMethodLabel
 import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
@@ -30,6 +31,12 @@ data class VenueStaffCallDto(
     val reason: String,
     val reasonLabel: String,
     val comment: String? = null,
+    val orderId: Long? = null,
+    val tabId: Long? = null,
+    val paymentMethod: String? = null,
+    val paymentMethodLabel: String? = null,
+    val orderDisplayLabel: String? = null,
+    val tabDisplayLabel: String? = null,
     val status: String,
     val statusLabel: String,
     val createdAt: String? = null,
@@ -162,6 +169,12 @@ private fun StaffCallQueueItem.toDto(): VenueStaffCallDto =
         reason = reason,
         reasonLabel = staffCallReasonLabel(reason),
         comment = comment,
+        orderId = orderId,
+        tabId = tabId,
+        paymentMethod = paymentMethod?.name,
+        paymentMethodLabel = paymentMethodLabel,
+        orderDisplayLabel = orderDisplayLabel,
+        tabDisplayLabel = tabDisplayLabel,
         status = status,
         statusLabel = staffCallStatusLabel(status),
         createdAt = createdAt.toString(),
@@ -175,6 +188,12 @@ private fun StaffCallStatusUpdateResult.toDto(): VenueStaffCallDto =
         reason = reason.name,
         reasonLabel = staffCallReasonLabel(reason),
         comment = comment,
+        orderId = orderId,
+        tabId = tabId,
+        paymentMethod = paymentMethod?.name,
+        paymentMethodLabel = paymentMethod?.let(::billPaymentMethodLabel),
+        orderDisplayLabel = orderDisplayLabel,
+        tabDisplayLabel = tabDisplayLabel,
         status = status.dbValue,
         statusLabel = staffCallStatusLabel(status),
         guestDisplayName = guestDisplayName,
@@ -189,7 +208,7 @@ private fun staffCallReasonLabel(reason: String): String =
 private fun staffCallReasonLabel(reason: StaffCallReason): String =
     when (reason) {
         StaffCallReason.COALS -> "Заменить угли"
-        StaffCallReason.BILL -> "Принести счёт"
+        StaffCallReason.BILL -> "Запрос счёта"
         StaffCallReason.COME -> "Консультация"
         StaffCallReason.OTHER -> "Другое"
     }

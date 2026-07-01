@@ -827,9 +827,26 @@ input[type="number"] {
   color: #dc2626;
 }
 
+.order-message[data-tone='success'] {
+  color: #16a34a;
+}
+
+.order-message[data-tone='info'] {
+  color: #475569;
+}
+
 .order-content {
   display: grid;
   gap: 0.75rem;
+}
+
+.order-bill-request {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.order-bill-request h3 {
+  margin: 0;
 }
 
 .order-empty {

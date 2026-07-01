@@ -3,6 +3,7 @@ import type {
   ActiveOrderResponse,
   AddBatchRequest,
   AddBatchResponse,
+  BillPaymentMethod,
   CartPreviewRequest,
   CartPreviewResponse,
   CatalogResponse,
@@ -15,6 +16,8 @@ import type {
   GuestBookingListResponse,
   GuestBookingResponse,
   GuestBookingUpdateRequest,
+  GuestBillRequestRequest,
+  GuestBillRequestResponse,
   GuestFavoriteItemsResponse,
   GuestFavoriteVenuesResponse,
   GuestShiftExtensionOptionsResponse,
@@ -63,6 +66,14 @@ function invalidTableTokenResult<T>(): ApiResult<T> {
 
 function invalidPositiveIdResult<T>(name: string): ApiResult<T> {
   return invalidInputResult(`${name} должен быть положительным числом`)
+}
+
+function invalidPaymentMethodResult<T>(): ApiResult<T> {
+  return invalidInputResult('Некорректный способ оплаты')
+}
+
+function isBillPaymentMethod(value: string): value is BillPaymentMethod {
+  return value === 'CARD' || value === 'CASH' || value === 'UNKNOWN'
 }
 
 export async function guestGetCatalog(
@@ -483,6 +494,39 @@ export async function guestPreviewCart(
   return requestApi<CartPreviewResponse>(
     backendUrl,
     '/api/guest/order/preview',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestPayload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function guestRequestBill(
+  backendUrl: string,
+  payload: GuestBillRequestRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestBillRequestResponse>> {
+  const normalizedToken = normalizeTableToken(payload.tableToken)
+  if (!normalizedToken) {
+    return invalidTableTokenResult()
+  }
+  if (!Number.isFinite(payload.tableSessionId) || !Number.isInteger(payload.tableSessionId) || payload.tableSessionId <= 0) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  if (!Number.isFinite(payload.tabId) || !Number.isInteger(payload.tabId) || payload.tabId <= 0) {
+    return invalidPositiveIdResult('tabId')
+  }
+  if (!isBillPaymentMethod(payload.paymentMethod)) {
+    return invalidPaymentMethodResult()
+  }
+  const requestPayload: GuestBillRequestRequest = { ...payload, tableToken: normalizedToken }
+  return requestApi<GuestBillRequestResponse>(
+    backendUrl,
+    '/api/guest/order/bill-request',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

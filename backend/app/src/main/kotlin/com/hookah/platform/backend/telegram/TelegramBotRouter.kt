@@ -21697,17 +21697,86 @@ class TelegramBotRouter(
                 "Заведение"
             }
         val text =
-            buildStaffCallNotificationText(
-                venueName = venueName,
-                tableLabel = result.tableNumber.toString(),
-                reason = result.reason,
-                comment = result.comment,
-                type = staffCallNotificationTypeFor(reason = result.reason, comment = result.comment),
-                statusLine = statusLine,
-                guestDisplayName = result.guestDisplayName,
-            )
+            if (result.reason == StaffCallReason.BILL && result.paymentMethod != null) {
+                val total = loadStaffCallBillRequestTotal(venueId, result.orderId, result.tabId)
+                buildStaffBillRequestNotificationText(
+                    venueName = venueName,
+                    tableLabel = result.tableNumber.toString(),
+                    orderDisplayLabel = result.orderDisplayLabel,
+                    accountLabel = result.tabDisplayLabel,
+                    billTotalMinor = total?.totalMinor,
+                    billCurrency = total?.currency,
+                    paymentMethod = result.paymentMethod,
+                    statusLine = statusLine,
+                    guestDisplayName = result.guestDisplayName,
+                )
+            } else {
+                buildStaffCallNotificationText(
+                    venueName = venueName,
+                    tableLabel = result.tableNumber.toString(),
+                    reason = result.reason,
+                    comment = result.comment,
+                    type = staffCallNotificationTypeFor(reason = result.reason, comment = result.comment),
+                    statusLine = statusLine,
+                    guestDisplayName = result.guestDisplayName,
+                )
+            }
         enqueueEditMessage(chatId, messageId, text, replyMarkup)
     }
+
+    private data class StaffCallBillRequestTotal(
+        val totalMinor: Long,
+        val currency: String,
+    )
+
+    private suspend fun loadStaffCallBillRequestTotal(
+        venueId: Long,
+        orderId: Long?,
+        tabId: Long?,
+    ): StaffCallBillRequestTotal? {
+        orderId ?: return null
+        val detail =
+            try {
+                venueOrdersRepository.loadOrderDetail(venueId = venueId, orderId = orderId)
+            } catch (e: DatabaseUnavailableException) {
+                logBestEffort("load order detail for staff call bill request edit", e)
+                return null
+            } ?: return null
+        return staffCallBillRequestTotalForTab(detail, tabId)
+    }
+
+    private fun staffCallBillRequestTotalForTab(
+        detail: OrderDetail,
+        tabId: Long?,
+    ): StaffCallBillRequestTotal {
+        val batches =
+            detail.batches.filter { batch ->
+                batch.status != OrderWorkflowStatus.CLOSED && (tabId == null || batch.tabId == tabId)
+            }
+        val items = batches.flatMap { batch -> batch.items }.filter { item -> item.isActiveBillRequestItem() }
+        val itemTotal = items.sumOf { item -> item.billRequestLinePayableMinor() }
+        val serviceChargeTotal = detail.serviceCharges.sumOf { charge -> charge.totalMinor }
+        val currency =
+            items.firstOrNull { !it.currency.isNullOrBlank() }?.currency
+                ?: detail.serviceCharges.firstOrNull { it.currency.isNotBlank() }?.currency
+                ?: "RUB"
+        return StaffCallBillRequestTotal(totalMinor = itemTotal + serviceChargeTotal, currency = currency)
+    }
+
+    private fun OrderBatchItemDetail.isActiveBillRequestItem(): Boolean =
+        itemStatus == OrderBatchItemStatus.ACTIVE && !isExcluded
+
+    private fun OrderBatchItemDetail.billRequestLineGrossMinor(): Long = priceMinor?.let { it * qty } ?: 0L
+
+    private fun OrderBatchItemDetail.billRequestManualDiscountMinor(): Long =
+        discountPercent
+            ?.takeIf { it in 1..100 }
+            ?.let { billRequestLineGrossMinor() * it / 100 }
+            ?: 0L
+
+    private fun OrderBatchItemDetail.billRequestLinePayableMinor(): Long =
+        (billRequestLineGrossMinor() - billRequestManualDiscountMinor() - promoDiscountMinor.coerceAtLeast(0L))
+            .coerceAtLeast(0L)
 
     private fun staffChatCallCurrentStatusLine(status: StaffCallStatus): String =
         when (status) {

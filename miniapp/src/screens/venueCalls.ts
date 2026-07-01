@@ -52,6 +52,21 @@ function formatTime(value?: string | null) {
   return date.toLocaleString()
 }
 
+function appendBillRequestContext(meta: HTMLElement, call: VenueStaffCallDto) {
+  if (call.reason !== 'BILL') {
+    return
+  }
+  if (call.orderDisplayLabel) {
+    meta.appendChild(el('span', { text: `Заказ: ${call.orderDisplayLabel}` }))
+  }
+  if (call.tabDisplayLabel) {
+    meta.appendChild(el('span', { text: `Счёт: ${call.tabDisplayLabel}` }))
+  }
+  if (call.paymentMethodLabel) {
+    meta.appendChild(el('span', { text: `Оплата: ${call.paymentMethodLabel}` }))
+  }
+}
+
 function buildCallsDom(root: HTMLDivElement): CallsRefs {
   const wrapper = el('div', { className: 'venue-calls' })
   const header = el('div', { className: 'card' })
@@ -112,6 +127,7 @@ function renderCallCard(
   if (call.comment?.trim()) {
     meta.appendChild(el('span', { text: `Комментарий: ${call.comment.trim()}` }))
   }
+  appendBillRequestContext(meta, call)
 
   const actions = el('div', { className: 'button-row' })
   const ackButton = el('button', { className: 'button-small', text: 'Принять' }) as HTMLButtonElement
