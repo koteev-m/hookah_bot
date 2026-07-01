@@ -395,6 +395,9 @@ export async function guestEndTableSession(
     '/api/guest/table/session/end',
     {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         tableToken: normalizedToken,
         tableSessionId: request.tableSessionId

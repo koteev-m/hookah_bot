@@ -635,7 +635,12 @@ async function mockGuestApi(
   let activeOrderServiceCharges: ServiceCharge[] = []
   const previewRequests: Array<{ items: AddBatchItemPayload[] }> = []
   const addBatchRequests: AddBatchPayload[] = []
-  const tableSessionEndRequests: Array<{ tableToken: string; tableSessionId: number }> = []
+  const tableSessionEndRequests: Array<{
+    url: string
+    method: string
+    contentType: string | undefined
+    body: { tableToken: string; tableSessionId: number }
+  }> = []
   let submittedOrderItems: AddBatchItemPayload[] = []
   const bookingUpdateRequests: Array<{ venueId: number; bookingId: number; scheduledAt: string; partySize?: number | null; comment?: string | null }> = []
   const bookingCancelRequests: Array<{ venueId: number; bookingId: number }> = []
@@ -919,8 +924,14 @@ async function mockGuestApi(
   })
 
   await page.route('**/api/guest/table/session/end', async (route) => {
-    const body = (await route.request().postDataJSON()) as { tableToken: string; tableSessionId: number }
-    tableSessionEndRequests.push(body)
+    const request = route.request()
+    const body = (await request.postDataJSON()) as { tableToken: string; tableSessionId: number }
+    tableSessionEndRequests.push({
+      url: request.url(),
+      method: request.method(),
+      contentType: request.headers()['content-type'],
+      body
+    })
     if (tableSessionEndResponse.ended) {
       restoreContext = null
     }
@@ -2812,7 +2823,12 @@ test('table context leave session clears current guest restore state', async ({ 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
 
-  expect(api.getTableSessionEndRequests()).toEqual([{ tableToken, tableSessionId: 77 }])
+  expect(api.getTableSessionEndRequests()).toHaveLength(1)
+  const endRequest = api.getTableSessionEndRequests()[0]
+  expect(new URL(endRequest.url).pathname).toBe('/api/guest/table/session/end')
+  expect(endRequest.method).toBe('POST')
+  expect(endRequest.contentType).toContain('application/json')
+  expect(endRequest.body).toEqual({ tableToken, tableSessionId: 77 })
   await expect(page.getByText('Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.')).toBeVisible()
   await expect(page.getByText('Вы за столом №4 · Микс')).toHaveCount(0)
 
@@ -2837,7 +2853,7 @@ test('table context leave session keeps context when active order blocks exit', 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
 
-  expect(api.getTableSessionEndRequests()).toEqual([{ tableToken, tableSessionId: 77 }])
+  expect(api.getTableSessionEndRequests()[0].body).toEqual({ tableToken, tableSessionId: 77 })
   await expect(page.getByText('Сначала закройте счёт. После этого визит можно завершить.')).toBeVisible()
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Мой заказ' })).toBeVisible()
