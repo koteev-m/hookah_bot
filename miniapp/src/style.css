@@ -840,13 +840,20 @@ input[type="number"] {
   gap: 0.75rem;
 }
 
-.order-bill-request {
-  display: grid;
-  gap: 0.75rem;
+.order-bill-request-slot {
+  margin-top: 0.75rem;
 }
 
-.order-bill-request h3 {
+.order-bill-request {
+  display: grid;
+  gap: 0.65rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e5e7f2;
+}
+
+.order-bill-request h4 {
   margin: 0;
+  font-size: 1rem;
 }
 
 .order-empty {

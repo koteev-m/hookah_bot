@@ -39,6 +39,7 @@ type OrderRefs = {
   refreshButton: HTMLButtonElement
   addButton: HTMLButtonElement
   billButton: HTMLButtonElement
+  billChoiceSlot: HTMLDivElement
   content: HTMLDivElement
 }
 
@@ -173,7 +174,8 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
   const addButton = el('button', { className: 'button-small', text: 'Добавить к заказу' }) as HTMLButtonElement
   const billButton = el('button', { className: 'button-small button-secondary', text: 'Попросить счёт' }) as HTMLButtonElement
   append(buttonRow, addButton, billButton)
-  append(header, title, statusValue, accountValue, scopeValue, hint, buttonRow)
+  const billChoiceSlot = el('div', { className: 'order-bill-request-slot' }) as HTMLDivElement
+  append(header, title, statusValue, accountValue, scopeValue, hint, buttonRow, billChoiceSlot)
 
   const refreshPanel = el('div', { className: 'button-row order-refresh-panel' }) as HTMLDivElement
   const refreshButton = el('button', { className: 'button-small', text: '🔄 Обновить' }) as HTMLButtonElement
@@ -215,6 +217,7 @@ function buildOrderDom(root: HTMLDivElement): OrderRefs {
     refreshButton,
     addButton,
     billButton,
+    billChoiceSlot,
     content
   }
 }
@@ -351,8 +354,8 @@ function renderBillRequestChooser(
   isSubmitting: boolean,
   onChoose: (method: BillPaymentMethod) => void
 ) {
-  const panel = el('div', { className: 'card order-bill-request' })
-  panel.appendChild(el('h3', { text: 'Как будете оплачивать?' }))
+  const panel = el('div', { className: 'order-bill-request' })
+  panel.appendChild(el('h4', { text: 'Как будете оплачивать?' }))
   const actions = el('div', { className: 'button-row order-actions' })
   const methods: BillPaymentMethod[] = ['CARD', 'CASH', 'UNKNOWN']
   methods.forEach((method) => {
@@ -461,6 +464,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
 
   const renderState = () => {
     refs.content.replaceChildren()
+    refs.billChoiceSlot.replaceChildren()
     updateHint()
     hideError()
     refs.header.hidden = !currentOrder
@@ -491,6 +495,9 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     refs.statusValue.textContent = `Статус: ${orderStatusLabel(resolveGuestOrderStatus(currentOrder))}`
     refs.accountValue.textContent = currentAccountLabel ? `Счёт: ${currentAccountLabel}` : ''
     refs.scopeValue.textContent = currentAccountType?.toUpperCase() === 'SHARED' ? 'Показан только этот счёт.' : ''
+    if (billChoiceVisible && !isClosedOrderStatus(currentOrder.status)) {
+      renderBillRequestChooser(refs.billChoiceSlot, billRequestInFlight, (method) => void requestBill(method))
+    }
     renderBatches(refs.content, currentOrder.batches ?? [])
     if (isClosedOrderStatus(currentOrder.status)) {
       refs.content.appendChild(
@@ -499,9 +506,6 @@ export function renderOrderScreen(options: OrderScreenOptions) {
           text: 'Счёт закрыт. Состав и итог доступны только для просмотра.'
         })
       )
-    }
-    if (billChoiceVisible && !isClosedOrderStatus(currentOrder.status)) {
-      renderBillRequestChooser(refs.content, billRequestInFlight, (method) => void requestBill(method))
     }
     renderOrderBill(refs.content, currentOrder)
   }

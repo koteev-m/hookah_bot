@@ -3068,6 +3068,11 @@ test('guest creates staff call from active table and sees lifecycle status', asy
 
   await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
   await expect(page.getByText('Причина')).toBeVisible()
+  await expect(page.locator('select.staff-select option').filter({ hasText: 'Счёт' })).toHaveCount(0)
+  const staffReasonValues = await page.locator('select.staff-select').evaluate((node) =>
+    Array.from((node as HTMLSelectElement).options).map((option) => option.value)
+  )
+  expect(staffReasonValues).not.toContain('BILL')
   await page.locator('select.staff-select').selectOption('COALS')
   await page.locator('textarea.staff-comment').fill('Нужны угли')
   await page.getByRole('button', { name: 'Вызвать персонал к столу №4' }).click()
@@ -4489,6 +4494,16 @@ test('guest bill request payment method posts json from order screen and shows d
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
   await page.getByRole('button', { name: 'Попросить счёт' }).click()
   await expect(page.getByRole('heading', { name: 'Как будете оплачивать?' })).toBeVisible()
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const chooser = document.querySelector('.order-bill-request')
+        const composition = document.querySelector('.order-batches')
+        if (!chooser || !composition) return false
+        return chooser.getBoundingClientRect().bottom <= composition.getBoundingClientRect().top
+      })
+    )
+    .toBe(true)
   await page.getByRole('button', { name: 'Картой на месте' }).click()
 
   await expect(page.getByText('Персонал получил запрос на счёт.')).toBeVisible()
