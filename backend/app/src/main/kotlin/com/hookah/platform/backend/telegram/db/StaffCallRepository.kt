@@ -142,14 +142,17 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         reason: StaffCallReason,
         comment: String?,
         tableSessionId: Long? = null,
+        orderId: Long? = null,
     ): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val sql =
                     """
-                    INSERT INTO staff_calls (venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status)
-                    VALUES (?, ?, ?, ?, ?, ?, 'NEW')
+                    INSERT INTO staff_calls (
+                        venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, order_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
                     RETURNING id
                     """.trimIndent()
                 connection.prepareStatement(sql).use { statement ->
@@ -167,6 +170,11 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                     }
                     statement.setString(5, reason.name)
                     statement.setString(6, comment)
+                    if (orderId != null) {
+                        statement.setLong(7, orderId)
+                    } else {
+                        statement.setNull(7, java.sql.Types.BIGINT)
+                    }
                     statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
                 }
             }
@@ -180,6 +188,7 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         createdByUserId: Long?,
         reason: StaffCallReason,
         comment: String?,
+        orderId: Long? = null,
     ): CreatedStaffCall {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -192,8 +201,11 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                     if (isH2) {
                         val sql =
                             """
-                            INSERT INTO staff_calls (venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status)
-                            VALUES (?, ?, ?, ?, ?, ?, 'NEW')
+                            INSERT INTO staff_calls (
+                                venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
+                                order_id
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
                             """.trimIndent()
                         connection.prepareStatement(sql, java.sql.Statement.RETURN_GENERATED_KEYS).use { statement ->
                             statement.setLong(1, venueId)
@@ -206,6 +218,11 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                             }
                             statement.setString(5, reason.name)
                             statement.setString(6, comment)
+                            if (orderId != null) {
+                                statement.setLong(7, orderId)
+                            } else {
+                                statement.setNull(7, java.sql.Types.BIGINT)
+                            }
                             statement.executeUpdate()
                             statement.generatedKeys.use { keys ->
                                 if (keys.next()) {
@@ -232,8 +249,11 @@ class StaffCallRepository(private val dataSource: DataSource?) {
 
                     val sql =
                         """
-                        INSERT INTO staff_calls (venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status)
-                        VALUES (?, ?, ?, ?, ?, ?, 'NEW')
+                        INSERT INTO staff_calls (
+                            venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
+                            order_id
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
                         RETURNING id, created_at
                         """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
@@ -247,6 +267,11 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                         }
                         statement.setString(5, reason.name)
                         statement.setString(6, comment)
+                        if (orderId != null) {
+                            statement.setLong(7, orderId)
+                        } else {
+                            statement.setNull(7, java.sql.Types.BIGINT)
+                        }
                         statement.executeQuery().use { rs ->
                             if (rs.next()) {
                                 val createdAt = rs.getTimestamp("created_at").toInstant()
@@ -256,6 +281,96 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                     }
                 }
                 throw DatabaseUnavailableException()
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun countActiveOrderActivity(
+        venueId: Long,
+        orderId: Long,
+    ): Int {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT COUNT(*) AS count
+                        FROM staff_calls
+                        WHERE venue_id = ?
+                          AND order_id = ?
+                          AND status IN ('NEW', 'ACK')
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, orderId)
+                        statement.executeQuery().use { rs -> if (rs.next()) rs.getInt("count") else 0 }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun listOrderActivity(
+        venueId: Long,
+        orderId: Long,
+        includeStaffCallId: Long? = null,
+        limit: Int = 5,
+    ): List<StaffOrderActivityItem> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT sc.id,
+                               sc.reason,
+                               sc.comment,
+                               sc.status,
+                               sc.created_at,
+                               sc.tab_id,
+                               sc.payment_method,
+                               t.type AS tab_type,
+                               u.guest_display_name
+                        FROM staff_calls sc
+                        LEFT JOIN tab t ON t.id = sc.tab_id
+                        LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
+                        WHERE sc.venue_id = ?
+                          AND sc.order_id = ?
+                          AND (
+                              sc.status IN ('NEW', 'ACK')
+                              OR (? IS NOT NULL AND sc.id = ?)
+                          )
+                        ORDER BY
+                          CASE WHEN sc.status IN ('NEW', 'ACK') THEN 0 ELSE 1 END,
+                          sc.created_at DESC,
+                          sc.id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, orderId)
+                        if (includeStaffCallId != null) {
+                            statement.setLong(3, includeStaffCallId)
+                            statement.setLong(4, includeStaffCallId)
+                        } else {
+                            statement.setNull(3, java.sql.Types.BIGINT)
+                            statement.setNull(4, java.sql.Types.BIGINT)
+                        }
+                        statement.setInt(5, limit)
+                        statement.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) {
+                                    add(rs.toStaffOrderActivityItem())
+                                }
+                            }
+                        }
+                    }
+                }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
@@ -676,6 +791,18 @@ data class StaffCallQueueItem(
     val guestDisplayName: String? = null,
 )
 
+data class StaffOrderActivityItem(
+    val staffCallId: Long,
+    val reason: StaffCallReason,
+    val comment: String?,
+    val status: StaffCallStatus,
+    val createdAt: Instant,
+    val tabId: Long? = null,
+    val paymentMethod: BillPaymentMethod? = null,
+    val tabDisplayLabel: String? = null,
+    val guestDisplayName: String? = null,
+)
+
 enum class StaffCallStatus(
     val dbValue: String,
 ) {
@@ -727,6 +854,24 @@ private fun ResultSet.toStaffCallQueueItem(): StaffCallQueueItem {
                 orderId = orderId,
             ),
         tabDisplayLabel = tabDisplayLabel(tabType),
+        guestDisplayName = getString("guest_display_name"),
+    )
+}
+
+private fun ResultSet.toStaffOrderActivityItem(): StaffOrderActivityItem {
+    val reason =
+        runCatching { StaffCallReason.valueOf(getString("reason")) }
+            .getOrDefault(StaffCallReason.OTHER)
+    val status = StaffCallStatus.fromDb(getString("status")) ?: StaffCallStatus.NEW
+    return StaffOrderActivityItem(
+        staffCallId = getLong("id"),
+        reason = reason,
+        comment = getString("comment"),
+        status = status,
+        createdAt = getTimestamp("created_at").toInstant(),
+        tabId = getNullableLong("tab_id"),
+        paymentMethod = getString("payment_method")?.toBillPaymentMethod(),
+        tabDisplayLabel = tabDisplayLabel(getString("tab_type")),
         guestDisplayName = getString("guest_display_name"),
     )
 }

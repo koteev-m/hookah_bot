@@ -25410,6 +25410,74 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `staff chat linked staff call ack refreshes live order card and audits action`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                staffCallRepository.ackStaffCall(10L, 6L, 501L)
+            } returns
+                StaffCallStatusUpdateResult(
+                    staffCallId = 6L,
+                    status = StaffCallStatus.ACK,
+                    applied = true,
+                    tableNumber = 105,
+                    reason = StaffCallReason.COME,
+                    comment = null,
+                    orderId = 19L,
+                    guestDisplayName = "Максим",
+                )
+            coEvery { staffChatNotifier.refreshOrderActivityCardNow(10L, 19L, 6L) } returns
+                StaffChatNotificationResult.SENT_OR_QUEUED
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_407,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-linked-call-ack",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 88L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_call_ack:10:6",
+                        ),
+                ),
+            )
+
+            coVerify {
+                staffChatNotifier.refreshOrderActivityCardNow(
+                    venueId = 10L,
+                    orderId = 19L,
+                    includeStaffCallId = 6L,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueEditMessageText(
+                    -777L,
+                    88L,
+                    match { it.contains("🛎 Вызов персонала") },
+                    any(),
+                )
+            }
+            coVerify {
+                auditLogRepository.appendJson(
+                    actorUserId = 501L,
+                    action = STAFF_CALL_ACK_AUDIT_ACTION,
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload =
+                        match { payload ->
+                            payload["venueId"]?.jsonPrimitive?.content == "10" &&
+                                payload["staffCallId"]?.jsonPrimitive?.content == "6" &&
+                                payload["fromStatus"]?.jsonPrimitive?.content == "NEW" &&
+                                payload["toStatus"]?.jsonPrimitive?.content == "ACK" &&
+                                payload["source"]?.jsonPrimitive?.content ==
+                                STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT
+                        },
+                )
+            }
+        }
+
+    @Test
     fun `callback idempotency does not dedupe by source message id`() =
         runBlocking {
             router.process(

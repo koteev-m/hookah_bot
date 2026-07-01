@@ -22,6 +22,7 @@ import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.db.CreatedStaffCall
+import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
@@ -371,6 +372,172 @@ class GuestStaffCallRoutesTest {
                             it.tableSessionId == 55L &&
                             it.orderId == null &&
                             it.type == StaffCallNotificationType.NORMAL
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `api staff call links to active order only when safe resolver allows it`() =
+        testApplication {
+            val config =
+                MapApplicationConfig(
+                    "app.env" to appEnv,
+                    "api.session.jwtSecret" to "test-secret",
+                )
+            val sessionConfig = SessionTokenConfig.from(config, appEnv)
+            val algorithm = Algorithm.HMAC256(sessionConfig.jwtSecret)
+            val guestVenueRepository: GuestVenueRepository = mockk()
+            val subscriptionRepository: SubscriptionRepository = mockk()
+            val staffCallRepository: StaffCallRepository = mockk()
+            val tableSessionRepository: TableSessionRepository = mockk()
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val ordersRepository: OrdersRepository = mockk()
+            val rateLimiter =
+                object : RateLimiter {
+                    override fun tryAcquire(
+                        key: GuestRateLimitKey,
+                        limit: Int,
+                        window: Duration,
+                        now: Instant,
+                    ): Boolean = true
+                }
+            val table =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Mix",
+                    tableId = 11L,
+                    tableNumber = 105,
+                    tableToken = "staff-token",
+                    staffChatId = -777L,
+                )
+
+            coEvery {
+                tableSessionRepository.touchActiveSession(
+                    tableSessionId = 55L,
+                    venueId = 10L,
+                    tableId = 11L,
+                    ttl = any(),
+                    now = any(),
+                )
+            } returns
+                TableSessionRecord(
+                    id = 55L,
+                    venueId = 10L,
+                    tableId = 11L,
+                    startedAt = Instant.parse("2026-04-29T10:00:00Z"),
+                    lastActivityAt = Instant.parse("2026-04-29T10:00:00Z"),
+                    expiresAt = Instant.parse("2026-04-29T12:00:00Z"),
+                    endedAt = null,
+                    status = TableSessionStatus.ACTIVE,
+                )
+            coEvery { guestVenueRepository.findVenueByIdForGuest(10L) } returns
+                com.hookah.platform.backend.miniapp.guest.db.VenueShort(
+                    id = 10L,
+                    name = "Mix",
+                    city = "City",
+                    address = "Address",
+                    status = VenueStatus.PUBLISHED,
+                )
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery {
+                ordersRepository.findSafelyLinkableStaffCallOrderId(
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = TELEGRAM_USER_ID,
+                )
+            } returns 19L
+            coEvery { staffCallRepository.countActiveOrderActivity(10L, 19L) } returns 0
+            coEvery {
+                staffCallRepository.createGuestStaffCall(
+                    venueId = 10L,
+                    tableId = 11L,
+                    tableSessionId = 55L,
+                    createdByUserId = TELEGRAM_USER_ID,
+                    reason = StaffCallReason.COME,
+                    comment = null,
+                    orderId = 19L,
+                )
+            } returns CreatedStaffCall(id = 7L, createdAt = Instant.parse("2026-04-29T10:10:00Z"))
+            coEvery { staffChatNotifier.notifyStaffCallNow(any()) } returns StaffChatNotificationResult.SENT_OR_QUEUED
+
+            application {
+                install(ContentNegotiation) { json(this@GuestStaffCallRoutesTest.json) }
+                install(Authentication) {
+                    jwt("miniapp-session") {
+                        verifier(
+                            JWT
+                                .require(algorithm)
+                                .withIssuer(sessionConfig.issuer)
+                                .withAudience(sessionConfig.audience)
+                                .build(),
+                        )
+                        validate { credentials ->
+                            val subject = credentials.payload.subject ?: return@validate null
+                            subject.toLongOrNull() ?: return@validate null
+                            JWTPrincipal(credentials.payload)
+                        }
+                    }
+                }
+                routing {
+                    authenticate("miniapp-session") {
+                        guestStaffCallRoutes(
+                            guestRateLimitConfig =
+                                GuestRateLimitConfig(
+                                    staffCall = GuestRateLimitPolicy(5, Duration.ofSeconds(30)),
+                                    addBatch = GuestRateLimitPolicy(5, Duration.ofSeconds(10)),
+                                ),
+                            rateLimiter = rateLimiter,
+                            tableTokenResolver = { token -> if (token == "staff-token") table else null },
+                            guestVenueRepository = guestVenueRepository,
+                            subscriptionRepository = subscriptionRepository,
+                            staffCallRepository = staffCallRepository,
+                            tableSessionRepository = tableSessionRepository,
+                            tableSessionConfig =
+                                TableSessionConfig(
+                                    ttl = Duration.ofHours(2),
+                                    cleanupInterval = Duration.ofMinutes(1),
+                                ),
+                            staffChatNotifier = staffChatNotifier,
+                            ordersRepository = ordersRepository,
+                        )
+                    }
+                }
+            }
+
+            val token = SessionTokenService(sessionConfig).issueToken(TELEGRAM_USER_ID).token
+            val request =
+                StaffCallRequest(
+                    tableToken = "staff-token",
+                    tableSessionId = 55L,
+                    reason = "COME",
+                    comment = null,
+                )
+            val response =
+                client.post("/staff-call") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(StaffCallRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            coVerify {
+                staffCallRepository.createGuestStaffCall(
+                    venueId = 10L,
+                    tableId = 11L,
+                    tableSessionId = 55L,
+                    createdByUserId = TELEGRAM_USER_ID,
+                    reason = StaffCallReason.COME,
+                    comment = null,
+                    orderId = 19L,
+                )
+            }
+            coVerify {
+                staffChatNotifier.notifyStaffCallNow(
+                    match<StaffCallNotification> {
+                        it.staffCallId == 7L &&
+                            it.orderId == 19L &&
+                            it.reason == StaffCallReason.COME
                     },
                 )
             }

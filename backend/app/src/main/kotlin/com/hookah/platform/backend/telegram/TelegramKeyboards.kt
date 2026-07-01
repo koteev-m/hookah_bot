@@ -2,6 +2,11 @@ package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 
+data class StaffChatStaffCallInlineAction(
+    val text: String,
+    val callbackData: String,
+)
+
 object TelegramKeyboards {
     fun venueManagerMenu(
         showAiAssistant: Boolean = false,
@@ -5288,9 +5293,20 @@ object TelegramKeyboards {
         webAppUrl: String?,
         batchLabel: String? = null,
         pendingShiftExtensionRequestId: Long? = null,
+        staffCallAction: StaffChatStaffCallInlineAction? = null,
     ): InlineKeyboardMarkup {
         val rows =
             buildList {
+                staffCallAction?.let { action ->
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = action.text,
+                                callbackData = action.callbackData,
+                            ),
+                        ),
+                    )
+                }
                 when (status) {
                     OrderWorkflowStatus.NEW ->
                         add(

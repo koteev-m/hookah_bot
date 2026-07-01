@@ -270,6 +270,73 @@ class OrdersRepository(
         }
     }
 
+    suspend fun findSafelyLinkableStaffCallOrderId(
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+    ): Long? {
+        val ds = dataSource ?: return null
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val activeOrderIds =
+                        connection.prepareStatement(
+                            """
+                            SELECT id
+                            FROM orders
+                            WHERE venue_id = ?
+                              AND table_session_id = ?
+                              AND status = 'ACTIVE'
+                            ORDER BY id
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, tableSessionId)
+                            statement.executeQuery().use { rs ->
+                                buildList {
+                                    while (rs.next()) {
+                                        add(rs.getLong("id"))
+                                    }
+                                }
+                            }
+                        }
+                    val orderId = activeOrderIds.singleOrNull() ?: return@use null
+                    val participant =
+                        connection.prepareStatement(
+                            """
+                            SELECT 1
+                            FROM order_batches ob
+                            LEFT JOIN guest_batch_idempotency gbi
+                              ON gbi.batch_id = ob.id
+                             AND gbi.user_id = ?
+                            WHERE ob.order_id = ?
+                              AND (
+                                  ob.author_user_id = ?
+                                  OR gbi.user_id IS NOT NULL
+                                  OR EXISTS (
+                                      SELECT 1
+                                      FROM tab_member tm
+                                      WHERE tm.tab_id = ob.tab_id
+                                        AND tm.user_id = ?
+                                  )
+                              )
+                            LIMIT 1
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, userId)
+                            statement.setLong(2, orderId)
+                            statement.setLong(3, userId)
+                            statement.setLong(4, userId)
+                            statement.executeQuery().use { rs -> rs.next() }
+                        }
+                    orderId.takeIf { participant }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun findActiveOrderDetails(tableSessionId: Long): ActiveOrderDetails? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {

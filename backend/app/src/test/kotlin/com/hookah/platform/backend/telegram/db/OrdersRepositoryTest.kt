@@ -14,6 +14,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class OrdersRepositoryTest {
     @Test
@@ -95,6 +96,119 @@ class OrdersRepositoryTest {
             val display = fetchOrderDisplay(jdbcUrl, orderId)
             assertEquals(LocalDate.now(venueZone), display.displayDate)
             assertEquals(1, display.displayNumber)
+        }
+
+    @Test
+    fun `safe staff call resolver returns active order for authored batch participant`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-order-author")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val repository = OrdersRepository(dataSource(jdbcUrl))
+            val userId = 1001L
+            seedUser(jdbcUrl, userId)
+            val orderId =
+                repository.getOrCreateActiveOrderId(
+                    tableId = fixture.tableId,
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    venueZoneId = ZoneId.of("UTC"),
+                )
+            assertNotNull(orderId)
+            seedOrderBatch(jdbcUrl, orderId = orderId, authorUserId = userId)
+
+            val resolved =
+                repository.findSafelyLinkableStaffCallOrderId(
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    userId = userId,
+                )
+
+            assertEquals(orderId, resolved)
+        }
+
+    @Test
+    fun `safe staff call resolver returns active order for tab member participant`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-order-tab-member")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val repository = OrdersRepository(dataSource(jdbcUrl))
+            val ownerUserId = 1001L
+            val memberUserId = 2002L
+            seedUser(jdbcUrl, ownerUserId)
+            seedUser(jdbcUrl, memberUserId)
+            val orderId =
+                repository.getOrCreateActiveOrderId(
+                    tableId = fixture.tableId,
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    venueZoneId = ZoneId.of("UTC"),
+                )
+            assertNotNull(orderId)
+            val tabId =
+                seedTab(
+                    jdbcUrl = jdbcUrl,
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    ownerUserId = ownerUserId,
+                )
+            seedTabMember(jdbcUrl, tabId = tabId, userId = memberUserId)
+            seedOrderBatch(jdbcUrl, orderId = orderId, authorUserId = ownerUserId, tabId = tabId)
+
+            val resolved =
+                repository.findSafelyLinkableStaffCallOrderId(
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    userId = memberUserId,
+                )
+
+            assertEquals(orderId, resolved)
+        }
+
+    @Test
+    fun `safe staff call resolver returns null without active order`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-order-none")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val repository = OrdersRepository(dataSource(jdbcUrl))
+
+            val resolved =
+                repository.findSafelyLinkableStaffCallOrderId(
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    userId = 1001L,
+                )
+
+            assertNull(resolved)
+        }
+
+    @Test
+    fun `safe staff call resolver does not attach another user to order`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-order-wrong-user")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val repository = OrdersRepository(dataSource(jdbcUrl))
+            val orderUserId = 1001L
+            val otherUserId = 2002L
+            seedUser(jdbcUrl, orderUserId)
+            seedUser(jdbcUrl, otherUserId)
+            val orderId =
+                repository.getOrCreateActiveOrderId(
+                    tableId = fixture.tableId,
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    venueZoneId = ZoneId.of("UTC"),
+                )
+            assertNotNull(orderId)
+            seedOrderBatch(jdbcUrl, orderId = orderId, authorUserId = orderUserId)
+
+            val resolved =
+                repository.findSafelyLinkableStaffCallOrderId(
+                    venueId = fixture.venueId,
+                    tableSessionId = fixture.tableSessionId,
+                    userId = otherUserId,
+                )
+
+            assertNull(resolved)
         }
 
     private fun migratedJdbcUrl(prefix: String): String {
@@ -211,6 +325,98 @@ class OrdersRepositoryTest {
             return OrderFixture(venueId = venueId, tableId = tableId, tableSessionId = tableSessionId)
         }
     }
+
+    private fun seedUser(
+        jdbcUrl: String,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO users (telegram_user_id, first_name)
+                VALUES (?, 'Guest')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedTab(
+        jdbcUrl: String,
+        venueId: Long,
+        tableSessionId: Long,
+        ownerUserId: Long,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO tab (venue_id, table_session_id, type, owner_user_id)
+                VALUES (?, ?, 'PERSONAL', ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, ownerUserId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert tab")
+                }
+            }
+        }
+
+    private fun seedTabMember(
+        jdbcUrl: String,
+        tabId: Long,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO tab_member (tab_id, user_id, role)
+                VALUES (?, ?, 'MEMBER')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tabId)
+                statement.setLong(2, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedOrderBatch(
+        jdbcUrl: String,
+        orderId: Long,
+        authorUserId: Long?,
+        tabId: Long? = null,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO order_batches (order_id, author_user_id, tab_id, source, status, items_snapshot)
+                VALUES (?, ?, ?, 'MINIAPP', 'NEW', '[]')
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                if (authorUserId != null) {
+                    statement.setLong(2, authorUserId)
+                } else {
+                    statement.setNull(2, java.sql.Types.BIGINT)
+                }
+                if (tabId != null) {
+                    statement.setLong(3, tabId)
+                } else {
+                    statement.setNull(3, java.sql.Types.BIGINT)
+                }
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert order batch")
+                }
+            }
+        }
 
     private fun seedClosedOrderDisplay(
         jdbcUrl: String,

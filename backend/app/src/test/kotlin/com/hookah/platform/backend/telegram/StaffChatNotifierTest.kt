@@ -1,14 +1,21 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchDetail
+import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSelectedOptionSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
+import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderPendingShiftExtension
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
+import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.StaffChatOrderMessage
+import com.hookah.platform.backend.telegram.db.StaffOrderActivityItem
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettings
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
@@ -864,6 +871,229 @@ class StaffChatNotifierTest {
         }
 
     @Test
+    fun `bill request edits existing live order card with payment context`() =
+        runBlocking {
+            val venueOrdersRepository: VenueOrdersRepository = mockk()
+            val staffCallRepository: StaffCallRepository = mockk()
+            val notifier =
+                notifierWithActivity(
+                    venueOrdersRepository = venueOrdersRepository,
+                    staffCallRepository = staffCallRepository,
+                )
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns VenueShort(1L, "Venue", 777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(1L, 2L) } returns orderDetail(tabId = 91L)
+            coEvery {
+                staffCallRepository.listOrderActivity(
+                    venueId = 1L,
+                    orderId = 2L,
+                    includeStaffCallId = 6L,
+                    limit = 5,
+                )
+            } returns
+                listOf(
+                    StaffOrderActivityItem(
+                        staffCallId = 6L,
+                        reason = StaffCallReason.BILL,
+                        comment = null,
+                        status = StaffCallStatus.NEW,
+                        createdAt = Instant.parse("2026-06-05T12:35:00Z"),
+                        tabId = 91L,
+                        paymentMethod = BillPaymentMethod.CARD,
+                        tabDisplayLabel = "Личный счёт",
+                        guestDisplayName = "Максим",
+                    ),
+                )
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(orderId = 2L, venueId = 1L, chatId = 777L, messageId = 55L)
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.tryClaimAndEnqueueOrderMessage(
+                    notificationKey = -1_000_000_000_006L,
+                    orderId = 2L,
+                    venueId = 1L,
+                    chatId = 777L,
+                    method = "editMessageText",
+                    payloadJson = capture(payloadSlot),
+                )
+            } returns StaffChatNotificationClaim.CLAIMED
+
+            val result =
+                notifier.notifyBillRequestNow(
+                    StaffBillRequestNotification(
+                        venueId = 1L,
+                        staffCallId = 6L,
+                        tableLabel = "7",
+                        orderId = 2L,
+                        orderDisplayLabel = "Заказ №12",
+                        accountLabel = "Личный счёт",
+                        billTotalMinor = 3_000L,
+                        billCurrency = "RUB",
+                        paymentMethod = BillPaymentMethod.CARD,
+                        guestDisplayName = "Максим",
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("\"message_id\":55"), payload)
+            assertTrue(payload.contains("Оперативно"), payload)
+            assertTrue(payload.contains("Запрос счёта: Личный счёт"), payload)
+            assertTrue(payload.contains("Картой на месте"), payload)
+            assertTrue(payload.contains("к оплате 30 ₽"), payload)
+            assertTrue(payload.contains("✅ Принять счёт"), payload)
+            assertTrue(payload.contains("sc_call_ack:1:6"), payload)
+            coVerify(exactly = 0) { notificationRepository.tryClaimAndEnqueue(any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `linked staff call edits existing live order card`() =
+        runBlocking {
+            val venueOrdersRepository: VenueOrdersRepository = mockk()
+            val staffCallRepository: StaffCallRepository = mockk()
+            val notifier =
+                notifierWithActivity(
+                    venueOrdersRepository = venueOrdersRepository,
+                    staffCallRepository = staffCallRepository,
+                )
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns VenueShort(1L, "Venue", 777L)
+            coEvery { venueOrdersRepository.loadOrderDetail(1L, 2L) } returns orderDetail(tabId = 91L)
+            coEvery {
+                staffCallRepository.listOrderActivity(1L, 2L, 8L, 5)
+            } returns
+                listOf(
+                    StaffOrderActivityItem(
+                        staffCallId = 8L,
+                        reason = StaffCallReason.COME,
+                        comment = "Подойдите",
+                        status = StaffCallStatus.NEW,
+                        createdAt = Instant.parse("2026-06-05T12:35:00Z"),
+                        tabId = null,
+                        guestDisplayName = "Максим",
+                    ),
+                )
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(orderId = 2L, venueId = 1L, chatId = 777L, messageId = 55L)
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.tryClaimAndEnqueueOrderMessage(
+                    -1_000_000_000_008L,
+                    2L,
+                    1L,
+                    777L,
+                    "editMessageText",
+                    capture(payloadSlot),
+                )
+            } returns StaffChatNotificationClaim.CLAIMED
+
+            val result =
+                notifier.notifyStaffCallNow(
+                    StaffCallNotification(
+                        venueId = 1L,
+                        staffCallId = 8L,
+                        tableLabel = "7",
+                        reason = StaffCallReason.COME,
+                        comment = "Подойдите",
+                        tableSessionId = 90L,
+                        orderId = 2L,
+                        guestDisplayName = "Максим",
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("Вызов: Консультация"), payload)
+            assertTrue(payload.contains("Подойдите"), payload)
+            assertTrue(payload.contains("✅ Принять вызов"), payload)
+            assertTrue(payload.contains("sc_call_ack:1:8"), payload)
+            coVerify(exactly = 0) { notificationRepository.tryClaimAndEnqueue(any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `multiple active order activities omit ambiguous staff call buttons`() =
+        runBlocking {
+            val staffCallRepository: StaffCallRepository = mockk()
+            val notifier = notifierWithActivity(staffCallRepository = staffCallRepository)
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns VenueShort(1L, "Venue", 777L)
+            coEvery {
+                staffCallRepository.listOrderActivity(1L, 2L, null, 5)
+            } returns
+                listOf(
+                    StaffOrderActivityItem(
+                        staffCallId = 6L,
+                        reason = StaffCallReason.BILL,
+                        comment = null,
+                        status = StaffCallStatus.NEW,
+                        createdAt = Instant.parse("2026-06-05T12:35:00Z"),
+                        tabId = 91L,
+                        paymentMethod = BillPaymentMethod.CARD,
+                        tabDisplayLabel = "Личный счёт",
+                    ),
+                    StaffOrderActivityItem(
+                        staffCallId = 8L,
+                        reason = StaffCallReason.COME,
+                        comment = null,
+                        status = StaffCallStatus.NEW,
+                        createdAt = Instant.parse("2026-06-05T12:36:00Z"),
+                    ),
+                )
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(orderId = 2L, venueId = 1L, chatId = 777L, messageId = 55L)
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.enqueueOrderMessage(2L, 1L, 777L, "editMessageText", capture(payloadSlot))
+            } returns true
+
+            val result =
+                notifier.notifyBillUpdatedNow(
+                    StaffBillUpdatedNotification(
+                        venueId = 1L,
+                        orderId = 2L,
+                        displayNumber = 12,
+                        tableLabel = "7",
+                        change = StaffBillUpdateChange.STATUS_UPDATED,
+                        status = OrderWorkflowStatus.NEW,
+                        actionBatchId = 10L,
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+                        bill =
+                            billSnapshot(
+                                grossTotalMinor = 3_000,
+                                finalPayableTotalMinor = 3_000,
+                                activeItems =
+                                    listOf(
+                                        activeItemSnapshot(
+                                            batchId = 10L,
+                                            name = "Чай",
+                                            lineGrossMinor = 3_000,
+                                            linePayableMinor = 3_000,
+                                        ),
+                                    ),
+                            ),
+                        batches =
+                            listOf(
+                                StaffOrderBatchLiveBlock(
+                                    batchId = 10L,
+                                    label = "Основной заказ",
+                                    status = OrderWorkflowStatus.NEW,
+                                    comment = null,
+                                    tabId = 91L,
+                                ),
+                            ),
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("Запрос счёта: Личный счёт"), payload)
+            assertTrue(payload.contains("Вызов: Консультация"), payload)
+            assertFalse(payload.contains("sc_call_ack:1:6"), payload)
+            assertFalse(payload.contains("sc_call_ack:1:8"), payload)
+            assertTrue(payload.contains("sc_ob_a:1:10"), payload)
+        }
+
+    @Test
     fun `bill update notification edits live staff chat message with current discounted total`() =
         runBlocking {
             coEvery { venueSettingsRepository.find(1L) } returns null
@@ -1309,6 +1539,64 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.FAILED_ENQUEUE, result)
         }
+
+    private fun notifierWithActivity(
+        venueOrdersRepository: VenueOrdersRepository? = null,
+        staffCallRepository: StaffCallRepository? = null,
+    ): StaffChatNotifier =
+        StaffChatNotifier(
+            venueRepository = venueRepository,
+            notificationRepository = notificationRepository,
+            venueSettingsRepository = venueSettingsRepository,
+            isTelegramActive = { true },
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            venueOrdersRepository = venueOrdersRepository,
+            staffCallRepository = staffCallRepository,
+        )
+
+    private fun orderDetail(
+        orderId: Long = 2L,
+        tabId: Long = 91L,
+    ): OrderDetail =
+        OrderDetail(
+            orderId = orderId,
+            venueId = 1L,
+            tableId = 11L,
+            tableNumber = 7,
+            status = OrderWorkflowStatus.NEW,
+            createdAt = Instant.parse("2026-06-05T12:30:00Z"),
+            updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+            displayNumber = 12,
+            batches =
+                listOf(
+                    OrderBatchDetail(
+                        batchId = 10L,
+                        tabId = tabId,
+                        tabType = "PERSONAL",
+                        tabOwnerUserId = 501L,
+                        status = OrderWorkflowStatus.NEW,
+                        source = "MINIAPP",
+                        comment = null,
+                        createdAt = Instant.parse("2026-06-05T12:30:00Z"),
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+                        rejectedReasonCode = null,
+                        rejectedReasonText = null,
+                        authorUserId = 501L,
+                        guestDisplayName = "Максим",
+                        items =
+                            listOf(
+                                OrderBatchItemDetail(
+                                    batchItemId = 100L,
+                                    itemId = 200L,
+                                    name = "Чай",
+                                    qty = 2,
+                                    priceMinor = 1_500L,
+                                    currency = "RUB",
+                                ),
+                            ),
+                    ),
+                ),
+        )
 
     private fun billSnapshot(
         grossTotalMinor: Long,

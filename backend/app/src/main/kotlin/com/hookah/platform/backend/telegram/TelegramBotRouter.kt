@@ -21381,6 +21381,18 @@ class TelegramBotRouter(
                 StaffCallStatus.ACK -> TelegramKeyboards.inlineStaffChatStaffCallDone(venueId, staffCallId)
                 else -> null
             }
+        if (result.orderId != null) {
+            val refreshed =
+                staffChatNotifier?.refreshOrderActivityCardNow(
+                    venueId = venueId,
+                    orderId = result.orderId,
+                    includeStaffCallId = result.staffCallId,
+                )
+            if (refreshed != null) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Готово")
+                return
+            }
+        }
         editStaffChatStaffCallMessage(
             chatId = chatId,
             messageId = messageId,
@@ -31923,15 +31935,37 @@ class TelegramBotRouter(
             return
         }
         val tableSession = resolveCurrentTableSession(chatId, context) ?: return
-        val staffCallId =
-            staffCallRepository.createStaffCall(
-                context.table.venueId,
-                context.table.tableId,
-                context.userId,
-                reason,
-                comment,
+        val linkedOrderId =
+            resolveSafeStaffCallOrderId(
+                venueId = context.table.venueId,
                 tableSessionId = tableSession.id,
-            ) ?: run {
+                userId = context.userId,
+                reason = reason,
+                comment = comment,
+            )
+        val createdStaffCallId =
+            if (linkedOrderId != null) {
+                staffCallRepository.createStaffCall(
+                    context.table.venueId,
+                    context.table.tableId,
+                    context.userId,
+                    reason,
+                    comment,
+                    tableSessionId = tableSession.id,
+                    orderId = linkedOrderId,
+                )
+            } else {
+                staffCallRepository.createStaffCall(
+                    context.table.venueId,
+                    context.table.tableId,
+                    context.userId,
+                    reason,
+                    comment,
+                    tableSessionId = tableSession.id,
+                )
+            }
+        val staffCallId =
+            createdStaffCallId ?: run {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
@@ -31947,8 +31981,36 @@ class TelegramBotRouter(
             reason = reason,
             comment = comment,
             tableSessionId = tableSession.id,
-            orderId = null,
+            orderId = linkedOrderId,
         )
+    }
+
+    private suspend fun resolveSafeStaffCallOrderId(
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        reason: StaffCallReason,
+        comment: String?,
+    ): Long? {
+        if (!isOrderLinkEligibleStaffCall(reason = reason, comment = comment)) {
+            return null
+        }
+        val orderId =
+            runCatching {
+                ordersRepository.findSafelyLinkableStaffCallOrderId(
+                    venueId = venueId,
+                    tableSessionId = tableSessionId,
+                    userId = userId,
+                )
+            }.getOrNull() ?: return null
+        val activeActivityCount =
+            runCatching {
+                staffCallRepository.countActiveOrderActivity(
+                    venueId = venueId,
+                    orderId = orderId,
+                )
+            }.getOrElse { Int.MAX_VALUE }
+        return orderId.takeIf { activeActivityCount == 0 }
     }
 
     private suspend fun notifyStaffChatAboutStaffCall(

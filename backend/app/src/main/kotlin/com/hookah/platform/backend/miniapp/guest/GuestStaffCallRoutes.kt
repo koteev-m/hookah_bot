@@ -14,10 +14,12 @@ import com.hookah.platform.backend.telegram.StaffCallNotification
 import com.hookah.platform.backend.telegram.StaffCallReason
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
+import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.UserRepository
+import com.hookah.platform.backend.telegram.isOrderLinkEligibleStaffCall
 import com.hookah.platform.backend.telegram.staffCallReasonLabel
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -40,6 +42,7 @@ fun Route.guestStaffCallRoutes(
     tableSessionConfig: TableSessionConfig,
     staffChatNotifier: StaffChatNotifier? = null,
     userRepository: UserRepository = UserRepository(null),
+    ordersRepository: OrdersRepository = OrdersRepository(null),
 ) {
     route("/staff-call") {
         installGuestStaffCallRateLimit(
@@ -68,16 +71,38 @@ fun Route.guestStaffCallRoutes(
                 ) ?: throw NotFoundException()
             ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
             val userId = call.requireUserId()
-
-            val created =
-                staffCallRepository.createGuestStaffCall(
+            val linkedOrderId =
+                resolveSafeStaffCallOrderId(
+                    ordersRepository = ordersRepository,
+                    staffCallRepository = staffCallRepository,
                     venueId = table.venueId,
-                    tableId = table.tableId,
                     tableSessionId = tableSession.id,
-                    createdByUserId = userId,
+                    userId = userId,
                     reason = reason,
                     comment = comment,
                 )
+
+            val created =
+                if (linkedOrderId != null) {
+                    staffCallRepository.createGuestStaffCall(
+                        venueId = table.venueId,
+                        tableId = table.tableId,
+                        tableSessionId = tableSession.id,
+                        createdByUserId = userId,
+                        reason = reason,
+                        comment = comment,
+                        orderId = linkedOrderId,
+                    )
+                } else {
+                    staffCallRepository.createGuestStaffCall(
+                        venueId = table.venueId,
+                        tableId = table.tableId,
+                        tableSessionId = tableSession.id,
+                        createdByUserId = userId,
+                        reason = reason,
+                        comment = comment,
+                    )
+                }
             staffChatNotifier?.notifyStaffCallNow(
                 StaffCallNotification(
                     venueId = table.venueId,
@@ -86,6 +111,7 @@ fun Route.guestStaffCallRoutes(
                     reason = reason,
                     comment = comment,
                     tableSessionId = tableSession.id,
+                    orderId = linkedOrderId,
                     guestDisplayName =
                         runCatching { userRepository.findGuestProfile(userId)?.guestDisplayName }
                             .getOrNull(),
@@ -129,6 +155,36 @@ fun Route.guestStaffCallRoutes(
             call.respond(StaffCallStatusResponse(items = calls.map { it.toGuestStatusDto() }))
         }
     }
+}
+
+private suspend fun resolveSafeStaffCallOrderId(
+    ordersRepository: OrdersRepository,
+    staffCallRepository: StaffCallRepository,
+    venueId: Long,
+    tableSessionId: Long,
+    userId: Long,
+    reason: StaffCallReason,
+    comment: String?,
+): Long? {
+    if (!isOrderLinkEligibleStaffCall(reason = reason, comment = comment)) {
+        return null
+    }
+    val orderId =
+        runCatching {
+            ordersRepository.findSafelyLinkableStaffCallOrderId(
+                venueId = venueId,
+                tableSessionId = tableSessionId,
+                userId = userId,
+            )
+        }.getOrNull() ?: return null
+    val activeActivityCount =
+        runCatching {
+            staffCallRepository.countActiveOrderActivity(
+                venueId = venueId,
+                orderId = orderId,
+            )
+        }.getOrElse { Int.MAX_VALUE }
+    return orderId.takeIf { activeActivityCount == 0 }
 }
 
 private fun StaffCallQueueItem.toGuestStatusDto(): StaffCallStatusDto {

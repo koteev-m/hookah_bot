@@ -8,8 +8,13 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderPendingShiftExtension
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
+import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
+import com.hookah.platform.backend.telegram.db.StaffCallRepository
+import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
+import com.hookah.platform.backend.telegram.db.StaffOrderActivityItem
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import kotlinx.coroutines.CancellationException
@@ -119,6 +124,19 @@ data class StaffOrderBatchLiveBlock(
     val label: String,
     val status: OrderWorkflowStatus,
     val comment: String?,
+    val tabId: Long? = null,
+)
+
+internal data class StaffOrderActivityBlock(
+    val staffCallId: Long,
+    val reason: StaffCallReason,
+    val status: StaffCallStatus,
+    val comment: String?,
+    val accountLabel: String?,
+    val paymentMethod: BillPaymentMethod?,
+    val billTotalMinor: Long?,
+    val billCurrency: String?,
+    val guestDisplayName: String?,
 )
 
 enum class StaffBillUpdateChange {
@@ -139,6 +157,8 @@ enum class StaffChatNotificationResult {
     SKIPPED_INACTIVE,
     FAILED_ENQUEUE,
 }
+
+private const val STAFF_ORDER_ACTIVITY_LIMIT = 5
 
 interface StaffBillUpdateNotifier {
     suspend fun notifyBillUpdatedNow(event: StaffBillUpdatedNotification): StaffChatNotificationResult
@@ -162,6 +182,7 @@ private data class StaffOrderLiveMessage(
     val pendingShiftExtension: OrderPendingShiftExtension? = null,
     val updatedAt: Instant,
     val change: StaffBillUpdateChange? = null,
+    val includeStaffCallId: Long? = null,
 )
 
 class StaffChatNotifier(
@@ -172,6 +193,8 @@ class StaffChatNotifier(
     private val scope: CoroutineScope,
     private val json: Json = Json { ignoreUnknownKeys = true },
     private val venueMiniAppUrl: (Long) -> String? = { null },
+    private val venueOrdersRepository: VenueOrdersRepository? = null,
+    private val staffCallRepository: StaffCallRepository? = null,
 ) : StaffBillUpdateNotifier {
     private val logger = LoggerFactory.getLogger(StaffChatNotifier::class.java)
 
@@ -241,8 +264,28 @@ class StaffChatNotifier(
         )
     }
 
-    suspend fun notifyStaffCallNow(event: StaffCallNotification): StaffChatNotificationResult =
-        notifyTextNow(
+    suspend fun notifyStaffCallNow(event: StaffCallNotification): StaffChatNotificationResult {
+        if (
+            event.orderId != null &&
+            isOrderLinkEligibleStaffCall(
+                reason = event.reason,
+                comment = event.comment,
+                type = event.type,
+            )
+        ) {
+            val liveResult =
+                notifyOrderActivityCardNow(
+                    venueId = event.venueId,
+                    orderId = event.orderId,
+                    notificationKey = staffCallNotificationKey(event.staffCallId),
+                    includeStaffCallId = event.staffCallId,
+                    change = StaffBillUpdateChange.STATUS_UPDATED,
+                )
+            if (liveResult != null) {
+                return liveResult
+            }
+        }
+        return notifyTextNow(
             venueId = event.venueId,
             notificationKey = staffCallNotificationKey(event.staffCallId),
             setting = StaffChatNotificationSetting.STAFF_CALLS,
@@ -258,9 +301,21 @@ class StaffChatNotifier(
             },
             replyMarkup = TelegramKeyboards.inlineStaffChatStaffCallAck(event.venueId, event.staffCallId),
         )
+    }
 
-    suspend fun notifyBillRequestNow(event: StaffBillRequestNotification): StaffChatNotificationResult =
-        notifyTextNow(
+    suspend fun notifyBillRequestNow(event: StaffBillRequestNotification): StaffChatNotificationResult {
+        val liveResult =
+            notifyOrderActivityCardNow(
+                venueId = event.venueId,
+                orderId = event.orderId,
+                notificationKey = staffCallNotificationKey(event.staffCallId),
+                includeStaffCallId = event.staffCallId,
+                change = StaffBillUpdateChange.STATUS_UPDATED,
+            )
+        if (liveResult != null) {
+            return liveResult
+        }
+        return notifyTextNow(
             venueId = event.venueId,
             notificationKey = staffCallNotificationKey(event.staffCallId),
             setting = StaffChatNotificationSetting.STAFF_CALLS,
@@ -278,6 +333,7 @@ class StaffChatNotifier(
             },
             replyMarkup = TelegramKeyboards.inlineStaffChatStaffCallAck(event.venueId, event.staffCallId),
         )
+    }
 
     suspend fun notifyBookingNow(event: BookingStaffNotification): StaffChatNotificationResult =
         notifyTextNow(
@@ -349,6 +405,59 @@ class StaffChatNotifier(
             notificationKey = null,
         )
 
+    private suspend fun notifyOrderActivityCardNow(
+        venueId: Long,
+        orderId: Long,
+        notificationKey: Long?,
+        includeStaffCallId: Long?,
+        change: StaffBillUpdateChange?,
+    ): StaffChatNotificationResult? {
+        val detail =
+            runCatching { venueOrdersRepository?.loadOrderDetail(venueId = venueId, orderId = orderId) }
+                .onFailure { e ->
+                    logger.warn(
+                        "Failed to load order detail for staff chat activity card venue_id={} order_id={}: {}",
+                        venueId,
+                        orderId,
+                        sanitizeTelegramForLog(e.message),
+                    )
+                    logger.debugTelegramException(e) { "load order detail for staff chat activity card" }
+                }
+                .getOrNull()
+                ?: return null
+        return notifyLiveOrderMessageNow(
+            event =
+                StaffOrderLiveMessage(
+                    venueId = venueId,
+                    orderId = orderId,
+                    actionBatchId = staffOrderActivityActionBatchId(detail),
+                    displayNumber = detail.displayNumber,
+                    tableLabel = detail.tableNumber.toString(),
+                    status = detail.status,
+                    bill = detail.toOrderBillSnapshot(),
+                    batches = detail.toStaffOrderBatchLiveBlocks(),
+                    pendingShiftExtension = detail.pendingShiftExtension,
+                    updatedAt = detail.updatedAt,
+                    change = change,
+                    includeStaffCallId = includeStaffCallId,
+                ),
+            notificationKey = notificationKey,
+        )
+    }
+
+    suspend fun refreshOrderActivityCardNow(
+        venueId: Long,
+        orderId: Long,
+        includeStaffCallId: Long? = null,
+    ): StaffChatNotificationResult? =
+        notifyOrderActivityCardNow(
+            venueId = venueId,
+            orderId = orderId,
+            notificationKey = null,
+            includeStaffCallId = includeStaffCallId,
+            change = StaffBillUpdateChange.STATUS_UPDATED,
+        )
+
     suspend fun rememberOrderMessageNow(
         venueId: Long,
         orderId: Long,
@@ -382,6 +491,7 @@ class StaffChatNotifier(
             return StaffChatNotificationResult.SKIPPED_DISABLED
         }
         val venueZoneId = resolveVenueZoneId(event.venueId)
+        val activities = loadStaffOrderActivities(event)
         val text =
             buildStaffOrderLiveMessageText(
                 venueName = venue.name,
@@ -394,6 +504,7 @@ class StaffChatNotifier(
                 updatedAt = event.updatedAt,
                 venueZoneId = venueZoneId,
                 change = event.change,
+                activities = activities,
             )
         val actionTarget = staffOrderLiveActionTarget(event)
         val replyMarkup =
@@ -405,6 +516,7 @@ class StaffChatNotifier(
                 webAppUrl = venueMiniAppUrl(event.venueId),
                 batchLabel = actionTarget.label,
                 pendingShiftExtensionRequestId = event.pendingShiftExtension?.requestId,
+                staffCallAction = staffOrderActivityInlineAction(event.venueId, activities),
             )
         val existingMessage = notificationRepository.findOrderMessage(event.orderId)
         val (method, payloadJson) =
@@ -462,6 +574,95 @@ class StaffChatNotifier(
             }
         logResult(event.venueId, logKey, result)
         return result
+    }
+
+    private suspend fun loadStaffOrderActivities(event: StaffOrderLiveMessage): List<StaffOrderActivityBlock> {
+        val repository = staffCallRepository ?: return emptyList()
+        val items =
+            runCatching {
+                repository.listOrderActivity(
+                    venueId = event.venueId,
+                    orderId = event.orderId,
+                    includeStaffCallId = event.includeStaffCallId,
+                    limit = STAFF_ORDER_ACTIVITY_LIMIT,
+                )
+            }.onFailure { e ->
+                logger.warn(
+                    "Failed to load staff order activity venue_id={} order_id={}: {}",
+                    event.venueId,
+                    event.orderId,
+                    sanitizeTelegramForLog(e.message),
+                )
+                logger.debugTelegramException(e) { "load staff order activity" }
+            }.getOrDefault(emptyList())
+        return items.map { item -> item.toStaffOrderActivityBlock(event) }
+    }
+
+    private fun StaffOrderActivityItem.toStaffOrderActivityBlock(
+        event: StaffOrderLiveMessage,
+    ): StaffOrderActivityBlock {
+        val billTotal =
+            if (reason == StaffCallReason.BILL) {
+                staffOrderActivityBillTotal(event, tabId)
+            } else {
+                null
+            }
+        return StaffOrderActivityBlock(
+            staffCallId = staffCallId,
+            reason = reason,
+            status = status,
+            comment = comment,
+            accountLabel = tabDisplayLabel,
+            paymentMethod = paymentMethod,
+            billTotalMinor = billTotal?.first,
+            billCurrency = billTotal?.second,
+            guestDisplayName = guestDisplayName,
+        )
+    }
+
+    private fun staffOrderActivityBillTotal(
+        event: StaffOrderLiveMessage,
+        tabId: Long?,
+    ): Pair<Long, String> {
+        val tabBatchIds =
+            tabId?.let { id ->
+                event.batches
+                    .filter { batch -> batch.tabId == id }
+                    .map { batch -> batch.batchId }
+                    .toSet()
+                    .takeIf { it.isNotEmpty() }
+            }
+        val itemTotal =
+            if (tabBatchIds == null) {
+                event.bill.activeItems.sumOf { it.linePayableMinor }
+            } else {
+                event.bill.activeItems
+                    .filter { item -> item.batchId in tabBatchIds }
+                    .sumOf { item -> item.linePayableMinor }
+            }
+        return (itemTotal + event.bill.serviceCharges.sumOf { it.totalMinor }) to event.bill.currency
+    }
+
+    private fun staffOrderActivityInlineAction(
+        venueId: Long,
+        activities: List<StaffOrderActivityBlock>,
+    ): StaffChatStaffCallInlineAction? {
+        val active = activities.filter { it.status == StaffCallStatus.NEW || it.status == StaffCallStatus.ACK }
+        val target = active.singleOrNull() ?: return null
+        val (text, callbackPrefix) =
+            when (target.status) {
+                StaffCallStatus.NEW ->
+                    (if (target.reason == StaffCallReason.BILL) "✅ Принять счёт" else "✅ Принять вызов") to
+                        "sc_call_ack"
+                StaffCallStatus.ACK ->
+                    (if (target.reason == StaffCallReason.BILL) "✅ Счёт вынесен" else "✅ Выполнено") to
+                        "sc_call_done"
+                else -> return null
+            }
+        return StaffChatStaffCallInlineAction(
+            text = text,
+            callbackData = "$callbackPrefix:$venueId:${target.staffCallId}",
+        )
     }
 
     private suspend fun notifyTextNow(
@@ -735,8 +936,12 @@ internal fun OrderDetail.toStaffOrderBatchLiveBlocks(): List<StaffOrderBatchLive
             label = staffOrderBatchLabel(index),
             status = batch.status,
             comment = batch.comment,
+            tabId = batch.tabId,
         )
     }
+
+private fun staffOrderActivityActionBatchId(detail: OrderDetail): Long =
+    detail.batches.lastOrNull()?.batchId ?: detail.orderId
 
 internal fun buildStaffOrderLiveMessageText(
     venueName: String,
@@ -749,6 +954,7 @@ internal fun buildStaffOrderLiveMessageText(
     updatedAt: Instant,
     venueZoneId: ZoneId = defaultStaffChatVenueZoneId,
     change: StaffBillUpdateChange? = null,
+    activities: List<StaffOrderActivityBlock> = emptyList(),
 ): String =
     buildString {
         append("🧾 Заказ")
@@ -759,6 +965,11 @@ internal fun buildStaffOrderLiveMessageText(
         append("Статус: ").append(staffOrderStatusLabel(status)).append('\n')
         change?.let { updateChange ->
             append("Изменение: ").append(staffBillUpdateChangeLabel(updateChange)).append('\n')
+        }
+        if (activities.isNotEmpty()) {
+            append("\nОперативно:\n")
+            append(formatStaffOrderActivities(activities))
+            append('\n')
         }
         val excludedItems = bill.excludedItems.filter { item -> item.status == "excluded" }
         if (batches.isEmpty()) {
@@ -802,6 +1013,52 @@ internal fun buildStaffOrderLiveMessageText(
         if (status == OrderWorkflowStatus.CLOSED) {
             append("\n\nСчёт закрыт.")
         }
+    }
+
+private fun formatStaffOrderActivities(activities: List<StaffOrderActivityBlock>): String =
+    activities
+        .take(STAFF_ORDER_ACTIVITY_LIMIT)
+        .joinToString("\n") { activity ->
+            when (activity.reason) {
+                StaffCallReason.BILL -> formatStaffOrderBillRequestActivity(activity)
+                else -> formatStaffOrderStaffCallActivity(activity)
+            }
+        }
+
+private fun formatStaffOrderBillRequestActivity(activity: StaffOrderActivityBlock): String =
+    buildString {
+        append("• Запрос счёта")
+        activity.accountLabel?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+        append(" — ").append(staffCallStatusLabel(activity.status))
+        activity.paymentMethod?.let { method ->
+            append(", ").append(billPaymentMethodLabel(method))
+        }
+        if (activity.billTotalMinor != null && !activity.billCurrency.isNullOrBlank()) {
+            append(", к оплате ").append(formatStaffChatMoney(activity.billTotalMinor, activity.billCurrency))
+        }
+        activity.guestDisplayName?.takeIf { it.isNotBlank() }?.let { guest ->
+            append(", гость ").append(guest)
+        }
+    }
+
+private fun formatStaffOrderStaffCallActivity(activity: StaffOrderActivityBlock): String =
+    buildString {
+        append("• Вызов: ").append(staffCallReasonLabel(activity.reason))
+        append(" — ").append(staffCallStatusLabel(activity.status))
+        staffCallUserFacingComment(activity.comment)?.let { comment ->
+            append(", ").append(comment.take(120))
+        }
+        activity.guestDisplayName?.takeIf { it.isNotBlank() }?.let { guest ->
+            append(", гость ").append(guest)
+        }
+    }
+
+private fun staffCallStatusLabel(status: StaffCallStatus): String =
+    when (status) {
+        StaffCallStatus.NEW -> "новый"
+        StaffCallStatus.ACK -> "в работе"
+        StaffCallStatus.DONE -> "выполнен"
+        StaffCallStatus.CANCELLED -> "отменён"
     }
 
 private fun formatStaffChatLiveMessageUpdatedAt(
@@ -1182,6 +1439,26 @@ internal fun staffCallReasonLabel(reason: StaffCallReason): String =
         StaffCallReason.COME -> "Консультация"
         StaffCallReason.OTHER -> "Другое"
     }
+
+internal fun isOrderLinkEligibleStaffCall(
+    reason: StaffCallReason,
+    comment: String?,
+    type: StaffCallNotificationType = StaffCallNotificationType.NORMAL,
+): Boolean {
+    if (type == StaffCallNotificationType.RELOCATION) return false
+    if (reason == StaffCallReason.OTHER) {
+        val normalized = comment.orEmpty().lowercase(Locale.ROOT)
+        if (
+            normalized.contains("смена стола") ||
+            normalized.contains("пересадка") ||
+            normalized.contains("change table") ||
+            normalized.contains("relocation")
+        ) {
+            return false
+        }
+    }
+    return true
+}
 
 private fun staffCallUserFacingComment(comment: String?): String? {
     val clean =

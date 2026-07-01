@@ -576,6 +576,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     )
                 }
             },
+            venueOrdersRepository = venueOrdersRepository,
+            staffCallRepository = staffCallRepository,
         )
     val guestStaffChatNotifier = overrides.staffChatNotifier ?: staffChatNotifier
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
@@ -1129,6 +1131,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         tableSessionConfig = tableSessionConfig,
                         staffChatNotifier = guestStaffChatNotifier,
                         userRepository = userRepository,
+                        ordersRepository = ordersRepository,
                     )
                     guestShiftExtensionRoutes(
                         tableTokenResolver = tableTokenResolver,
