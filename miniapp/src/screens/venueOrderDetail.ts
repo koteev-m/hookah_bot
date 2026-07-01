@@ -261,7 +261,7 @@ function renderBill(container: HTMLElement, order: OrderDetailDto) {
   container.replaceChildren()
   container.appendChild(el('h3', { text: 'Счёт' }))
   appendBillRow(container, 'Сумма до скидок', formatMoney(bill.grossTotalMinor, bill.currency))
-  appendBillRow(container, 'Ручные скидки', formatDiscount(bill.manualDiscountTotalMinor, bill.currency))
+  appendBillRow(container, 'Скидка заведения', formatDiscount(bill.manualDiscountTotalMinor, bill.currency))
   renderDiscountRows(container, 'Акции', bill.promoDiscounts)
   if (!bill.promoDiscounts.length) {
     appendBillRow(container, 'Акции', formatDiscount(bill.promoDiscountTotalMinor, bill.currency))
@@ -316,7 +316,7 @@ function renderItemPriceMeta(item: OrderBatchItemDto, discountLabel: string) {
     parts.push(`сумма ${formatMoney(item.lineGrossMinor, item.currency)}`)
   }
   if (item.manualDiscountMinor > 0 && item.currency) {
-    parts.push(`ручная скидка ${formatDiscount(item.manualDiscountMinor, item.currency)}`)
+    parts.push(`скидка заведения ${formatDiscount(item.manualDiscountMinor, item.currency)}`)
   }
   if (item.promoDiscountMinor > 0 && item.currency) {
     parts.push(`${discountLabel} ${formatDiscount(item.promoDiscountMinor, item.currency)}`)
@@ -338,7 +338,7 @@ function renderItemStatusMeta(item: OrderBatchItemDto) {
     parts.push(`Исключено${item.excludedReasonText ? `: ${item.excludedReasonText}` : ''}`)
   }
   if (item.discountPercent) {
-    parts.push(`Ручная скидка ${item.discountPercent}%`)
+    parts.push(`Скидка заведения ${item.discountPercent}%`)
   }
   return parts.join(' · ')
 }
@@ -555,7 +555,7 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
         className: 'venue-order-sub',
         text: canEditBill
           ? 'Скидки и исключение позиций доступны у строк состава заказа. Итог обновится после сохранения.'
-          : 'Счёт доступен только для просмотра. Ручные скидки и исключение позиций доступны менеджеру или владельцу.'
+          : 'Счёт доступен только для просмотра. Скидки заведения и исключение позиций доступны менеджеру или владельцу.'
       })
     )
   }

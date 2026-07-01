@@ -435,6 +435,7 @@ private fun com.hookah.platform.backend.telegram.db.ActiveOrderDetails.toDto(
             batches.map { batch ->
                 OrderBatchDto(
                     batchId = batch.batchId,
+                    status = batch.status,
                     comment = batch.comment,
                     items =
                         batch.items.map { item ->

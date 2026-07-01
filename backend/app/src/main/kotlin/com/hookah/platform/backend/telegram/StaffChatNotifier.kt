@@ -757,7 +757,7 @@ internal fun buildStaffOrderLiveMessageText(
         }
         append("\n\nСумма до скидок: ").append(formatStaffChatMoney(bill.grossTotalMinor, bill.currency))
         if (bill.manualDiscountTotalMinor > 0L) {
-            append("\nРучные скидки: −").append(formatStaffChatMoney(bill.manualDiscountTotalMinor, bill.currency))
+            append("\nСкидка заведения: −").append(formatStaffChatMoney(bill.manualDiscountTotalMinor, bill.currency))
         }
         appendStaffBillDiscountLines("Акции", bill.promoDiscounts)
         appendStaffBillDiscountLines("Лояльность", bill.loyaltyDiscounts)
@@ -897,7 +897,7 @@ internal fun buildStaffBillUpdatedNotificationText(
         }
         append("\n\nСумма до скидок: ").append(formatStaffChatMoney(bill.grossTotalMinor, bill.currency))
         if (bill.manualDiscountTotalMinor > 0L) {
-            append("\nРучные скидки: −").append(formatStaffChatMoney(bill.manualDiscountTotalMinor, bill.currency))
+            append("\nСкидка заведения: −").append(formatStaffChatMoney(bill.manualDiscountTotalMinor, bill.currency))
         }
         appendStaffBillDiscountLines("Акции", bill.promoDiscounts)
         appendStaffBillDiscountLines("Лояльность", bill.loyaltyDiscounts)
@@ -910,7 +910,7 @@ internal fun buildStaffBillUpdatedNotificationText(
 
 private fun staffBillUpdateChangeLabel(change: StaffBillUpdateChange): String =
     when (change) {
-        StaffBillUpdateChange.MANUAL_DISCOUNT -> "ручная скидка"
+        StaffBillUpdateChange.MANUAL_DISCOUNT -> "скидка заведения"
         StaffBillUpdateChange.ITEM_EXCLUDED -> "позиция исключена"
         StaffBillUpdateChange.ITEM_RESTORED -> "позиция восстановлена"
         StaffBillUpdateChange.STATUS_UPDATED -> "статус заказа"

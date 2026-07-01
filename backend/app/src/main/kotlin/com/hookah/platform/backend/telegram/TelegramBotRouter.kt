@@ -24154,7 +24154,7 @@ class TelegramBotRouter(
                             billSnapshot.currency,
                         ),
                     )
-                append("\nРучные скидки: −")
+                append("\nСкидка заведения: −")
                     .append(
                         formatCompactMoney(
                             billSnapshot.manualDiscountTotalMinor,

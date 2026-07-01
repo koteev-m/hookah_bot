@@ -52,6 +52,7 @@ data class OrderBatchDetails(
     val batchId: Long,
     val comment: String?,
     val items: List<OrderBatchItemDetails>,
+    val status: String = "NEW",
 )
 
 data class ActiveOrderDetails(
@@ -159,6 +160,12 @@ private data class ActiveOrderHeader(
     val status: String,
     val displayNumber: Int?,
     val displayDate: LocalDate?,
+)
+
+private data class ActiveOrderBatchHeader(
+    val batchId: Long,
+    val status: String,
+    val comment: String?,
 )
 
 private data class OrderDisplay(
@@ -295,7 +302,7 @@ class OrdersRepository(
                     val batches =
                         connection.prepareStatement(
                             """
-                            SELECT id, guest_comment
+                            SELECT id, status, guest_comment
                             FROM order_batches
                             WHERE order_id = ?
                               AND status <> 'REJECTED'
@@ -307,15 +314,21 @@ class OrdersRepository(
                         ).use { statement ->
                             statement.setLong(1, order.orderId)
                             statement.executeQuery().use { rs ->
-                                val result = mutableListOf<Pair<Long, String?>>()
+                                val result = mutableListOf<ActiveOrderBatchHeader>()
                                 while (rs.next()) {
-                                    result.add(rs.getLong("id") to rs.getString("guest_comment"))
+                                    result.add(
+                                        ActiveOrderBatchHeader(
+                                            batchId = rs.getLong("id"),
+                                            status = rs.getString("status"),
+                                            comment = rs.getString("guest_comment"),
+                                        ),
+                                    )
                                 }
                                 result
                             }
                         }
 
-                    val itemsByBatch = loadBatchItems(connection, batches.map { it.first })
+                    val itemsByBatch = loadBatchItems(connection, batches.map { it.batchId })
 
                     ActiveOrderDetails(
                         orderId = order.orderId,
@@ -326,15 +339,16 @@ class OrdersRepository(
                             loadPromotionDiscountsForBatches(
                                 connection,
                                 order.orderId,
-                                batches.map { it.first },
+                                batches.map { it.batchId },
                             ),
                         serviceCharges = loadOrderServiceCharges(connection, order.orderId),
                         batches =
-                            batches.map { (batchId, comment) ->
+                            batches.map { batch ->
                                 OrderBatchDetails(
-                                    batchId = batchId,
-                                    comment = comment,
-                                    items = itemsByBatch[batchId].orEmpty(),
+                                    batchId = batch.batchId,
+                                    status = batch.status,
+                                    comment = batch.comment,
+                                    items = itemsByBatch[batch.batchId].orEmpty(),
                                 )
                             },
                     )
@@ -393,7 +407,7 @@ class OrdersRepository(
                     val batches =
                         connection.prepareStatement(
                             """
-                            SELECT id, guest_comment
+                            SELECT id, status, guest_comment
                             FROM order_batches
                             WHERE order_id = ?
                               AND tab_id = ?
@@ -407,9 +421,15 @@ class OrdersRepository(
                             statement.setLong(1, order.orderId)
                             statement.setLong(2, tabId)
                             statement.executeQuery().use { rs ->
-                                val result = mutableListOf<Pair<Long, String?>>()
+                                val result = mutableListOf<ActiveOrderBatchHeader>()
                                 while (rs.next()) {
-                                    result.add(rs.getLong("id") to rs.getString("guest_comment"))
+                                    result.add(
+                                        ActiveOrderBatchHeader(
+                                            batchId = rs.getLong("id"),
+                                            status = rs.getString("status"),
+                                            comment = rs.getString("guest_comment"),
+                                        ),
+                                    )
                                 }
                                 result
                             }
@@ -419,7 +439,7 @@ class OrdersRepository(
                         return@use null
                     }
 
-                    val itemsByBatch = loadBatchItems(connection, batches.map { it.first })
+                    val itemsByBatch = loadBatchItems(connection, batches.map { it.batchId })
                     ActiveOrderDetails(
                         orderId = order.orderId,
                         status = order.status,
@@ -429,15 +449,16 @@ class OrdersRepository(
                             loadPromotionDiscountsForBatches(
                                 connection,
                                 order.orderId,
-                                batches.map { it.first },
+                                batches.map { it.batchId },
                             ),
                         serviceCharges = loadOrderServiceCharges(connection, order.orderId),
                         batches =
-                            batches.map { (batchId, comment) ->
+                            batches.map { batch ->
                                 OrderBatchDetails(
-                                    batchId = batchId,
-                                    comment = comment,
-                                    items = itemsByBatch[batchId].orEmpty(),
+                                    batchId = batch.batchId,
+                                    status = batch.status,
+                                    comment = batch.comment,
+                                    items = itemsByBatch[batch.batchId].orEmpty(),
                                 )
                             },
                     )

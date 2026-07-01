@@ -86,6 +86,13 @@ type ServiceCharge = {
   currency: string
 }
 
+type ActiveOrderFixtureOptions = {
+  status?: string
+  batchStatus?: string
+  itemManualDiscountMinor?: number
+  itemPromoDiscountMinor?: number
+}
+
 type ShiftExtensionSettings = {
   venueId: number
   enabled: boolean
@@ -613,6 +620,7 @@ async function mockGuestApi(
     bookings?: GuestBookingFixture[]
     bookingCreateError?: { code: string; message: string }
     tableSessionEndResponse?: TableSessionEndResponseFixture
+    activeOrder?: ActiveOrderFixtureOptions | null
   } = {}
 ) {
   let structuredMenuCalls = 0
@@ -630,6 +638,7 @@ async function mockGuestApi(
       blockedReason: null,
       message: 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
     }
+  let activeOrderOptions: ActiveOrderFixtureOptions | null = options.activeOrder === undefined ? {} : options.activeOrder
   let createExtensionRequestCalls = 0
   let nextBookingId = 9000
   let activeOrderServiceCharges: ServiceCharge[] = []
@@ -965,8 +974,30 @@ async function mockGuestApi(
   })
 
   await page.route('**/api/guest/order/active?**', async (route) => {
+    if (activeOrderOptions === null) {
+      await route.fulfill(jsonResponse({ order: null }))
+      return
+    }
     const orderItems = buildActiveOrderItems()
+    const firstItem = orderItems[0]
+    if (firstItem) {
+      const manualDiscountMinor = Math.min(
+        activeOrderOptions.itemManualDiscountMinor ?? 0,
+        firstItem.lineGrossMinor
+      )
+      const promoDiscountMinor = Math.min(
+        activeOrderOptions.itemPromoDiscountMinor ?? 0,
+        firstItem.lineGrossMinor - manualDiscountMinor
+      )
+      firstItem.manualDiscountMinor = manualDiscountMinor
+      firstItem.promoDiscountMinor = promoDiscountMinor
+      firstItem.discountMinor = manualDiscountMinor + promoDiscountMinor
+      firstItem.linePayableMinor = firstItem.lineGrossMinor - manualDiscountMinor - promoDiscountMinor
+    }
     const orderItemsTotal = orderItems.reduce((sum, item) => sum + item.lineGrossMinor, 0)
+    const manualDiscountTotal = orderItems.reduce((sum, item) => sum + item.manualDiscountMinor, 0)
+    const promoDiscountTotal = orderItems.reduce((sum, item) => sum + item.promoDiscountMinor, 0)
+    const payableItemsTotal = orderItems.reduce((sum, item) => sum + item.linePayableMinor, 0)
     const serviceChargeTotal = activeOrderServiceCharges.reduce((sum, charge) => sum + charge.totalMinor, 0)
     await route.fulfill(
       jsonResponse({
@@ -978,18 +1009,28 @@ async function mockGuestApi(
           tableSessionId: 77,
           tabId: 88,
           tableNumber: '4',
-          status: 'ACTIVE',
+          status: activeOrderOptions.status ?? 'ACTIVE',
           grossTotalMinor: orderItemsTotal + serviceChargeTotal,
-          manualDiscountTotalMinor: 0,
-          promoDiscountTotalMinor: 0,
+          manualDiscountTotalMinor: manualDiscountTotal,
+          promoDiscountTotalMinor: promoDiscountTotal,
           loyaltyDiscountTotalMinor: 0,
-          finalPayableTotalMinor: orderItemsTotal + serviceChargeTotal,
+          finalPayableTotalMinor: payableItemsTotal + serviceChargeTotal,
           currency: 'RUB',
-          discounts: [],
+          discounts: promoDiscountTotal > 0
+            ? [
+                {
+                  label: 'Скидка',
+                  discountMinor: promoDiscountTotal,
+                  currency: 'RUB',
+                  ruleType: 'PROMO'
+                }
+              ]
+            : [],
           serviceCharges: activeOrderServiceCharges,
           batches: [
             {
               batchId: 333,
+              status: activeOrderOptions.batchStatus ?? 'NEW',
               comment: null,
               items: orderItems
             }
@@ -1122,6 +1163,9 @@ async function mockGuestApi(
     },
     setActiveOrderServiceCharges: (charges: ServiceCharge[]) => {
       activeOrderServiceCharges = charges
+    },
+    setActiveOrder: (order: ActiveOrderFixtureOptions | null) => {
+      activeOrderOptions = order
     }
   }
 }
@@ -2851,11 +2895,12 @@ test('table context without active order hides pre-visit actions and extension e
 })
 
 test('table context leave session clears current guest restore state', async ({ page }) => {
-  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext(), activeOrder: null })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await expect(page.getByRole('button', { name: '🚪 Завершить визит' })).toBeVisible()
   await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
 
   expect(api.getTableSessionEndRequests()).toHaveLength(1)
@@ -2872,7 +2917,7 @@ test('table context leave session clears current guest restore state', async ({ 
   await expect(page.getByText('Вы за столом №4 · Микс')).toHaveCount(0)
 })
 
-test('table context leave session keeps context when active order blocks exit', async ({ page }) => {
+test('table context with active order hides leave session action', async ({ page }) => {
   const api = await mockGuestApi(page, {
     restoreContext: buildRestoreContext(),
     tableSessionEndResponse: {
@@ -2886,10 +2931,8 @@ test('table context leave session keeps context when active order blocks exit', 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
-  await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
-
-  expect(api.getTableSessionEndRequests()[0].body).toEqual({ tableToken, tableSessionId: 77 })
-  await expect(page.getByText('Сначала закройте счёт. После этого визит можно завершить.')).toBeVisible()
+  await expect(page.getByRole('button', { name: '🚪 Завершить визит' })).toHaveCount(0)
+  expect(api.getTableSessionEndRequests()).toHaveLength(0)
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Мой заказ' })).toBeVisible()
 })
@@ -3207,7 +3250,7 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await page.getByRole('button', { name: 'Открыть' }).click()
   await expect(page.getByRole('heading', { name: 'Заказ №42' })).toBeVisible()
   await expect(page.getByText('Личный счёт гостя', { exact: true })).toBeVisible()
-  await expect(page.getByText('Ручная скидка 10%')).toBeVisible()
+  await expect(page.getByText('Скидка заведения 10%')).toBeVisible()
   await expect(page.getByText('Исключено из счёта')).toBeVisible()
   await expect(page.getByText(/Личный счёт гостя · Основной заказ: Чай ×1/)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Заказ №900' })).toHaveCount(0)
@@ -4296,8 +4339,16 @@ test('my order after restored table context keeps table scope', async ({ page })
 
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
   await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
-  await expect(page.getByText('Показаны только позиции этого счёта. Исключённые и чужие позиции не входят в сумму.')).toBeVisible()
+  await expect(page.getByText('Статус: Отправлен')).toBeVisible()
+  await expect(page.getByText('Показаны только позиции этого счёта. Исключённые и чужие позиции не входят в сумму.')).toHaveCount(0)
+  await expect(page.getByText('Показан только этот счёт.')).toHaveCount(0)
   await expect(page.getByText('Double Apple')).toBeVisible()
+  const plainItemRow = page.locator('.order-item').filter({ hasText: 'Double Apple' })
+  await expect(plainItemRow).toContainText(/1\s*500,00\s*₽/)
+  await expect(plainItemRow).not.toContainText('к оплате')
+  await expect(page.getByText('Сумма до скидок')).toHaveCount(0)
+  await expect(page.getByText('К оплате', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '🚪 Завершить визит' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Заказ №900' })).toHaveCount(0)
   await expect(page.getByText('Заявка №333')).toHaveCount(0)
   await expect(page.getByText('Общий счёт #88')).toHaveCount(0)
@@ -4314,6 +4365,56 @@ test('my order after restored table context keeps table scope', async ({ page })
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toHaveCount(0)
   await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
+})
+
+test('guest bill with discount shows useful breakdown and human discount copy', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    restoreContext: buildRestoreContext(),
+    activeOrder: {
+      batchStatus: 'ACCEPTED',
+      itemManualDiscountMinor: 25000
+    }
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Статус: Принят')).toBeVisible()
+  const discountedItemRow = page.locator('.order-item').filter({ hasText: 'Double Apple' })
+  await expect(discountedItemRow).toContainText(/1\s*500,00\s*₽/)
+  await expect(discountedItemRow).toContainText(/скидка заведения −250,00\s*₽/)
+  await expect(discountedItemRow).toContainText(/к оплате 1\s*250,00\s*₽/)
+  await expect(page.getByText('Сумма до скидок')).toBeVisible()
+  await expect(page.getByText('Скидка заведения', { exact: true })).toBeVisible()
+  await expect(page.getByText('К оплате', { exact: true })).toBeVisible()
+  await expect(page.getByText(/Ручн/)).toHaveCount(0)
+})
+
+test('guest order status updates to delivered and closed copy stays self-service', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    restoreContext: buildRestoreContext(),
+    activeOrder: {
+      batchStatus: 'ACCEPTED'
+    }
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+
+  await expect(page.getByText('Статус: Принят')).toBeVisible()
+
+  api.setActiveOrder({ batchStatus: 'DELIVERED' })
+  await page.getByRole('button', { name: '🔄 Обновить' }).click()
+  await expect(page.getByText('Статус: Доставлен')).toBeVisible()
+
+  api.setActiveOrder({ status: 'CLOSED', batchStatus: 'DELIVERED' })
+  await page.getByRole('button', { name: '🔄 Обновить' }).click()
+  await expect(page.getByText('Статус: Счёт закрыт')).toBeVisible()
+  await expect(page.getByText('Счёт закрыт. Состав и итог доступны только для просмотра.')).toBeVisible()
+  await expect(page.getByText(/обратитесь к персоналу/)).toHaveCount(0)
 })
 
 test('explicit QR table token wins over restore context', async ({ page }) => {

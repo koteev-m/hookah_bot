@@ -42,13 +42,14 @@ type OrderRefs = {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  active: 'Активный',
-  new: 'Новый',
+  active: 'Отправлен',
+  new: 'Отправлен',
   accepted: 'Принят',
+  preparing: 'Готовится',
   cooking: 'Готовится',
-  delivering: 'Доставляется',
+  delivering: 'Готовится',
   delivered: 'Доставлен',
-  closed: 'Закрыт',
+  closed: 'Счёт закрыт',
   rejected: 'Отклонён'
 }
 
@@ -89,6 +90,26 @@ function formatItemTitle(itemId: number): string {
 
 function orderStatusLabel(status: string): string {
   return STATUS_LABELS[status.toLowerCase()] ?? status
+}
+
+function isClosedOrderStatus(status: string | null | undefined): boolean {
+  return status?.toLowerCase() === 'closed'
+}
+
+function isOperationalBatchStatus(status: string | null | undefined): boolean {
+  const normalized = status?.toLowerCase()
+  return Boolean(normalized && normalized !== 'closed' && normalized !== 'rejected' && normalized !== 'canceled' && normalized !== 'cancelled')
+}
+
+function resolveGuestOrderStatus(order: ActiveOrderDto): string {
+  if (isClosedOrderStatus(order.status)) {
+    return 'closed'
+  }
+  const activeBatches = (order.batches ?? []).filter((batch) => isOperationalBatchStatus(batch.status))
+  if (activeBatches.length > 0) {
+    return activeBatches[activeBatches.length - 1].status
+  }
+  return order.status
 }
 
 function formatMoney(amountMinor: number, currency: string | null | undefined): string {
@@ -213,18 +234,26 @@ function renderDiscountBreakdown(container: HTMLElement, order: ActiveOrderDto) 
 function renderOrderBill(container: HTMLElement, order: ActiveOrderDto) {
   const bill = el('div', { className: 'card venue-order-bill' })
   bill.appendChild(el('h3', { text: 'Итого по заказу' }))
-  appendBillRow(bill, 'Сумма до скидок', formatMoney(order.grossTotalMinor, order.currency))
+  const serviceCharges = order.serviceCharges ?? []
+  const hasDiscounts =
+    order.manualDiscountTotalMinor > 0 ||
+    order.promoDiscountTotalMinor > 0 ||
+    order.loyaltyDiscountTotalMinor > 0 ||
+    order.discounts.length > 0
+  const hasServiceCharges = serviceCharges.length > 0
+  if (hasDiscounts || hasServiceCharges) {
+    appendBillRow(bill, 'Сумма до скидок', formatMoney(order.grossTotalMinor, order.currency))
+  }
   if (order.manualDiscountTotalMinor > 0) {
-    appendBillRow(bill, 'Ручные скидки', formatDiscount(order.manualDiscountTotalMinor, order.currency))
+    appendBillRow(bill, 'Скидка заведения', formatDiscount(order.manualDiscountTotalMinor, order.currency))
   }
   if (order.promoDiscountTotalMinor > 0) {
-    appendBillRow(bill, 'Акции', formatDiscount(order.promoDiscountTotalMinor, order.currency))
+    appendBillRow(bill, 'Скидка', formatDiscount(order.promoDiscountTotalMinor, order.currency))
   }
   if (order.loyaltyDiscountTotalMinor > 0) {
     appendBillRow(bill, 'Лояльность', formatDiscount(order.loyaltyDiscountTotalMinor, order.currency))
   }
   renderDiscountBreakdown(bill, order)
-  const serviceCharges = order.serviceCharges ?? []
   serviceCharges.forEach((charge) => {
     appendBillRow(bill, charge.label, formatMoney(charge.totalMinor, charge.currency))
   })
@@ -234,18 +263,21 @@ function renderOrderBill(container: HTMLElement, order: ActiveOrderDto) {
 
 function renderItemPriceMeta(item: OrderBatchDto['items'][number]) {
   const parts: string[] = []
+  const hasManualDiscount = item.manualDiscountMinor > 0
+  const hasPromoDiscount = item.promoDiscountMinor > 0
+  const hasDiscount = hasManualDiscount || hasPromoDiscount
   if (item.lineGrossMinor > 0) {
     parts.push(formatMoney(item.lineGrossMinor, item.currency))
   } else if (item.priceMinor != null && item.currency) {
     parts.push(formatMoney(item.priceMinor * item.qty, item.currency))
   }
-  if (item.manualDiscountMinor > 0) {
-    parts.push(`ручная скидка ${formatDiscount(item.manualDiscountMinor, item.currency)}`)
+  if (hasManualDiscount) {
+    parts.push(`скидка заведения ${formatDiscount(item.manualDiscountMinor, item.currency)}`)
   }
-  if (item.promoDiscountMinor > 0) {
-    parts.push(`акции/бонусы ${formatDiscount(item.promoDiscountMinor, item.currency)}`)
+  if (hasPromoDiscount) {
+    parts.push(`скидка ${formatDiscount(item.promoDiscountMinor, item.currency)}`)
   }
-  if (item.linePayableMinor >= 0 && (item.lineGrossMinor > 0 || item.promoDiscountMinor > 0 || item.manualDiscountMinor > 0)) {
+  if (hasDiscount && item.linePayableMinor >= 0) {
     parts.push(`к оплате ${formatMoney(item.linePayableMinor, item.currency)}`)
   }
   return parts.join(' · ')
@@ -262,7 +294,8 @@ function renderBatches(container: HTMLElement, batches: OrderBatchDto[]) {
     const card = el('div', { className: 'order-batch' })
     const header = el('div', { className: 'order-batch-header' })
     const batchTitle = el('strong', { text: index === 0 ? 'Состав заказа' : `Дозаказ ${index}` })
-    const batchMeta = el('span', { text: index === 0 ? 'Текущий счёт' : 'Добавлено к счёту' })
+    const batchScope = index === 0 ? 'Текущий счёт' : 'Добавлено к счёту'
+    const batchMeta = el('span', { text: `${batchScope} · ${orderStatusLabel(batch.status)}` })
     append(header, batchTitle, batchMeta)
     if (batch.comment) {
       const comment = el('p', { className: 'order-batch-comment', text: batch.comment })
@@ -309,6 +342,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
   let inFlight = false
   let currentOrder: ActiveOrderDto | null = null
   let currentAccountLabel: string | null = null
+  let currentAccountType: string | null = null
   let lastError: ApiErrorInfo | null = null
   let hadLoadedOrder = false
   let emptyStateReason: 'none' | 'closed' = 'none'
@@ -398,17 +432,18 @@ export function renderOrderScreen(options: OrderScreenOptions) {
           className: 'order-empty',
           text:
             emptyStateReason === 'closed'
-              ? 'Счёт закрыт. Активного заказа по этому счёту больше нет. Если нужен новый заказ, обратитесь к персоналу.'
+              ? 'Счёт закрыт. Можно открыть меню и сделать новый заказ.'
               : 'Активного заказа нет.'
         })
       )
       return
     }
     refs.title.textContent = currentOrder.displayNumber ? `Заказ №${currentOrder.displayNumber}` : 'Мой заказ'
-    refs.statusValue.textContent = `Статус: ${orderStatusLabel(currentOrder.status)}`
+    refs.statusValue.textContent = `Статус: ${orderStatusLabel(resolveGuestOrderStatus(currentOrder))}`
     refs.accountValue.textContent = currentAccountLabel ? `Счёт: ${currentAccountLabel}` : ''
-    refs.scopeValue.textContent = 'Показаны только позиции этого счёта. Исключённые и чужие позиции не входят в сумму.'
-    if (currentOrder.status.toLowerCase() === 'closed') {
+    refs.scopeValue.textContent = currentAccountType?.toUpperCase() === 'SHARED' ? 'Показан только этот счёт.' : ''
+    renderBatches(refs.content, currentOrder.batches ?? [])
+    if (isClosedOrderStatus(currentOrder.status)) {
       refs.content.appendChild(
         el('p', {
           className: 'order-empty',
@@ -416,7 +451,6 @@ export function renderOrderScreen(options: OrderScreenOptions) {
         })
       )
     }
-    renderBatches(refs.content, currentOrder.batches ?? [])
     renderOrderBill(refs.content, currentOrder)
   }
 
@@ -432,6 +466,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       }
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       lastError = null
       inFlight = false
       emptyStateReason = 'none'
@@ -472,6 +507,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       orderAbort = null
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -483,6 +519,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       lastError = tabsResult.error
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       inFlight = false
       orderAbort = null
       emptyStateReason = 'none'
@@ -497,6 +534,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       orderAbort = null
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -507,6 +545,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     }
     setSelectedGuestTabId(tableScope.tableSessionId, selectedTab.id)
     currentAccountLabel = formatGuestTabLabel(selectedTab, tabsResult.data.tabs)
+    currentAccountType = selectedTab.type
 
     const result = await guestGetActiveOrder(
       backendUrl,
@@ -535,6 +574,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       orderAbort = null
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -548,6 +588,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       lastError = result.error
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
       renderState()
@@ -561,6 +602,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     ) {
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       lastError = null
       emptyStateReason = 'none'
       refs.statusValue.textContent = 'Статус: —'
@@ -572,13 +614,15 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     currentOrder = activeOrder
     if (activeOrder) {
       hadLoadedOrder = true
-      emptyStateReason = activeOrder.status.toLowerCase() === 'closed' ? 'closed' : 'none'
+      emptyStateReason = isClosedOrderStatus(activeOrder.status) ? 'closed' : 'none'
     } else {
       emptyStateReason = hadLoadedOrder ? 'closed' : 'none'
     }
     lastSuccessfulRefreshAt = new Date()
     lastError = null
-    refs.statusValue.textContent = currentOrder ? `Статус: ${orderStatusLabel(currentOrder.status)}` : 'Статус: —'
+    refs.statusValue.textContent = currentOrder
+      ? `Статус: ${orderStatusLabel(resolveGuestOrderStatus(currentOrder))}`
+      : 'Статус: —'
     renderState()
   }
 
@@ -634,6 +678,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       inFlight = false
       currentOrder = null
       currentAccountLabel = null
+      currentAccountType = null
       lastError = null
       emptyStateReason = 'none'
       lastSuccessfulRefreshAt = null

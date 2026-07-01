@@ -188,6 +188,7 @@ export type ActiveOrderServiceChargeDto = {
 
 export type OrderBatchDto = {
   batchId: number
+  status: string
   comment: string | null
   items: OrderBatchItemDto[]
 }

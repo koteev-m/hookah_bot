@@ -52,6 +52,7 @@ data class ActiveOrderServiceChargeDto(
 @Serializable
 data class OrderBatchDto(
     val batchId: Long,
+    val status: String,
     val comment: String?,
     val items: List<OrderBatchItemDto>,
 )

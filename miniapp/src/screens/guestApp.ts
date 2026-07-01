@@ -1,6 +1,6 @@
 import { getBackendBaseUrl } from '../shared/api/backend'
 import { clearSession, getAccessToken } from '../shared/api/auth'
-import { guestEndTableSession } from '../shared/api/guestApi'
+import { guestEndTableSession, guestGetActiveOrder, guestGetStaffCallStatus, guestGetTabs } from '../shared/api/guestApi'
 import { isDebugEnabled } from '../shared/debug'
 import {
   clearCurrentTableContext,
@@ -283,6 +283,21 @@ function canOpenActiveOrder(snapshot: ReturnType<typeof getTableContext>): boole
   return snapshot.status === 'resolved' && Boolean(snapshot.tableToken) && snapshot.orderAllowed
 }
 
+function isOpenGuestOrderStatus(status: string | null | undefined): boolean {
+  const normalized = status?.toLowerCase()
+  return Boolean(
+    normalized &&
+      normalized !== 'closed' &&
+      normalized !== 'rejected' &&
+      normalized !== 'canceled' &&
+      normalized !== 'cancelled'
+  )
+}
+
+function isActiveGuestStaffCallStatus(status: string | null | undefined): boolean {
+  return status === 'NEW' || status === 'ACK'
+}
+
 function resolveTableMode(snapshot: ReturnType<typeof getTableContext>): GuestTableMode {
   const hasResolvedTable = snapshot.status === 'resolved' && Boolean(snapshot.tableToken) && Boolean(snapshot.venueId)
   if (hasResolvedTable && !snapshot.tableSessionActive) {
@@ -386,11 +401,16 @@ function updateGuestShellActions(
   route: Route,
   cartQty: number,
   staffCallActive: boolean,
+  canLeaveTable: boolean,
   onAction: (action: GuestActionId) => void
 ) {
+  const primaryActions =
+    mode === 'active-table' && !canLeaveTable
+      ? primaryActionsByMode[mode].filter((action) => action !== 'leave')
+      : primaryActionsByMode[mode]
   renderActionSet(
     refs.primaryActions,
-    primaryActionsByMode[mode],
+    primaryActions,
     'button-secondary',
     cartQty,
     route,
@@ -414,6 +434,7 @@ export function mountGuestApp(options: GuestAppOptions) {
   let tableSnapshot = getTableContext()
   let currentRoute: Route = resolveRoute()
   let staffCallActive = false
+  let canLeaveTable = false
   let handleGuestAction: (action: GuestActionId) => void = () => undefined
   const renderShellActions = () => {
     updateGuestShellActions(
@@ -422,11 +443,89 @@ export function mountGuestApp(options: GuestAppOptions) {
       currentRoute,
       getCartSnapshot().totalQty,
       staffCallActive,
+      canLeaveTable,
       (action) => handleGuestAction(action)
     )
   }
   setCartTableToken(resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.tableToken : null)
   let rerenderForTableChange: (() => void) | null = null
+  let exitCheckAbort: AbortController | null = null
+
+  const setCanLeaveTable = (nextValue: boolean) => {
+    if (canLeaveTable === nextValue) return
+    canLeaveTable = nextValue
+    renderShellActions()
+  }
+
+  const getExitCheckScope = () => {
+    if (
+      resolveTableMode(tableSnapshot) !== 'active-table' ||
+      tableSnapshot.status !== 'resolved' ||
+      !tableSnapshot.tableToken ||
+      !tableSnapshot.tableSessionId
+    ) {
+      return null
+    }
+    return {
+      tableToken: tableSnapshot.tableToken,
+      tableSessionId: tableSnapshot.tableSessionId
+    }
+  }
+
+  const refreshVisitExitAvailability = () => {
+    const scope = getExitCheckScope()
+    if (!scope) {
+      exitCheckAbort?.abort()
+      exitCheckAbort = null
+      setCanLeaveTable(false)
+      return
+    }
+    exitCheckAbort?.abort()
+    const controller = new AbortController()
+    exitCheckAbort = controller
+    setCanLeaveTable(false)
+    const deps = { isDebug, getAccessToken, clearSession }
+    void (async () => {
+      const staffStatus = await guestGetStaffCallStatus(backendUrl, scope, deps, controller.signal)
+      if (controller.signal.aborted || exitCheckAbort !== controller) return
+      if (!staffStatus.ok || staffStatus.data.items.some((item) => isActiveGuestStaffCallStatus(item.status))) {
+        exitCheckAbort = null
+        setCanLeaveTable(false)
+        return
+      }
+
+      const tabsResult = await guestGetTabs(backendUrl, scope.tableSessionId, deps, controller.signal)
+      if (controller.signal.aborted || exitCheckAbort !== controller) return
+      if (!tabsResult.ok) {
+        exitCheckAbort = null
+        setCanLeaveTable(false)
+        return
+      }
+
+      const activeTabs = tabsResult.data.tabs.filter(
+        (tab) => tab.status === 'ACTIVE' && tab.tableSessionId === scope.tableSessionId
+      )
+      for (const tab of activeTabs) {
+        const orderResult = await guestGetActiveOrder(
+          backendUrl,
+          scope.tableToken,
+          scope.tableSessionId,
+          tab.id,
+          deps,
+          controller.signal
+        )
+        if (controller.signal.aborted || exitCheckAbort !== controller) return
+        if (!orderResult.ok || (orderResult.data.order && isOpenGuestOrderStatus(orderResult.data.order.status))) {
+          exitCheckAbort = null
+          setCanLeaveTable(false)
+          return
+        }
+      }
+
+      exitCheckAbort = null
+      setCanLeaveTable(true)
+    })()
+  }
 
   const tableSubscription = subscribeTable((snapshot) => {
     const previousCanOpenOrder = canOpenActiveOrder(tableSnapshot)
@@ -443,6 +542,7 @@ export function mountGuestApp(options: GuestAppOptions) {
       staffCallActive = false
     }
     renderShellActions()
+    refreshVisitExitAvailability()
     const routeName = resolveRoute().name
     if (
       rerenderForTableChange &&
@@ -458,6 +558,7 @@ export function mountGuestApp(options: GuestAppOptions) {
     renderShellActions()
   })
   renderShellActions()
+  refreshVisitExitAvailability()
 
   const handleStaffCallState = (event: Event) => {
     const detail = (event as CustomEvent<{ active?: boolean; venueId?: number | null }>).detail
@@ -468,6 +569,7 @@ export function mountGuestApp(options: GuestAppOptions) {
     if (staffCallActive === nextActive) return
     staffCallActive = nextActive
     renderShellActions()
+    refreshVisitExitAvailability()
   }
   window.addEventListener('hookah:guest-staff-call-state', handleStaffCallState)
   disposables.push(() => window.removeEventListener('hookah:guest-staff-call-state', handleStaffCallState))
@@ -768,6 +870,7 @@ export function mountGuestApp(options: GuestAppOptions) {
     const route = resolveRoute()
     currentRoute = route
     renderShellActions()
+    refreshVisitExitAvailability()
     currentDispose?.()
     if (route.name === 'catalog' && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
       navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
@@ -869,6 +972,7 @@ export function mountGuestApp(options: GuestAppOptions) {
 
   return () => {
     window.removeEventListener('hashchange', onHashChange)
+    exitCheckAbort?.abort()
     currentDispose?.()
     unbindBackButton()
     disposables.forEach((dispose) => dispose())
