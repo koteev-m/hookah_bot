@@ -89,7 +89,7 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Mini App settings and staff management parity should be smoke-tested by role.
 - Staff chat diagnostics/unlink polish is closed after M6 staging smoke; keep real Telegram group link/test/unlink and operational notification delivery in per-venue regression.
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
-- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle, staff-call UX polish and guest table-context cleanup are not implemented in this milestone.
+- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Menu options/photos/descriptions/top-list richness may still be partial depending on guest surface.
 - Multi-venue owner selector/entry should be smoke-tested if owner has several memberships.
 - Platform owner invite, owner revoke and ownership access management belong to Platform Owner flow, not this role doc.

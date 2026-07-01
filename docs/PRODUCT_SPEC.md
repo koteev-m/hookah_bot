@@ -83,6 +83,7 @@ SHOULD:
 - Favorites and history (Block 15) integrate with catalog.
 - Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR. Manual `Завершить визит` stores a user-scoped exit marker so that guest no longer restores the table context; scanning the table QR again explicitly re-enters and clears that marker.
 - Manual guest exit is blocked only for that guest's obligations in the current `table_session`: active order/bill batches or active `NEW`/`ACK` staff calls created by the guest. Empty personal tabs and another guest's order/call at the same table do not block exit.
+- Current staging-smoked behavior: pre-visit venue card keeps address, route/copy address and booking actions; active table context hides those pre-visit actions and shows `Завершить визит`. Exiting does not close the shared physical `table_sessions` row for other guests.
 - Adaptive booking reminders are implemented as M7c code/test-backed behavior and passed one controlled real Telegram staging smoke; runtime remains disabled by default and requires explicit opt-in. MVP sends at most one transactional reminder for `CONFIRMED`/`CHANGED` bookings, calculated in venue-local time with a 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Legacy reminder rows are preserved but isolated by policy version; legacy unsent rows are reconciled to canceled by migration and cannot be claimed by the M7c worker. Outbox enqueue means `QUEUED`, not Telegram-delivered. `Да, буду` / `Я приду` records guest attendance intent separately from venue-controlled booking status, edits the guest reminder state, and exposes the response in Bot `/my`, Guest Mini App `Мои брони` and Venue Mini App booking queue. The latest enriched staff-chat attendance copy is code/test-backed but has not been manually re-smoked with a new booking.
 
 ## Block 5 — Orders (one active order per table_session + batches)
@@ -205,7 +206,7 @@ Product intent:
 
 Current implementation map:
 - Backend/data/API: settings, pending requests, approve/reject, service charge creation, session extension and bill snapshot totals are implemented.
-- Guest Mini App: active table menu exposes service action `Продление работы заведения`; request/pending/confirmed states are implemented outside cart logic.
+- Guest Mini App: active order/table state exposes service action `Продление работы заведения` only when extension settings and current order/bill state make it actionable; request/pending/confirmed states are implemented outside cart logic.
 - Venue Mini App: owner/manager settings are implemented; order queue/detail exposes pending extension state and staff/manager/owner approve/reject from the order context.
 - Staff chat: pending extension appears inside the existing live order/bill message with approve/reject actions; approved/rejected state refreshes the same live message and approval shows the service charge under bill service charges.
 - Guest Bot: bot ordering menu section lists expose `Продление работы заведения` from `🍽️ Меню` and `Мой заказ → Дозаказать`; the request screen creates the same fixed-price pending request, shows duplicate pending state and keeps extension outside cart/menu-item/cart/order-batch logic.
@@ -220,7 +221,7 @@ Guest Mini App target:
 6. The service action must never add anything to cart, menu items, order batches or batch item snapshots.
 
 Guest Bot target:
-1. In every bot ordering menu section list entry point, including `🍽️ Меню` and `Мой заказ → Дозаказать`, show `Продление работы заведения` when the venue exposes enabled, configured extension settings.
+1. In every bot ordering menu section list entry point, including `🍽️ Меню` and `Мой заказ → Дозаказать`, show `Продление работы заведения` only when the venue exposes enabled, configured extension settings and the current table/order state makes extension actionable.
 2. Opening it shows `Продление на 1 час — 3 000 ₽` and `Персонал подтвердит возможность продления.`
 3. Primary action: `Продлить на 1 час`; after submit, replace action with `Ожидает подтверждения`.
 4. Duplicate pending requests should show the existing pending state instead of creating another request.

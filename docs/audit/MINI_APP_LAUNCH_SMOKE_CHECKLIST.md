@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-06-30.
+Дата: 2026-07-01.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -28,7 +28,9 @@
 - M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper opened one authenticated persistent connection after a bounded retry, reused that connection for rsync/plain SSH through the existing deployment script, completed image build/upload and backend recreate, and passed local/public health, DB health and Mini App static checks. The normal `./scripts/deploy-staging.sh hookah-staging` path remains supported and unchanged. The exact fresh SSH connection failure cause remains unconfirmed.
 - M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges/rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing is CLOSED / staging smoke passed: OWNER/MANAGER can manage weekly hours, inclusive closed/special-hours exception ranges and optional guest-facing reasons/comments in Venue Mini App; successful exception saves close/reset the form and reveal the saved row in the compact list; existing closed and changed-hours exceptions can be edited to a new inclusive date range; STAFF is hidden/forbidden; guest catalog/card read models expose safe today schedule/open state; and direct Guest Mini App booking create/update validates configured venue hours with human schedule errors. Missing schedule setup shows `График не указан` / `Заведение пока не настроило график бронирования.`, not `Закрыто`.
 - Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed: actual Mini App PUT/PATCH/DELETE CORS preflights allow `Content-Type` and `Authorization`, Guest Mini App staff-call payload/backend row/staff-chat event include `tableSessionId`, linked staff-chat staff-call notification enqueue is covered, and fallback quick order emits `Telegram.WebApp.sendData` with `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this item.
-- Staff Call Lifecycle ACK/DONE audit hardening: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, and Guest ability to create a new call after DONE. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, CANCELLED UI/lifecycle, staff-call UX polish and guest table-context cleanup remain separate follow-ups.
+- Staff Call Lifecycle ACK/DONE audit hardening: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, and Guest ability to create a new call after DONE. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish remain separate follow-ups.
+- Guest Table Context UX Cleanup / Feature-gated Extension Module: CLOSED / staging smoke passed. Real Telegram Mini App QR smoke confirmed correct venue/table context, route/copy address/booking actions hidden in table context, pre-visit venue card still showing address/route/copy/booking, `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when active order state makes it available, and hidden again after bill/order close.
+- Guest Table Session Exit / Expiry UX: CLOSED / staging smoke passed. First staging attempt returned `415 Unsupported Media Type` on `POST /api/guest/table/session/end`; root cause was missing JSON `Content-Type`. Mini App now sends Authorization plus `Content-Type: application/json` and body `{ tableToken, tableSessionId }`, and e2e asserts URL/method/content-type/body. Post-fix deploy smoke confirmed `Завершить визит` works, reopening without QR no longer restores table 101 for that user, explicit QR re-enters, shared `table_sessions` are not closed for all guests, and empty tab/order/staff-call blocking rules are current-user scoped.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -41,7 +43,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE THROUGH M9b.3`; baseline smoke passed on 2026-06-04, with later staged parity and deployment smokes recorded through M9b.3.
+Status: `PASSED FOR CURRENT RELEASE THROUGH GUEST TABLE-CONTEXT EXIT`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3 and guest table-context exit.
 
 Confirmed:
 
@@ -70,6 +72,8 @@ Confirmed:
 - M8a/M8b-Free public profile/card settings staging smoke passed: OWNER edited country, city, manual address, public contact and description; reload preserved the values; the guest card reflected the saved public fields; `Построить маршрут` opened from the saved textual address; STAFF remained denied/hidden; Yandex geodata remained disabled and unused.
 - M9a ControlMaster deployment path staging smoke passed: initial master connection hit an SSH banner timeout, bounded retry opened the master, rsync upload, Docker build, image upload and backend recreate succeeded through the persistent connection, PostgreSQL stayed healthy, local `/health`, `/db/health` and Mini App static checks passed, public `/health`, `/db/health` and `/miniapp/` passed, and a separate retry-based public check also passed for all three endpoints.
 - M9b/M9b.1/M9b.2/M9b.3 schedule smoke passed after the M9b.3 fix: OWNER smoke confirmed weekly schedule and date exception functionality; closed period and changed-hours period can be created, edited, have their date ranges changed and deleted; edited old dates no longer behave as exceptions and edited new dates do; guest booking on closed/out-of-hours dates is rejected with human copy; Bot closed-date path shows human copy and action buttons `📅 К выбору дат` plus `🏠 В каталог`.
+- Guest Table Context UX Cleanup / Feature-gated Extension Module smoke passed: table QR opened the real Telegram Mini App with the correct venue/table; table context no longer made route/copy address/booking prominent; pre-visit venue card still showed address, route/copy address and booking; extension was hidden without active order/bill or unavailable state, appeared when active order state made it available, and disappeared after bill/order close.
+- Guest Table Session Exit / Expiry UX smoke passed after the JSON `Content-Type` fix: `Завершить визит` moved the current guest to no-table mode, reopening Mini App without QR did not restore table 101, re-scanning QR restored table context, empty personal tab/no active order allowed exit, active current-user order/bill blocked, active current-user NEW/ACK staff call blocked, DONE staff call did not block, another guest at the same physical table was not kicked out, and menu/cart/order/staff-call/fallback flows still worked.
 
 Remaining:
 
@@ -80,6 +84,9 @@ Remaining:
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
 - P1 CLOSED: M4B/M4C Unified Messages Inbox UX and lifecycle staging smoke passed. Keep M4A/M4B/M4C booking conversation behavior, multi-venue scoping, unread/status state and resolve/reopen actions in regression.
 - P1 CLOSED: M5 staff calls lifecycle and compact Guest Mini App UX staging smoke passed. Keep linked Telegram group notification and inline ACK/DONE behavior in per-venue regression.
+- P2 follow-up: completed DONE staff-call card may visually linger; validate whether dismiss-after-DONE cleanup is needed, but do not treat it as a table-session exit blocker unless current smoke shows confusion or repeated-call regressions.
+- P1 CLOSED: Guest Table Context UX Cleanup / Feature-gated Extension Module staging smoke passed. Keep pre-QR vs table-context action separation and extension visibility gating in regression.
+- P1 CLOSED: Guest Table Session Exit / Expiry UX staging smoke passed. Keep user-scoped `guest_table_session_exits`, JSON request contract, QR re-entry and active obligation blocking in regression.
 - P1 CLOSED: M6 staff chat diagnostics/unlink polish staging smoke passed. Keep real Telegram group link/test/unlink and operational notification delivery in per-venue regression.
 - P1 CLOSED: M7c adaptive transactional reminders passed core real Telegram staging smoke and remain disabled by default for rollout. Keep feature flag, legacy-row isolation, attendance idempotency, message editing and staff notification dedupe in regression. The enriched staff-chat attendance copy after the smoke is code/test-backed only.
 - P1 CLOSED / staging smoke passed: M8a/M8b-Free Venue Mini App structured public profile/card settings exposes guest-facing public location/contact fields (`countryCode`, `city`, `address`, `formattedAddress`, optional coordinates, `guestContact`, `cardDescription`) for OWNER/MANAGER; STAFF stays denied/hidden; provider-free country/city suggestions and manual address entry are the primary flow. Keep guest public card/catalog reflection, route links, validation and tenant isolation in regression.
@@ -669,22 +676,37 @@ Manual M4B/M4C inbox regression smoke after deployment:
 14. Confirm Platform Support Center is not exposed unless routes and permissions are backend-backed.
 15. Keep M4A regression: quick compose closes after send, manager stays on `Брони`, staff chat remains a notification mirror, and booking confirm/change/cancel/arrived/no-show actions are unchanged.
 
+Manual guest table context exit regression smoke after deployment:
+
+1. Guest opens real Telegram Mini App from a table QR and sees the correct venue/table context.
+2. Confirm table context does not prominently show pre-visit route/copy address/booking actions.
+3. Open the same venue without table context and confirm address, route/copy address and booking remain visible on the pre-visit card.
+4. With no active order/bill and no NEW/ACK staff call, tap `🚪 Завершить визит`; confirm the request is `POST /api/guest/table/session/end` with `Content-Type: application/json` and body `{ tableToken, tableSessionId }`.
+5. Confirm the guest returns to no-table/catalog mode and reopening the Mini App without QR does not restore the old table.
+6. Scan the QR again and confirm the guest re-enters table context.
+7. Create an active order/bill and confirm `Завершить визит` is blocked with clear bill-close copy.
+8. Create a NEW/ACK staff call and confirm exit is blocked until the call is DONE.
+9. Mark the call DONE and confirm it no longer blocks exit.
+10. With two guests at the same physical table, confirm one guest exit does not kick out the other guest or close the shared physical `table_sessions` row.
+11. Confirm existing menu/cart/order/staff-call/fallback quick-order flows still work after exit and QR re-entry.
+
 Manual paid extension smoke after full parity:
 
 1. Configure extension for a venue in Venue Mini App: enabled, fixed one-hour duration and price.
 2. Configure the same extension in Owner/Manager Bot once the remaining bot settings parity slice is implemented; confirm copy `Показывать гостям возможность продления`.
-3. Guest Mini App active table context shows service entry `Продление работы заведения` in the ordering section list, then `Продлить на 1 час` inside that service screen.
-4. Guest Bot `🍽️ Меню` and `Мой заказ → Дозаказать` section lists show `Продление работы заведения` alongside ordering sections and create the same fixed-price request.
-5. Guest creates one extension request; repeated taps/callbacks do not duplicate pending requests.
-6. Venue Mini App order queue shows a pending extension badge/count on the affected order/table.
-7. Venue Mini App order detail shows `Запрос на продление работы заведения`, `На 1 час — 3 000 ₽`, `✅ Подтвердить продление`, `❌ Отказать`.
-8. Staff chat live order/bill message updates in place with the pending extension block and inline approve/reject buttons; no separate noisy lifecycle message is sent.
-9. STAFF/MANAGER approves from Venue Mini App or staff chat; bill gains service charge `Продление работы на 1 час`, Guest/Venue/Telegram bill totals match, and table session orderable-until time extends.
-10. Create and approve a second extension; charge and session extension are applied once per request.
-11. Reject a request and confirm guest sees rejection copy while bill/session do not mutate.
-12. As STAFF, confirm price/duration/settings are not editable in Mini App or bot.
-13. As MANAGER/OWNER, confirm settings are editable in Mini App; repeat in bot after the remaining bot settings parity slice lands.
-14. Close bill/session and confirm extension request/approve endpoints are denied and extension UI disappears or disables safely.
+3. Guest Mini App active table context with no active order/bill does not show `Продление работы заведения`.
+4. After creating an active order/bill where extension is available, Guest Mini App shows service entry `Продление работы заведения` in the ordering section list, then `Продлить на 1 час` inside that service screen.
+5. Guest Bot `🍽️ Меню` and `Мой заказ → Дозаказать` section lists show `Продление работы заведения` only when the current active order/table state makes it actionable and create the same fixed-price request.
+6. Guest creates one extension request; repeated taps/callbacks do not duplicate pending requests.
+7. Venue Mini App order queue shows a pending extension badge/count on the affected order/table.
+8. Venue Mini App order detail shows `Запрос на продление работы заведения`, `На 1 час — 3 000 ₽`, `✅ Подтвердить продление`, `❌ Отказать`.
+9. Staff chat live order/bill message updates in place with the pending extension block and inline approve/reject buttons; no separate noisy lifecycle message is sent.
+10. STAFF/MANAGER approves from Venue Mini App or staff chat; bill gains service charge `Продление работы на 1 час`, Guest/Venue/Telegram bill totals match, and table session orderable-until time extends.
+11. Create and approve a second extension; charge and session extension are applied once per request.
+12. Reject a request and confirm guest sees rejection copy while bill/session do not mutate.
+13. As STAFF, confirm price/duration/settings are not editable in Mini App or bot.
+14. As MANAGER/OWNER, confirm settings are editable in Mini App; repeat in bot after the remaining bot settings parity slice lands.
+15. Close bill/session and confirm extension request/approve endpoints are denied and extension UI disappears or disables safely.
 
 Manual options/flavors parity regression smoke:
 

@@ -87,7 +87,7 @@ Manager Mini App areas:
 - Menu options/photos/descriptions/top-list parity may still be partial.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
-- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle, staff-call UX polish and guest table-context cleanup are not implemented in this milestone.
+- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 
 ## Smoke-critical checks

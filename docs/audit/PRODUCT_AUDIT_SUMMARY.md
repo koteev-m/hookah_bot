@@ -14,13 +14,15 @@
 >
 > Current checkpoint as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. Current tests verify actual Mini App PUT/PATCH/DELETE CORS preflights with `Content-Type` and `Authorization`, Mini App staff-call `tableSessionId` persistence and staff-chat event payload, linked staff-chat staff-call notification enqueue, and Guest Mini App fallback quick-order `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this checkpoint.
 >
-> Current checkpoint as of 2026-06-30: Staff Call Lifecycle ACK/DONE audit hardening is CLOSED / staging smoke passed. Successful applied staff-call ACK/DONE transitions write `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit evidence from both Venue Mini App routes and Telegram staff-chat callbacks with top-level `actorUserId`, venue/call/status/source payload and no guest comment/display-name or secrets. Staging confirmed guest-created calls, Venue Mini App ACK/DONE audit rows with `source=venue_miniapp`, Telegram staff-chat ACK/DONE callback edits plus audit rows with `source=telegram_staff_chat`, and guest ability to create a new call after DONE. Audit remains best-effort after the operational transition; row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and broader staff-call UX/table-context cleanup remain out of scope.
+> Current checkpoint as of 2026-06-30: Staff Call Lifecycle ACK/DONE audit hardening is CLOSED / staging smoke passed. Successful applied staff-call ACK/DONE transitions write `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit evidence from both Venue Mini App routes and Telegram staff-chat callbacks with top-level `actorUserId`, venue/call/status/source payload and no guest comment/display-name or secrets. Staging confirmed guest-created calls, Venue Mini App ACK/DONE audit rows with `source=venue_miniapp`, Telegram staff-chat ACK/DONE callback edits plus audit rows with `source=telegram_staff_chat`, and guest ability to create a new call after DONE. Audit remains best-effort after the operational transition; row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and broader staff-call UX remain out of scope.
+>
+> Current checkpoint as of 2026-07-01: Guest Table Context UX Cleanup / Feature-gated Extension Module and Guest Table Session Exit / Expiry UX are CLOSED / staging smoke passed. Real Telegram Mini App QR smoke confirmed correct venue/table context, route/copy address/booking hidden in table context but preserved on the pre-visit venue card, extension hidden without active order/bill or availability and visible only when active order state makes it actionable, and extension disappearing after bill/order close. `Завершить визит` initially failed on staging with `415 Unsupported Media Type`; Mini App now sends `Content-Type: application/json` plus `{ tableToken, tableSessionId }`, e2e asserts the request contract, and post-deploy smoke confirmed user-scoped exit through `guest_table_session_exits`: no stale restore without QR, explicit QR re-entry, empty personal tab allowed, active current-user order/bill or NEW/ACK staff call blocked, DONE staff call not blocked, another guest at the same physical table unaffected, shared `table_sessions` not closed for all guests, and existing menu/cart/order/staff-call/fallback flows still green.
 
 # Краткое резюме
 
 Проект уже содержит серьёзный backend-фундамент для Telegram bot + Mini App: auth через Telegram initData, JWT session, venue RBAC, guest catalog, QR/table sessions, cart/order batches, venue order queue, staff chat notifications, staff invites, menu/table management, billing/subscriptions, platform venue management, migrations and tests.
 
-Исторический главный риск этого аудита был core guest order model: в апреле active order был связан с `table_id`, а не с `table_session_id`. Этот риск закрыт в текущем кодовом срезе: active order/table-session/tab scoping, CORS mutation methods, staff-call lifecycle and staff stop-list RBAC были исправлены последующими M1-M6 работами. H2/PostgreSQL active-order and active personal-tab uniqueness fidelity is now also closed as a test/database-fidelity milestone. Текущие проверяемые риски: operational Mini App mutation smoke, broad Venue Mini App settings still mostly bot-canonical, Platform Mini App billing/support/analytics cockpit gaps, and per-venue real Telegram runtime smoke.
+Исторический главный риск этого аудита был core guest order model: в апреле active order был связан с `table_id`, а не с `table_session_id`. Этот риск закрыт в текущем кодовом срезе: active order/table-session/tab scoping, CORS mutation methods, staff-call lifecycle and staff stop-list RBAC были исправлены последующими M1-M6 работами. H2/PostgreSQL active-order and active personal-tab uniqueness fidelity is now also closed as a test/database-fidelity milestone. Guest table context cleanup and user-scoped table-session exit are also closed after staging smoke. Текущие проверяемые риски: guest/staff bill display parity, broad Venue Mini App money/detail parity, Platform Mini App billing/support/analytics cockpit gaps, and per-venue real Telegram runtime smoke.
 
 # Что реально готово
 
@@ -41,7 +43,7 @@
 - Full bill, discounts, excluded items: backend/Telegram/Mini App management bill path exists; keep money snapshots and role denials in regression.
 - Split bill: tabs/invites/consent and active order scoping by `tableSessionId`/`tabId` exist; H2 now mirrors PostgreSQL active-order and active personal-tab uniqueness predicates. Remaining DB nuance: PostgreSQL still permits active `PERSONAL` tabs with `owner_user_id NULL` at schema level, shared-tab uniqueness remains repository-idempotent rather than DB-enforced, and there is no DB-level uniqueness for one active table session per table because runtime locking handles active session resolution.
 - Booking: bot/backend and Guest/Venue Mini App screens exist; M7a hold settings is closed and M7b Guest Mini App `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline. M7c adaptive reminders passed a controlled real Telegram staging smoke with legacy-row reconciliation, truthful `QUEUED` outbox semantics, atomic guest attendance, visible Telegram message editing and cross-channel indicators; runtime remains opt-in disabled for rollout. Preorder remains later.
-- Staff calls: create/list/ACK/DONE lifecycle exists across Guest/Venue Mini App and bot/staff chat path, and applied ACK/DONE transitions are audited from Venue Mini App and Telegram staff-chat surfaces. CANCELLED UI/lifecycle, row-level ACK/DONE actor/timestamp columns, SLA/escalation and UX/table-context cleanup remain later.
+- Staff calls: create/list/ACK/DONE lifecycle exists across Guest/Venue Mini App and bot/staff chat path, and applied ACK/DONE transitions are audited from Venue Mini App and Telegram staff-chat surfaces. CANCELLED UI/lifecycle, row-level ACK/DONE actor/timestamp columns and SLA/escalation remain later. A completed DONE staff-call card may visually linger and should be handled as a small UX cleanup if it confuses repeated calls.
 - Menu constructor: category/item CRUD, structured options/flavors, base profiles and item/option stop-list exist; photos/descriptions/top-list polish remains later.
 - Stop-list: STAFF operational item/option availability is aligned between bot and Mini App; content editing remains MANAGER/OWNER.
 - Table QR: batch create/rotate/export есть, single edit/delete/capacity incomplete.
@@ -58,22 +60,23 @@
 - Clear `venue_admin` behavior distinct from `manager`.
 - Wider frontend/browser e2e beyond current smoke harness.
 
-# Current top P0/P1/P2 gaps after 2026-06-30 checkpoint
+# Current top P0/P1/P2 gaps after 2026-07-01 checkpoint
 
-No confirmed production P0 was found in the 2026-06-30 checkpoint after M9a/M9b, Platform Owner invite/revoke closure, H2/PostgreSQL uniqueness fidelity validation and the Mini App mutation/operational verification pack. Current priorities:
+No confirmed production P0 was found in the 2026-07-01 checkpoint after M9a/M9b, Platform Owner invite/revoke closure, H2/PostgreSQL uniqueness fidelity validation, the Mini App mutation/operational verification pack, Staff Call Lifecycle ACK/DONE audit hardening and the two guest table-context milestones. Current priorities:
 
-1. **P1/P2**: Platform Billing Cockpit / Owner Payment UX. Backend invoice/payment routes and subscription settings exist, but Platform Mini App invoice operations and manual mark-paid UX are incomplete.
-2. **P1/P2 verification**: Guest-facing bill/display-number/full-bill parity. Existing bill snapshot automation exists; keep guest/staff money and display-number surfaces aligned before polishing bookings/growth.
-3. **P1/P2**: keep M7b real two-account isolation, M7c opt-in reminder rollout, M9b schedule validation, Platform Owner invite, Platform OWNER revoke and Mini App mutation/staff-call/fallback payload checks as release regression checks, not new implementation milestones unless a regression is found.
-4. **P2**: General guest support ticket creation beyond booking threads.
-5. **P2**: Guest Mini App repeat/favorite mutation parity and promotion/review surfaces.
+1. **P1 verification/fix**: Guest-facing bill/display-number/full-bill parity. Existing bill snapshot automation exists; keep guest/staff money, service charges, discounts, exclusions, display-number and closed-state copy aligned before polishing bookings/growth.
+2. **P1/P2 verification/fix**: Venue Mini App full bill / discounts / excluded items parity. Operator-facing bill controls should match Telegram/staff bill snapshots and keep STAFF denial/manager-owner permission boundaries.
+3. **P2 UX**: Completed staff-call card dismiss-after-DONE behavior. This is a small verified follow-up, not a blocker unless it confuses table exit or repeated staff calls.
+4. **P1/P2 later**: Platform Billing Cockpit / Owner Payment UX. Backend invoice/payment routes and subscription settings exist, but Platform Mini App invoice operations and manual mark-paid UX are incomplete; do not start broad billing before guest/staff bill correctness is protected.
+5. **P2**: General guest support ticket creation beyond booking threads and guest repeat/favorite/promotion/review surfaces.
 
 # Рекомендуемый порядок дальнейшей работы
 
-1. Build Platform Billing Cockpit / Owner Payment UX once operational smoke remains green.
-2. Verify Guest-facing bill/display-number/full-bill parity across Bot/Mini App/staff views before growth polish.
-3. Keep Platform Owner invite/revoke, M7b/M7c, M9b schedule and Mini App mutation/staff-call/fallback payload paths in regression.
-4. Add support/tickets and growth features after core order/billing stability.
+1. Verify Guest-facing bill/display-number/full-bill parity across Bot/Mini App/staff views before growth polish.
+2. Verify Venue Mini App full bill / discounts / excluded items parity and STAFF/manager/owner permission boundaries.
+3. Fix completed staff-call card dismiss-after-DONE behavior if the lingering card is still visible in current staging.
+4. Keep Platform Owner invite/revoke, M7b/M7c, M9b schedule, Mini App mutation/staff-call/fallback payload paths and guest table-context exit in regression.
+5. Add Platform Billing Cockpit, support/tickets and growth features after core order/billing stability.
 
 # Какие функции лучше не трогать пока
 
@@ -98,7 +101,7 @@ No confirmed production P0 was found in the 2026-06-30 checkpoint after M9a/M9b,
 
 | Блок | Статус | Evidence | Что дальше |
 |---|---|---|---|
-| Guest QR/table flow | DONE/PARTIAL | `GuestTableResolveRoutes`, `TableSessionRepository`, `GuestTableResolveRoutesTest` | Связать order with table_session |
+| Guest QR/table flow | DONE / staging smoke passed | `GuestTableResolveRoutes`, `TableSessionRepository`, `GuestTableResolveRoutesTest`, `guest_table_session_exits` | Keep QR/table restore, user-scoped exit, active obligation blocking and explicit QR re-entry in regression |
 | Guest menu/order/cart/comment | PARTIAL | `GuestMenuRepository`, `GuestOrderRoutes`, `cart.ts` | Options/modifiers, fallback contract |
 | Order batches / дозаказы | PARTIAL | `OrdersRepository.createGuestOrderBatch`, `order_batches`, `VenueOrdersRepository` | Full DTO and session scoping |
 | Venue-side orders queue | PARTIAL | `VenueOrderRoutes`, `venueOrders.ts`, `venueOrderDetail.ts` | Display number/full bill/prices |

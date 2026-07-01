@@ -106,7 +106,7 @@ STAFF Mini App behavior:
 - Telegram and Mini App staff entries must both use inline `web_app` as runtime Mini App opener.
 - Staff multi-venue selector needs smoke if a staff user belongs to more than one venue.
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
-- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle, staff-call UX polish and guest table-context cleanup are not implemented in this milestone.
+- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Direct API denial tests remain critical: UI hiding is not a security boundary.
 
 ## Smoke-critical checks
