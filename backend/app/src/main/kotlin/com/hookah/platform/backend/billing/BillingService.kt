@@ -136,4 +136,46 @@ class BillingService(
             throw DatabaseUnavailableException()
         }
     }
+
+    suspend fun applyManualPayment(
+        invoice: BillingInvoice,
+        occurredAt: Instant,
+        actorUserId: Long?,
+    ) {
+        try {
+            val event =
+                PaymentEvent.Paid(
+                    provider = invoice.provider,
+                    providerEventId = "manual:${invoice.id}",
+                    providerInvoiceId = invoice.providerInvoiceId,
+                    amountMinor = invoice.amountMinor,
+                    currency = invoice.currency,
+                    occurredAt = occurredAt,
+                    rawPayload = null,
+                )
+            paymentRepository.insertPaymentEventIdempotent(
+                invoiceId = invoice.id,
+                provider = event.provider,
+                providerEventId = event.providerEventId,
+                amountMinor = event.amountMinor,
+                currency = event.currency,
+                status = PaymentStatus.SUCCEEDED,
+                occurredAt = event.occurredAt,
+                rawPayload = event.rawPayload,
+            )
+            val marked =
+                invoiceRepository.markInvoicePaid(
+                    invoiceId = invoice.id,
+                    paidAt = occurredAt,
+                    actorUserId = actorUserId,
+                )
+            if (marked) {
+                hooks.onInvoicePaid(invoice.copy(status = InvoiceStatus.PAID, paidAt = occurredAt), event)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
 }

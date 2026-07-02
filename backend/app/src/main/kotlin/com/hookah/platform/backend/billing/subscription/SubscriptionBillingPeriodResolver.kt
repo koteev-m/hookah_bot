@@ -4,10 +4,11 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 object SubscriptionBillingPeriodResolver {
+    @Suppress("UNUSED_PARAMETER")
     fun resolvePaidAnchor(
         trialEndDate: LocalDate?,
         paidStartDate: LocalDate?,
-    ): LocalDate? = paidStartDate ?: trialEndDate
+    ): LocalDate? = paidStartDate
 
     fun resolvePeriodStart(
         anchor: LocalDate,

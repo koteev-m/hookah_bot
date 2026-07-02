@@ -6,7 +6,6 @@ import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.billing.InvoiceStatus
-import com.hookah.platform.backend.billing.PaymentEvent
 import com.hookah.platform.backend.billing.appendBillingCheckoutEnsureAudit
 import com.hookah.platform.backend.billing.toResponse
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
@@ -154,21 +153,8 @@ fun Route.platformBillingRoutes(
                 throw InvalidInputException("invoice must be OPEN or PAST_DUE to mark paid")
             }
 
-            val providerInvoiceId =
-                invoice.providerInvoiceId?.takeIf { it.isNotBlank() }
-                    ?: throw InvalidInputException("invoice providerInvoiceId is missing")
             val occurredAt = request.occurredAt?.let { parseInstant(it, "occurredAt") } ?: Instant.now()
-            val event =
-                PaymentEvent.Paid(
-                    provider = invoice.provider,
-                    providerEventId = "manual:$invoiceId",
-                    providerInvoiceId = providerInvoiceId,
-                    amountMinor = invoice.amountMinor,
-                    currency = invoice.currency,
-                    occurredAt = occurredAt,
-                    rawPayload = null,
-                )
-            billingService.applyPaymentEvent(event, actorUserId = actorUserId)
+            billingService.applyManualPayment(invoice, occurredAt = occurredAt, actorUserId = actorUserId)
             val updatedInvoice = billingInvoiceRepository.getInvoiceById(invoice.id)
             auditLogRepository.appendJson(
                 actorUserId = actorUserId,

@@ -10,6 +10,7 @@ import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -50,6 +51,8 @@ class PlatformBillingRoutesTest {
             val venueId = seedVenue(jdbcUrl)
             seedInvoice(jdbcUrl, venueId)
             val token = issueToken(config, userId = ownerId)
+            val invoiceCountBefore = countInvoices(jdbcUrl, venueId)
+            val subscriptionRowsBefore = countSubscriptionRows(jdbcUrl, venueId)
 
             val response =
                 client.get("/api/platform/venues/$venueId/billing") {
@@ -67,12 +70,14 @@ class PlatformBillingRoutesTest {
             assertFalse(payload.paymentAvailable)
             assertEquals(null, payload.checkoutUrl)
             assertEquals(null, payload.invoices.single().checkoutUrl)
-            assertEquals(1, countInvoices(jdbcUrl, venueId))
-            assertEquals(0, countSubscriptionRows(jdbcUrl, venueId))
+            assertEquals(1, invoiceCountBefore)
+            assertEquals(0, subscriptionRowsBefore)
+            assertEquals(invoiceCountBefore, countInvoices(jdbcUrl, venueId))
+            assertEquals(subscriptionRowsBefore, countSubscriptionRows(jdbcUrl, venueId))
         }
 
     @Test
-    fun `platform checkout ensure reports fake provider manual only without creating invoice`() =
+    fun `platform checkout ensure creates manual invoice for fake provider idempotently`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-billing-fake-checkout")
             val ownerId = 5151L
@@ -87,22 +92,131 @@ class PlatformBillingRoutesTest {
             seedSubscriptionSettings(jdbcUrl, venueId)
             val token = issueToken(config, userId = ownerId)
 
-            val response =
-                client.post("/api/platform/venues/$venueId/billing/checkout") {
+            repeat(2) {
+                val response =
+                    client.post("/api/platform/venues/$venueId/billing/checkout") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+
+                assertEquals(HttpStatusCode.OK, response.status)
+                val payload =
+                    json.decodeFromString(
+                        OwnerBillingOverviewResponse.serializer(),
+                        response.bodyAsText(),
+                    )
+                assertFalse(payload.paymentAvailable)
+                assertEquals("fake_provider_manual_only", payload.unavailableReason)
+                assertEquals(null, payload.checkoutUrl)
+                val invoice = assertNotNull(payload.payableInvoice)
+                assertEquals("OPEN", invoice.status)
+                assertEquals(null, invoice.checkoutUrl)
+                assertEquals(1, payload.invoices.size)
+            }
+            assertEquals(1, countInvoices(jdbcUrl, venueId))
+            assertEquals(2, countAuditActions(jdbcUrl, "BILLING_CHECKOUT_ENSURE", ownerId))
+        }
+
+    @Test
+    fun `platform saved settings feed manual invoice ensure and mark paid paid through`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-manual-flow")
+            val ownerId = 5161L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val token = issueToken(config, userId = ownerId)
+            val paidStart = LocalDate.now().minusDays(1)
+            val trialEnd = paidStart
+
+            val saveResponse =
+                client.put("/api/platform/venues/$venueId/subscription") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformSubscriptionSettingsUpdateRequest.serializer(),
+                            PlatformSubscriptionSettingsUpdateRequest(
+                                trialEndDate = trialEnd.toString(),
+                                paidStartDate = paidStart.toString(),
+                                basePriceMinor = 1_500_000,
+                                priceOverrideMinor = 1_000_000,
+                                currency = "RUB",
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, saveResponse.status)
+            assertEquals(0, countScheduleRows(jdbcUrl, venueId))
+
+            val overviewResponse =
+                client.get("/api/platform/venues/$venueId/billing") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
-
-            assertEquals(HttpStatusCode.OK, response.status)
-            val payload =
+            assertEquals(HttpStatusCode.OK, overviewResponse.status)
+            val overview =
                 json.decodeFromString(
                     OwnerBillingOverviewResponse.serializer(),
-                    response.bodyAsText(),
+                    overviewResponse.bodyAsText(),
                 )
-            assertFalse(payload.paymentAvailable)
-            assertEquals("fake_provider_manual_only", payload.unavailableReason)
-            assertEquals(null, payload.checkoutUrl)
+            assertEquals(trialEnd.toString(), overview.settingsTrialEndDate)
+            assertEquals(paidStart.toString(), overview.settingsPaidStartDate)
+            assertEquals(1_000_000, overview.priceMinor)
             assertEquals(0, countInvoices(jdbcUrl, venueId))
-            assertEquals(1, countAuditActions(jdbcUrl, "BILLING_CHECKOUT_ENSURE", ownerId))
+
+            repeat(2) {
+                val ensureResponse =
+                    client.post("/api/platform/venues/$venueId/billing/checkout") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                assertEquals(HttpStatusCode.OK, ensureResponse.status)
+                val ensured =
+                    json.decodeFromString(
+                        OwnerBillingOverviewResponse.serializer(),
+                        ensureResponse.bodyAsText(),
+                    )
+                assertFalse(ensured.paymentAvailable)
+                assertEquals("fake_provider_manual_only", ensured.unavailableReason)
+                assertEquals(null, ensured.checkoutUrl)
+                val invoice = assertNotNull(ensured.payableInvoice)
+                assertEquals("OPEN", invoice.status)
+                assertEquals(1_000_000, invoice.amountMinor)
+                assertEquals(null, invoice.checkoutUrl)
+            }
+            assertEquals(1, countInvoices(jdbcUrl, venueId))
+
+            val invoiceId = openInvoiceId(jdbcUrl, venueId)
+            val markResponse =
+                client.post("/api/platform/invoices/$invoiceId/mark-paid") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformMarkInvoicePaidRequest.serializer(),
+                            PlatformMarkInvoicePaidRequest(),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, markResponse.status)
+            assertEquals(1, countPayments(jdbcUrl, "manual:$invoiceId"))
+
+            val paidOverviewResponse =
+                client.get("/api/platform/venues/$venueId/billing") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, paidOverviewResponse.status)
+            val paidOverview =
+                json.decodeFromString(
+                    OwnerBillingOverviewResponse.serializer(),
+                    paidOverviewResponse.bodyAsText(),
+                )
+            val paidInvoice = paidOverview.invoices.single()
+            assertEquals("PAID", paidInvoice.status)
+            assertEquals(paidInvoice.periodEnd, paidOverview.paidThrough)
         }
 
     @Test
@@ -314,6 +428,7 @@ class PlatformBillingRoutesTest {
                 "db.password" to "",
                 "platform.ownerUserId" to ownerId.toString(),
                 "venue.staffInviteSecretPepper" to "invite-pepper",
+                "billing.subscription.intervalSeconds" to "0",
             )
         if (genericCheckout) {
             values["billing.provider"] = "generic_hmac"
@@ -445,6 +560,51 @@ class PlatformBillingRoutesTest {
             }
         }
         return 0
+    }
+
+    private fun countScheduleRows(
+        jdbcUrl: String,
+        venueId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM venue_price_schedule
+                WHERE venue_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) return rs.getInt(1)
+                }
+            }
+        }
+        return 0
+    }
+
+    private fun openInvoiceId(
+        jdbcUrl: String,
+        venueId: Long,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT id
+                FROM billing_invoices
+                WHERE venue_id = ?
+                  AND status = 'OPEN'
+                ORDER BY id DESC
+                LIMIT 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) return rs.getLong("id")
+                }
+            }
+        }
+        error("Open invoice not found")
     }
 
     private fun countSubscriptionRows(

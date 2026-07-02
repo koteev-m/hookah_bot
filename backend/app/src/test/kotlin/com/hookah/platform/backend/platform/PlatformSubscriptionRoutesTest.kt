@@ -174,7 +174,7 @@ class PlatformSubscriptionRoutesTest {
         }
 
     @Test
-    fun `effective price prefers override then schedule then base`() =
+    fun `effective price prefers override then base then schedule`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-subscription-effective")
             val ownerId = 5505L
@@ -235,7 +235,7 @@ class PlatformSubscriptionRoutesTest {
             assertEquals(HttpStatusCode.OK, scheduleResponse.status)
 
             val scheduledSnapshot = getSubscription(client, venueId, token)
-            assertEquals(2000, scheduledSnapshot.effectivePriceToday?.priceMinor)
+            assertEquals(1000, scheduledSnapshot.effectivePriceToday?.priceMinor)
 
             val overrideResponse =
                 client.put("/api/platform/venues/$venueId/subscription") {
@@ -254,6 +254,31 @@ class PlatformSubscriptionRoutesTest {
             val overrideSnapshot = getSubscription(client, venueId, token)
             assertEquals(4000, overrideSnapshot.effectivePriceToday?.priceMinor)
             assertEquals("RUB", overrideSnapshot.effectivePriceToday?.currency)
+
+            val scheduleOnlyVenueId = seedVenue(jdbcUrl)
+            val scheduleOnlyResponse =
+                client.put("/api/platform/venues/$scheduleOnlyVenueId/price-schedule") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformPriceScheduleUpdateRequest.serializer(),
+                            PlatformPriceScheduleUpdateRequest(
+                                items =
+                                    listOf(
+                                        PlatformPriceScheduleItemInput(
+                                            effectiveFrom = today.minusDays(1).toString(),
+                                            priceMinor = 2500,
+                                            currency = "RUB",
+                                        ),
+                                    ),
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, scheduleOnlyResponse.status)
+            val scheduleOnlySnapshot = getSubscription(client, scheduleOnlyVenueId, token)
+            assertEquals(2500, scheduleOnlySnapshot.effectivePriceToday?.priceMinor)
         }
 
     private suspend fun getSubscription(

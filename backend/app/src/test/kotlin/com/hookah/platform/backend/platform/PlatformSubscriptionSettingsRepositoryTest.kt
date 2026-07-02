@@ -166,4 +166,92 @@ class PlatformSubscriptionSettingsRepositoryTest {
             }
             Unit
         }
+
+    @Test
+    fun `update settings syncs lifecycle dates without recalculating existing status`() =
+        runBlocking {
+            val venueId = dataSource.connection.use { connection -> insertVenue(connection) }
+            val repository = PlatformSubscriptionSettingsRepository(dataSource)
+            val trialEndDate = LocalDate.parse("2026-07-02")
+            val paidStartDate = LocalDate.parse("2026-07-02")
+
+            val updated =
+                repository.updateSettings(
+                    venueId = venueId,
+                    update =
+                        PlatformSubscriptionSettingsRepository.PlatformSubscriptionSettingsUpdate(
+                            trialEndDate = trialEndDate,
+                            paidStartDate = paidStartDate,
+                            basePriceMinor = 1_500_000,
+                            priceOverrideMinor = 1_000_000,
+                            currency = "RUB",
+                        ),
+                    actorUserId = 999L,
+                )
+
+            assertNotNull(updated)
+            assertEquals(trialEndDate, updated.trialEndDate)
+            assertEquals(paidStartDate, updated.paidStartDate)
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT status, trial_end, paid_start
+                    FROM venue_subscriptions
+                    WHERE venue_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        assertEquals("TRIAL", rs.getString("status"))
+                        assertEquals(trialEndDate, rs.getTimestamp("trial_end").toLocalDateTime().toLocalDate())
+                        assertEquals(paidStartDate, rs.getTimestamp("paid_start").toLocalDateTime().toLocalDate())
+                    }
+                }
+
+                connection.prepareStatement(
+                    """
+                    UPDATE venue_subscriptions
+                    SET status = 'PAST_DUE'
+                    WHERE venue_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                }
+            }
+
+            val nextTrialEndDate = LocalDate.parse("2026-07-10")
+            val nextPaidStartDate = LocalDate.parse("2026-07-11")
+            repository.updateSettings(
+                venueId = venueId,
+                update =
+                    PlatformSubscriptionSettingsRepository.PlatformSubscriptionSettingsUpdate(
+                        trialEndDate = nextTrialEndDate,
+                        paidStartDate = nextPaidStartDate,
+                        basePriceMinor = null,
+                        priceOverrideMinor = null,
+                        currency = null,
+                    ),
+                actorUserId = 999L,
+            )
+
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT status, trial_end, paid_start
+                    FROM venue_subscriptions
+                    WHERE venue_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        assertEquals("PAST_DUE", rs.getString("status"))
+                        assertEquals(nextTrialEndDate, rs.getTimestamp("trial_end").toLocalDateTime().toLocalDate())
+                        assertEquals(nextPaidStartDate, rs.getTimestamp("paid_start").toLocalDateTime().toLocalDate())
+                    }
+                }
+            }
+        }
 }

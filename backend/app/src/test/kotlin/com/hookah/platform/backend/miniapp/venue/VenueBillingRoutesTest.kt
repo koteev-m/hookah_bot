@@ -21,6 +21,8 @@ import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class VenueBillingRoutesTest {
@@ -49,6 +51,8 @@ class VenueBillingRoutesTest {
             val ownerToken = issueToken(config, ownerUserId)
             val managerToken = issueToken(config, managerUserId)
             val staffToken = issueToken(config, staffUserId)
+            val invoiceCountBefore = countInvoices(jdbcUrl, venueId)
+            val subscriptionRowsBefore = countSubscriptionRows(jdbcUrl, venueId)
 
             val ownerResponse =
                 client.get("/api/venue/$venueId/subscription") {
@@ -61,8 +65,10 @@ class VenueBillingRoutesTest {
                     ownerResponse.bodyAsText(),
                 )
             assertEquals(venueId, payload.venueId)
-            assertEquals(0, countInvoices(jdbcUrl, venueId))
-            assertEquals(0, countSubscriptionRows(jdbcUrl, venueId))
+            assertEquals(0, invoiceCountBefore)
+            assertEquals(0, subscriptionRowsBefore)
+            assertEquals(invoiceCountBefore, countInvoices(jdbcUrl, venueId))
+            assertEquals(subscriptionRowsBefore, countSubscriptionRows(jdbcUrl, venueId))
 
             val managerResponse =
                 client.get("/api/venue/$venueId/subscription") {
@@ -134,6 +140,48 @@ class VenueBillingRoutesTest {
             assertEquals(2, countAuditActions(jdbcUrl, "BILLING_CHECKOUT_ENSURE", ownerUserId))
         }
 
+    @Test
+    fun `venue owner sees fake manual invoice but cannot mark paid`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-billing-fake-manual")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerUserId = 6301L
+            val venueId = seedVenueWithMembership(jdbcUrl, ownerUserId, "OWNER")
+            seedSubscriptionSettings(jdbcUrl, venueId)
+            val ownerToken = issueToken(config, ownerUserId)
+
+            val ensureResponse =
+                client.post("/api/venue/$venueId/subscription/checkout") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, ensureResponse.status)
+            val ensured =
+                json.decodeFromString(
+                    OwnerBillingOverviewResponse.serializer(),
+                    ensureResponse.bodyAsText(),
+                )
+            assertFalse(ensured.paymentAvailable)
+            assertEquals("fake_provider_manual_only", ensured.unavailableReason)
+            assertEquals(null, ensured.checkoutUrl)
+            val invoice = assertNotNull(ensured.payableInvoice)
+            assertEquals("OPEN", invoice.status)
+            assertEquals(null, invoice.checkoutUrl)
+            assertEquals(1, countInvoices(jdbcUrl, venueId))
+
+            val markPaidResponse =
+                client.post("/api/platform/invoices/${invoice.id}/mark-paid") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, markPaidResponse.status)
+            assertApiErrorEnvelope(markPaidResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -151,6 +199,7 @@ class VenueBillingRoutesTest {
                 "db.user" to "sa",
                 "db.password" to "",
                 "venue.staffInviteSecretPepper" to "invite-pepper",
+                "billing.subscription.intervalSeconds" to "0",
             )
         if (genericCheckout) {
             values["billing.provider"] = "generic_hmac"

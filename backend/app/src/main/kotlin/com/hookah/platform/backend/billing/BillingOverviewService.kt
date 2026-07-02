@@ -100,8 +100,8 @@ class BillingOverviewService(
                     periodStart = period.periodStart,
                     periodEnd = period.periodEnd,
                 )
-            if (provider.ownerCheckoutAvailable()) {
-                if (existing == null) {
+            if (existing == null) {
+                if (provider.ownerCheckoutAvailable()) {
                     billingService.createDraftOrOpenInvoice(
                         venueId = venueId,
                         amountMinor = period.price.priceMinor,
@@ -116,9 +116,14 @@ class BillingOverviewService(
                         periodEnd = period.periodEnd,
                         dueAt = period.periodStart.atStartOfDay(config.timeZone).toInstant(),
                     )
-                } else if (existing.status == InvoiceStatus.OPEN || existing.status == InvoiceStatus.PAST_DUE) {
-                    ensureProviderCheckoutDetails(existing)
+                } else {
+                    createManualInvoice(period)
                 }
+            } else if (
+                provider.ownerCheckoutAvailable() &&
+                (existing.status == InvoiceStatus.OPEN || existing.status == InvoiceStatus.PAST_DUE)
+            ) {
+                ensureProviderCheckoutDetails(existing)
             }
         }
 
@@ -161,8 +166,7 @@ class BillingOverviewService(
             }
         val checkoutEnsureAvailable =
             currentPeriod != null &&
-                !currentPeriodPaid &&
-                provider.ownerCheckoutAvailable()
+                !currentPeriodPaid
 
         return BillingOverview(
             venueId = venueId,
@@ -176,6 +180,30 @@ class BillingOverviewService(
             paymentAvailable = checkoutUrl != null,
             checkoutEnsureAvailable = checkoutEnsureAvailable,
             unavailableReason = unavailableReason,
+        )
+    }
+
+    private suspend fun createManualInvoice(period: BillablePeriod) {
+        invoiceRepository.createInvoice(
+            venueId = period.venueId,
+            amountMinor = period.price.priceMinor,
+            currency = period.price.currency,
+            description =
+                SubscriptionBillingPeriodResolver.buildInvoiceDescription(
+                    periodStart = period.periodStart,
+                    periodEnd = period.periodEnd,
+                    zone = config.timeZone,
+                ),
+            periodStart = period.periodStart,
+            periodEnd = period.periodEnd,
+            dueAt = period.periodStart.atStartOfDay(config.timeZone).toInstant(),
+            provider = provider.providerName(),
+            providerInvoiceId = null,
+            paymentUrl = null,
+            providerRawPayload = null,
+            status = InvoiceStatus.OPEN,
+            paidAt = null,
+            actorUserId = null,
         )
     }
 
@@ -246,6 +274,7 @@ class BillingOverviewService(
                 today = periodStart,
             ) ?: return null
         return BillablePeriod(
+            venueId = snapshot.settings.venueId,
             periodStart = periodStart,
             periodEnd = periodEnd,
             price = price,
@@ -295,6 +324,7 @@ class BillingOverviewService(
     }
 
     private data class BillablePeriod(
+        val venueId: Long,
         val periodStart: LocalDate,
         val periodEnd: LocalDate,
         val price: PlatformEffectivePrice,

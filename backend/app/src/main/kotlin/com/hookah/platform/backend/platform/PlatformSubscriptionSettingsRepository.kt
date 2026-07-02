@@ -82,13 +82,28 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    if (!venueExists(connection, venueId)) {
-                        return@use null
+                    val initialAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        if (!venueExists(connection, venueId)) {
+                            rollbackBestEffort(connection)
+                            return@use null
+                        }
+                        val existing = loadSettings(connection, venueId)
+                        val resolved = resolveSettingsUpdate(venueId, existing, update)
+                        upsertSettings(connection, resolved, actorUserId)
+                        syncSubscriptionLifecycleProjection(connection, resolved)
+                        connection.commit()
+                        resolved
+                    } catch (e: CancellationException) {
+                        rollbackBestEffort(connection)
+                        throw e
+                    } catch (e: SQLException) {
+                        rollbackBestEffort(connection)
+                        throw e
+                    } finally {
+                        runCatching { connection.autoCommit = initialAutoCommit }
                     }
-                    val existing = loadSettings(connection, venueId)
-                    val resolved = resolveSettingsUpdate(venueId, existing, update)
-                    upsertSettings(connection, resolved, actorUserId)
-                    resolved
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -201,7 +216,8 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                         upsertSubscriptionLifecycle(
                             connection = connection,
                             venueId = venueId,
-                            trialEndDate = trialEndDate,
+                            trialEndDate = settings.trialEndDate,
+                            paidStartDate = settings.paidStartDate,
                         )
                         val schedule = loadSchedule(connection, venueId)
                         val effectivePriceToday = resolveEffectivePrice(settings, schedule, LocalDate.now())
@@ -248,12 +264,14 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         settings.priceOverrideMinor?.let { override ->
             return PlatformEffectivePrice(priceMinor = override, currency = settings.currency)
         }
+        settings.basePriceMinor?.let { base ->
+            return PlatformEffectivePrice(priceMinor = base, currency = settings.currency)
+        }
         val scheduled = schedule.lastOrNull { !it.effectiveFrom.isAfter(today) }
         if (scheduled != null) {
             return PlatformEffectivePrice(priceMinor = scheduled.priceMinor, currency = scheduled.currency)
         }
-        val base = settings.basePriceMinor ?: return null
-        return PlatformEffectivePrice(priceMinor = base, currency = settings.currency)
+        return null
     }
 
     private fun loadSettings(
@@ -365,9 +383,10 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         connection: Connection,
         venueId: Long,
         trialEndDate: LocalDate?,
+        paidStartDate: LocalDate?,
     ) {
         val status = if (trialEndDate == null) "ACTIVE" else "TRIAL"
-        val paidStartDate = trialEndDate ?: LocalDate.now()
+        val resolvedPaidStartDate = paidStartDate ?: trialEndDate ?: LocalDate.now()
         connection.prepareStatement(
             """
             UPDATE venue_subscriptions
@@ -380,7 +399,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         ).use { statement ->
             statement.setString(1, status)
             setTimestampOrNull(statement, 2, trialEndDate)
-            statement.setTimestamp(3, Timestamp.valueOf(paidStartDate.atStartOfDay()))
+            statement.setTimestamp(3, Timestamp.valueOf(resolvedPaidStartDate.atStartOfDay()))
             statement.setLong(4, venueId)
             val updated = statement.executeUpdate()
             if (updated > 0) {
@@ -397,7 +416,7 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
                 statement.setLong(1, venueId)
                 statement.setString(2, status)
                 setTimestampOrNull(statement, 3, trialEndDate)
-                statement.setTimestamp(4, Timestamp.valueOf(paidStartDate.atStartOfDay()))
+                statement.setTimestamp(4, Timestamp.valueOf(resolvedPaidStartDate.atStartOfDay()))
                 statement.executeUpdate()
             }
         } catch (e: SQLException) {
@@ -413,10 +432,47 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
             ).use { statement ->
                 statement.setString(1, status)
                 setTimestampOrNull(statement, 2, trialEndDate)
-                statement.setTimestamp(3, Timestamp.valueOf(paidStartDate.atStartOfDay()))
+                statement.setTimestamp(3, Timestamp.valueOf(resolvedPaidStartDate.atStartOfDay()))
                 statement.setLong(4, venueId)
                 statement.executeUpdate()
             }
+        }
+    }
+
+    private fun syncSubscriptionLifecycleProjection(
+        connection: Connection,
+        settings: PlatformSubscriptionSettings,
+    ) {
+        connection.prepareStatement(
+            """
+            UPDATE venue_subscriptions
+            SET trial_end = ?,
+                paid_start = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            setTimestampOrNull(statement, 1, settings.trialEndDate)
+            setTimestampOrNull(statement, 2, settings.paidStartDate)
+            statement.setLong(3, settings.venueId)
+            val updated = statement.executeUpdate()
+            if (updated > 0) {
+                return
+            }
+        }
+
+        val status = if (settings.trialEndDate == null) "ACTIVE" else "TRIAL"
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_subscriptions (venue_id, status, trial_end, paid_start, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, settings.venueId)
+            statement.setString(2, status)
+            setTimestampOrNull(statement, 3, settings.trialEndDate)
+            setTimestampOrNull(statement, 4, settings.paidStartDate)
+            statement.executeUpdate()
         }
     }
 

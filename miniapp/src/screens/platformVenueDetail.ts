@@ -207,13 +207,21 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
     saveSubscriptionButton
   )
 
+  const scheduleDetails = document.createElement('details')
+  scheduleDetails.className = 'venue-advanced-section'
+  const scheduleSummary = el('summary', { text: 'Расширенные настройки: будущие изменения цены' })
   const scheduleTitle = el('h4', { text: 'Расписание цен' })
+  const scheduleHelp = el('p', {
+    className: 'venue-order-sub',
+    text: 'Расписание цен нужно только если цена должна измениться в будущем. Для обычной цены используйте поле индивидуальной цены.'
+  })
   const scheduleList = el('div', { className: 'venue-menu-categories' })
   const scheduleActions = el('div', { className: 'venue-inline-actions' })
   const addScheduleButton = el('button', { text: 'Добавить строку' }) as HTMLButtonElement
   const saveScheduleButton = el('button', { text: 'Сохранить расписание' }) as HTMLButtonElement
   append(scheduleActions, addScheduleButton, saveScheduleButton)
-  append(subscriptionCard, subscriptionTitle, subscriptionForm, scheduleTitle, scheduleList, scheduleActions)
+  append(scheduleDetails, scheduleSummary, scheduleTitle, scheduleHelp, scheduleList, scheduleActions)
+  append(subscriptionCard, subscriptionTitle, subscriptionForm, scheduleDetails)
 
   const billingCard = el('div', { className: 'card' })
   const billingTitle = el('h3', { text: 'Счета и оплата' })
@@ -225,7 +233,7 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   }) as HTMLButtonElement
   const billingEnsureCheckoutButton = el('button', {
     className: 'button-small',
-    text: 'Создать ссылку на оплату'
+    text: 'Создать счёт/ссылку'
   }) as HTMLButtonElement
   const billingOpenCheckoutButton = el('button', {
     className: 'button-small button-secondary',
@@ -374,23 +382,95 @@ function paymentReasonLabel(reason?: string | null) {
 function isTrialExpired(overview: OwnerBillingOverviewResponse) {
   const trialEnd = overview.settingsTrialEndDate ?? overview.trialEndAt
   if (!trialEnd || overview.subscriptionStatus.toLowerCase() !== 'trial') return false
-  return new Date(trialEnd).getTime() < Date.now()
+  const dateOnly = formatDate(trialEnd)
+  return new Date(`${dateOnly}T23:59:59`).getTime() < Date.now()
+}
+
+function isBlockingSubscriptionStatus(status?: string | null) {
+  return ['canceled', 'suspended', 'suspended_by_platform'].includes((status ?? '').toLowerCase())
+}
+
+function currentPayableInvoice(overview: OwnerBillingOverviewResponse) {
+  return (
+    overview.payableInvoice ??
+    overview.invoices.find((invoice) => invoice.status === 'OPEN' || invoice.status === 'PAST_DUE') ??
+    null
+  )
+}
+
+function billingDisplayState(overview: OwnerBillingOverviewResponse) {
+  if (isBlockingSubscriptionStatus(overview.subscriptionStatus)) {
+    return billingStatusLabel(overview.subscriptionStatus)
+  }
+  const invoice = currentPayableInvoice(overview)
+  if (overview.paidThrough) {
+    return `Оплачено до ${formatDate(overview.paidThrough)}`
+  }
+  if (invoice) {
+    return `Платный период настроен, счёт ${invoiceStatusLabel(invoice.status).toLowerCase()}`
+  }
+  if ((overview.settingsPaidStartDate ?? overview.paidStartAt) && overview.priceMinor) {
+    return 'Платный период настроен, счёт ещё не создан.'
+  }
+  const trialEnd = overview.settingsTrialEndDate ?? overview.trialEndAt
+  if (trialEnd && !isTrialExpired(overview)) {
+    return `Пробный период до ${formatDate(trialEnd)}`
+  }
+  if (trialEnd) {
+    return 'Пробный период закончился.'
+  }
+  return billingStatusLabel(overview.subscriptionStatus)
+}
+
+function invoiceStateLabel(overview: OwnerBillingOverviewResponse) {
+  const invoice = currentPayableInvoice(overview)
+  if (invoice) {
+    return `Счёт: #${invoice.id} · ${invoiceStatusLabel(invoice.status)}`
+  }
+  return 'Счёт: не создан'
+}
+
+function onlinePaymentStateLabel(overview: OwnerBillingOverviewResponse) {
+  if (overview.paymentAvailable) {
+    return 'Онлайн-оплата: доступна'
+  }
+  return `Онлайн-оплата: недоступна. ${paymentReasonLabel(overview.unavailableReason)}`
 }
 
 function billingNextStep(overview: OwnerBillingOverviewResponse) {
-  if (isTrialExpired(overview)) {
-    return 'Пробный период закончился. Настройте платный период или оплату.'
-  }
   if (!overview.priceMinor) {
     return paymentReasonLabel('missing_price')
   }
   if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) {
     return paymentReasonLabel('missing_billing_period')
   }
-  if (!overview.paymentAvailable) {
-    return paymentReasonLabel(overview.unavailableReason)
+  if (isBlockingSubscriptionStatus(overview.subscriptionStatus)) {
+    return `Подписка ${billingStatusLabel(overview.subscriptionStatus).toLowerCase()}. Проверьте статус перед оплатой.`
   }
-  return 'Можно открыть внешнюю ссылку оплаты.'
+  const invoice = currentPayableInvoice(overview)
+  if (invoice) {
+    if (overview.paymentAvailable) {
+      return 'Счёт создан. Можно открыть внешнюю ссылку оплаты.'
+    }
+    return `Счёт создан. ${paymentReasonLabel(overview.unavailableReason)}`
+  }
+  if (overview.paidThrough) {
+    return 'Оплата учтена.'
+  }
+  if (overview.checkoutEnsureAvailable) {
+    return 'Настройки заполнены. Создайте счёт для текущего периода.'
+  }
+  return paymentReasonLabel(overview.unavailableReason)
+}
+
+function ensureResultToast(overview: OwnerBillingOverviewResponse) {
+  if (overview.paymentAvailable) {
+    return 'Ссылка оплаты готова'
+  }
+  if (currentPayableInvoice(overview)) {
+    return 'Счёт создан для ручной оплаты'
+  }
+  return paymentReasonLabel(overview.unavailableReason)
 }
 
 function canEnsureCheckout(overview: OwnerBillingOverviewResponse | null) {
@@ -626,11 +706,14 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     }
 
     refs.billingSummary.replaceChildren(
-      el('p', { text: `Статус: ${billingStatusLabel(currentBilling.subscriptionStatus)}` }),
+      el('p', { text: `Состояние: ${billingDisplayState(currentBilling)}` }),
+      el('p', { text: `Статус подписки: ${billingStatusLabel(currentBilling.subscriptionStatus)}` }),
       el('p', { text: `Цена: ${formatMoney(currentBilling.priceMinor, currentBilling.currency)}` }),
       el('p', { text: `Пробный период до: ${formatDate(currentBilling.settingsTrialEndDate ?? currentBilling.trialEndAt)}` }),
       el('p', { text: `Платный период с: ${formatDate(currentBilling.settingsPaidStartDate ?? currentBilling.paidStartAt)}` }),
       el('p', { text: `Оплачено до: ${formatDate(currentBilling.paidThrough)}` }),
+      el('p', { text: invoiceStateLabel(currentBilling) }),
+      el('p', { text: onlinePaymentStateLabel(currentBilling) }),
       el('p', { text: `Что сделать дальше: ${billingNextStep(currentBilling)}` })
     )
     refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
@@ -1000,6 +1083,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     }
     currentSubscription = result.data
     renderSubscription()
+    await Promise.all([loadBilling(), loadVenue()])
     showToast('Настройки сохранены')
   }
 
@@ -1054,6 +1138,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     }
     scheduleItems = result.data.items.map((item) => ({ ...item }))
     renderSchedule()
+    await loadBilling()
     showToast('Расписание сохранено')
   }
 
@@ -1085,7 +1170,15 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     }
     currentBilling = result.data
     renderBilling()
-    showToast(result.data.paymentAvailable ? 'Ссылка оплаты готова' : paymentReasonLabel(result.data.unavailableReason))
+    showToast(ensureResultToast(result.data))
+  }
+
+  const handleBillingRefresh = async () => {
+    setStatus('Обновление счетов...')
+    await loadBilling()
+    if (disposed) return
+    setStatus('')
+    showToast('Счета обновлены')
   }
 
   const handleOpenCheckout = () => {
@@ -1141,7 +1234,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   const disposeSaveSubscription = on(refs.saveSubscriptionButton, 'click', () => void handleSubscriptionSave())
   const disposeAddSchedule = on(refs.addScheduleButton, 'click', () => void handleAddScheduleRow())
   const disposeSaveSchedule = on(refs.saveScheduleButton, 'click', () => void handleScheduleSave())
-  const disposeBillingRefresh = on(refs.billingRefreshButton, 'click', () => void loadBilling())
+  const disposeBillingRefresh = on(refs.billingRefreshButton, 'click', () => void handleBillingRefresh())
   const disposeBillingEnsureCheckout = on(refs.billingEnsureCheckoutButton, 'click', () => void handleEnsureCheckout())
   const disposeBillingOpenCheckout = on(refs.billingOpenCheckoutButton, 'click', () => handleOpenCheckout())
 
