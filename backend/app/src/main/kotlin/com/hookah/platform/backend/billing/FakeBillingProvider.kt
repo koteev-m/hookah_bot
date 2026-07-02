@@ -7,6 +7,8 @@ import java.time.LocalDate
 class FakeBillingProvider : BillingProvider {
     override fun providerName(): String = "FAKE"
 
+    override fun ownerCheckoutUnavailableReason(): String = "fake_provider_manual_only"
+
     override suspend fun createInvoice(
         invoiceId: Long,
         venueId: Long,

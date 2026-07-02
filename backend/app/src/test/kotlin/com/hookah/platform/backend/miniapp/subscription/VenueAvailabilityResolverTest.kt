@@ -22,6 +22,19 @@ class VenueAvailabilityResolverTest {
     }
 
     @Test
+    fun `active subscription with active venue is available`() {
+        val availability =
+            VenueAvailabilityResolver.resolve(
+                venueStatus = VenueStatus.PUBLISHED,
+                subscriptionStatus = SubscriptionStatus.ACTIVE,
+            )
+
+        assertTrue(availability.available)
+        assertNull(availability.reason)
+        assertEquals("active", availability.subscriptionStatus)
+    }
+
+    @Test
     fun `past due subscription keeps active venue available`() {
         val availability =
             VenueAvailabilityResolver.resolve(
@@ -58,6 +71,32 @@ class VenueAvailabilityResolverTest {
         assertFalse(availability.available)
         assertEquals("SUBSCRIPTION_BLOCKED", availability.reason)
         assertEquals("suspended_by_platform", availability.subscriptionStatus)
+    }
+
+    @Test
+    fun `suspended subscription blocks active venue`() {
+        val availability =
+            VenueAvailabilityResolver.resolve(
+                venueStatus = VenueStatus.PUBLISHED,
+                subscriptionStatus = SubscriptionStatus.SUSPENDED,
+            )
+
+        assertFalse(availability.available)
+        assertEquals("SUBSCRIPTION_BLOCKED", availability.reason)
+        assertEquals("suspended", availability.subscriptionStatus)
+    }
+
+    @Test
+    fun `unknown subscription blocks active venue`() {
+        val availability =
+            VenueAvailabilityResolver.resolve(
+                venueStatus = VenueStatus.PUBLISHED,
+                subscriptionStatus = SubscriptionStatus.UNKNOWN,
+            )
+
+        assertFalse(availability.available)
+        assertEquals("SUBSCRIPTION_BLOCKED", availability.reason)
+        assertEquals("unknown", availability.subscriptionStatus)
     }
 
     @Test

@@ -1131,7 +1131,7 @@ class VenueRbacRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
             val payload = json.decodeFromString(VenueStaffCallsResponse.serializer(), response.bodyAsText())
             assertEquals(
-                setOf("Консультация", "Заменить угли", "Принести счёт"),
+                setOf("Консультация", "Заменить угли", "Запрос счёта"),
                 payload.items.map { it.reasonLabel }.toSet(),
             )
         }

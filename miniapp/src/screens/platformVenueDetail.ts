@@ -5,13 +5,17 @@ import {
   platformAssignOwner,
   platformChangeVenueStatus,
   platformCreateOwnerInvite,
+  platformEnsureBillingCheckout,
+  platformGetBilling,
   platformGetSubscription,
   platformGetVenue,
+  platformMarkInvoicePaid,
   platformRevokeOwner,
   platformSearchUsers,
   platformUpdatePriceSchedule,
   platformUpdateSubscription
 } from '../shared/api/platformApi'
+import type { OwnerBillingInvoiceDto, OwnerBillingOverviewResponse } from '../shared/api/billingDtos'
 import type {
   PlatformOwnerInviteResponse,
   PlatformPriceScheduleItemDto,
@@ -65,6 +69,11 @@ type DetailRefs = {
   scheduleList: HTMLDivElement
   addScheduleButton: HTMLButtonElement
   saveScheduleButton: HTMLButtonElement
+  billingSummary: HTMLDivElement
+  billingRefreshButton: HTMLButtonElement
+  billingEnsureCheckoutButton: HTMLButtonElement
+  billingOpenCheckoutButton: HTMLButtonElement
+  billingInvoices: HTMLDivElement
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -189,6 +198,26 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   append(scheduleActions, addScheduleButton, saveScheduleButton)
   append(subscriptionCard, subscriptionTitle, subscriptionForm, scheduleTitle, scheduleList, scheduleActions)
 
+  const billingCard = el('div', { className: 'card' })
+  const billingTitle = el('h3', { text: 'Счета и оплата' })
+  const billingSummary = el('div', { className: 'venue-summary' }) as HTMLDivElement
+  const billingActions = el('div', { className: 'venue-inline-actions' })
+  const billingRefreshButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Обновить'
+  }) as HTMLButtonElement
+  const billingEnsureCheckoutButton = el('button', {
+    className: 'button-small',
+    text: 'Создать/обновить ссылку'
+  }) as HTMLButtonElement
+  const billingOpenCheckoutButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Открыть оплату'
+  }) as HTMLButtonElement
+  const billingInvoices = el('div', { className: 'venue-staff-list' }) as HTMLDivElement
+  append(billingActions, billingRefreshButton, billingEnsureCheckoutButton, billingOpenCheckoutButton)
+  append(billingCard, billingTitle, billingSummary, billingActions, billingInvoices)
+
   const status = el('p', { className: 'status', text: '' })
 
   const error = el('div', { className: 'error-card' })
@@ -199,7 +228,7 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   const errorDetails = el('div')
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
-  append(wrapper, summaryCard, statusCard, ownersCard, inviteCard, subscriptionCard, status, error)
+  append(wrapper, summaryCard, statusCard, ownersCard, inviteCard, subscriptionCard, billingCard, status, error)
   root.replaceChildren(wrapper)
 
   return {
@@ -234,7 +263,12 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
     saveSubscriptionButton,
     scheduleList,
     addScheduleButton,
-    saveScheduleButton
+    saveScheduleButton,
+    billingSummary,
+    billingRefreshButton,
+    billingEnsureCheckoutButton,
+    billingOpenCheckoutButton,
+    billingInvoices
   }
 }
 
@@ -245,6 +279,76 @@ function toDateInputValue(value: string | null | undefined) {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString()
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return '—'
+  return value.split('T')[0]
+}
+
+function formatMoney(amountMinor?: number | null, currency?: string | null) {
+  if (amountMinor === null || amountMinor === undefined) return '—'
+  return `${(amountMinor / 100).toLocaleString('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })} ${currency ?? 'RUB'}`
+}
+
+function billingStatusLabel(status?: string | null) {
+  switch ((status ?? '').toLowerCase()) {
+    case 'trial':
+      return 'Пробный период'
+    case 'active':
+      return 'Активна'
+    case 'past_due':
+      return 'Просрочена'
+    case 'canceled':
+      return 'Отменена'
+    case 'suspended':
+      return 'Приостановлена'
+    case 'suspended_by_platform':
+      return 'Заблокирована платформой'
+    case 'unknown':
+      return 'Не настроена'
+    default:
+      return status ?? '—'
+  }
+}
+
+function invoiceStatusLabel(status: string) {
+  switch (status.toUpperCase()) {
+    case 'OPEN':
+      return 'Открыт'
+    case 'PAST_DUE':
+      return 'Просрочен'
+    case 'PAID':
+      return 'Оплачен'
+    case 'VOID':
+      return 'Аннулирован'
+    case 'DRAFT':
+      return 'Черновик'
+    default:
+      return status
+  }
+}
+
+function paymentReasonLabel(reason?: string | null) {
+  switch (reason) {
+    case 'provider_not_configured':
+      return 'Провайдер оплаты не настроен.'
+    case 'external_checkout_unavailable':
+      return 'Внешняя ссылка оплаты пока недоступна.'
+    case 'missing_price':
+      return 'Не задана цена подписки.'
+    case 'missing_billing_period':
+      return 'Платёжный период ещё не определён.'
+    case 'fake_provider_manual_only':
+      return 'Тестовый провайдер: оплата только вручную.'
+    case 'already_paid':
+      return 'Текущий период уже оплачен.'
+    default:
+      return reason ? `Оплата недоступна: ${reason}` : 'Оплата недоступна.'
+  }
 }
 
 function formatOwnerName(owner: PlatformVenueDetailResponse['owners'][number]) {
@@ -295,12 +399,14 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   let disposed = false
   let venueAbort: AbortController | null = null
   let subscriptionAbort: AbortController | null = null
+  let billingAbort: AbortController | null = null
   let searchAbort: AbortController | null = null
   let loadSeq = 0
   let searchDebounce: ReturnType<typeof setTimeout> | null = null
   let selectedUser: PlatformUserDto | null = null
   let currentVenue: PlatformVenueDetailResponse | null = null
   let currentSubscription: PlatformSubscriptionSettingsResponse | null = null
+  let currentBilling: OwnerBillingOverviewResponse | null = null
   let currentInvite: PlatformOwnerInviteResponse | null = null
   let scheduleItems: PlatformPriceScheduleItemDto[] = []
   let isLoading = false
@@ -308,6 +414,8 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   let isUpdatingSettings = false
   let isUpdatingSchedule = false
   let isUpdatingStatus = false
+  let isEnsuringCheckout = false
+  let isMarkingInvoicePaid = false
   let isInviting = false
   let isRevokingOwner = false
 
@@ -342,6 +450,9 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.inviteButton.disabled = value || isInviting
     refs.saveSubscriptionButton.disabled = value || isUpdatingSettings
     refs.saveScheduleButton.disabled = value || isUpdatingSchedule
+    refs.billingRefreshButton.disabled = value
+    refs.billingEnsureCheckoutButton.disabled = value || isEnsuringCheckout
+    refs.billingOpenCheckoutButton.disabled = value || !currentBilling?.checkoutUrl
     updateActionButtons()
   }
 
@@ -352,6 +463,9 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     const canRevokeOwner = (currentVenue?.owners.length ?? 0) > 1
     refs.ownersList.querySelectorAll<HTMLButtonElement>('[data-role="owner-revoke"]').forEach((button) => {
       button.disabled = isLoading || isRevokingOwner || !canRevokeOwner
+    })
+    refs.billingInvoices.querySelectorAll<HTMLButtonElement>('[data-role="mark-paid"]').forEach((button) => {
+      button.disabled = isLoading || isMarkingInvoicePaid
     })
   }
 
@@ -429,6 +543,83 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.currencyLabel.textContent = `Валюта: ${currentSubscription.settings.currency}`
     scheduleItems = currentSubscription.schedule.map((item) => ({ ...item }))
     renderSchedule()
+  }
+
+  const renderBilling = () => {
+    refs.billingSummary.replaceChildren()
+    refs.billingInvoices.replaceChildren()
+    refs.billingOpenCheckoutButton.disabled = isLoading || !currentBilling?.checkoutUrl
+    refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout
+    if (!currentBilling) {
+      refs.billingSummary.appendChild(el('p', { className: 'venue-empty', text: 'Биллинг не загружен.' }))
+      refs.billingInvoices.appendChild(el('p', { className: 'venue-empty', text: 'Счета не загружены.' }))
+      return
+    }
+
+    refs.billingSummary.replaceChildren(
+      el('p', { text: `Статус: ${billingStatusLabel(currentBilling.subscriptionStatus)}` }),
+      el('p', { text: `Цена: ${formatMoney(currentBilling.priceMinor, currentBilling.currency)}` }),
+      el('p', { text: `Trial до: ${formatDate(currentBilling.settingsTrialEndDate ?? currentBilling.trialEndAt)}` }),
+      el('p', { text: `Платный период с: ${formatDate(currentBilling.settingsPaidStartDate ?? currentBilling.paidStartAt)}` }),
+      el('p', { text: `Оплачено до: ${formatDate(currentBilling.paidThrough)}` }),
+      el('p', {
+        text: currentBilling.paymentAvailable
+          ? 'Внешняя оплата доступна.'
+          : paymentReasonLabel(currentBilling.unavailableReason)
+      })
+    )
+
+    if (!currentBilling.invoices.length) {
+      refs.billingInvoices.appendChild(el('p', { className: 'venue-empty', text: 'Счетов пока нет.' }))
+      return
+    }
+
+    currentBilling.invoices.forEach((invoice) => {
+      refs.billingInvoices.appendChild(renderBillingInvoiceRow(invoice))
+    })
+    updateActionButtons()
+  }
+
+  const renderBillingInvoiceRow = (invoice: OwnerBillingInvoiceDto) => {
+    const row = el('div', { className: 'venue-staff-row' })
+    const info = el('div', { className: 'venue-staff-info' })
+    append(
+      info,
+      el('strong', { text: `Счёт #${invoice.id} · ${invoiceStatusLabel(invoice.status)}` }),
+      el('p', {
+        className: 'venue-order-sub',
+        text: `${formatDate(invoice.periodStart)} — ${formatDate(invoice.periodEnd)} · ${formatMoney(
+          invoice.amountMinor,
+          invoice.currency
+        )}`
+      }),
+      el('p', { className: 'venue-order-sub', text: `Срок оплаты: ${formatDate(invoice.dueAt)}` }),
+      el('p', {
+        className: 'venue-order-sub',
+        text: invoice.paidAt ? `Оплачен: ${formatDate(invoice.paidAt)}` : ''
+      })
+    )
+    const actions = el('div', { className: 'venue-staff-actions' })
+    if (invoice.checkoutUrl) {
+      const openButton = el('button', {
+        className: 'button-small button-secondary',
+        text: 'Открыть оплату'
+      }) as HTMLButtonElement
+      openButton.addEventListener('click', () => window.open(invoice.checkoutUrl ?? '', '_blank', 'noopener'))
+      append(actions, openButton)
+    }
+    const payable = invoice.status === 'OPEN' || invoice.status === 'PAST_DUE'
+    if (payable) {
+      const markPaidButton = el('button', {
+        className: 'button-small',
+        text: 'Отметить оплачено'
+      }) as HTMLButtonElement
+      markPaidButton.dataset.role = 'mark-paid'
+      markPaidButton.addEventListener('click', () => void handleMarkInvoicePaid(invoice))
+      append(actions, markPaidButton)
+    }
+    append(row, info, actions)
+    return row
   }
 
   const renderSchedule = () => {
@@ -514,9 +705,23 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     renderSubscription()
   }
 
+  const loadBilling = async () => {
+    billingAbort?.abort()
+    billingAbort = new AbortController()
+    const result = await platformGetBilling(backendUrl, venueId, deps, billingAbort.signal)
+    if (disposed) return
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) return
+      showError(result.error, loadBilling)
+      return
+    }
+    currentBilling = result.data
+    renderBilling()
+  }
+
   const loadAll = async () => {
     setLoadingState(true)
-    await Promise.all([loadVenue(), loadSubscription()])
+    await Promise.all([loadVenue(), loadSubscription(), loadBilling()])
     if (disposed) return
     setLoadingState(false)
   }
@@ -799,6 +1004,54 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     renderSchedule()
   }
 
+  const handleEnsureCheckout = async () => {
+    if (isEnsuringCheckout) return
+    isEnsuringCheckout = true
+    refs.billingEnsureCheckoutButton.disabled = true
+    hideError()
+    const result = await platformEnsureBillingCheckout(backendUrl, venueId, deps)
+    isEnsuringCheckout = false
+    if (disposed) return
+    if (!result.ok) {
+      refs.billingEnsureCheckoutButton.disabled = isLoading
+      showError(result.error, handleEnsureCheckout)
+      return
+    }
+    currentBilling = result.data
+    renderBilling()
+    showToast(result.data.paymentAvailable ? 'Ссылка оплаты готова' : paymentReasonLabel(result.data.unavailableReason))
+  }
+
+  const handleOpenCheckout = () => {
+    const url = currentBilling?.checkoutUrl
+    if (!url) {
+      showToast(paymentReasonLabel(currentBilling?.unavailableReason))
+      return
+    }
+    window.open(url, '_blank', 'noopener')
+  }
+
+  const handleMarkInvoicePaid = async (invoice: OwnerBillingInvoiceDto) => {
+    if (isMarkingInvoicePaid) return
+    const ok = window.confirm(
+      `Отметить счёт #${invoice.id} оплаченным вручную? Сумма: ${formatMoney(invoice.amountMinor, invoice.currency)}.`
+    )
+    if (!ok) return
+    isMarkingInvoicePaid = true
+    updateActionButtons()
+    hideError()
+    const result = await platformMarkInvoicePaid(backendUrl, invoice.id, deps)
+    isMarkingInvoicePaid = false
+    updateActionButtons()
+    if (disposed) return
+    if (!result.ok) {
+      showError(result.error, () => void handleMarkInvoicePaid(invoice))
+      return
+    }
+    showToast(result.data.alreadyPaid ? 'Счёт уже был оплачен' : 'Счёт отмечен оплаченным')
+    await Promise.all([loadBilling(), loadSubscription()])
+  }
+
   const disposeSearch = on(refs.userSearch, 'input', () => {
     const query = refs.userSearch.value.trim()
     clearSearchDebounce()
@@ -822,6 +1075,9 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   const disposeSaveSubscription = on(refs.saveSubscriptionButton, 'click', () => void handleSubscriptionSave())
   const disposeAddSchedule = on(refs.addScheduleButton, 'click', () => void handleAddScheduleRow())
   const disposeSaveSchedule = on(refs.saveScheduleButton, 'click', () => void handleScheduleSave())
+  const disposeBillingRefresh = on(refs.billingRefreshButton, 'click', () => void loadBilling())
+  const disposeBillingEnsureCheckout = on(refs.billingEnsureCheckoutButton, 'click', () => void handleEnsureCheckout())
+  const disposeBillingOpenCheckout = on(refs.billingOpenCheckoutButton, 'click', () => handleOpenCheckout())
 
   void loadAll()
 
@@ -829,9 +1085,11 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     disposed = true
     venueAbort?.abort()
     subscriptionAbort?.abort()
+    billingAbort?.abort()
     searchAbort?.abort()
     venueAbort = null
     subscriptionAbort = null
+    billingAbort = null
     searchAbort = null
     clearSearchDebounce()
     disposeSearch()
@@ -841,5 +1099,8 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     disposeSaveSubscription()
     disposeAddSchedule()
     disposeSaveSchedule()
+    disposeBillingRefresh()
+    disposeBillingEnsureCheckout()
+    disposeBillingOpenCheckout()
   }
 }

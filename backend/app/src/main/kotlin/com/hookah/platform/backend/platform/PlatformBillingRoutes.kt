@@ -3,9 +3,12 @@ package com.hookah.platform.backend.platform
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
+import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.billing.InvoiceStatus
 import com.hookah.platform.backend.billing.PaymentEvent
+import com.hookah.platform.backend.billing.appendBillingCheckoutEnsureAudit
+import com.hookah.platform.backend.billing.toResponse
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -29,6 +32,7 @@ data class PlatformInvoiceDto(
     val currency: String,
     val status: String,
     val paymentUrl: String? = null,
+    val checkoutUrl: String? = null,
     val paidAt: String? = null,
 )
 
@@ -52,9 +56,34 @@ fun Route.platformBillingRoutes(
     platformConfig: PlatformConfig,
     billingInvoiceRepository: BillingInvoiceRepository,
     billingService: BillingService,
+    billingOverviewService: BillingOverviewService,
     auditLogRepository: AuditLogRepository,
 ) {
     route("/platform/venues") {
+        get("/{venueId}/billing") {
+            call.requirePlatformOwner(platformConfig)
+            val venueId =
+                call.parameters["venueId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("venueId must be a number")
+            val overview = billingOverviewService.readOverview(venueId) ?: throw NotFoundException()
+            call.respond(overview.toResponse(billingOverviewService))
+        }
+
+        post("/{venueId}/billing/checkout") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val venueId =
+                call.parameters["venueId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("venueId must be a number")
+            val overview = billingOverviewService.ensureCheckout(venueId) ?: throw NotFoundException()
+            appendBillingCheckoutEnsureAudit(
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                actorType = "platform_owner",
+                overview = overview,
+            )
+            call.respond(overview.toResponse(billingOverviewService))
+        }
+
         get("/{venueId}/invoices") {
             call.requirePlatformOwner(platformConfig)
             val venueId =
@@ -82,7 +111,7 @@ fun Route.platformBillingRoutes(
                     limit = limit,
                     offset = offset,
                 )
-            call.respond(PlatformInvoiceListResponse(invoices = invoices.map { it.toDto() }))
+            call.respond(PlatformInvoiceListResponse(invoices = invoices.map { it.toDto(billingOverviewService) }))
         }
     }
 
@@ -96,6 +125,7 @@ fun Route.platformBillingRoutes(
             val invoice =
                 billingInvoiceRepository.getInvoiceById(invoiceId)
                     ?: throw NotFoundException()
+            val previousStatus = invoice.status
 
             if (invoice.status == InvoiceStatus.PAID) {
                 auditLogRepository.appendJson(
@@ -105,8 +135,14 @@ fun Route.platformBillingRoutes(
                     entityId = invoice.id,
                     payload =
                         buildJsonObject {
+                            put("actorUserId", actorUserId)
                             put("invoiceId", invoice.id)
                             put("venueId", invoice.venueId)
+                            put("amountMinor", invoice.amountMinor)
+                            put("currency", invoice.currency)
+                            put("previousStatus", previousStatus.dbValue)
+                            put("newStatus", InvoiceStatus.PAID.dbValue)
+                            put("source", "manual_platform_action")
                             put("alreadyPaid", true)
                         },
                 )
@@ -132,7 +168,8 @@ fun Route.platformBillingRoutes(
                     occurredAt = occurredAt,
                     rawPayload = null,
                 )
-            billingService.applyPaymentEvent(event)
+            billingService.applyPaymentEvent(event, actorUserId = actorUserId)
+            val updatedInvoice = billingInvoiceRepository.getInvoiceById(invoice.id)
             auditLogRepository.appendJson(
                 actorUserId = actorUserId,
                 action = "BILLING_MARK_PAID",
@@ -140,8 +177,14 @@ fun Route.platformBillingRoutes(
                 entityId = invoice.id,
                 payload =
                     buildJsonObject {
+                        put("actorUserId", actorUserId)
                         put("invoiceId", invoice.id)
                         put("venueId", invoice.venueId)
+                        put("amountMinor", invoice.amountMinor)
+                        put("currency", invoice.currency)
+                        put("previousStatus", previousStatus.dbValue)
+                        put("newStatus", updatedInvoice?.status?.dbValue ?: InvoiceStatus.PAID.dbValue)
+                        put("source", "manual_platform_action")
                         put("alreadyPaid", false)
                         put("occurredAt", occurredAt.toString())
                     },
@@ -151,8 +194,11 @@ fun Route.platformBillingRoutes(
     }
 }
 
-private fun com.hookah.platform.backend.billing.BillingInvoice.toDto(): PlatformInvoiceDto =
-    PlatformInvoiceDto(
+private fun com.hookah.platform.backend.billing.BillingInvoice.toDto(
+    billingOverviewService: BillingOverviewService,
+): PlatformInvoiceDto {
+    val checkoutUrl = billingOverviewService.safeOwnerCheckoutUrl(this)
+    return PlatformInvoiceDto(
         id = id,
         periodStart = periodStart.toString(),
         periodEnd = periodEnd.toString(),
@@ -160,9 +206,11 @@ private fun com.hookah.platform.backend.billing.BillingInvoice.toDto(): Platform
         amountMinor = amountMinor,
         currency = currency,
         status = status.dbValue,
-        paymentUrl = paymentUrl,
+        paymentUrl = checkoutUrl,
+        checkoutUrl = checkoutUrl,
         paidAt = paidAt?.toString(),
     )
+}
 
 private fun parseInstant(
     value: String,

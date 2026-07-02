@@ -1,4 +1,5 @@
 import { requestApi, requestBinary, type RequestDependencies } from './request'
+import type { OwnerBillingOverviewResponse } from './billingDtos'
 import type {
   VenueApplyBaseFlavorProfilesResponse,
   VenueAvailabilityRequest,
@@ -94,6 +95,36 @@ export async function venueGetStats(
     backendUrl,
     `/api/venue/${params.venueId}/stats?${search.toString()}`,
     { signal },
+    deps
+  )
+}
+
+export async function venueGetSubscription(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<OwnerBillingOverviewResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/subscription`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueEnsureSubscriptionCheckout(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies
+) {
+  return requestApi<OwnerBillingOverviewResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/subscription/checkout`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    },
     deps
   )
 }

@@ -1,4 +1,5 @@
 import { requestApi, type RequestDependencies } from './request'
+import type { OwnerBillingOverviewResponse } from './billingDtos'
 import type {
   PlatformMeResponse,
   PlatformOwnerAssignRequest,
@@ -181,6 +182,53 @@ export async function platformGetSubscription(
     backendUrl,
     `/api/platform/venues/${venueId}/subscription`,
     { signal },
+    deps
+  )
+}
+
+export async function platformGetBilling(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<OwnerBillingOverviewResponse>(
+    backendUrl,
+    `/api/platform/venues/${venueId}/billing`,
+    { signal },
+    deps
+  )
+}
+
+export async function platformEnsureBillingCheckout(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies
+) {
+  return requestApi<OwnerBillingOverviewResponse>(
+    backendUrl,
+    `/api/platform/venues/${venueId}/billing/checkout`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    },
+    deps
+  )
+}
+
+export async function platformMarkInvoicePaid(
+  backendUrl: string,
+  invoiceId: number,
+  deps: RequestDependencies
+) {
+  return requestApi<{ ok: boolean; alreadyPaid: boolean }>(
+    backendUrl,
+    `/api/platform/invoices/${invoiceId}/mark-paid`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    },
     deps
   )
 }

@@ -20,6 +20,7 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.billing.BillingConfig
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingNotificationRepository
+import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingPaymentRepository
 import com.hookah.platform.backend.billing.BillingProviderRegistry
 import com.hookah.platform.backend.billing.BillingService
@@ -83,6 +84,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.stats.venueStatsRoutes
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
+import com.hookah.platform.backend.miniapp.venue.venueBillingRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
@@ -437,6 +439,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             invoiceRepository = billingInvoiceRepository,
             paymentRepository = billingPaymentRepository,
             hooks = subscriptionBillingHooks,
+        )
+    val billingOverviewService =
+        BillingOverviewService(
+            subscriptionRepository = subscriptionRepository,
+            settingsRepository = subscriptionSettingsRepository,
+            invoiceRepository = billingInvoiceRepository,
+            billingService = billingService,
+            provider = billingProvider,
+            config = subscriptionBillingConfig,
         )
     val subscriptionBillingEngine =
         SubscriptionBillingEngine(
@@ -1159,6 +1170,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     staffChatNotifier = guestStaffChatNotifier,
                     telegramBotUsername = telegramConfig.botUsername,
                 )
+                venueBillingRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    billingOverviewService = billingOverviewService,
+                    auditLogRepository = auditLogRepository,
+                )
                 venueStaffRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStaffRepository = venueStaffRepository,
@@ -1222,6 +1238,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     auditLogRepository = auditLogRepository,
                     billingInvoiceRepository = billingInvoiceRepository,
                     billingService = billingService,
+                    billingOverviewService = billingOverviewService,
                     subscriptionSettingsRepository = subscriptionSettingsRepository,
                     platformVenueMemberRepository = platformVenueMemberRepository,
                     venueOwnerAccountRepository = venueOwnerAccountRepository,

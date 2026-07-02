@@ -8,6 +8,10 @@ import java.time.LocalDate
 interface BillingProvider {
     fun providerName(): String
 
+    fun ownerCheckoutAvailable(): Boolean = false
+
+    fun ownerCheckoutUnavailableReason(): String = "provider_not_configured"
+
     suspend fun createInvoice(
         invoiceId: Long,
         venueId: Long,

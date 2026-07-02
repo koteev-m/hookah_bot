@@ -21,6 +21,15 @@ class GenericHmacBillingProvider(
 ) : BillingProvider {
     override fun providerName(): String = PROVIDER_NAME
 
+    override fun ownerCheckoutAvailable(): Boolean {
+        val checkoutBaseUrl = config.checkoutBaseUrl?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        val signingSecret = config.signingSecret?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        val checkoutUsesSupportedScheme =
+            checkoutBaseUrl.startsWith("https://", ignoreCase = true) ||
+                checkoutBaseUrl.startsWith("http://", ignoreCase = true)
+        return signingSecret.isNotEmpty() && checkoutUsesSupportedScheme
+    }
+
     override suspend fun createInvoice(
         invoiceId: Long,
         venueId: Long,

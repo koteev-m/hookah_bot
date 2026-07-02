@@ -221,6 +221,37 @@ type VenueStatsResponse = {
   topItems: Array<{ itemName: string; qty: number }>
 }
 
+type BillingInvoiceFixture = {
+  id: number
+  periodStart: string
+  periodEnd: string
+  dueAt: string
+  amountMinor: number
+  currency: string
+  status: string
+  checkoutUrl?: string | null
+  paidAt?: string | null
+}
+
+type BillingOverviewFixture = {
+  venueId: number
+  subscriptionStatus: string
+  trialEndAt?: string | null
+  paidStartAt?: string | null
+  lifecycleUpdatedAt?: string | null
+  settingsTrialEndDate?: string | null
+  settingsPaidStartDate?: string | null
+  priceMinor?: number | null
+  currency?: string | null
+  paidThrough?: string | null
+  paymentAvailable: boolean
+  checkoutEnsureAvailable: boolean
+  unavailableReason?: string | null
+  checkoutUrl?: string | null
+  payableInvoice?: BillingInvoiceFixture | null
+  invoices: BillingInvoiceFixture[]
+}
+
 type VenueBookingFixture = {
   bookingId: number
   displayNumber?: number | null
@@ -1892,6 +1923,216 @@ async function mockVenueStatsApi(
 
   return {
     getPeriods: () => periods
+  }
+}
+
+function buildBillingOverview(overrides: Partial<BillingOverviewFixture> = {}): BillingOverviewFixture {
+  const invoice: BillingInvoiceFixture = {
+    id: 77,
+    periodStart: '2026-07-01',
+    periodEnd: '2026-07-31',
+    dueAt: '2026-07-01T00:00:00Z',
+    amountMinor: 150000,
+    currency: 'RUB',
+    status: 'OPEN',
+    checkoutUrl: null
+  }
+  return {
+    venueId: 1,
+    subscriptionStatus: 'past_due',
+    trialEndAt: '2026-06-30T00:00:00Z',
+    paidStartAt: '2026-07-01T00:00:00Z',
+    lifecycleUpdatedAt: '2026-07-01T00:00:00Z',
+    settingsTrialEndDate: '2026-06-30',
+    settingsPaidStartDate: '2026-07-01',
+    priceMinor: 150000,
+    currency: 'RUB',
+    paidThrough: null,
+    paymentAvailable: false,
+    checkoutEnsureAvailable: true,
+    unavailableReason: 'external_checkout_unavailable',
+    checkoutUrl: null,
+    payableInvoice: invoice,
+    invoices: [invoice],
+    ...overrides
+  }
+}
+
+function withCheckout(overview: BillingOverviewFixture): BillingOverviewFixture {
+  const invoice = {
+    ...overview.invoices[0],
+    checkoutUrl: 'https://pay.example.test/checkout?invoice_id=77'
+  }
+  return {
+    ...overview,
+    paymentAvailable: true,
+    unavailableReason: null,
+    checkoutUrl: invoice.checkoutUrl,
+    payableInvoice: invoice,
+    invoices: [invoice]
+  }
+}
+
+async function mockPlatformBillingApi(page: Page) {
+  let billingGetCalls = 0
+  let checkoutPostCalls = 0
+  let markPaidCalls = 0
+  let overview = buildBillingOverview()
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-platform-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/platform/me', async (route) => {
+    await route.fulfill(jsonResponse({ ok: true, ownerUserId: 123456789 }))
+  })
+
+  await page.route('**/api/platform/venues?**', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venues: [
+          {
+            id: 1,
+            name: 'Микс',
+            status: 'PUBLISHED',
+            createdAt: '2026-07-01T00:00:00Z',
+            ownersCount: 1,
+            subscriptionSummary: { trialEndDate: null, paidStartDate: '2026-07-01', isPaid: false }
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/platform/venues/1', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 1,
+          name: 'Микс',
+          city: 'Москва',
+          address: 'Пилотная, 1',
+          status: 'PUBLISHED',
+          createdAt: '2026-07-01T00:00:00Z',
+          deletedAt: null
+        },
+        owners: [{ userId: 123456789, role: 'OWNER', username: 'owner', firstName: 'Owner', lastName: null }],
+        subscriptionSummary: { trialEndDate: null, paidStartDate: '2026-07-01', isPaid: false }
+      })
+    )
+  })
+
+  await page.route('**/api/platform/venues/1/subscription', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        settings: {
+          trialEndDate: '2026-06-30',
+          paidStartDate: '2026-07-01',
+          basePriceMinor: 150000,
+          priceOverrideMinor: null,
+          currency: 'RUB'
+        },
+        schedule: [],
+        effectivePriceToday: { priceMinor: 150000, currency: 'RUB' }
+      })
+    )
+  })
+
+  await page.route('**/api/platform/venues/1/billing', async (route) => {
+    billingGetCalls += 1
+    await route.fulfill(jsonResponse(overview))
+  })
+
+  await page.route('**/api/platform/venues/1/billing/checkout', async (route) => {
+    checkoutPostCalls += 1
+    overview = withCheckout(overview)
+    await route.fulfill(jsonResponse(overview))
+  })
+
+  await page.route('**/api/platform/invoices/*/mark-paid', async (route) => {
+    markPaidCalls += 1
+    const paidInvoice = { ...overview.invoices[0], status: 'PAID', paidAt: '2026-07-02T10:00:00Z' }
+    overview = {
+      ...overview,
+      subscriptionStatus: 'active',
+      paidThrough: paidInvoice.periodEnd,
+      paymentAvailable: false,
+      unavailableReason: 'already_paid',
+      checkoutUrl: null,
+      payableInvoice: null,
+      invoices: [paidInvoice]
+    }
+    await route.fulfill(jsonResponse({ ok: true, alreadyPaid: false }))
+  })
+
+  return {
+    getBillingGetCalls: () => billingGetCalls,
+    getCheckoutPostCalls: () => checkoutPostCalls,
+    getMarkPaidCalls: () => markPaidCalls
+  }
+}
+
+async function mockVenueBillingApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+  } = {}
+) {
+  const role = options.role ?? 'OWNER'
+  const permissions = options.permissions ?? ['ORDER_QUEUE_VIEW']
+  let subscriptionGetCalls = 0
+  let checkoutPostCalls = 0
+  let overview = buildBillingOverview({ subscriptionStatus: 'active', unavailableReason: 'external_checkout_unavailable' })
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-venue-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role,
+            permissions
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/guest/venue/1', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: { id: 1, name: 'Микс', city: 'Москва', address: 'Пилотная, 1', status: 'PUBLISHED' }
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/subscription', async (route) => {
+    subscriptionGetCalls += 1
+    await route.fulfill(jsonResponse(overview))
+  })
+
+  await page.route('**/api/venue/1/subscription/checkout', async (route) => {
+    checkoutPostCalls += 1
+    overview = withCheckout(overview)
+    await route.fulfill(jsonResponse(overview))
+  })
+
+  return {
+    getSubscriptionGetCalls: () => subscriptionGetCalls,
+    getCheckoutPostCalls: () => checkoutPostCalls
   }
 }
 
@@ -4186,6 +4427,67 @@ test('venue manager sees read-only statistics and switches period', async ({ pag
 
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Заказы' }).getByText('8')).toBeVisible()
   expect(api.getPeriods()).toEqual(['today', '7d'])
+})
+
+test('platform billing cockpit shows invoices and uses explicit checkout and mark paid actions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformBillingApi(page)
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('heading', { name: 'Заведения' })).toBeVisible()
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByRole('heading', { name: 'Счета и оплата' })).toBeVisible()
+  await expect(page.getByText('Статус: Просрочена')).toBeVisible()
+  await expect(page.getByText('Счёт #77 · Открыт')).toBeVisible()
+  expect(api.getBillingGetCalls()).toBe(1)
+  expect(api.getCheckoutPostCalls()).toBe(0)
+
+  await page.getByRole('button', { name: 'Создать/обновить ссылку' }).click()
+  await expect(page.getByText('Внешняя оплата доступна.')).toBeVisible()
+  expect(api.getCheckoutPostCalls()).toBe(1)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: 'Отметить оплачено' }).click()
+  await expect(page.getByText('Счёт #77 · Оплачен')).toBeVisible()
+  await expect(page.getByText('Оплачено до: 2026-07-31')).toBeVisible()
+  expect(api.getMarkPaidCalls()).toBe(1)
+})
+
+test('venue owner subscription screen separates refresh from checkout ensure', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueBillingApi(page, { role: 'OWNER', permissions: ['ORDER_QUEUE_VIEW'] })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Подписка', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Подписка', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Подписка' })).toBeVisible()
+  await expect(page.getByText('Статус: Активна')).toBeVisible()
+  await expect(page.getByText('Счёт #77 · Открыт')).toBeVisible()
+  expect(api.getSubscriptionGetCalls()).toBe(1)
+  expect(api.getCheckoutPostCalls()).toBe(0)
+
+  await page.getByRole('button', { name: 'Проверить оплату' }).click()
+  expect(api.getSubscriptionGetCalls()).toBe(2)
+  expect(api.getCheckoutPostCalls()).toBe(0)
+
+  await page.getByRole('button', { name: 'Подготовить оплату' }).click()
+  await expect(page.getByText('Можно перейти к оплате картой.')).toBeVisible()
+  expect(api.getCheckoutPostCalls()).toBe(1)
+})
+
+test('venue staff does not see subscription payment controls', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueBillingApi(page, { role: 'STAFF', permissions: ['ORDER_QUEUE_VIEW'] })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Подписка', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/subscription'
+  })
+  await expect(page.getByText('У вас нет доступа к этому разделу.')).toBeVisible()
 })
 
 test('venue owner sees statistics section', async ({ page }) => {

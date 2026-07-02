@@ -330,6 +330,25 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun getInvoiceByPeriod(
+        venueId: Long,
+        periodStart: LocalDate,
+        periodEnd: LocalDate,
+    ): BillingInvoice? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    loadInvoiceByPeriod(connection, venueId, periodStart, periodEnd)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun listInvoicesByVenue(
         venueId: Long,
         status: InvoiceStatus?,

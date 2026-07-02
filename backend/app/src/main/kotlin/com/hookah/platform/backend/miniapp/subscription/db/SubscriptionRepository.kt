@@ -16,10 +16,51 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import javax.sql.DataSource
 
+data class VenueSubscriptionState(
+    val venueId: Long,
+    val status: SubscriptionStatus,
+    val trialEnd: Instant?,
+    val paidStart: Instant?,
+    val updatedAt: Instant?,
+)
+
 class SubscriptionRepository(
     private val dataSource: DataSource?,
     private val analyticsEventRepository: AnalyticsEventRepository? = null,
 ) {
+    suspend fun findSubscriptionState(venueId: Long): VenueSubscriptionState? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT venue_id, status, trial_end, paid_start, updated_at
+                        FROM venue_subscriptions
+                        WHERE venue_id = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.executeQuery().use { rs ->
+                            if (!rs.next()) {
+                                return@withContext null
+                            }
+                            VenueSubscriptionState(
+                                venueId = rs.getLong("venue_id"),
+                                status = SubscriptionStatus.fromDb(rs.getString("status")),
+                                trialEnd = rs.getTimestamp("trial_end")?.toInstant(),
+                                paidStart = rs.getTimestamp("paid_start")?.toInstant(),
+                                updatedAt = rs.getTimestamp("updated_at")?.toInstant(),
+                            )
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun getSubscriptionStatus(venueId: Long): SubscriptionStatus {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {

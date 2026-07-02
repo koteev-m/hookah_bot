@@ -24,6 +24,7 @@ import { renderVenueSettingsScreen } from './venueSettings'
 import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
 import { renderVenueStaffScreen } from './venueStaff'
 import { renderVenueStatsScreen } from './venueStats'
+import { renderVenueSubscriptionScreen } from './venueSubscription'
 import { renderVenueSupportScreen } from './supportScreens'
 import { renderVenueTablesScreen } from './venueTables'
 
@@ -44,6 +45,7 @@ type RouteName =
   | 'staff'
   | 'stats'
   | 'settings'
+  | 'subscription'
   | 'bookings'
   | 'chat'
   | 'support'
@@ -104,6 +106,7 @@ function resolveRoute(): Route {
       'staff',
       'stats',
       'settings',
+      'subscription',
       'bookings',
       'chat',
       'support'
@@ -160,6 +163,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
     stats: el('button', { className: 'nav-button', text: 'Статистика' }) as HTMLButtonElement,
     settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
+    subscription: el('button', { className: 'nav-button', text: 'Подписка' }) as HTMLButtonElement,
     chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement,
     support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
   }
@@ -178,7 +182,14 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     },
     {
       title: 'Настройки',
-      buttons: [navButtons.menu, navButtons.tables, navButtons.staff, navButtons.chat, navButtons.settings]
+      buttons: [
+        navButtons.menu,
+        navButtons.tables,
+        navButtons.staff,
+        navButtons.chat,
+        navButtons.settings,
+        navButtons.subscription
+      ]
     },
     {
       title: 'Статистика',
@@ -399,6 +410,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
     refs.navButtons.stats.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
+    refs.navButtons.subscription.hidden = currentRole !== 'OWNER'
     refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
     refs.navButtons.settings.hidden =
       !canManagePublicCard() && !hasPermission('SHIFT_EXTENSION_SETTINGS') && !hasPermission('BOOKING_MANAGE')
@@ -425,6 +437,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         return hasPermission('TABLE_VIEW')
       case 'settings':
         return canManagePublicCard() || hasPermission('SHIFT_EXTENSION_SETTINGS') || hasPermission('BOOKING_MANAGE')
+      case 'subscription':
+        return currentRole === 'OWNER'
       case 'staff':
         return currentRole !== 'STAFF'
       case 'stats':
@@ -518,6 +532,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'settings':
         return renderVenueSettingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+      case 'subscription':
+        return renderVenueSubscriptionScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'chat':
         return renderVenueChatLinkScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'support':
@@ -561,6 +577,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.staff, 'click', () => navigate('#/staff')))
   disposables.push(on(refs.navButtons.stats, 'click', () => navigate('#/stats')))
   disposables.push(on(refs.navButtons.settings, 'click', () => navigate('#/settings')))
+  disposables.push(on(refs.navButtons.subscription, 'click', () => navigate('#/subscription')))
   disposables.push(on(refs.navButtons.chat, 'click', () => navigate('#/chat')))
   disposables.push(on(refs.navButtons.support, 'click', () => navigate('#/support')))
   disposables.push(

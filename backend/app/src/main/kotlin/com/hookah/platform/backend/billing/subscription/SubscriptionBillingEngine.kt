@@ -59,12 +59,16 @@ class SubscriptionBillingEngine(
         for (venueId in venueIds) {
             subscriptionRepository.ensureRowExistsForVenue(venueId)
             val snapshot = settingsRepository.getSubscriptionSnapshot(venueId) ?: continue
-            val anchor = resolvePaidAnchor(snapshot.settings.trialEndDate, snapshot.settings.paidStartDate)
+            val anchor =
+                SubscriptionBillingPeriodResolver.resolvePaidAnchor(
+                    snapshot.settings.trialEndDate,
+                    snapshot.settings.paidStartDate,
+                )
             if (anchor == null) {
                 logger.debug("Subscription billing skipped: venueId={} not configured", venueId)
                 continue
             }
-            val periodStart = resolvePeriodStart(anchor, today)
+            val periodStart = SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
             val leadDate = periodStart.minusDays(config.leadDays)
             if (today.isBefore(leadDate)) {
                 continue
@@ -80,7 +84,7 @@ class SubscriptionBillingEngine(
                     continue
                 }
             val dueAt = periodStart.atStartOfDay(zone).toInstant()
-            val description = buildInvoiceDescription(periodStart, periodEnd, zone)
+            val description = SubscriptionBillingPeriodResolver.buildInvoiceDescription(periodStart, periodEnd, zone)
             billingService.createDraftOrOpenInvoice(
                 venueId = venueId,
                 amountMinor = effectivePrice.priceMinor,
@@ -155,33 +159,6 @@ class SubscriptionBillingEngine(
                 nextStatus = SubscriptionStatus.SUSPENDED_BY_PLATFORM,
             )
         }
-    }
-
-    private fun resolvePaidAnchor(
-        trialEndDate: LocalDate?,
-        paidStartDate: LocalDate?,
-    ): LocalDate? {
-        // Если paidStartDate не задан, используем дату окончания trial как старт первого платного периода.
-        return paidStartDate ?: trialEndDate
-    }
-
-    private fun resolvePeriodStart(
-        anchor: LocalDate,
-        today: LocalDate,
-    ): LocalDate {
-        var start = anchor
-        while (!start.plusMonths(1).isAfter(today)) {
-            start = start.plusMonths(1)
-        }
-        return start
-    }
-
-    private fun buildInvoiceDescription(
-        periodStart: LocalDate,
-        periodEnd: LocalDate,
-        zone: ZoneId,
-    ): String {
-        return "Подписка ($periodStart - $periodEnd, ${zone.id})"
     }
 
     private fun buildReminderPayload(

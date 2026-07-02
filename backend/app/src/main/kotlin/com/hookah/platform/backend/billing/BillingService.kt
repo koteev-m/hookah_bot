@@ -79,7 +79,10 @@ class BillingService(
         }
     }
 
-    suspend fun applyPaymentEvent(event: PaymentEvent) {
+    suspend fun applyPaymentEvent(
+        event: PaymentEvent,
+        actorUserId: Long? = null,
+    ) {
         try {
             val providerInvoiceId = event.providerInvoiceId ?: return
             val invoice =
@@ -120,7 +123,7 @@ class BillingService(
                         invoiceRepository.markInvoicePaid(
                             invoiceId = invoice.id,
                             paidAt = event.occurredAt,
-                            actorUserId = null,
+                            actorUserId = actorUserId,
                         )
                     if (marked) {
                         hooks.onInvoicePaid(invoice.copy(status = InvoiceStatus.PAID, paidAt = event.occurredAt), event)
