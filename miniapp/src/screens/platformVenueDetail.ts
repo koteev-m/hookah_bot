@@ -27,6 +27,7 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
+import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
 
 export type PlatformVenueDetailOptions = {
@@ -91,6 +92,16 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
     button.addEventListener('click', action.onClick)
     container.appendChild(button)
   })
+}
+
+function labeledField(labelText: string, input: HTMLInputElement, helperText?: string) {
+  const label = document.createElement('label')
+  label.className = 'venue-form-row'
+  append(label, el('span', { className: 'field-label', text: labelText }), input)
+  if (helperText) {
+    label.appendChild(el('p', { className: 'venue-order-sub', text: helperText }))
+  }
+  return label
 }
 
 function buildDetailDom(root: HTMLDivElement): DetailRefs {
@@ -172,20 +183,26 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   basePriceInput.className = 'venue-input'
   basePriceInput.type = 'number'
   basePriceInput.min = '1'
-  basePriceInput.placeholder = 'Базовая цена, копейки'
+  basePriceInput.step = '1'
+  basePriceInput.placeholder = '3000'
   const overridePriceInput = document.createElement('input')
   overridePriceInput.className = 'venue-input'
   overridePriceInput.type = 'number'
   overridePriceInput.min = '1'
-  overridePriceInput.placeholder = 'Индивидуальная цена, копейки'
+  overridePriceInput.step = '1'
+  overridePriceInput.placeholder = '3000'
   const currencyLabel = el('span', { text: '' })
   const saveSubscriptionButton = el('button', { text: 'Сохранить настройки' }) as HTMLButtonElement
   append(
     subscriptionForm,
-    trialEndInput,
-    paidStartInput,
-    basePriceInput,
-    overridePriceInput,
+    labeledField('Пробный период до', trialEndInput),
+    labeledField(
+      'Платный период с',
+      paidStartInput,
+      'После даты начала платного периода можно создать счёт за текущий период.'
+    ),
+    labeledField('Базовая цена, ₽/мес', basePriceInput),
+    labeledField('Индивидуальная цена для этой кальянной, ₽/мес', overridePriceInput),
     currencyLabel,
     saveSubscriptionButton
   )
@@ -208,7 +225,7 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
   }) as HTMLButtonElement
   const billingEnsureCheckoutButton = el('button', {
     className: 'button-small',
-    text: 'Создать/обновить ссылку'
+    text: 'Создать ссылку на оплату'
   }) as HTMLButtonElement
   const billingOpenCheckoutButton = el('button', {
     className: 'button-small button-secondary',
@@ -288,10 +305,13 @@ function formatDate(value?: string | null) {
 
 function formatMoney(amountMinor?: number | null, currency?: string | null) {
   if (amountMinor === null || amountMinor === undefined) return '—'
-  return `${(amountMinor / 100).toLocaleString('ru-RU', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  })} ${currency ?? 'RUB'}`
+  return formatPrice(amountMinor, currency ?? 'RUB')
+}
+
+function minorToRublesInput(amountMinor?: number | null) {
+  if (amountMinor === null || amountMinor === undefined || amountMinor <= 0) return ''
+  const rubles = amountMinor / 100
+  return Number.isInteger(rubles) ? String(rubles) : String(rubles).replace('.', ',')
 }
 
 function billingStatusLabel(status?: string | null) {
@@ -335,19 +355,59 @@ function invoiceStatusLabel(status: string) {
 function paymentReasonLabel(reason?: string | null) {
   switch (reason) {
     case 'provider_not_configured':
-      return 'Провайдер оплаты не настроен.'
+      return 'Онлайн-оплата не подключена. Можно вести оплату вручную.'
     case 'external_checkout_unavailable':
-      return 'Внешняя ссылка оплаты пока недоступна.'
+      return 'Внешняя ссылка оплаты пока недоступна. Проверьте настройки оплаты или ведите оплату вручную.'
     case 'missing_price':
-      return 'Не задана цена подписки.'
+      return 'Цена не задана. Укажите цену в блоке «Подписка и цены» и сохраните настройки.'
     case 'missing_billing_period':
-      return 'Платёжный период ещё не определён.'
+      return 'Платный период не задан. Укажите дату начала платного периода.'
     case 'fake_provider_manual_only':
-      return 'Тестовый провайдер: оплата только вручную.'
+      return 'Онлайн-оплата не подключена. Можно вести оплату вручную.'
     case 'already_paid':
       return 'Текущий период уже оплачен.'
     default:
       return reason ? `Оплата недоступна: ${reason}` : 'Оплата недоступна.'
+  }
+}
+
+function isTrialExpired(overview: OwnerBillingOverviewResponse) {
+  const trialEnd = overview.settingsTrialEndDate ?? overview.trialEndAt
+  if (!trialEnd || overview.subscriptionStatus.toLowerCase() !== 'trial') return false
+  return new Date(trialEnd).getTime() < Date.now()
+}
+
+function billingNextStep(overview: OwnerBillingOverviewResponse) {
+  if (isTrialExpired(overview)) {
+    return 'Пробный период закончился. Настройте платный период или оплату.'
+  }
+  if (!overview.priceMinor) {
+    return paymentReasonLabel('missing_price')
+  }
+  if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) {
+    return paymentReasonLabel('missing_billing_period')
+  }
+  if (!overview.paymentAvailable) {
+    return paymentReasonLabel(overview.unavailableReason)
+  }
+  return 'Можно открыть внешнюю ссылку оплаты.'
+}
+
+function canEnsureCheckout(overview: OwnerBillingOverviewResponse | null) {
+  if (!overview) return false
+  if (!overview.checkoutEnsureAvailable) return false
+  if (!overview.priceMinor) return false
+  if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) return false
+  return true
+}
+
+function safeCheckoutUrl(url?: string | null) {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? url : null
+  } catch {
+    return null
   }
 }
 
@@ -375,11 +435,20 @@ function renderScheduleRow(
   priceInput.className = 'venue-input'
   priceInput.type = 'number'
   priceInput.min = '1'
-  priceInput.value = item.priceMinor ? String(item.priceMinor) : ''
+  priceInput.step = '1'
+  priceInput.placeholder = '3000'
+  priceInput.value = minorToRublesInput(item.priceMinor)
   priceInput.dataset.role = 'schedule-price'
 
   const currency = el('p', { className: 'venue-order-sub', text: item.currency })
-  append(info, effectiveInput, priceInput, currency)
+  append(
+    info,
+    el('p', { className: 'field-label', text: 'Дата начала цены' }),
+    effectiveInput,
+    el('p', { className: 'field-label', text: 'Цена, ₽/мес' }),
+    priceInput,
+    currency
+  )
 
   const actions = el('div', { className: 'venue-menu-item-actions' })
   const removeButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
@@ -451,8 +520,8 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.saveSubscriptionButton.disabled = value || isUpdatingSettings
     refs.saveScheduleButton.disabled = value || isUpdatingSchedule
     refs.billingRefreshButton.disabled = value
-    refs.billingEnsureCheckoutButton.disabled = value || isEnsuringCheckout
-    refs.billingOpenCheckoutButton.disabled = value || !currentBilling?.checkoutUrl
+    refs.billingEnsureCheckoutButton.disabled = value || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
+    refs.billingOpenCheckoutButton.disabled = value || !safeCheckoutUrl(currentBilling?.checkoutUrl)
     updateActionButtons()
   }
 
@@ -535,10 +604,10 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.trialEndInput.value = toDateInputValue(currentSubscription.settings.trialEndDate)
     refs.paidStartInput.value = toDateInputValue(currentSubscription.settings.paidStartDate)
     refs.basePriceInput.value = currentSubscription.settings.basePriceMinor
-      ? String(currentSubscription.settings.basePriceMinor)
+      ? minorToRublesInput(currentSubscription.settings.basePriceMinor)
       : ''
     refs.overridePriceInput.value = currentSubscription.settings.priceOverrideMinor
-      ? String(currentSubscription.settings.priceOverrideMinor)
+      ? minorToRublesInput(currentSubscription.settings.priceOverrideMinor)
       : ''
     refs.currencyLabel.textContent = `Валюта: ${currentSubscription.settings.currency}`
     scheduleItems = currentSubscription.schedule.map((item) => ({ ...item }))
@@ -548,8 +617,8 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   const renderBilling = () => {
     refs.billingSummary.replaceChildren()
     refs.billingInvoices.replaceChildren()
-    refs.billingOpenCheckoutButton.disabled = isLoading || !currentBilling?.checkoutUrl
-    refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout
+    refs.billingOpenCheckoutButton.disabled = isLoading || !safeCheckoutUrl(currentBilling?.checkoutUrl)
+    refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
     if (!currentBilling) {
       refs.billingSummary.appendChild(el('p', { className: 'venue-empty', text: 'Биллинг не загружен.' }))
       refs.billingInvoices.appendChild(el('p', { className: 'venue-empty', text: 'Счета не загружены.' }))
@@ -559,15 +628,12 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.billingSummary.replaceChildren(
       el('p', { text: `Статус: ${billingStatusLabel(currentBilling.subscriptionStatus)}` }),
       el('p', { text: `Цена: ${formatMoney(currentBilling.priceMinor, currentBilling.currency)}` }),
-      el('p', { text: `Trial до: ${formatDate(currentBilling.settingsTrialEndDate ?? currentBilling.trialEndAt)}` }),
+      el('p', { text: `Пробный период до: ${formatDate(currentBilling.settingsTrialEndDate ?? currentBilling.trialEndAt)}` }),
       el('p', { text: `Платный период с: ${formatDate(currentBilling.settingsPaidStartDate ?? currentBilling.paidStartAt)}` }),
       el('p', { text: `Оплачено до: ${formatDate(currentBilling.paidThrough)}` }),
-      el('p', {
-        text: currentBilling.paymentAvailable
-          ? 'Внешняя оплата доступна.'
-          : paymentReasonLabel(currentBilling.unavailableReason)
-      })
+      el('p', { text: `Что сделать дальше: ${billingNextStep(currentBilling)}` })
     )
+    refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
 
     if (!currentBilling.invoices.length) {
       refs.billingInvoices.appendChild(el('p', { className: 'venue-empty', text: 'Счетов пока нет.' }))
@@ -600,12 +666,13 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       })
     )
     const actions = el('div', { className: 'venue-staff-actions' })
-    if (invoice.checkoutUrl) {
+    const checkoutUrl = safeCheckoutUrl(invoice.checkoutUrl)
+    if (checkoutUrl) {
       const openButton = el('button', {
         className: 'button-small button-secondary',
         text: 'Открыть оплату'
       }) as HTMLButtonElement
-      openButton.addEventListener('click', () => window.open(invoice.checkoutUrl ?? '', '_blank', 'noopener'))
+      openButton.addEventListener('click', () => window.open(checkoutUrl, '_blank', 'noopener'))
       append(actions, openButton)
     }
     const payable = invoice.status === 'OPEN' || invoice.status === 'PAST_DUE'
@@ -889,26 +956,25 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     }
   }
 
-  const parsePrice = (value: string) => {
+  const parseRublesToMinor = (value: string) => {
     if (!value.trim()) return null
-    const parsed = Number(value)
+    const parsed = Number(value.trim().replace(',', '.'))
     if (!Number.isFinite(parsed)) return null
-    const rounded = Math.round(parsed)
-    if (rounded <= 0) return null
-    return rounded
+    if (parsed <= 0) return null
+    return Math.round(parsed * 100)
   }
 
   const handleSubscriptionSave = async () => {
     if (isUpdatingSettings) return
     if (!currentSubscription) return
-    const basePriceMinor = parsePrice(refs.basePriceInput.value)
-    const priceOverrideMinor = parsePrice(refs.overridePriceInput.value)
+    const basePriceMinor = parseRublesToMinor(refs.basePriceInput.value)
+    const priceOverrideMinor = parseRublesToMinor(refs.overridePriceInput.value)
     if (refs.basePriceInput.value.trim() && basePriceMinor === null) {
-      showToast('Базовая цена должна быть больше 0')
+      showToast('Базовая цена в рублях должна быть больше 0')
       return
     }
     if (refs.overridePriceInput.value.trim() && priceOverrideMinor === null) {
-      showToast('Индивидуальная цена должна быть больше 0')
+      showToast('Индивидуальная цена в рублях должна быть больше 0')
       return
     }
     isUpdatingSettings = true
@@ -947,13 +1013,13 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       const priceInput = row.querySelector<HTMLInputElement>('[data-role="schedule-price"]')
       const effectiveFrom = dateInput?.value.trim() ?? ''
       const priceRaw = priceInput?.value.trim() ?? ''
-      const price = parsePrice(priceRaw)
+      const price = parseRublesToMinor(priceRaw)
       if (!effectiveFrom) {
         showToast('Заполните даты в расписании')
         return
       }
       if (price === null) {
-        showToast('Цена в расписании должна быть > 0')
+        showToast('Цена в расписании должна быть больше 0 ₽')
         return
       }
       items.push({
@@ -1023,7 +1089,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   }
 
   const handleOpenCheckout = () => {
-    const url = currentBilling?.checkoutUrl
+    const url = safeCheckoutUrl(currentBilling?.checkoutUrl)
     if (!url) {
       showToast(paymentReasonLabel(currentBilling?.unavailableReason))
       return

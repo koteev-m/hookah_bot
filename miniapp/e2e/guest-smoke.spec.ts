@@ -1973,11 +1973,24 @@ function withCheckout(overview: BillingOverviewFixture): BillingOverviewFixture 
   }
 }
 
-async function mockPlatformBillingApi(page: Page) {
+async function mockPlatformBillingApi(
+  page: Page,
+  options: {
+    overview?: Partial<BillingOverviewFixture>
+  } = {}
+) {
   let billingGetCalls = 0
   let checkoutPostCalls = 0
   let markPaidCalls = 0
-  let overview = buildBillingOverview()
+  let lastSubscriptionUpdate: Record<string, unknown> | null = null
+  let overview = buildBillingOverview(options.overview)
+  let subscriptionSettings = {
+    trialEndDate: '2026-06-30',
+    paidStartDate: '2026-07-01',
+    basePriceMinor: 150000,
+    priceOverrideMinor: null as number | null,
+    currency: 'RUB'
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-platform-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -2023,17 +2036,22 @@ async function mockPlatformBillingApi(page: Page) {
   })
 
   await page.route('**/api/platform/venues/1/subscription', async (route) => {
+    if (route.request().method() === 'PUT') {
+      lastSubscriptionUpdate = route.request().postDataJSON() as Record<string, unknown>
+      subscriptionSettings = {
+        ...subscriptionSettings,
+        trialEndDate: (lastSubscriptionUpdate.trialEndDate as string | null | undefined) ?? null,
+        paidStartDate: (lastSubscriptionUpdate.paidStartDate as string | null | undefined) ?? null,
+        basePriceMinor: (lastSubscriptionUpdate.basePriceMinor as number | null | undefined) ?? null,
+        priceOverrideMinor: (lastSubscriptionUpdate.priceOverrideMinor as number | null | undefined) ?? null,
+        currency: (lastSubscriptionUpdate.currency as string | null | undefined) ?? 'RUB'
+      }
+    }
     await route.fulfill(
       jsonResponse({
-        settings: {
-          trialEndDate: '2026-06-30',
-          paidStartDate: '2026-07-01',
-          basePriceMinor: 150000,
-          priceOverrideMinor: null,
-          currency: 'RUB'
-        },
+        settings: subscriptionSettings,
         schedule: [],
-        effectivePriceToday: { priceMinor: 150000, currency: 'RUB' }
+        effectivePriceToday: { priceMinor: subscriptionSettings.basePriceMinor, currency: subscriptionSettings.currency }
       })
     )
   })
@@ -2068,7 +2086,8 @@ async function mockPlatformBillingApi(page: Page) {
   return {
     getBillingGetCalls: () => billingGetCalls,
     getCheckoutPostCalls: () => checkoutPostCalls,
-    getMarkPaidCalls: () => markPaidCalls
+    getMarkPaidCalls: () => markPaidCalls,
+    getLastSubscriptionUpdate: () => lastSubscriptionUpdate
   }
 }
 
@@ -2077,13 +2096,18 @@ async function mockVenueBillingApi(
   options: {
     role?: 'OWNER' | 'MANAGER' | 'STAFF'
     permissions?: string[]
+    overview?: Partial<BillingOverviewFixture>
   } = {}
 ) {
   const role = options.role ?? 'OWNER'
   const permissions = options.permissions ?? ['ORDER_QUEUE_VIEW']
   let subscriptionGetCalls = 0
   let checkoutPostCalls = 0
-  let overview = buildBillingOverview({ subscriptionStatus: 'active', unavailableReason: 'external_checkout_unavailable' })
+  let overview = buildBillingOverview({
+    subscriptionStatus: 'active',
+    unavailableReason: 'external_checkout_unavailable',
+    ...options.overview
+  })
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-venue-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -4438,13 +4462,30 @@ test('platform billing cockpit shows invoices and uses explicit checkout and mar
   await expect(page.getByRole('heading', { name: 'Заведения' })).toBeVisible()
   await page.getByRole('button', { name: 'Открыть' }).click()
   await expect(page.getByRole('heading', { name: 'Счета и оплата' })).toBeVisible()
+  await expect(page.getByLabel('Пробный период до')).toHaveValue('2026-06-30')
+  await expect(page.getByLabel('Платный период с')).toHaveValue('2026-07-01')
+  await expect(page.getByText('После даты начала платного периода можно создать счёт за текущий период.')).toBeVisible()
+  await expect(page.getByLabel('Базовая цена, ₽/мес')).toHaveValue('1500')
+  await expect(page.getByLabel('Индивидуальная цена для этой кальянной, ₽/мес')).toHaveValue('')
+  await expect(page.getByText(/копейки/)).toHaveCount(0)
   await expect(page.getByText('Статус: Просрочена')).toBeVisible()
+  await expect(page.getByText(/Цена:.*₽/)).toBeVisible()
+  await expect(page.getByText('Пробный период до: 2026-06-30')).toBeVisible()
+  await expect(page.getByText('Платный период с: 2026-07-01')).toBeVisible()
   await expect(page.getByText('Счёт #77 · Открыт')).toBeVisible()
   expect(api.getBillingGetCalls()).toBe(1)
   expect(api.getCheckoutPostCalls()).toBe(0)
 
-  await page.getByRole('button', { name: 'Создать/обновить ссылку' }).click()
-  await expect(page.getByText('Внешняя оплата доступна.')).toBeVisible()
+  await page.getByLabel('Базовая цена, ₽/мес').fill('3000')
+  await page.getByLabel('Индивидуальная цена для этой кальянной, ₽/мес').fill('3500')
+  await page.getByRole('button', { name: 'Сохранить настройки' }).click()
+  await expect.poll(() => api.getLastSubscriptionUpdate()).toMatchObject({
+    basePriceMinor: 300000,
+    priceOverrideMinor: 350000
+  })
+
+  await page.getByRole('button', { name: 'Создать ссылку на оплату' }).click()
+  await expect(page.getByText('Что сделать дальше: Можно открыть внешнюю ссылку оплаты.')).toBeVisible()
   expect(api.getCheckoutPostCalls()).toBe(1)
 
   page.once('dialog', (dialog) => dialog.accept())
@@ -4452,6 +4493,69 @@ test('platform billing cockpit shows invoices and uses explicit checkout and mar
   await expect(page.getByText('Счёт #77 · Оплачен')).toBeVisible()
   await expect(page.getByText('Оплачено до: 2026-07-31')).toBeVisible()
   expect(api.getMarkPaidCalls()).toBe(1)
+})
+
+test('platform billing cockpit explains missing setup before checkout', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockPlatformBillingApi(page, {
+    overview: {
+      priceMinor: null,
+      paymentAvailable: false,
+      checkoutEnsureAvailable: false,
+      unavailableReason: 'missing_price',
+      checkoutUrl: 'fake://invoice/77',
+      invoices: [{ ...buildBillingOverview().invoices[0], checkoutUrl: 'fake://invoice/77' }]
+    }
+  })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(
+    page.getByText('Цена не задана. Укажите цену в блоке «Подписка и цены» и сохраните настройки.')
+  ).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Создать ссылку на оплату' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Открыть оплату' })).toBeDisabled()
+  await expect(page.getByText('fake://')).toHaveCount(0)
+})
+
+test('platform billing cockpit explains missing paid period and manual provider state', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockPlatformBillingApi(page, {
+    overview: {
+      paidStartAt: null,
+      settingsPaidStartDate: null,
+      paymentAvailable: false,
+      checkoutEnsureAvailable: false,
+      unavailableReason: 'missing_billing_period',
+      checkoutUrl: null
+    }
+  })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByText('Платный период не задан. Укажите дату начала платного периода.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Создать ссылку на оплату' })).toBeDisabled()
+})
+
+test('platform billing cockpit warns when trial status is stale', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockPlatformBillingApi(page, {
+    overview: {
+      subscriptionStatus: 'trial',
+      trialEndAt: '2026-06-30T00:00:00Z',
+      settingsTrialEndDate: '2026-06-30',
+      paymentAvailable: false,
+      unavailableReason: 'external_checkout_unavailable'
+    }
+  })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByText('Статус: Пробный период')).toBeVisible()
+  await expect(page.getByText('Пробный период закончился. Настройте платный период или оплату.')).toBeVisible()
 })
 
 test('venue owner subscription screen separates refresh from checkout ensure', async ({ page }) => {
@@ -4464,6 +4568,9 @@ test('venue owner subscription screen separates refresh from checkout ensure', a
   await page.getByRole('button', { name: 'Подписка', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Подписка' })).toBeVisible()
   await expect(page.getByText('Статус: Активна')).toBeVisible()
+  await expect(page.getByText(/Цена:.*₽/)).toBeVisible()
+  await expect(page.getByText('Пробный период до: 2026-06-30')).toBeVisible()
+  await expect(page.getByText('Платный период с: 2026-07-01')).toBeVisible()
   await expect(page.getByText('Счёт #77 · Открыт')).toBeVisible()
   expect(api.getSubscriptionGetCalls()).toBe(1)
   expect(api.getCheckoutPostCalls()).toBe(0)
@@ -4475,6 +4582,28 @@ test('venue owner subscription screen separates refresh from checkout ensure', a
   await page.getByRole('button', { name: 'Подготовить оплату' }).click()
   await expect(page.getByText('Можно перейти к оплате картой.')).toBeVisible()
   expect(api.getCheckoutPostCalls()).toBe(1)
+})
+
+test('venue owner subscription screen uses human manual payment copy and hides fake links', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueBillingApi(page, {
+    role: 'OWNER',
+    permissions: ['ORDER_QUEUE_VIEW'],
+    overview: {
+      paymentAvailable: false,
+      checkoutEnsureAvailable: true,
+      unavailableReason: 'fake_provider_manual_only',
+      checkoutUrl: 'fake://invoice/77',
+      invoices: [{ ...buildBillingOverview().invoices[0], checkoutUrl: 'fake://invoice/77' }]
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Подписка', exact: true }).click()
+  await expect(page.getByText('Онлайн-оплата не подключена. Оплату ведёт платформа вручную.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Оплатить картой' })).toBeDisabled()
+  await expect(page.getByText('fake://')).toHaveCount(0)
 })
 
 test('venue staff does not see subscription payment controls', async ({ page }) => {

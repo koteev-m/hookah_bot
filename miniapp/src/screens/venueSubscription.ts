@@ -88,20 +88,37 @@ function invoiceStatusLabel(status: string) {
 function paymentReasonLabel(reason?: string | null) {
   switch (reason) {
     case 'provider_not_configured':
-      return 'Оплата картой пока не настроена.'
+      return 'Онлайн-оплата не подключена. Оплату ведёт платформа вручную.'
     case 'external_checkout_unavailable':
-      return 'Ссылка оплаты пока недоступна.'
+      return 'Ссылка оплаты пока недоступна. Обратитесь к платформе или оплатите вручную.'
     case 'missing_price':
-      return 'Цена подписки ещё не задана.'
+      return 'Цена подписки ещё не задана. Обратитесь к платформе.'
     case 'missing_billing_period':
-      return 'Платёжный период ещё не выставлен.'
+      return 'Платный период ещё не задан. Обратитесь к платформе.'
     case 'fake_provider_manual_only':
-      return 'Оплата проходит вручную через платформу.'
+      return 'Онлайн-оплата не подключена. Оплату ведёт платформа вручную.'
     case 'already_paid':
       return 'Текущий период уже оплачен.'
     default:
       return reason ? `Оплата недоступна: ${reason}` : 'Оплата недоступна.'
   }
+}
+
+function safeCheckoutUrl(url?: string | null) {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? url : null
+  } catch {
+    return null
+  }
+}
+
+function subscriptionNextStep(overview: OwnerBillingOverviewResponse) {
+  if (!overview.priceMinor) return paymentReasonLabel('missing_price')
+  if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) return paymentReasonLabel('missing_billing_period')
+  if (!overview.paymentAvailable) return paymentReasonLabel(overview.unavailableReason)
+  return 'Можно перейти к оплате картой.'
 }
 
 function buildDom(root: HTMLDivElement): VenueSubscriptionRefs {
@@ -214,7 +231,7 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
   const updateButtons = () => {
     refs.refreshButton.disabled = inFlight
     refs.ensureCheckoutButton.disabled = inFlight || ensuring
-    refs.openCheckoutButton.disabled = inFlight || !current?.checkoutUrl
+    refs.openCheckoutButton.disabled = inFlight || !safeCheckoutUrl(current?.checkoutUrl)
   }
 
   const renderInvoice = (invoice: OwnerBillingInvoiceDto) => {
@@ -249,11 +266,10 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
     refs.summary.replaceChildren(
       el('p', { text: `Статус: ${subscriptionStatusLabel(current.subscriptionStatus)}` }),
       el('p', { text: `Цена: ${formatMoney(current.priceMinor, current.currency)}` }),
-      el('p', { text: `Trial до: ${formatDate(current.settingsTrialEndDate ?? current.trialEndAt)}` }),
+      el('p', { text: `Пробный период до: ${formatDate(current.settingsTrialEndDate ?? current.trialEndAt)}` }),
+      el('p', { text: `Платный период с: ${formatDate(current.settingsPaidStartDate ?? current.paidStartAt)}` }),
       el('p', { text: `Оплачено до: ${formatDate(current.paidThrough)}` }),
-      el('p', {
-        text: current.paymentAvailable ? 'Можно перейти к оплате картой.' : paymentReasonLabel(current.unavailableReason)
-      })
+      el('p', { text: subscriptionNextStep(current) })
     )
     if (!current.invoices.length) {
       refs.invoices.appendChild(el('p', { className: 'venue-empty', text: 'Счетов пока нет.' }))
@@ -314,7 +330,7 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
   }
 
   const openCheckout = () => {
-    const url = current?.checkoutUrl
+    const url = safeCheckoutUrl(current?.checkoutUrl)
     if (!url) {
       showToast(paymentReasonLabel(current?.unavailableReason))
       return
