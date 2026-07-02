@@ -336,6 +336,8 @@ class TelegramBotRouterTableTokenTest {
         coEvery { dialogStateRepository.clear(any()) } returns Unit
         coEvery { auditLogRepository.appendJson(any(), any(), any(), any(), any()) } returns Unit
         coEvery { staffCallRepository.completeActiveBillRequestsForOrder(any(), any()) } returns emptyList()
+        coEvery { staffChatNotifier.rememberOrderMessageNow(any(), any(), any(), any()) } returns false
+        coEvery { staffChatNotifier.refreshOrderActivityCardNow(any(), any(), any()) } returns null
         coEvery { chatContextRepository.saveContext(any(), any(), any()) } returns Unit
         coEvery { chatContextRepository.get(any()) } returns null
         coEvery { chatContextRepository.clear(any()) } returns Unit
@@ -25015,6 +25017,118 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-refresh", "Обновлено", false)
+            }
+        }
+
+    @Test
+    fun `staff chat order refresh delegates to activity card notifier`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { staffChatNotifier.rememberOrderMessageNow(10L, 19L, -777L, 77L) } returns true
+            coEvery { staffChatNotifier.refreshOrderActivityCardNow(10L, 19L, null) } returns
+                StaffChatNotificationResult.SENT_OR_QUEUED
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_21,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-refresh-activity",
+                            from = User(id = 501L),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_or:a:j:1l",
+                        ),
+                ),
+            )
+
+            coVerify {
+                staffChatNotifier.rememberOrderMessageNow(
+                    venueId = 10L,
+                    orderId = 19L,
+                    chatId = -777L,
+                    messageId = 77L,
+                )
+            }
+            coVerify {
+                staffChatNotifier.refreshOrderActivityCardNow(
+                    venueId = 10L,
+                    orderId = 19L,
+                    includeStaffCallId = null,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueEditMessageText(-777L, 77L, any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-refresh-activity", "Обновлено", false)
+            }
+        }
+
+    @Test
+    fun `staff chat order batch accept refreshes activity card through notifier`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery {
+                venueOrdersRepository.updateBatchStatus(
+                    venueId = 10L,
+                    batchId = 57L,
+                    expectedCurrentStatus = OrderBatchStatus.NEW,
+                    nextStatus = OrderBatchStatus.ACCEPTED,
+                    actor = any(),
+                )
+            } returns
+                BatchStatusUpdateResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
+                    applied = true,
+                )
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.ACCEPTED,
+                    orderStatus = OrderWorkflowStatus.ACCEPTED,
+                )
+            coEvery { staffChatNotifier.rememberOrderMessageNow(10L, 19L, -777L, 77L) } returns true
+            coEvery { staffChatNotifier.refreshOrderActivityCardNow(10L, 19L, null) } returns
+                StaffChatNotificationResult.SENT_OR_QUEUED
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_404_22,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-order-accept-activity",
+                            from = User(id = 501L, username = "waiter"),
+                            message = Message(messageId = 77L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "sc_ob_a:10:57",
+                        ),
+                ),
+            )
+
+            coVerify {
+                staffChatNotifier.rememberOrderMessageNow(
+                    venueId = 10L,
+                    orderId = 19L,
+                    chatId = -777L,
+                    messageId = 77L,
+                )
+            }
+            coVerify {
+                staffChatNotifier.refreshOrderActivityCardNow(
+                    venueId = 10L,
+                    orderId = 19L,
+                    includeStaffCallId = null,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueEditMessageText(-777L, 77L, any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-accept-activity", "Готово", false)
             }
         }
 

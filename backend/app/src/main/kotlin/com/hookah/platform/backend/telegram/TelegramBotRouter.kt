@@ -20839,6 +20839,16 @@ class TelegramBotRouter(
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Уже обработано")
             return
         }
+        notifyGuestAboutStaffChatBatchStatusChange(
+            venueId = venueId,
+            orderId = result.orderId,
+            batchId = batchId,
+            nextStatus = nextStatus.toWorkflow(),
+        )
+        if (refreshStaffChatLiveOrderCardFromCallback(chatId, messageId, venueId, result.orderId) != null) {
+            enqueueCallbackAnswer(chatId, callbackQueryId, text = "Готово")
+            return
+        }
         val actor = formatStaffChatActionActor(user)
         val statusLine =
             when (nextStatus) {
@@ -20856,12 +20866,6 @@ class TelegramBotRouter(
                     webAppUrl = venueMiniAppUrl(venueId),
                     batchLabel = null,
                 )
-        notifyGuestAboutStaffChatBatchStatusChange(
-            venueId = venueId,
-            orderId = result.orderId,
-            batchId = batchId,
-            nextStatus = nextStatus.toWorkflow(),
-        )
         editStaffChatOrderBatchMessage(
             chatId = chatId,
             messageId = messageId,
@@ -20966,6 +20970,9 @@ class TelegramBotRouter(
         venueId: Long,
         orderId: Long,
     ) {
+        if (refreshStaffChatLiveOrderCardFromCallback(chatId, messageId, venueId, orderId) != null) {
+            return
+        }
         val detail =
             try {
                 venueOrdersRepository.loadOrderDetail(venueId = venueId, orderId = orderId)
@@ -21079,6 +21086,10 @@ class TelegramBotRouter(
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "Счёт уже закрыт.")
                 return
             }
+            if (refreshStaffChatLiveOrderCardFromCallback(chatId, messageId, action.venueId, action.orderId) != null) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Ок")
+                return
+            }
             editStaffChatOrderBatchMessage(
                 chatId = chatId,
                 messageId = messageId,
@@ -21153,6 +21164,10 @@ class TelegramBotRouter(
             val role = resolveVenueRoleForStaffChatAction(user.id, action.venueId)
             if (role == null) {
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "Нет доступа", showAlert = true)
+                return
+            }
+            if (refreshStaffChatLiveOrderCardFromCallback(chatId, messageId, action.venueId, action.orderId) != null) {
+                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Обновлено")
                 return
             }
             val detail =
@@ -21460,6 +21475,9 @@ class TelegramBotRouter(
         result: BatchStatusUpdateResult,
         batchId: Long,
     ) {
+        if (refreshStaffChatLiveOrderCardFromCallback(chatId, messageId, venueId, result.orderId) != null) {
+            return
+        }
         val replyMarkup =
             buildStaffChatLiveOrderActions(venueId = venueId, orderId = result.orderId)
                 ?: TelegramKeyboards.inlineStaffChatOrderActions(
@@ -21478,6 +21496,28 @@ class TelegramBotRouter(
             batchId = batchId,
             statusLine = staffChatOrderCurrentStatusLine(result.status),
             replyMarkup = replyMarkup,
+        )
+    }
+
+    private suspend fun refreshStaffChatLiveOrderCardFromCallback(
+        chatId: Long,
+        messageId: Long?,
+        venueId: Long,
+        orderId: Long,
+        includeStaffCallId: Long? = null,
+    ): StaffChatNotificationResult? {
+        if (messageId != null) {
+            staffChatNotifier?.rememberOrderMessageNow(
+                venueId = venueId,
+                orderId = orderId,
+                chatId = chatId,
+                messageId = messageId,
+            )
+        }
+        return staffChatNotifier?.refreshOrderActivityCardNow(
+            venueId = venueId,
+            orderId = orderId,
+            includeStaffCallId = includeStaffCallId,
         )
     }
 
