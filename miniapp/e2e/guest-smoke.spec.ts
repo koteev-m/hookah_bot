@@ -3139,7 +3139,7 @@ test('guest mini app uses context-aware placeholder and submits structured selec
       {
         id: 20,
         name: 'Кальянное меню',
-        categoryType: 'HOOKAH',
+        categoryType: 'OTHER',
         items: [
           {
             id: 210,
@@ -3147,7 +3147,7 @@ test('guest mini app uses context-aware placeholder and submits structured selec
             priceMinor: 180000,
             currency: 'RUB',
             isAvailable: true,
-            effectiveItemType: 'HOOKAH',
+            effectiveItemType: 'OTHER',
             options: [
               { id: 304, name: 'Ягодный', priceDeltaMinor: 0, isAvailable: true },
               { id: 301, name: 'Яблоко', priceDeltaMinor: 0, isAvailable: true },
@@ -3216,6 +3216,7 @@ test('guest mini app uses context-aware placeholder and submits structured selec
   const hookahNoteInput = page.getByLabel('Пожелания к приготовлению')
   await expect(hookahNoteInput).toHaveAttribute('placeholder', 'Например: покрепче, полегче, больше мяты, без ментола')
   await expect(hookahNoteInput).not.toHaveAttribute('placeholder', /без сахара|без льда/)
+  await expect(page.getByPlaceholder('Например: без сахара, без льда, потеплее')).toHaveCount(0)
   await page.getByRole('button', { name: /К выбору вкуса/ }).click()
   await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
   await expect(page.getByLabel('Пожелания к приготовлению')).toHaveCount(0)

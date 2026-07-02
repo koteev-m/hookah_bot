@@ -34,6 +34,8 @@ const MAX_ITEM_QTY = 50
 const MAX_STAFF_COMMENT_LENGTH = 500
 const MAX_ITEM_PREFERENCE_NOTE_LENGTH = 200
 const STAFF_CALL_STATUS_POLL_MS = 10000
+const HOOKAH_ITEM_NOTE_PLACEHOLDER = 'Например: покрепче, полегче, больше мяты, без ментола'
+const DEFAULT_ITEM_NOTE_PLACEHOLDER = 'Например: без сахара, без льда, потеплее'
 
 type VenueScreenOptions = {
   root: HTMLDivElement | null
@@ -274,7 +276,7 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
     const price = el('span', { className: 'menu-item-price', text: formatPrice(item.priceMinor, item.currency) })
     append(info, name, price)
     if (itemOptions.length > 0) {
-      info.appendChild(el('span', { className: 'menu-item-option-hint', text: getOptionCopy(item).hint }))
+      info.appendChild(el('span', { className: 'menu-item-option-hint', text: getOptionCopy(item, category).hint }))
     }
 
     const controls = el('div', { className: 'menu-item-controls' })
@@ -320,18 +322,45 @@ function getAvailableItemOptions(item: MenuItemDto): MenuItemOptionDto[] {
   return (item.options ?? []).filter((option) => option.isAvailable !== false)
 }
 
-function isHookahMenuItem(item: MenuItemDto) {
-  return item.effectiveItemType === 'HOOKAH'
+function isKnownNonHookahMenuType(value: string | null | undefined) {
+  return value === 'DRINK' || value === 'FOOD' || value === 'TEA'
 }
 
-function getOptionCopy(item: MenuItemDto) {
-  const isHookah = isHookahMenuItem(item)
+function hasHookahContextText(value: string | null | undefined) {
+  const normalized = value?.trim().toLocaleLowerCase('ru-RU') ?? ''
+  return (
+    normalized.includes('кальян') ||
+    normalized.includes('hookah') ||
+    normalized.includes('табак') ||
+    normalized.includes('вкус') ||
+    normalized.includes('чаша') ||
+    normalized.includes('крепост') ||
+    normalized.includes('мят') ||
+    normalized.includes('ментол')
+  )
+}
+
+function isHookahMenuContext(item: MenuItemDto, category?: MenuCategoryDto | null) {
+  const itemType = item.effectiveItemType ?? item.itemType
+  if (itemType === 'HOOKAH') return true
+  if (isKnownNonHookahMenuType(itemType)) return false
+  if (category?.categoryType === 'HOOKAH') return true
+  if (isKnownNonHookahMenuType(category?.categoryType)) return false
+  return [category?.name, item.name, ...(item.options ?? []).map((option) => option.name)].some(hasHookahContextText)
+}
+
+function findMenuItemCategory(item: MenuItemDto, categories: MenuCategoryDto[]) {
+  return categories.find((category) => category.items.some((candidate) => candidate.id === item.id)) ?? null
+}
+
+function getOptionCopy(item: MenuItemDto, category?: MenuCategoryDto | null) {
+  const isHookah = isHookahMenuContext(item, category)
   return {
     hint: isHookah ? 'Выберите вкус' : 'Выберите опцию',
     chooseTitle: isHookah ? 'Выберите вкус' : 'Выберите опцию',
     selectedLabel: isHookah ? 'Вкус' : 'Опция',
     backToChoice: isHookah ? '← К выбору вкуса' : '← К выбору опции',
-    notePlaceholder: isHookah ? 'Например: покрепче, полегче, больше мяты, без ментола' : 'Например: без сахара, без льда, потеплее'
+    notePlaceholder: isHookah ? HOOKAH_ITEM_NOTE_PLACEHOLDER : DEFAULT_ITEM_NOTE_PLACEHOLDER
   }
 }
 
@@ -984,7 +1013,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const renderOptionPicker = (item: MenuItemDto, categories: MenuCategoryDto[]) => {
     const section = el('section', { className: 'card menu-option-picker' })
     const options = getAvailableItemOptions(item)
-    const optionCopy = getOptionCopy(item)
+    const optionCopy = getOptionCopy(item, findMenuItemCategory(item, categories))
     const selectedOption =
       selectedOptionChoice && options.some((option) => option.id === selectedOptionChoice?.id) ? selectedOptionChoice : null
     if (selectedOptionChoice && !selectedOption) {
