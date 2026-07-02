@@ -380,6 +380,27 @@ class StaffCallRepository(private val dataSource: DataSource?) {
     suspend fun completeActiveBillRequestsForOrder(
         venueId: Long,
         orderId: Long,
+    ): List<CompletedStaffCallStatusUpdate> =
+        resolveActiveCallsForClosedOrder(
+            venueId = venueId,
+            orderId = orderId,
+            billOnly = true,
+        )
+
+    suspend fun resolveActiveCallsForClosedOrder(
+        venueId: Long,
+        orderId: Long,
+    ): List<CompletedStaffCallStatusUpdate> =
+        resolveActiveCallsForClosedOrder(
+            venueId = venueId,
+            orderId = orderId,
+            billOnly = false,
+        )
+
+    private suspend fun resolveActiveCallsForClosedOrder(
+        venueId: Long,
+        orderId: Long,
+        billOnly: Boolean,
     ): List<CompletedStaffCallStatusUpdate> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -393,11 +414,31 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                             } else {
                                 "FOR UPDATE OF sc"
                             }
-                        val activeBillRequests =
+                        val tableSessionId =
+                            connection.prepareStatement(
+                                """
+                                SELECT table_session_id
+                                FROM orders
+                                WHERE id = ?
+                                  AND venue_id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, orderId)
+                                statement.setLong(2, venueId)
+                                statement.executeQuery().use { rs ->
+                                    if (rs.next()) {
+                                        rs.getNullableLong("table_session_id")
+                                    } else {
+                                        null
+                                    }
+                                }
+                            }
+                        val activeCalls =
                             connection.prepareStatement(
                                 """
                                 SELECT sc.id,
                                        sc.status,
+                                       sc.reason,
                                        sc.comment,
                                        sc.order_id,
                                        sc.tab_id,
@@ -412,31 +453,75 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                                 LEFT JOIN tab t ON t.id = sc.tab_id
                                 LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
                                 WHERE sc.venue_id = ?
-                                  AND sc.order_id = ?
-                                  AND sc.reason = 'BILL'
                                   AND sc.status IN ('NEW', 'ACK')
+                                  AND (
+                                      sc.order_id = ?
+                                      OR (
+                                          ? = FALSE
+                                          AND ? IS NOT NULL
+                                          AND sc.table_session_id = ?
+                                          AND (
+                                              sc.order_id IS NULL
+                                              OR NOT EXISTS (
+                                                  SELECT 1
+                                                  FROM orders linked_active_order
+                                                  WHERE linked_active_order.id = sc.order_id
+                                                    AND linked_active_order.venue_id = sc.venue_id
+                                                    AND linked_active_order.status = 'ACTIVE'
+                                              )
+                                          )
+                                          AND NOT EXISTS (
+                                              SELECT 1
+                                              FROM orders other_active_order
+                                              WHERE other_active_order.venue_id = sc.venue_id
+                                                AND other_active_order.table_session_id = sc.table_session_id
+                                                AND other_active_order.status = 'ACTIVE'
+                                                AND other_active_order.id <> ?
+                                          )
+                                      )
+                                  )
+                                  AND (? = FALSE OR sc.reason = 'BILL')
                                 ORDER BY sc.created_at DESC, sc.id DESC
                                 $forUpdateClause
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setLong(1, venueId)
                                 statement.setLong(2, orderId)
+                                statement.setBoolean(3, billOnly)
+                                if (tableSessionId != null) {
+                                    statement.setLong(4, tableSessionId)
+                                    statement.setLong(5, tableSessionId)
+                                } else {
+                                    statement.setNull(4, java.sql.Types.BIGINT)
+                                    statement.setNull(5, java.sql.Types.BIGINT)
+                                }
+                                statement.setLong(6, orderId)
+                                statement.setBoolean(7, billOnly)
                                 statement.executeQuery().use { rs ->
                                     buildList {
                                         while (rs.next()) {
                                             val fromStatus =
                                                 StaffCallStatus.fromDb(rs.getString("status"))
                                                     ?: StaffCallStatus.NEW
+                                            val reason =
+                                                runCatching { StaffCallReason.valueOf(rs.getString("reason")) }
+                                                    .getOrDefault(StaffCallReason.OTHER)
+                                            val nextStatus =
+                                                if (reason == StaffCallReason.BILL) {
+                                                    StaffCallStatus.DONE
+                                                } else {
+                                                    StaffCallStatus.CANCELLED
+                                                }
                                             add(
                                                 CompletedStaffCallStatusUpdate(
                                                     fromStatus = fromStatus,
                                                     result =
                                                         StaffCallStatusUpdateResult(
                                                             staffCallId = rs.getLong("id"),
-                                                            status = StaffCallStatus.DONE,
+                                                            status = nextStatus,
                                                             applied = true,
                                                             tableNumber = rs.getInt("table_number"),
-                                                            reason = StaffCallReason.BILL,
+                                                            reason = reason,
                                                             comment = rs.getString("comment"),
                                                             orderId = rs.getNullableLong("order_id"),
                                                             tabId = rs.getNullableLong("tab_id"),
@@ -458,31 +543,33 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                                     }
                                 }
                             }
-                        if (activeBillRequests.isEmpty()) {
+                        if (activeCalls.isEmpty()) {
                             connection.commit()
                             return@use emptyList()
                         }
-                        val updated =
-                            connection.prepareStatement(
-                                """
-                                UPDATE staff_calls
-                                SET status = 'DONE'
-                                WHERE venue_id = ?
-                                  AND order_id = ?
-                                  AND reason = 'BILL'
-                                  AND status IN ('NEW', 'ACK')
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setLong(1, venueId)
-                                statement.setLong(2, orderId)
-                                statement.executeUpdate()
+                        activeCalls.forEach { completion ->
+                            val updated =
+                                connection.prepareStatement(
+                                    """
+                                    UPDATE staff_calls
+                                    SET status = ?
+                                    WHERE id = ?
+                                      AND venue_id = ?
+                                      AND status IN ('NEW', 'ACK')
+                                    """.trimIndent(),
+                                ).use { statement ->
+                                    statement.setString(1, completion.result.status.dbValue)
+                                    statement.setLong(2, completion.result.staffCallId)
+                                    statement.setLong(3, venueId)
+                                    statement.executeUpdate()
+                                }
+                            if (updated != 1) {
+                                runCatching { connection.rollback() }
+                                throw DatabaseUnavailableException()
                             }
-                        if (updated != activeBillRequests.size) {
-                            runCatching { connection.rollback() }
-                            throw DatabaseUnavailableException()
                         }
                         connection.commit()
-                        activeBillRequests
+                        activeCalls
                     } catch (e: SQLException) {
                         runCatching { connection.rollback() }
                         throw DatabaseUnavailableException()

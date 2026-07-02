@@ -170,6 +170,102 @@ class StaffCallRepositoryTest {
             assertEquals("ACK", fetchStaffCallStatus(jdbcUrl, otherOrderBillCallId))
         }
 
+    @Test
+    fun `resolveActiveCallsForClosedOrder clears closed visit calls from guest status and active queue`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-resolve-closed-order")
+            val fixture = seedStaffCall(jdbcUrl, status = "DONE")
+            val repository = StaffCallRepository(dataSource(jdbcUrl))
+            val orderId = seedOrder(jdbcUrl, fixture, status = "CLOSED")
+            val billCallId =
+                seedLinkedStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    orderId = orderId,
+                    reason = StaffCallReason.BILL,
+                    status = "NEW",
+                )
+            val linkedGenericCallId =
+                seedLinkedStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    orderId = orderId,
+                    reason = StaffCallReason.COALS,
+                    status = "ACK",
+                )
+            val legacySameVisitCallId =
+                seedContextStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    tableSessionId = fixture.tableSessionId,
+                    orderId = null,
+                    reason = StaffCallReason.COME,
+                    status = "NEW",
+                )
+            val otherTableSessionId = seedTableSession(jdbcUrl, fixture)
+            val otherContextCallId =
+                seedContextStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    tableSessionId = otherTableSessionId,
+                    orderId = null,
+                    reason = StaffCallReason.COME,
+                    status = "NEW",
+                )
+
+            val completed = repository.resolveActiveCallsForClosedOrder(fixture.venueId, orderId)
+
+            assertEquals(
+                setOf(billCallId, linkedGenericCallId, legacySameVisitCallId),
+                completed.map { it.result.staffCallId }.toSet(),
+            )
+            assertEquals("DONE", fetchStaffCallStatus(jdbcUrl, billCallId))
+            assertEquals("CANCELLED", fetchStaffCallStatus(jdbcUrl, linkedGenericCallId))
+            assertEquals("CANCELLED", fetchStaffCallStatus(jdbcUrl, legacySameVisitCallId))
+            assertEquals("NEW", fetchStaffCallStatus(jdbcUrl, otherContextCallId))
+            assertEquals(
+                listOf(otherContextCallId),
+                repository.listActiveByVenue(fixture.venueId, limit = 20).map { it.id },
+            )
+            val guestStatuses =
+                repository.listByGuestTableSession(
+                    venueId = fixture.venueId,
+                    tableId = fixture.tableId,
+                    tableSessionId = fixture.tableSessionId,
+                    userId = GUEST_USER_ID,
+                    limit = 20,
+                )
+            assertTrue(guestStatuses.none { it.status == "NEW" || it.status == "ACK" }, guestStatuses.toString())
+        }
+
+    @Test
+    fun `resolveActiveCallsForClosedOrder keeps legacy call when same session still has active order`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("staff-call-resolve-active-sibling")
+            val fixture = seedStaffCall(jdbcUrl, status = "DONE")
+            val repository = StaffCallRepository(dataSource(jdbcUrl))
+            val closedOrderId = seedOrder(jdbcUrl, fixture, status = "CLOSED")
+            seedOrder(jdbcUrl, fixture, status = "ACTIVE")
+            val legacyCallId =
+                seedContextStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    tableSessionId = fixture.tableSessionId,
+                    orderId = null,
+                    reason = StaffCallReason.COME,
+                    status = "NEW",
+                )
+
+            val completed = repository.resolveActiveCallsForClosedOrder(fixture.venueId, closedOrderId)
+
+            assertEquals(emptyList(), completed)
+            assertEquals("NEW", fetchStaffCallStatus(jdbcUrl, legacyCallId))
+            assertEquals(
+                listOf(legacyCallId),
+                repository.listActiveByVenue(fixture.venueId, limit = 20).map { it.id },
+            )
+        }
+
     private fun migratedJdbcUrl(prefix: String): String {
         val jdbcUrl =
             "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;" +
@@ -323,6 +419,23 @@ class StaffCallRepositoryTest {
         reason: StaffCallReason,
         status: String,
     ): Long =
+        seedContextStaffCall(
+            jdbcUrl = jdbcUrl,
+            fixture = fixture,
+            tableSessionId = fixture.tableSessionId,
+            orderId = orderId,
+            reason = reason,
+            status = status,
+        )
+
+    private fun seedContextStaffCall(
+        jdbcUrl: String,
+        fixture: StaffCallFixture,
+        tableSessionId: Long,
+        orderId: Long?,
+        reason: StaffCallReason,
+        status: String,
+    ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -336,12 +449,16 @@ class StaffCallRepositoryTest {
             ).use { statement ->
                 statement.setLong(1, fixture.venueId)
                 statement.setLong(2, fixture.tableId)
-                statement.setLong(3, fixture.tableSessionId)
+                statement.setLong(3, tableSessionId)
                 statement.setLong(4, GUEST_USER_ID)
                 statement.setString(5, reason.name)
                 statement.setString(6, "Комментарий")
                 statement.setString(7, status)
-                statement.setLong(8, orderId)
+                if (orderId != null) {
+                    statement.setLong(8, orderId)
+                } else {
+                    statement.setNull(8, java.sql.Types.BIGINT)
+                }
                 if (reason == StaffCallReason.BILL) {
                     statement.setString(9, BillPaymentMethod.CARD.name)
                 } else {
@@ -351,6 +468,31 @@ class StaffCallRepositoryTest {
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) rs.getLong(1) else error("Failed to insert linked staff call")
+                }
+            }
+        }
+
+    private fun seedTableSession(
+        jdbcUrl: String,
+        fixture: StaffCallFixture,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO table_sessions (venue_id, table_id, started_at, last_activity_at, expires_at, status)
+                VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                val now = Instant.now()
+                statement.setLong(1, fixture.venueId)
+                statement.setLong(2, fixture.tableId)
+                statement.setTimestamp(3, Timestamp.from(now))
+                statement.setTimestamp(4, Timestamp.from(now))
+                statement.setTimestamp(5, Timestamp.from(now.plusSeconds(7200)))
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert table session")
                 }
             }
         }

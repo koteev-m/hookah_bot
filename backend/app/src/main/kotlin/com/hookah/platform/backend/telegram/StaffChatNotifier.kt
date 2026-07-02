@@ -1159,6 +1159,9 @@ private fun formatStaffOrderBatchBlocks(
                     staffOrderStatusLabel(batch.status)
                 },
             )
+            if (isNewReorderBatch(batch, orderStatus)) {
+                append("\n🆕 ").append(batch.label).append(" ожидает принятия")
+            }
             batch.comment?.takeIf { it.isNotBlank() }?.let { comment ->
                 append("\nКомментарий: ").append(comment)
             }
@@ -1179,6 +1182,14 @@ private fun formatStaffOrderBatchBlocks(
             }
         }
     }
+
+private fun isNewReorderBatch(
+    batch: StaffOrderBatchLiveBlock,
+    orderStatus: OrderWorkflowStatus,
+): Boolean =
+    orderStatus != OrderWorkflowStatus.CLOSED &&
+        batch.status == OrderWorkflowStatus.NEW &&
+        !batch.label.equals("Основной заказ", ignoreCase = true)
 
 internal fun buildStaffBillUpdatedNotificationText(
     venueName: String,

@@ -335,7 +335,7 @@ class TelegramBotRouterTableTokenTest {
         coEvery { dialogStateRepository.set(any(), any()) } returns Unit
         coEvery { dialogStateRepository.clear(any()) } returns Unit
         coEvery { auditLogRepository.appendJson(any(), any(), any(), any(), any()) } returns Unit
-        coEvery { staffCallRepository.completeActiveBillRequestsForOrder(any(), any()) } returns emptyList()
+        coEvery { staffCallRepository.resolveActiveCallsForClosedOrder(any(), any()) } returns emptyList()
         coEvery { staffChatNotifier.rememberOrderMessageNow(any(), any(), any(), any()) } returns false
         coEvery { staffChatNotifier.refreshOrderActivityCardNow(any(), any(), any()) } returns null
         coEvery { chatContextRepository.saveContext(any(), any(), any()) } returns Unit
@@ -24552,7 +24552,7 @@ class TelegramBotRouterTableTokenTest {
                     updatedAt = Instant.parse("2026-03-30T10:00:00Z"),
                     applied = true,
                 )
-            coEvery { staffCallRepository.completeActiveBillRequestsForOrder(10L, 19L) } returns
+            coEvery { staffCallRepository.resolveActiveCallsForClosedOrder(10L, 19L) } returns
                 listOf(
                     CompletedStaffCallStatusUpdate(
                         fromStatus = StaffCallStatus.ACK,
@@ -24617,7 +24617,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-close-confirm", "Счёт закрыт", false)
             }
             coVerify {
-                staffCallRepository.completeActiveBillRequestsForOrder(10L, 19L)
+                staffCallRepository.resolveActiveCallsForClosedOrder(10L, 19L)
             }
             coVerify {
                 auditLogRepository.appendJson(

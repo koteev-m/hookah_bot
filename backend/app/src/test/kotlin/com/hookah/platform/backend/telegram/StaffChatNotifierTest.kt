@@ -1443,6 +1443,7 @@ class StaffChatNotifierTest {
         assertTrue(text.contains("Комментарий: Без мяты"), text)
         assertTrue(text.contains("Авторский кальян ×1 — 200 ₽"), text)
         assertTrue(text.contains("Дозаказ №1 — новый"), text)
+        assertTrue(text.contains("🆕 Дозаказ №1 ожидает принятия"), text)
         assertTrue(text.contains("Чай ×1 — 100 ₽"), text)
         assertTrue(text.contains("К оплате: 300 ₽"), text)
     }

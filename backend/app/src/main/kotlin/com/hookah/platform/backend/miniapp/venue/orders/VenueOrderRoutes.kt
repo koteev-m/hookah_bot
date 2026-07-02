@@ -210,7 +210,7 @@ fun Route.venueOrderRoutes(
                 throw InvalidInputException("Invalid status transition")
             }
             if (nextStatus == OrderWorkflowStatus.CLOSED) {
-                completeBillRequestsForClosedOrder(
+                resolveActiveStaffCallsForClosedOrder(
                     staffCallRepository = staffCallRepository,
                     auditLogRepository = auditLogRepository,
                     venueId = venueId,
@@ -298,7 +298,7 @@ fun Route.venueOrderRoutes(
             if (!result.applied) {
                 throw InvalidInputException("Invalid status transition")
             }
-            completeBillRequestsForClosedOrder(
+            resolveActiveStaffCallsForClosedOrder(
                 staffCallRepository = staffCallRepository,
                 auditLogRepository = auditLogRepository,
                 venueId = venueId,
@@ -866,7 +866,7 @@ private fun OrderBillSelectedOptionSnapshot.toDto(): OrderItemSelectedOptionDto 
         priceDeltaMinor = priceDeltaMinor,
     )
 
-private suspend fun completeBillRequestsForClosedOrder(
+private suspend fun resolveActiveStaffCallsForClosedOrder(
     staffCallRepository: StaffCallRepository?,
     auditLogRepository: AuditLogRepository?,
     venueId: Long,
@@ -876,13 +876,13 @@ private suspend fun completeBillRequestsForClosedOrder(
     val repository = staffCallRepository ?: return
     val completed =
         runCatching {
-            repository.completeActiveBillRequestsForOrder(
+            repository.resolveActiveCallsForClosedOrder(
                 venueId = venueId,
                 orderId = orderId,
             )
         }.onFailure { error ->
             venueOrderRoutesLogger.warn(
-                "Failed to complete bill requests for closed order venue_id={} order_id={}: {}",
+                "Failed to resolve staff calls for closed order venue_id={} order_id={}: {}",
                 venueId,
                 orderId,
                 sanitizeTelegramForLog(error.message),
