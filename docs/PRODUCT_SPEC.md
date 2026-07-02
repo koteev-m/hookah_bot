@@ -9,7 +9,7 @@ Platform Owner manages onboarding of venues, venue OWNER invitations/revocation,
 ## Core surfaces
 - Telegram Bot (chat): navigation, fallback ordering, booking fallback
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)
-- Optional staff group chat per venue for order/call duplicates (venue creates it; platform just stores chat_id)
+- Optional staff group chat per venue for operational notifications and live order activity-card shortcuts (venue creates it; platform stores chat_id and live message ids where needed)
 
 ## Roles (RBAC)
 Platform:
@@ -96,8 +96,9 @@ MUST:
 SHOULD:
 - Out-of-stock handling via stop-list, not via last-minute rejects.
 - Staff-facing live order messages keep the main order and every add-batch/doporder visually separated, with batch status/action context clear to operators. Order/bill totals still come from the canonical backend bill snapshot.
-- Guest/staff bill identity parity is code-test-backed as of 2026-07-01: Guest Mini App, Venue Mini App and Telegram staff full-bill surfaces use human order labels (`Заказ №<display_number>`) when present. Guest Mini App shows the selected/current tab bill with a human account label (`Личный счёт` / `Общий счёт`) and does not use raw `tabId` or technical `orderId` as the primary visible identity. Venue Mini App full bill shows included/excluded/discounted items, service charges, closed-state copy and human personal/shared account context for batches and non-payable rows.
-- Guest bill request / payment method UX is implemented / code-test verification passed as of 2026-07-01. Guest Mini App active order screen exposes `Попросить счёт`, then choices `Картой на месте`, `Наличными`, `Пока не знаю`. This is only an on-site operational note for staff, not online payment, acquiring, Telegram Payments/Stars or automatic bill close. Mini App sends JSON `POST /api/guest/order/bill-request` with `Content-Type: application/json`, Authorization, `tableToken`, `tableSessionId`, `tabId` and `paymentMethod`. Backend validates current Telegram user, active table session, tab membership and active order, stores structured context on `staff_calls`, dedupes active `NEW`/`ACK` requests per venue/table_session/tab, allows a new request after `DONE`, and sends a separate staff-chat bill-request notification with table, order label, account label, total and payment method. Venue Mini App staff-call queue shows bill-request order/account/payment context through the existing ACK/DONE flow. No manual staging smoke is claimed for this checkpoint.
+- Guest/staff bill identity parity is CLOSED / staging smoke passed as of 2026-07-02: Guest Mini App, Venue Mini App and Telegram staff full-bill surfaces use human order labels (`Заказ №<display_number>`) when present. Guest Mini App shows the selected/current tab bill with a human account label (`Личный счёт` / `Общий счёт`) and does not use raw `tabId` or technical `orderId` as the primary visible identity. Venue Mini App full bill shows included/excluded/discounted items, service charges, closed-state copy and human personal/shared account context for batches and non-payable rows. Venue Mini App / Bot / Guest totals match in the verified smoke.
+- Guest bill request / payment method UX is CLOSED / staging smoke passed as of 2026-07-02. Guest Mini App active order screen exposes `Попросить счёт`, then choices `Картой на месте`, `Наличными`, `Пока не знаю`. This is only an on-site operational note for staff, not online payment, acquiring, Telegram Payments/Stars or automatic bill close. Mini App sends JSON `POST /api/guest/order/bill-request` with `Content-Type: application/json`, Authorization, `tableToken`, `tableSessionId`, `tabId` and `paymentMethod`. Backend validates current Telegram user, active table session, tab membership and active order, stores structured context on `staff_calls`, dedupes active `NEW`/`ACK` requests per venue/table_session/tab, allows a new request after `DONE`, updates the order-scoped live staff-chat activity card with table/order/account/total/payment method when available, and falls back to standalone notification only if the live-card path cannot be loaded. Venue Mini App staff-call queue shows bill-request order/account/payment context through the existing ACK/DONE flow.
+- Staff Chat Noise Reduction / Table Activity Card is CLOSED / staging smoke passed as of 2026-07-02. Venue Mode remains the source of truth; staff chat is a radar/shortcut. Order, reorder, bill request and safely linked staff-call activity update one live order card keyed by `orderId`; unsafe/no-order/ambiguous staff calls remain standalone. Manual `Обновить` preserves order activity, bill request and staff-call sections; activity uses compact visual markers such as `🆕`, `🚨`, `🛎️`, `🧾`, `💳`, `💵`, `❓`; DONE/CANCELLED generic calls do not remain in the active `Оперативно` section; closing the order/bill resolves linked active BILL requests and closed-visit staff-call leftovers. No staff-chat forum topics, table-session-level card storage, split-bill redesign or online payment provider was added.
 
 ## Block 6 — Split bill (personal/shared) with anti-abuse
 MUST:
@@ -155,7 +156,7 @@ Current state:
 - Guest Mini App hides unavailable options in the picker, and backend preview/checkout rejects unavailable or foreign selected options.
 - Venue Mini App exposes item-scoped option/flavor CRUD for OWNER/MANAGER and operational stop-list toggles for STAFF/MANAGER/OWNER. STAFF may change only item/option availability; STAFF must not create/edit/delete/reorder items, edit prices, add/delete flavors or apply base flavor profiles. Hookah items show `Вкусы / опции`; non-hookah items show neutral `Опции` only when options are configured.
 - Venue Mini App applies missing bot canonical base flavor profiles through item-scoped `Добавить базовые вкусы` for hookah items.
-- Staging smoke passed: new/old hookah items show the same editor controls, base profiles are copied only to that hookah item, repeated apply does not duplicate profiles, owner/manager can add/edit/delete/toggle flavors, whole item stop-list and flavor-level stop-list work, water/kitchen/drink items do not receive hookah flavors, and Guest Mini App shows the picker only for the selected hookah item.
+- Staging smoke passed: new/old hookah items show the same editor controls, base profiles are copied only to that hookah item, repeated apply does not duplicate profiles, owner/manager can add/edit/delete/toggle flavors, whole item stop-list and flavor-level stop-list work, water/kitchen/drink items do not receive hookah flavors, Guest Mini App shows the picker only for the selected hookah item, and hookah/flavor preparation notes use hookah-relevant placeholder copy (`Например: покрепче, полегче, больше мяты, без ментола`) while food/drink options keep the generic preparation examples.
 
 Target behavior:
 1. Guest menu DTOs expose available options for each item that needs a guest choice.
@@ -188,7 +189,7 @@ MUST:
 SHOULD:
 - “Table code” confirmation for high-risk actions (optional anti-photo-QR).
 
-## Block 10 — Shift ops + staff chat duplicate
+## Block 10 — Shift ops + staff chat live-card behavior
 MUST:
 - Staff queue view (new/accepted/in_progress/delivered).
 - Staff calls view and acknowledgements.

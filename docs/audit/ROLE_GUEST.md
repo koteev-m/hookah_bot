@@ -51,7 +51,7 @@ QR/table Guest Mini App:
 - submit order/add batch;
 - fallback chat order emits `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`;
 - active order screen с refresh/polling, human order label `Заказ №...`, selected account label `Личный счёт` / `Общий счёт`, selected-tab bill totals, discounts and service charges;
-- active order screen exposes `Попросить счёт` with on-site operational payment note choices `Картой на месте`, `Наличными`, `Пока не знаю`; backend dedupes active `NEW`/`ACK` bill requests for the current user/tab and staff receives a separate bill-request notification with order/account/total/payment context. This is not online payment/acquiring/Telegram Payments/Stars and does not close the bill automatically;
+- active order screen exposes `Попросить счёт` with on-site operational payment note choices `Картой на месте`, `Наличными`, `Пока не знаю`; backend dedupes active `NEW`/`ACK` bill requests for the current user/tab and staff sees order/account/total/payment context on the live staff-chat order activity card when available, with standalone fallback only when the card cannot be loaded. This is not online payment/acquiring/Telegram Payments/Stars and does not close the bill automatically;
 - staff call flow as transient compose + compact NEW/ACK/DONE status;
 - `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when current active order/bill state makes it actionable, and hidden again after bill/order close;
 - `🚪 Завершить визит` в active table context очищает только текущий guest restore/local context и возвращает в обычный каталог. Empty personal tab/no order allows exit; active order/bill or active `NEW`/`ACK` staff call blocks with clear copy.
@@ -97,13 +97,12 @@ Account/bookings:
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
 - Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
-- M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Linked Telegram staff-chat runtime notification remains per-venue regression.
-- Completed DONE staff-call card may visually linger; treat dismiss-after-DONE as a small UX follow-up unless it confuses repeated calls.
+- M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Staff-chat activity-card polish also passed: DONE/CANCELLED generic calls no longer stay active in `Оперативно`, and linked closed-visit call leftovers are resolved on order/bill close.
 - Fallback quick-order payload is CLOSED / code-test verification passed; real Telegram client fallback remains part of release smoke.
 - Media proxy требует ручной проверки для image/PDF и скрытых/удалённых sections.
 - QR/table order flow должен smoke-тестироваться отдельно от pre-QR catalog flow.
 - QR/table exit flow is CLOSED / staging smoke passed and should stay in regression: one guest exits, another guest at the same physical table remains in their own context; explicit QR scan re-enters after exit.
-- Guest bill request / payment method UX is implemented / code-test verification passed; manual staging smoke remains recommended before launch sign-off.
+- Guest bill request / payment method UX is CLOSED / staging smoke passed; payment choices are structured, active duplicate requests do not spam staff chat and no online payment provider was added.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 
 ## Smoke-critical checks

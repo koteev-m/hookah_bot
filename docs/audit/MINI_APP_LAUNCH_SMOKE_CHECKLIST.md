@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-01.
+Дата: 2026-07-02.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -31,6 +31,10 @@
 - Staff Call Lifecycle ACK/DONE audit hardening: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, and Guest ability to create a new call after DONE. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish remain separate follow-ups.
 - Guest Table Context UX Cleanup / Feature-gated Extension Module: CLOSED / staging smoke passed. Real Telegram Mini App QR smoke confirmed correct venue/table context, route/copy address/booking actions hidden in table context, pre-visit venue card still showing address/route/copy/booking, `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when active order state makes it available, and hidden again after bill/order close.
 - Guest Table Session Exit / Expiry UX: CLOSED / staging smoke passed. First staging attempt returned `415 Unsupported Media Type` on `POST /api/guest/table/session/end`; root cause was missing JSON `Content-Type`. Mini App now sends Authorization plus `Content-Type: application/json` and body `{ tableToken, tableSessionId }`, and e2e asserts URL/method/content-type/body. Post-fix deploy smoke confirmed `Завершить визит` works, reopening without QR no longer restores table 101 for that user, explicit QR re-enters, shared `table_sessions` are not closed for all guests, and empty tab/order/staff-call blocking rules are current-user scoped.
+- Guest Bill / Display-Number / Full-Bill Parity: CLOSED / staging smoke passed. Guest sees `Заказ №N`, human account labels, clear no-discount/discounted bill rows and closed-bill copy; Venue Mini App / Bot / Guest totals match.
+- Guest Bill Request / Payment Method UX: CLOSED / staging smoke passed. Guest sees `Попросить счёт`, payment choices appear directly under the action, the request carries structured payment method and duplicate active requests do not spam staff chat.
+- Staff Chat Noise Reduction / Table Activity Card: CLOSED / staging smoke passed. New order, reorder, bill request and safe linked staff call update one live order card; unsafe/no-order/ambiguous calls stay standalone; manual `Обновить` preserves order/bill/call activity; markers `🆕`, `🚨`, `🛎️`, `🧾`, `💳`, `💵`, `❓` are visible; DONE/CANCELLED generic calls do not remain active; closing order/bill resolves linked active BILL requests and closed-visit staff-call leftovers.
+- Hookah preparation placeholder polish: CLOSED / staging smoke passed. Nested hookah flavor/options notes use `Например: покрепче, полегче, больше мяты, без ментола`; food/drink notes keep `Например: без сахара, без льда, потеплее`.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -43,7 +47,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE THROUGH GUEST TABLE-CONTEXT EXIT`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3 and guest table-context exit.
+Status: `PASSED FOR CURRENT RELEASE THROUGH STAFF-CHAT ACTIVITY CARD AND HOOKAH PLACEHOLDER POLISH`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card and hookah placeholder polish.
 
 Confirmed:
 
@@ -74,6 +78,10 @@ Confirmed:
 - M9b/M9b.1/M9b.2/M9b.3 schedule smoke passed after the M9b.3 fix: OWNER smoke confirmed weekly schedule and date exception functionality; closed period and changed-hours period can be created, edited, have their date ranges changed and deleted; edited old dates no longer behave as exceptions and edited new dates do; guest booking on closed/out-of-hours dates is rejected with human copy; Bot closed-date path shows human copy and action buttons `📅 К выбору дат` plus `🏠 В каталог`.
 - Guest Table Context UX Cleanup / Feature-gated Extension Module smoke passed: table QR opened the real Telegram Mini App with the correct venue/table; table context no longer made route/copy address/booking prominent; pre-visit venue card still showed address, route/copy address and booking; extension was hidden without active order/bill or unavailable state, appeared when active order state made it available, and disappeared after bill/order close.
 - Guest Table Session Exit / Expiry UX smoke passed after the JSON `Content-Type` fix: `Завершить визит` moved the current guest to no-table mode, reopening Mini App without QR did not restore table 101, re-scanning QR restored table context, empty personal tab/no active order allowed exit, active current-user order/bill blocked, active current-user NEW/ACK staff call blocked, DONE staff call did not block, another guest at the same physical table was not kicked out, and menu/cart/order/staff-call/fallback flows still worked.
+- Guest Bill / Display-Number / Full-Bill Parity smoke passed: Guest Mini App showed human order/account labels, clear bill totals/discounts/statuses and closed-bill copy, while Venue Mini App / Bot / Guest totals matched.
+- Guest Bill Request / Payment Method UX smoke passed: payment method choices appeared in the right place, structured payment method reached staff context, active duplicate requests did not spam staff chat and generic `Счёт` did not remain a separate generic staff-call path.
+- Staff Chat Noise Reduction / Table Activity Card smoke passed: new order, reorder, bill request and safe staff call updated the same live order card, manual refresh preserved activity sections, unsafe calls stayed standalone, DONE/CANCELLED generic calls stopped appearing as active, and bill/order close resolved linked active BILL and closed-visit staff-call leftovers.
+- Hookah placeholder smoke passed: nested hookah flavor/options preparation note used hookah-specific examples and did not show the food/drink examples; drink/food options kept the generic copy.
 
 Remaining:
 
@@ -84,7 +92,8 @@ Remaining:
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
 - P1 CLOSED: M4B/M4C Unified Messages Inbox UX and lifecycle staging smoke passed. Keep M4A/M4B/M4C booking conversation behavior, multi-venue scoping, unread/status state and resolve/reopen actions in regression.
 - P1 CLOSED: M5 staff calls lifecycle and compact Guest Mini App UX staging smoke passed. Keep linked Telegram group notification and inline ACK/DONE behavior in per-venue regression.
-- P2 follow-up: completed DONE staff-call card may visually linger; validate whether dismiss-after-DONE cleanup is needed, but do not treat it as a table-session exit blocker unless current smoke shows confusion or repeated-call regressions.
+- P1 CLOSED: Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX and Staff Chat Noise Reduction / Table Activity Card staging smoke passed. Keep human order/account labels, payment-method request context, live-card dedupe/refresh, standalone unsafe calls and Venue Mode source-of-truth behavior in regression.
+- P2 CLOSED: Hookah preparation placeholder polish staging smoke passed. Keep nested hookah flavor/options placeholder copy and generic drink/food placeholder copy in browser smoke.
 - P1 CLOSED: Guest Table Context UX Cleanup / Feature-gated Extension Module staging smoke passed. Keep pre-QR vs table-context action separation and extension visibility gating in regression.
 - P1 CLOSED: Guest Table Session Exit / Expiry UX staging smoke passed. Keep user-scoped `guest_table_session_exits`, JSON request contract, QR re-entry and active obligation blocking in regression.
 - P1 CLOSED: M6 staff chat diagnostics/unlink polish staging smoke passed. Keep real Telegram group link/test/unlink and operational notification delivery in per-venue regression.
@@ -516,9 +525,10 @@ Expected:
 - Telegram WebApp `initData` can only be fully validated in Telegram runtime or a dedicated WebApp test harness.
 - Manual comparison with Telegram full bill remains useful in release smoke, but money-critical totals now also have cross-channel backend snapshot coverage.
 - Staff Telegram chat totals refresh and main order vs doporders clarity passed staging smoke; keep one-message/no-spam and batch-status behavior in regression smoke.
+- Staff-chat activity-card behavior passed staging smoke; keep order-linked card updates, manual refresh with activity sections, bill request payment markers and safe/unsafe staff-call split in regression smoke.
 - Guest table session restore and Telegram BackButton navigation passed staging smoke; keep restore, QR priority, account-switch isolation and no-loop BackButton behavior in regression smoke.
 - Paid venue/shift extension is implemented for backend, Guest/Venue Mini App, Guest Bot table menu entry and staff-chat pending action path as a confirmed service charge/session extension, not as a normal menu/cart/order-batch item. Remaining parity gap: Owner/Manager Bot settings closure where still needed by roadmap.
-- Guest/Menu Options & Flavors parity is CLOSED after staging smoke: owner/manager can create hookah items, apply canonical base flavor profiles only to that item, repeat apply without duplicates, manage flavor CRUD and stop-list, stop-list the whole item, water/kitchen/drink items do not receive hookah flavors, Guest Mini App shows the picker only for the selected hookah item, and `selectedOptionId` / `preferenceNote` still work.
+- Guest/Menu Options & Flavors parity is CLOSED after staging smoke: owner/manager can create hookah items, apply canonical base flavor profiles only to that item, repeat apply without duplicates, manage flavor CRUD and stop-list, stop-list the whole item, water/kitchen/drink items do not receive hookah flavors, Guest Mini App shows the picker only for the selected hookah item, hookah preparation placeholder copy is hookah-specific even in nested flavor/options flow, and `selectedOptionId` / `preferenceNote` still work.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
 - Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
