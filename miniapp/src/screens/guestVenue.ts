@@ -331,7 +331,7 @@ function getOptionCopy(item: MenuItemDto) {
     chooseTitle: isHookah ? 'Выберите вкус' : 'Выберите опцию',
     selectedLabel: isHookah ? 'Вкус' : 'Опция',
     backToChoice: isHookah ? '← К выбору вкуса' : '← К выбору опции',
-    notePlaceholder: isHookah ? 'Например: поменьше холодка, без мяты, покрепче' : 'Например: без сахара, без льда, потеплее'
+    notePlaceholder: isHookah ? 'Например: покрепче, полегче, больше мяты, без ментола' : 'Например: без сахара, без льда, потеплее'
   }
 }
 

@@ -1003,7 +1003,7 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("🚨 Вызов персонала: Консультация"), payload)
+            assertTrue(payload.contains("🚨 Новый вызов персонала: Консультация"), payload)
             assertTrue(payload.contains("Подойдите"), payload)
             assertTrue(payload.contains("✅ Принять вызов"), payload)
             assertTrue(payload.contains("sc_call_ack:1:8"), payload)
@@ -1087,7 +1087,7 @@ class StaffChatNotifierTest {
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
             assertTrue(payload.contains("🧾 Запрос счёта: Личный счёт"), payload)
-            assertTrue(payload.contains("🚨 Вызов персонала: Консультация"), payload)
+            assertTrue(payload.contains("🚨 Новый вызов персонала: Консультация"), payload)
             assertFalse(payload.contains("sc_call_ack:1:6"), payload)
             assertFalse(payload.contains("sc_call_ack:1:8"), payload)
             assertTrue(payload.contains("sc_ob_a:1:10"), payload)
@@ -1236,9 +1236,145 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("🚨 Вызов персонала: Консультация"), payload)
+            assertTrue(payload.contains("🛎️ Вызов в работе: Консультация"), payload)
             assertTrue(payload.contains("✅ Выполнено"), payload)
             assertTrue(payload.contains("sc_call_done:1:8"), payload)
+        }
+
+    @Test
+    fun `completed generic staff calls are omitted from live order activity section`() {
+        val text =
+            buildStaffOrderLiveMessageText(
+                venueName = "Venue",
+                tableLabel = "7",
+                displayNumber = 12,
+                status = OrderWorkflowStatus.ACCEPTED,
+                bill =
+                    billSnapshot(
+                        grossTotalMinor = 3_000,
+                        finalPayableTotalMinor = 3_000,
+                        activeItems =
+                            listOf(
+                                activeItemSnapshot(
+                                    name = "Чай",
+                                    lineGrossMinor = 3_000,
+                                    linePayableMinor = 3_000,
+                                ),
+                            ),
+                    ),
+                activities =
+                    listOf(
+                        StaffOrderActivityBlock(
+                            staffCallId = 8L,
+                            reason = StaffCallReason.COALS,
+                            status = StaffCallStatus.DONE,
+                            comment = "Уже заменили",
+                            accountLabel = null,
+                            paymentMethod = null,
+                            billTotalMinor = null,
+                            billCurrency = null,
+                            guestDisplayName = "Максим",
+                        ),
+                        StaffOrderActivityBlock(
+                            staffCallId = 9L,
+                            reason = StaffCallReason.COME,
+                            status = StaffCallStatus.CANCELLED,
+                            comment = "Отменено",
+                            accountLabel = null,
+                            paymentMethod = null,
+                            billTotalMinor = null,
+                            billCurrency = null,
+                            guestDisplayName = "Максим",
+                        ),
+                    ),
+                updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+            )
+
+        assertFalse(text.contains("Оперативно"), text)
+        assertFalse(text.contains("Уже заменили"), text)
+        assertFalse(text.contains("Отменено"), text)
+        assertFalse(text.contains("✅ Выполнено: Заменить угли"), text)
+    }
+
+    @Test
+    fun `new generic staff call after completed one shows new marker and ack button`() =
+        runBlocking {
+            val staffCallRepository: StaffCallRepository = mockk()
+            val notifier = notifierWithActivity(staffCallRepository = staffCallRepository)
+            coEvery { venueSettingsRepository.find(1L) } returns null
+            coEvery { venueRepository.findVenueById(1L) } returns VenueShort(1L, "Venue", 777L)
+            coEvery {
+                staffCallRepository.listOrderActivity(1L, 2L, null, 5)
+            } returns
+                listOf(
+                    StaffOrderActivityItem(
+                        staffCallId = 7L,
+                        reason = StaffCallReason.COALS,
+                        comment = "Уже заменили",
+                        status = StaffCallStatus.DONE,
+                        createdAt = Instant.parse("2026-06-05T12:30:00Z"),
+                    ),
+                    StaffOrderActivityItem(
+                        staffCallId = 8L,
+                        reason = StaffCallReason.COME,
+                        comment = "Подойдите",
+                        status = StaffCallStatus.NEW,
+                        createdAt = Instant.parse("2026-06-05T12:35:00Z"),
+                    ),
+                )
+            coEvery { notificationRepository.findOrderMessage(2L) } returns
+                StaffChatOrderMessage(orderId = 2L, venueId = 1L, chatId = 777L, messageId = 55L)
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.enqueueOrderMessage(2L, 1L, 777L, "editMessageText", capture(payloadSlot))
+            } returns true
+
+            val result =
+                notifier.notifyBillUpdatedNow(
+                    StaffBillUpdatedNotification(
+                        venueId = 1L,
+                        orderId = 2L,
+                        displayNumber = 12,
+                        tableLabel = "7",
+                        change = StaffBillUpdateChange.STATUS_UPDATED,
+                        status = OrderWorkflowStatus.ACCEPTED,
+                        actionBatchId = 10L,
+                        updatedAt = Instant.parse("2026-06-05T12:34:00Z"),
+                        bill =
+                            billSnapshot(
+                                grossTotalMinor = 3_000,
+                                finalPayableTotalMinor = 3_000,
+                                activeItems =
+                                    listOf(
+                                        activeItemSnapshot(
+                                            batchId = 10L,
+                                            name = "Чай",
+                                            lineGrossMinor = 3_000,
+                                            linePayableMinor = 3_000,
+                                        ),
+                                    ),
+                            ),
+                        batches =
+                            listOf(
+                                StaffOrderBatchLiveBlock(
+                                    batchId = 10L,
+                                    label = "Основной заказ",
+                                    status = OrderWorkflowStatus.ACCEPTED,
+                                    comment = null,
+                                    tabId = 91L,
+                                ),
+                            ),
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("🚨 Новый вызов персонала: Консультация"), payload)
+            assertTrue(payload.contains("Подойдите"), payload)
+            assertTrue(payload.contains("✅ Принять вызов"), payload)
+            assertTrue(payload.contains("sc_call_ack:1:8"), payload)
+            assertFalse(payload.contains("Уже заменили"), payload)
+            assertFalse(payload.contains("sc_call_done:1:7"), payload)
         }
 
     @Test

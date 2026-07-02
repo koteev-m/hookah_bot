@@ -970,6 +970,7 @@ internal fun buildStaffOrderLiveMessageText(
     activities: List<StaffOrderActivityBlock> = emptyList(),
 ): String =
     buildString {
+        val visibleActivities = visibleStaffOrderActivities(activities)
         append("🧾 Заказ")
         displayNumber?.let { append(" №").append(it) }
         append('\n')
@@ -979,9 +980,9 @@ internal fun buildStaffOrderLiveMessageText(
         change?.let { updateChange ->
             append("Изменение: ").append(staffBillUpdateChangeLabel(updateChange)).append('\n')
         }
-        if (activities.isNotEmpty()) {
+        if (visibleActivities.isNotEmpty()) {
             append("\nОперативно:\n")
-            append(formatStaffOrderActivities(activities))
+            append(formatStaffOrderActivities(visibleActivities))
             append('\n')
         }
         val excludedItems = bill.excludedItems.filter { item -> item.status == "excluded" }
@@ -1028,6 +1029,13 @@ internal fun buildStaffOrderLiveMessageText(
         }
     }
 
+private fun visibleStaffOrderActivities(activities: List<StaffOrderActivityBlock>): List<StaffOrderActivityBlock> =
+    activities.filter { activity ->
+        activity.reason == StaffCallReason.BILL ||
+            activity.status == StaffCallStatus.NEW ||
+            activity.status == StaffCallStatus.ACK
+    }
+
 private fun formatStaffOrderActivities(activities: List<StaffOrderActivityBlock>): String =
     activities
         .take(STAFF_ORDER_ACTIVITY_LIMIT)
@@ -1056,14 +1064,22 @@ private fun formatStaffOrderBillRequestActivity(activity: StaffOrderActivityBloc
 
 private fun formatStaffOrderStaffCallActivity(activity: StaffOrderActivityBlock): String =
     buildString {
-        append("• 🚨 Вызов персонала: ").append(staffCallReasonLabel(activity.reason))
-        append(" — ").append(staffCallStatusLabel(activity.status))
+        append("• ").append(staffOrderStaffCallActivityLabel(activity.status))
+        append(": ").append(staffCallReasonLabel(activity.reason))
         staffCallUserFacingComment(activity.comment)?.let { comment ->
             append(", ").append(comment.take(120))
         }
         activity.guestDisplayName?.takeIf { it.isNotBlank() }?.let { guest ->
             append(", гость ").append(guest)
         }
+    }
+
+private fun staffOrderStaffCallActivityLabel(status: StaffCallStatus): String =
+    when (status) {
+        StaffCallStatus.NEW -> "🚨 Новый вызов персонала"
+        StaffCallStatus.ACK -> "🛎️ Вызов в работе"
+        StaffCallStatus.DONE -> "✅ Выполнено"
+        StaffCallStatus.CANCELLED -> "Вызов отменён"
     }
 
 private fun staffOrderActivityPaymentMethodLabel(method: BillPaymentMethod): String =

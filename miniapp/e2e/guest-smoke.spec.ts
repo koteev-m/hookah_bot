@@ -3131,7 +3131,7 @@ test('guest creates staff call from active table and sees lifecycle status', asy
   await expect(page.getByRole('button', { name: 'Вызов активен' })).toHaveCount(0)
 })
 
-test('guest mini app selects item flavor and submits structured selected option', async ({ page }) => {
+test('guest mini app uses context-aware placeholder and submits structured selected option', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, {
     restoreContext: buildRestoreContext(),
@@ -3162,6 +3162,15 @@ test('guest mini app selects item flavor and submits structured selected option'
             currency: 'RUB',
             isAvailable: true,
             effectiveItemType: 'DRINK'
+          },
+          {
+            id: 212,
+            name: 'Чай',
+            priceMinor: 30000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'DRINK',
+            options: [{ id: 305, name: 'Горячий', priceDeltaMinor: 0, isAvailable: true }]
           }
         ]
       }
@@ -3174,10 +3183,22 @@ test('guest mini app selects item flavor and submits structured selected option'
 
   await expect(page.getByText('Кальян', { exact: true })).toBeVisible()
   await expect(page.getByText('Выберите вкус')).toBeVisible()
+  const hookahItem = page.locator('.menu-item').filter({ hasText: 'Кальян' })
   const waterItem = page.locator('.menu-item').filter({ hasText: 'Вода' })
   await expect(waterItem.getByText('Выберите вкус')).toHaveCount(0)
   await expect(waterItem.getByText('Выберите опцию')).toHaveCount(0)
-  await page.getByRole('button', { name: 'Выбрать' }).click()
+  const teaItem = page.locator('.menu-item').filter({ hasText: 'Чай' })
+  await expect(teaItem.getByText('Выберите опцию')).toBeVisible()
+  await teaItem.getByRole('button', { name: 'Выбрать' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Выберите опцию' })).toBeVisible()
+  await page.getByRole('button', { name: /Горячий/ }).click()
+  const drinkNoteInput = page.getByLabel('Пожелания к приготовлению')
+  await expect(drinkNoteInput).toHaveAttribute('placeholder', 'Например: без сахара, без льда, потеплее')
+  await page.getByRole('button', { name: /К выбору опции/ }).click()
+  await page.getByRole('button', { name: '← Назад' }).click()
+
+  await hookahItem.getByRole('button', { name: 'Выбрать' }).click()
 
   await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
   await expect(page.getByText('Кальян', { exact: true })).toBeVisible()
@@ -3192,25 +3213,28 @@ test('guest mini app selects item flavor and submits structured selected option'
   await expect(page.getByText('Вкус: Яблоко')).toBeVisible()
   await expect(page.getByText('Если пожеланий нет, просто добавьте в корзину.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Добавить в корзину' })).toBeVisible()
+  const hookahNoteInput = page.getByLabel('Пожелания к приготовлению')
+  await expect(hookahNoteInput).toHaveAttribute('placeholder', 'Например: покрепче, полегче, больше мяты, без ментола')
+  await expect(hookahNoteInput).not.toHaveAttribute('placeholder', /без сахара|без льда/)
   await page.getByRole('button', { name: /К выбору вкуса/ }).click()
   await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
   await expect(page.getByLabel('Пожелания к приготовлению')).toHaveCount(0)
 
   await page.getByRole('button', { name: /Яблоко/ }).click()
   await page.getByRole('button', { name: 'Добавить в корзину' }).click()
-  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await hookahItem.getByRole('button', { name: 'Выбрать' }).click()
   await page.getByRole('button', { name: /Яблоко/ }).click()
   await page.getByLabel('Пожелания к приготовлению').fill('поменьше холодка')
   await page.getByRole('button', { name: 'Добавить в корзину' }).click()
-  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await hookahItem.getByRole('button', { name: 'Выбрать' }).click()
   await page.getByRole('button', { name: /Яблоко/ }).click()
   await page.getByLabel('Пожелания к приготовлению').fill(' поменьше холодка ')
   await page.getByRole('button', { name: 'Добавить в корзину' }).click()
-  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await hookahItem.getByRole('button', { name: 'Выбрать' }).click()
   await page.getByRole('button', { name: /Яблоко/ }).click()
   await page.getByLabel('Пожелания к приготовлению').fill('без мяты')
   await page.getByRole('button', { name: 'Добавить в корзину' }).click()
-  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await hookahItem.getByRole('button', { name: 'Выбрать' }).click()
   await page.getByRole('button', { name: /Мята/ }).click()
   await page.getByRole('button', { name: 'Добавить в корзину' }).click()
 
