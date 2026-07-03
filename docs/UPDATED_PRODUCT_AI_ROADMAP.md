@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-07-02.
+Дата обновления: 2026-07-03.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -22,7 +22,7 @@
 
 > Market launch требует production-ready Telegram bot + Mini App core. AI входит в продукт как assistant layer. Telegram Guest Mode, Telegram Business / Secretary Bots, Managed branded bots и Bot-to-Bot agents не являются обязательными для первого запуска.
 
-Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card and hookah preparation placeholder polish are CLOSED. Next bounded milestone should be selected from the remaining launch backlog; do not reopen staff-call lifecycle/audit hardening, guest table-context lifecycle, bill/bill-request or staff-chat activity-card work without new smoke or code evidence. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
+Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED. Next bounded milestone should be selected from the remaining launch backlog; do not reopen staff-call lifecycle/audit hardening, guest table-context lifecycle, bill/bill-request, staff-chat activity-card, manual billing cockpit/renewal/courtesy or staff invite sharing work without new smoke or code evidence. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
 
 Актуальный post-fix snapshot:
 
@@ -77,6 +77,9 @@ Recently verified:
 - M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 Schedule Exception Ranges and Guest Copy, M9b.2 Schedule Exception Save UX and M9b.3 Schedule Exception Range Editing are CLOSED / staging smoke passed. Venue Mini App manages weekly hours plus inclusive closed/special-hours date-exception ranges for OWNER/MANAGER; the same from/to date means one day; nullable `guest_note` carries the optional guest-facing reason/comment; changed-hours saves visibly return to the compact exception list; existing closed and changed-hours exceptions can be edited to a new inclusive date range; range storage remains per-date overrides and overlapping target dates are overwritten by the latest saved range values; STAFF is hidden/forbidden; guest catalog/card read models expose today's safe schedule/open state; and direct Guest Mini App booking create/update returns human schedule rejection codes/copy. Product decision: the existing Bot `Часы работы` model intentionally represents both public operating hours and booking availability for launch. Missing schedule setup shows `График не указан` / `VENUE_SCHEDULE_NOT_CONFIGURED`, not a deliberate closed day.
 - Platform Owner Invite / ADMIN Semantics Hardening is CLOSED / staging smoke passed: Bot/API platform-owner config parity is implemented, Platform Mini App does not offer `ADMIN`, owner invite create returns usable Telegram `deepLink`/`copyText`, Telegram accept grants OWNER for the intended venue, non-platform users are denied, existing manager/staff invite flows remain green, and `VENUE_OWNER_INVITE_CREATE` / `VENUE_OWNER_INVITE_ACCEPT` audit evidence exists.
 - Platform Venue OWNER Revocation is CLOSED / staging smoke passed: Platform Owner sees active OWNER memberships, revokes an old OWNER when another active OWNER remains, revoked OWNER loses Venue Mini App and Telegram Bot venue-owner access through membership role resolution, remaining OWNER stays active, last-owner revoke and non-platform revoke are blocked, existing invite/removal flows remain green, and `VENUE_OWNER_REVOKE` audit evidence exists. `owner_account_id` / primary-owner linkage is not automatically relinked.
+- Platform Billing Cockpit / Owner Payment UX is CLOSED / staging smoke passed: Platform Owner sees billing cockpit state, Venue Owner sees subscription/payment state, GET billing/subscription overviews are read-only, invoice/checkout ensure uses explicit POST actions, manual/fake invoices do not expose provider-internal fake URLs, manual mark-paid writes audit, and Russian paid-through/next-payment copy uses human dates.
+- Platform Billing Renewal / Advance Invoice / Courtesy Days is CLOSED / staging smoke passed: next invoice periods are calculated from effective paid-through + 1 day, next invoice ensure is idempotent, Platform Owner can create the next invoice in advance, `billing_adjustments` stores `COURTESY_DAYS`, Platform Owner can add courtesy/free days only with required reason, `BILLING_COURTESY_DAYS_ADDED` audit is written, and adjusted paid-through/next-payment dates are shown to Venue Owner without exposing mark-paid or courtesy controls.
+- Staff/Manager invite deep-link sharing polish is CLOSED / staging smoke passed: Telegram invite messages use valid `t.me` deep links and copy-text buttons where supported, Venue Mini App shows one selectable invite link field with copy-link and Telegram-share actions, the fallback command is secondary, no self-open action is shown in the result card, and Manager/Staff invite acceptance smoke passed.
 
 ## 2. Sources Merged
 
@@ -186,7 +189,7 @@ Done:
 Remaining P1:
 
 - final staging smoke after each release batch;
-- continue bounded venue settings slices where backend-backed; media sections, promotions, preview and billing remain bot/platform-canonical until implemented explicitly;
+- continue bounded venue settings slices where backend-backed; media sections, promotions and preview remain bot/platform-canonical until implemented explicitly; venue subscription state is covered by the staging-smoked billing MVP, while real acquiring and Telegram Stars remain separate future work;
 - Venue Mini App normalize/reset helper only if still needed after pilots; base flavor profile apply, item-level stop-list and flavor-level stop-list parity are smoke-passed. Preserve STAFF no-settings/no-menu-content-management boundaries while keeping operational stop-list allowed;
 - custom date range picker, arbitrary period stats, AI-generated summaries, advanced analytics/platform dashboards/network stats remain later; read-only venue stats is covered by closed M2;
 - M4B/M4C Unified Messages Inbox UX and lifecycle are CLOSED after staging smoke; keep multi-venue/thread scoping, unread clearing and resolve/reopen in regression;
@@ -211,13 +214,18 @@ Done:
 - Platform Owner invite/add OWNER flow with usable Telegram deep link/copy text, intended-venue OWNER acceptance and `VENUE_OWNER_INVITE_CREATE` / `VENUE_OWNER_INVITE_ACCEPT` audit.
 - Platform Mini App owner assignment no longer exposes `ADMIN` as a selectable runtime role; `ADMIN` remains a legacy DB alias to `MANAGER` only.
 - Platform Owner active OWNER membership list and OWNER revoke, with server-side last-owner protection, non-platform denial, membership-based runtime access loss and `VENUE_OWNER_REVOKE` audit.
+- Platform Owner billing cockpit with read-only overview, explicit invoice/checkout ensure POST, manual/fake invoice creation, manual mark-paid audit and human paid-through/next-payment copy.
+- Billing renewal with effective paid-through based next-period invoice creation, idempotent advance invoice ensure and `billing_adjustments` courtesy-days model with required reason plus `BILLING_COURTESY_DAYS_ADDED` audit.
+- Venue Owner subscription screen shows adjusted paid-through and next-payment state, but cannot mark paid or add courtesy days; Manager/Staff payment controls stay hidden/forbidden.
 
 Remaining P1/P2:
 
 - platform support/ticket system if required for scale;
 - richer analytics dashboard;
 - placements cockpit parity with bot;
-- billing/invoices and platform runbook;
+- real acquiring provider, Telegram Stars and automatic recurring card payment remain separate future milestones;
+- audited invoice void/reissue for courtesy conflicts with already-open future invoices;
+- distinction between billing-created and manual `SUSPENDED_BY_PLATFORM` before broader auto-reactivation;
 - primary/legal/billing owner relink and a dedicated platform-mediated legal transfer helper;
 - billing payer transfer if commercial ownership transfer requires it.
 
@@ -466,7 +474,7 @@ Platform Mini App:
 - placements controls;
 - support/tickets;
 - analytics;
-- billing/invoices;
+- real acquiring provider or Telegram Stars, if selected for commercial launch;
 - platform operations runbook screens.
 
 ### Phase 3 — Internal AI Assistant Core Hardening
@@ -655,16 +663,19 @@ Recently closed:
 - Staff Call Lifecycle ACK/DONE audit hardening: **CLOSED / staging smoke passed**. Venue Mini App and Telegram staff-chat ACK/DONE transitions write actor-bearing audit rows with safe source payload; audit is best-effort and row-level ACK/DONE actor/timestamp columns plus CANCELLED UI/lifecycle remain out of scope.
 - Guest Table Context UX Cleanup / Feature-gated Extension Module: **CLOSED / staging smoke passed**. Table-context route/copy/booking actions are no longer prominent, pre-visit venue cards keep address/route/copy/booking, and extension entry is feature-gated by active order/bill availability.
 - Guest Table Session Exit / Expiry UX: **CLOSED / staging smoke passed**. `Завершить визит` works after the JSON `Content-Type` fix; exit is user-scoped through `guest_table_session_exits`, shared `table_sessions` stay open for other guests and TTL cleanup handles physical-session expiry.
+- Platform Billing Cockpit / Owner Payment UX: **CLOSED / staging smoke passed**. Platform Owner billing cockpit, Venue Owner subscription screen, read-only GET overviews, explicit invoice/checkout ensure POST, manual/fake invoice flow without exposing provider-internal fake URLs, manual mark-paid audit and human period copy are verified.
+- Platform Billing Renewal / Advance Invoice / Courtesy Days: **CLOSED / staging smoke passed**. Next invoice period starts at effective paid-through + 1 day, repeated next-invoice ensure is idempotent, Platform Owner can create the next invoice in advance, `billing_adjustments` represents `COURTESY_DAYS`, courtesy requires reason, writes `BILLING_COURTESY_DAYS_ADDED`, shifts paid-through/next-payment dates, and Venue Owner/Manager/Staff payment-control denials are verified.
+- Staff/Manager invite deep-link sharing polish: **CLOSED / staging smoke passed**. Telegram invite messages use accepted `staff_invite_<code>` deep-link payloads and copy-text buttons where supported; Venue Mini App invite result has one selectable link field, copy-link and Telegram-share actions, a secondary fallback command and no risky self-open action; Manager/Staff acceptance and billing-control denial smoke passed.
 
 Ranked next candidates:
 
-1. Platform Billing Cockpit / Owner Payment UX.
-   - Why: order, bill, staff-call, staff-chat and table-context operations are now staging-smoked, so the next launch-critical gap is commercial operations. Backend invoice/payment/subscription foundations exist, but Platform/Owner-facing billing state, invoice operations and manual paid-through workflows are still not a complete cockpit.
-   - Acceptance: Platform Owner can inspect venue subscription/invoice/payment state, see overdue/current paid-through status, record or reconcile manual payment/admin adjustments with audit evidence, and owners get clear billing/payment status without exposing provider secrets or adding an online payment provider.
-
-2. Support/tickets MVP beyond booking threads.
-   - Why: booking conversation threads and inbox lifecycle are staging-closed, but general guest/venue/platform support routing remains incomplete. This is operationally important, but should not outrank billing unless pilot support intake becomes a blocker.
+1. Support/tickets MVP beyond booking threads.
+   - Why: booking conversation threads and inbox lifecycle are staging-closed, but general guest/venue/platform support routing remains incomplete. This is now the clearest operational gap after manual billing and invite sharing closure.
    - Acceptance: Guest/Venue/Platform support threads are backend-backed, role-scoped, auditable, and separated from booking lifecycle; staff chat remains a notification mirror.
+
+2. Real acquiring provider / Telegram Stars decision and provider-specific billing rollout.
+   - Why: manual/fake billing cockpit, renewal and courtesy are staging-smoked, but no real card acquiring, Telegram Stars or recurring automatic payment is implemented. Commercial launch may require one provider path.
+   - Acceptance: provider secrets stay server-side, webhook verification/idempotency are tested, provider payloads/internal IDs are not exposed to Mini App/audit copy, and the manual invoice path remains safe.
 
 3. Guest history / repeat / favorites / post-visit feedback polish.
    - Why: retention features are valuable after stable operations and billing. History/favorites foundations vary by surface, and repeat/post-visit feedback need careful availability and privacy rules.
@@ -675,6 +686,7 @@ Not selected as implementation right now:
 - Broad Guest Order / Table Session / Tab Scoping Hardening is not reopened without new evidence; current runtime is documented as `table_session_id`/`tab_id` scoped.
 - Mini App mutation and fallback payload verification is closed; keep it in regression.
 - Guest-facing bill/display-number/full-bill parity, Venue Mini App full bill parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card and hookah placeholder polish are closed; keep them in regression rather than selecting them again.
+- Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are closed; keep read-only GET checks, explicit POST creation, courtesy audit, Manager/Staff payment-control denials and invite acceptance/share UX in regression.
 - Staff call lifecycle ACK/DONE and ACK/DONE audit hardening are already CLOSED / staging smoke passed; keep them in regression.
 - Production config / infra readiness remains a launch operations checklist item: stable backend/Mini App URLs, webhook URL, WebApp URL, CORS, secrets and environment profile documented.
 
@@ -687,6 +699,8 @@ Not selected as implementation right now:
 - platform placements cockpit parity;
 - platform support/tickets;
 - platform analytics;
+- invoice void/reissue for courtesy conflicts with already-open future invoices;
+- billing-created versus manual `SUSPENDED_BY_PLATFORM` distinction before broader auto-reactivation;
 - expand frontend/browser e2e automation beyond the minimal Guest Mini App smoke.
 
 ### P2 / Future
@@ -858,7 +872,29 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 ## 12. Next Development Block
 
-Latest booking block: M7c adaptive transactional reminders.
+Latest closed smoke blocks: Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish.
+
+Recommended next bounded milestone: Support/tickets MVP beyond booking threads.
+
+Why:
+- booking-thread conversations/inbox lifecycle are staging-smoked, but general support intake/routing is still not a product block;
+- manual billing and renewal/courtesy are now closed, while real acquiring/Stars can remain a separate commercial-provider decision;
+- support/tickets is operationally useful without changing guest order/staff-chat runtime.
+
+Acceptance target:
+- backend-backed guest/venue/platform support threads;
+- clear role scoping and venue/platform visibility;
+- audit-safe state transitions;
+- staff chat remains notification mirror rather than source of truth;
+- no fake support data or dead-end controls in Mini App.
+
+Remaining billing follow-ups:
+- real acquiring provider and Telegram Stars remain future milestones;
+- invoice void/reissue for courtesy conflicts with already-open future invoices remains unimplemented;
+- billing-created versus manual `SUSPENDED_BY_PLATFORM` distinction remains needed before broader auto-reactivation;
+- automatic recurring card payments are not implemented.
+
+Historical booking block: M7c adaptive transactional reminders.
 
 M7b status: IMPLEMENTED with code/test/e2e evidence and staging visual parity. Guest Mini App exposes `Профиль → Мои брони`, lists active/upcoming bookings across venues, uses backend public booking labels and venue-local display/deadline fields, and reuses existing guest change/cancel endpoints. Staging evidence covers the same booking's Bot `/my` versus Guest Mini App public label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified.
 

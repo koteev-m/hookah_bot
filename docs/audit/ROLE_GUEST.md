@@ -1,6 +1,6 @@
 # Guest
 
-Дата актуализации: 2026-07-01.
+Дата актуализации: 2026-07-03.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл фиксирует текущее поведение Guest в Telegram bot и Mini App после последних parity/fix-pack'ов.
 
@@ -103,6 +103,7 @@ Account/bookings:
 - QR/table order flow должен smoke-тестироваться отдельно от pre-QR catalog flow.
 - QR/table exit flow is CLOSED / staging smoke passed and should stay in regression: one guest exits, another guest at the same physical table remains in their own context; explicit QR scan re-enters after exit.
 - Guest bill request / payment method UX is CLOSED / staging smoke passed; payment choices are structured, active duplicate requests do not spam staff chat and no online payment provider was added.
+- Real acquiring provider, Telegram Stars and automatic recurring payments remain future work; guest bill request is still an on-site operational request, not online payment.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 
 ## Smoke-critical checks

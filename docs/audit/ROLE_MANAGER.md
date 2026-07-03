@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-06-30.
+Дата актуализации: 2026-07-03.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -49,7 +49,7 @@ Manager Mini App areas:
 - tables management and QR export where backend permission allows;
 - staff chat link/status;
 - stats;
-- staff list/invite only where current conservative route policy allows.
+- staff list/invite only where current conservative route policy allows; invite result uses a valid Telegram deep link, copy/share actions and a secondary fallback command.
 
 ## Allowed actions
 
@@ -72,7 +72,8 @@ Manager Mini App areas:
 ## Denied actions
 
 - Platform Owner access and platform venue lifecycle.
-- Subscription commercial terms and platform billing cockpit.
+- Subscription commercial terms, Platform Owner billing cockpit, manual mark-paid and courtesy/free-days controls.
+- Billing/payment controls in Venue Owner subscription screen.
 - Owner-only venue settings if backend requires owner permission.
 - Promote users to owner/platform owner or bypass last-owner protection.
 - Rotate all table tokens or other owner-only QR actions if backend permission does not allow it.
@@ -83,6 +84,7 @@ Manager Mini App areas:
 
 - `ADMIN == MANAGER` remains an intentional legacy alias, but product copy should avoid promising a separate admin role.
 - Manager staff management scope is conservative and should be smoke-tested before pilot.
+- Staff invite deep-link sharing polish is CLOSED / staging smoke passed for the allowed manager invite path: link is selectable/copyable/shareable and accepted payload grants the intended role.
 - Some Telegram manager flows may still be richer than Mini App equivalents.
 - Menu options/photos/descriptions/top-list parity may still be partial.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
@@ -102,3 +104,5 @@ Manager Mini App areas:
 8. Manager cannot enter platform owner mode.
 9. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
 10. Linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
+11. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
+12. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.

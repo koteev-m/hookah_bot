@@ -314,12 +314,19 @@ SHOULD:
 ## Block 12 — Monetization & subscription
 MUST:
 - Subscription per venue with trial and per-venue price overrides.
-- Card payment: external checkout link + webhook verification + idempotency.
-- Optional Telegram Stars method (if implemented).
+- Future card payment: external checkout link + webhook verification + idempotency. Current staging-smoked MVP is manual/fake-provider only and does not implement a real acquiring provider.
+- Optional Telegram Stars method remains future work if implemented.
 - Gating policy: `past_due` allows guest actions (orders/booking), while `suspended`, `suspended_by_platform`, and `canceled` block guest actions until status recovery.
 - Platform owner can set/override prices without code changes.
+- Platform Owner billing cockpit and Venue Owner subscription screen show read-only subscription/payment overviews through GET routes; invoice/checkout creation happens through explicit POST ensure actions.
+- Manual/fake invoice flow must not expose provider-internal fake URLs or secrets to Mini App users; manual mark-paid writes audit evidence.
+- Renewal invoices use real invoice periods: the next monthly period starts at current effective paid-through + 1 day, and repeated ensure reuses an existing OPEN/PAST_DUE invoice for the same period.
+- Courtesy/free days are represented by `billing_adjustments` rows with kind `COURTESY_DAYS`, positive days, required reason, previous/new paid-through dates, actor user id and creation time. Courtesy writes `BILLING_COURTESY_DAYS_ADDED` audit and must not mutate paid invoice history.
+- Venue Owner sees adjusted paid-through and next-payment dates but cannot mark invoices paid or add courtesy days. Manager/Staff cannot access billing payment controls.
 SHOULD:
 - Billing events log; self-serve invoice link generation.
+- Follow-up: audited invoice void/reissue for open future invoice conflicts after courtesy adjustments.
+- Follow-up: distinguish billing-created from manual `SUSPENDED_BY_PLATFORM` before broader auto-reactivation.
 
 ## Block 13 — Analytics/KPI/events
 MUST:

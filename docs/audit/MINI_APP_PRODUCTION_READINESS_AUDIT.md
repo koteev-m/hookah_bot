@@ -7,6 +7,8 @@
 > Current correction as of 2026-06-03: CORS methods, Mini App staff call `tableSessionId`, fallback WebApp command contract, active order session/tab scoping, Venue Mini App full bill parity, bookings screens, and STAFF close bill/order policy have been addressed in code. Use `docs/UPDATED_PRODUCT_AI_ROADMAP.md` and `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` for current release status.
 >
 > Current correction as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. The old CORS mutation-method, Mini App staff-call `tableSessionId`, Mini App staff-call staff-chat notification, and fallback quick-order payload claims below are stale/superseded by current code and focused regression coverage. No staging smoke is claimed by this correction.
+>
+> Current correction as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Historical billing and invite-share risks below must be read as superseded for the manual/fake billing MVP: read-only billing/subscription GET overviews, explicit invoice/checkout POST ensure, manual mark-paid audit, next-period invoice ensure, `billing_adjustments` courtesy days, Venue Owner adjusted state, Manager/Staff payment-control denial and Mini App invite copy/share have all passed smoke. Real acquiring, Telegram Stars, invoice void/reissue, support/tickets and analytics remain future work.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -94,7 +96,7 @@ Status: `PARTIAL`.
 Риски:
 
 - onboarding request cockpit is incomplete;
-- billing/invoice workspace is not full operator cockpit;
+- manual billing/invoice workspace MVP is staging-smoked; real acquiring, Telegram Stars, invoice void/reissue and broader provider payment automation remain future;
 - placements are not represented as a platform Mini App workspace;
 - support/tickets product block is missing;
 - analytics cockpit is missing or partial.

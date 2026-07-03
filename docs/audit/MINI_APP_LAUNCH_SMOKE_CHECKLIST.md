@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-02.
+Дата: 2026-07-03.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -35,6 +35,9 @@
 - Guest Bill Request / Payment Method UX: CLOSED / staging smoke passed. Guest sees `Попросить счёт`, payment choices appear directly under the action, the request carries structured payment method and duplicate active requests do not spam staff chat.
 - Staff Chat Noise Reduction / Table Activity Card: CLOSED / staging smoke passed. New order, reorder, bill request and safe linked staff call update one live order card; unsafe/no-order/ambiguous calls stay standalone; manual `Обновить` preserves order/bill/call activity; markers `🆕`, `🚨`, `🛎️`, `🧾`, `💳`, `💵`, `❓` are visible; DONE/CANCELLED generic calls do not remain active; closing order/bill resolves linked active BILL requests and closed-visit staff-call leftovers.
 - Hookah preparation placeholder polish: CLOSED / staging smoke passed. Nested hookah flavor/options notes use `Например: покрепче, полегче, больше мяты, без ментола`; food/drink notes keep `Например: без сахара, без льда, потеплее`.
+- Platform Billing Cockpit / Owner Payment UX: CLOSED / staging smoke passed. Platform Owner billing cockpit and Venue Owner subscription screen show human paid-through/next-payment state through read-only GET overviews. Invoice/checkout creation uses explicit POST ensure actions. Manual/fake invoices do not expose provider-internal fake URLs, and manual mark-paid writes audit.
+- Platform Billing Renewal / Advance Invoice / Courtesy Days: CLOSED / staging smoke passed. Next invoice period is based on effective paid-through + 1 day, repeated next-invoice ensure is idempotent, Platform Owner can create the next invoice in advance, `billing_adjustments` stores `COURTESY_DAYS`, Platform Owner courtesy/free days require reason, `BILLING_COURTESY_DAYS_ADDED` audit is written, paid-through/next-payment dates shift, Venue Owner sees adjusted state, and Manager/Staff cannot access payment controls.
+- Staff/Manager invite deep-link sharing polish: CLOSED / staging smoke passed. Telegram invite messages use valid `t.me` staff invite links and copy-text buttons where supported; Venue Mini App invite result has one selectable invite link field, primary copy-link/share-in-Telegram actions, a secondary fallback command and no self-open result-card action. Manager/Staff invite acceptance smoke passed and payment controls stayed hidden/forbidden.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -47,7 +50,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE THROUGH STAFF-CHAT ACTIVITY CARD AND HOOKAH PLACEHOLDER POLISH`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card and hookah placeholder polish.
+Status: `PASSED FOR CURRENT RELEASE THROUGH PLATFORM BILLING RENEWAL / COURTESY DAYS AND STAFF INVITE SHARING POLISH`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy and staff invite deep-link sharing polish.
 
 Confirmed:
 
@@ -82,11 +85,21 @@ Confirmed:
 - Guest Bill Request / Payment Method UX smoke passed: payment method choices appeared in the right place, structured payment method reached staff context, active duplicate requests did not spam staff chat and generic `Счёт` did not remain a separate generic staff-call path.
 - Staff Chat Noise Reduction / Table Activity Card smoke passed: new order, reorder, bill request and safe staff call updated the same live order card, manual refresh preserved activity sections, unsafe calls stayed standalone, DONE/CANCELLED generic calls stopped appearing as active, and bill/order close resolved linked active BILL and closed-visit staff-call leftovers.
 - Hookah placeholder smoke passed: nested hookah flavor/options preparation note used hookah-specific examples and did not show the food/drink examples; drink/food options kept the generic copy.
+- Platform Billing Cockpit / Owner Payment UX smoke passed: Platform Owner sees billing cockpit state, Venue Owner sees subscription/payment state, GET billing/subscription overviews are read-only, invoice/checkout ensure is POST-only, manual/fake invoice flow does not leak provider-internal fake URLs, manual mark-paid is audited, and paid-through/next-payment copy is human.
+- Platform Billing Renewal / Advance Invoice / Courtesy Days smoke passed: next-period invoice starts from effective paid-through + 1 day, repeated ensure does not duplicate invoices, advance next invoice creation works, `COURTESY_DAYS` adjustments require reason, `BILLING_COURTESY_DAYS_ADDED` audit exists, paid-through/next-payment shift, Venue Owner sees adjusted state, and Venue Owner/Manager/Staff cannot access mark-paid/courtesy controls.
+- Staff/Manager invite sharing smoke passed: owner/manager can share/copy the valid Telegram deep link from the Venue Mini App result, fallback command remains available in a secondary block, fresh account acceptance grants the intended Manager/Staff role, and Manager/Staff cannot access billing/payment controls.
 
 Remaining:
 
 - repeat this smoke after any additional release batch;
 - keep M9b/M9b.1/M9b.2/M9b.3 schedule behavior in regression after future release batches;
+- real acquiring provider remains future work;
+- Telegram Stars remains future work;
+- invoice void/reissue for courtesy conflicts with already-open future invoices remains a follow-up;
+- billing-created versus manual `SUSPENDED_BY_PLATFORM` distinction remains a follow-up before broader auto-reactivation;
+- support/tickets beyond booking threads remain missing;
+- guest history/repeat/favorites/feedback/growth flows remain future work;
+- platform analytics dashboards remain future work;
 - P1 follow-up: paid venue/shift extension is implemented in backend, Guest/Venue Mini App, Guest Bot entry and staff-chat action path; remaining parity is Owner/Manager Bot settings smoke/closure where still needed by roadmap;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
 - P1 CLOSED: Venue Mini App M2 read-only `Статистика` staging smoke passed. Keep periods, cards/top items, STAFF hidden state and empty state in regression.
@@ -213,6 +226,11 @@ Manual runtime coverage for each release batch:
 - `owner_account_id` and `venue_owner_accounts.primary_owner_user_id` are not relinked by membership revoke;
 - `VENUE_OWNER_REVOKE` audit evidence exists;
 - safe sections `#/onboarding`, `#/placements`, `#/support`, `#/analytics` show explanations without fake data or dead-end controls.
+- Platform Owner billing cockpit shows current paid state, next period dates, explicit next-invoice action and courtesy-days action.
+- Platform billing and Venue subscription GET overviews are read-only; invoice/checkout ensure and courtesy-days actions happen only through POST.
+- Platform Owner can create/reuse current and next-period invoices, mark manual invoice paid with audit, add courtesy/free days with required reason and audit, and repeat next invoice ensure without duplicates.
+- Venue Owner sees adjusted paid-through and next-payment state but cannot mark paid or add courtesy days.
+- Manager/Staff cannot access payment controls after invite acceptance.
 - requests/commercial terms/create-link venue, suspend/archive/delete and hidden deleted venues are smoke-tested in Telegram bot flow.
 
 ## 2. Telegram Bot Manual Smoke
