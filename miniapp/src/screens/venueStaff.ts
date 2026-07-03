@@ -28,6 +28,12 @@ type StaffRefs = {
   inviteRole: HTMLSelectElement
   inviteButton: HTMLButtonElement
   inviteResult: HTMLDivElement
+  inviteRoleLabel: HTMLSpanElement
+  inviteVenueName: HTMLSpanElement
+  invitePrimaryLink: HTMLAnchorElement
+  inviteCopyLinkButton: HTMLButtonElement
+  inviteFallbackCommand: HTMLElement
+  inviteCopyCommandButton: HTMLButtonElement
   inviteCode: HTMLSpanElement
   inviteExpires: HTMLSpanElement
   inviteInstructions: HTMLParagraphElement
@@ -66,14 +72,39 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
 
   const inviteResult = el('div', { className: 'venue-invite-result' })
   inviteResult.hidden = true
+  const inviteRoleLabel = el('span')
+  const inviteVenueName = el('span')
+  const invitePrimaryLink = document.createElement('a')
+  invitePrimaryLink.className = 'venue-invite-link'
+  invitePrimaryLink.target = '_blank'
+  invitePrimaryLink.rel = 'noopener noreferrer'
+  const inviteCopyLinkButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Скопировать ссылку'
+  }) as HTMLButtonElement
+  const inviteFallbackCommand = el('code', { className: 'venue-invite-command' })
+  const inviteCopyCommandButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Скопировать команду'
+  }) as HTMLButtonElement
   const inviteCode = el('span')
   const inviteExpires = el('span')
   const inviteInstructions = el('p', { text: '' })
   append(
     inviteResult,
+    el('p', { text: 'Роль:' }),
+    inviteRoleLabel,
+    el('p', { text: 'Заведение:' }),
+    inviteVenueName,
+    el('p', { text: 'Ссылка:' }),
+    invitePrimaryLink,
+    inviteCopyLinkButton,
+    el('p', { text: 'Запасная команда:' }),
+    inviteFallbackCommand,
+    inviteCopyCommandButton,
     el('p', { text: 'Код:' }),
     inviteCode,
-    el('p', { text: 'Истекает:' }),
+    el('p', { text: 'Действует до:' }),
     inviteExpires,
     inviteInstructions
   )
@@ -105,6 +136,12 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     inviteRole,
     inviteButton,
     inviteResult,
+    inviteRoleLabel,
+    inviteVenueName,
+    invitePrimaryLink,
+    inviteCopyLinkButton,
+    inviteFallbackCommand,
+    inviteCopyCommandButton,
     inviteCode,
     inviteExpires,
     inviteInstructions,
@@ -204,10 +241,35 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       refs.inviteResult.hidden = true
       return
     }
+    const startPayload = currentInvite.startPayload ?? `staff_invite_${currentInvite.inviteCode}`
+    const fallbackCommand = currentInvite.fallbackCommand ?? `/start ${startPayload}`
+    const deepLink = currentInvite.deepLink?.trim() || null
+    refs.inviteRoleLabel.textContent = currentInvite.role ?? refs.inviteRole.value
+    refs.inviteVenueName.textContent = currentInvite.venueName ?? access.venueName ?? `Venue ${venueId}`
+    refs.invitePrimaryLink.hidden = !deepLink
+    refs.inviteCopyLinkButton.hidden = !deepLink
+    refs.inviteCopyLinkButton.disabled = !deepLink
+    if (deepLink) {
+      refs.invitePrimaryLink.href = deepLink
+      refs.invitePrimaryLink.textContent = deepLink
+    } else {
+      refs.invitePrimaryLink.removeAttribute('href')
+      refs.invitePrimaryLink.textContent = 'Ссылка недоступна'
+    }
+    refs.inviteFallbackCommand.textContent = fallbackCommand
     refs.inviteCode.textContent = currentInvite.inviteCode
     refs.inviteExpires.textContent = new Date(currentInvite.expiresAt).toLocaleString()
     refs.inviteInstructions.textContent = currentInvite.instructions
     refs.inviteResult.hidden = false
+  }
+
+  const copyInviteText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast('Скопировано')
+    } catch {
+      window.prompt('Скопируйте текст', text)
+    }
   }
 
   const renderStaff = (members: VenueStaffMemberDto[], currentUserId: number) => {
@@ -297,6 +359,19 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const disposables: Array<() => void> = []
   disposables.push(on(refs.inviteButton, 'click', () => void createInvite()))
+  disposables.push(
+    on(refs.inviteCopyLinkButton, 'click', () => {
+      const link = currentInvite?.deepLink?.trim()
+      if (link) void copyInviteText(link)
+    })
+  )
+  disposables.push(
+    on(refs.inviteCopyCommandButton, 'click', () => {
+      if (!currentInvite) return
+      const startPayload = currentInvite.startPayload ?? `staff_invite_${currentInvite.inviteCode}`
+      void copyInviteText(currentInvite.fallbackCommand ?? `/start ${startPayload}`)
+    })
+  )
 
   refs.inviteButton.disabled = !canInvite
   refs.inviteButton.title = canInvite ? '' : 'Недостаточно прав'

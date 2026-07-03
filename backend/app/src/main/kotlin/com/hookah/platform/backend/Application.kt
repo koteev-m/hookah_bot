@@ -1186,6 +1186,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     staffInviteConfig = staffInviteConfig,
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     auditLogRepository = auditLogRepository,
+                    telegramBotUsername = telegramConfig.botUsername,
                 )
                 venueStaffCallRoutes(
                     venueAccessRepository = venueAccessRepository,

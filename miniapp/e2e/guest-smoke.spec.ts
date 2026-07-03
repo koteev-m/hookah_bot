@@ -2430,6 +2430,7 @@ async function mockVenueStaffChatApi(
   const permissions = options.permissions ?? (role === 'STAFF' ? [] : ['STAFF_CHAT_LINK'])
   let linked = options.linked ?? true
   let generated = 0
+  let staffInvites = 0
   let testMessages = 0
   let unlinks = 0
   let activeCodeHint: string | null = null
@@ -2474,6 +2475,54 @@ async function mockVenueStaffChatApi(
 
   await page.route('**/api/venue/1/staff-calls**', async (route) => {
     await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/staff', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    await route.fulfill(
+      jsonResponse({
+        members: [
+          {
+            userId: 123456789,
+            role,
+            createdAt: '2030-01-10T18:00:00Z',
+            invitedByUserId: null
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/venue/1/staff/invites', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    staffInvites += 1
+    const body = (await route.request().postDataJSON()) as { role?: string }
+    const inviteCode = 'ABC234'
+    const startPayload = `staff_invite_${inviteCode}`
+    const deepLink = `https://t.me/TestHookahBot?start=${startPayload}`
+    const fallbackCommand = `/start ${startPayload}`
+    await route.fulfill(
+      jsonResponse({
+        inviteCode,
+        expiresAt: '2030-01-17T18:00:00Z',
+        ttlSeconds: 604800,
+        role: body.role ?? 'STAFF',
+        venueName: 'Микс',
+        startPayload,
+        deepLink,
+        fallbackCommand,
+        copyText: deepLink,
+        instructions: `Передайте сотруднику приглашение.\nЗаведение: Микс\nРоль: ${
+          body.role ?? 'STAFF'
+        }\nСсылка: ${deepLink}\nЗапасная команда: ${fallbackCommand}`
+      })
+    )
   })
 
   await page.route('**/api/venue/1/staff-chat**', async (route) => {
@@ -2534,6 +2583,7 @@ async function mockVenueStaffChatApi(
 
   return {
     getGeneratedCalls: () => generated,
+    getStaffInvites: () => staffInvites,
     getTestMessages: () => testMessages,
     getUnlinks: () => unlinks,
     setLinked: (next: boolean) => {
@@ -3909,6 +3959,44 @@ test('venue manager can test staff chat but cannot unlink', async ({ page }) => 
   await expect(page.getByText('Чат персонала подключён')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Отправить тестовое сообщение' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Отвязать чат' })).toHaveCount(0)
+})
+
+test('venue owner creates manager staff invite with copyable deep link', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          ;(window as Window & { __copiedText?: string }).__copiedText = text
+        }
+      }
+    })
+  })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: true })
+  const deepLink = 'https://t.me/TestHookahBot?start=staff_invite_ABC234'
+  const fallbackCommand = '/start staff_invite_ABC234'
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Персонал' })).toBeVisible()
+  await page.locator('.venue-staff select.venue-select').first().selectOption('MANAGER')
+  await page.getByRole('button', { name: 'Создать инвайт' }).click()
+
+  await expect(page.locator('.venue-invite-result')).toContainText('MANAGER')
+  await expect(page.locator('.venue-invite-result')).toContainText('Микс')
+  await expect(page.getByRole('link', { name: deepLink })).toHaveAttribute('href', deepLink)
+  await expect(page.locator('.venue-invite-command')).toHaveText(fallbackCommand)
+  await expect(page.locator('.venue-invite-result span').filter({ hasText: /^ABC234$/ })).toBeVisible()
+  expect(api.getStaffInvites()).toBe(1)
+
+  await page.getByRole('button', { name: 'Скопировать ссылку' }).click()
+  await expect.poll(() => page.evaluate(() => (window as Window & { __copiedText?: string }).__copiedText)).toBe(deepLink)
+  await page.getByRole('button', { name: 'Скопировать команду' }).click()
+  await expect.poll(() => page.evaluate(() => (window as Window & { __copiedText?: string }).__copiedText)).toBe(
+    fallbackCommand
+  )
 })
 
 test('expired staff chat link code is not presented as usable', async ({ page }) => {

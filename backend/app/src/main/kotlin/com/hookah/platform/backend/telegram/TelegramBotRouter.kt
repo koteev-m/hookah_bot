@@ -15882,8 +15882,10 @@ class TelegramBotRouter(
         }
         val roleLabel = humanizeOwnerVenueStaffRoleForChoice(roleKey)
         val botUsername = config.botUsername?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
+        val startPayload = "$staffInviteStartPrefix${invite.code}"
         val inviteUrl =
-            botUsername?.let { buildTelegramStartUrl(it, "$staffInviteStartPrefix${invite.code}") }
+            botUsername?.let { buildTelegramStartUrl(it, startPayload) }
+        val fallbackCommand = "/start $startPayload"
         val venueName = loadVenueNameForStaffInvite(venueId)
         enqueueMessage(
             chatId,
@@ -15892,9 +15894,16 @@ class TelegramBotRouter(
                 roleLabel = roleLabel,
                 inviteCode = invite.code,
                 inviteUrl = inviteUrl,
+                fallbackCommand = fallbackCommand,
+                expiresAt = invite.expiresAt,
                 isStaffRole = roleKey == "staff",
             ),
-            TelegramKeyboards.inlineVenueOwnerStaffInviteCreatedActions(venueId, roleKey),
+            TelegramKeyboards.inlineVenueOwnerStaffInviteCreatedActions(
+                venueId = venueId,
+                roleKey = roleKey,
+                inviteUrl = inviteUrl,
+                fallbackCommand = fallbackCommand,
+            ),
         )
     }
 
@@ -25027,18 +25036,23 @@ class TelegramBotRouter(
         roleLabel: String,
         inviteCode: String,
         inviteUrl: String?,
+        fallbackCommand: String,
+        expiresAt: Instant,
         isStaffRole: Boolean,
     ): String =
         buildString {
             append("✅ Приглашение для роли $roleLabel создано.")
-            append("\nКальянная: $venueName")
-            append("\n\nОтправьте ссылку сотруднику.")
+            append("\nЗаведение: $venueName")
+            append("\nДействует до: ${formatInstantForPlatform(expiresAt)}")
+            append("\n\nОсновная ссылка для сотрудника:")
             if (inviteUrl != null) {
                 append("\n$inviteUrl")
             } else {
                 append("\nСсылка недоступна: не задан TELEGRAM_BOT_USERNAME.")
                 append("\nКод приглашения: $inviteCode")
             }
+            append("\n\nЗапасная команда:")
+            append("\n$fallbackCommand")
             if (isStaffRole) {
                 append(
                     "\n\nРекомендуется использовать отдельный нейтральный аккаунт заведения, а не " +

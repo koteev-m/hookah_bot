@@ -4539,23 +4539,47 @@ object TelegramKeyboards {
     fun inlineVenueOwnerStaffInviteCreatedActions(
         venueId: Long,
         roleKey: String,
+        inviteUrl: String?,
+        fallbackCommand: String,
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
-                listOf(
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "🔄 Пересоздать приглашение",
-                            callbackData = "owner_venue_staff_role_select:$venueId:$roleKey",
+                buildList {
+                    if (inviteUrl != null) {
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "📋 Скопировать ссылку",
+                                    copyText = CopyTextButton(inviteUrl),
+                                ),
+                            ),
+                        )
+                    }
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "📋 Скопировать команду",
+                                copyText = CopyTextButton(fallbackCommand),
+                            ),
                         ),
-                    ),
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "⬅️ К персоналу",
-                            callbackData = "owner_venue_staff_root:$venueId",
+                    )
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "🔄 Пересоздать приглашение",
+                                callbackData = "owner_venue_staff_role_select:$venueId:$roleKey",
+                            ),
                         ),
-                    ),
-                ),
+                    )
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "⬅️ К персоналу",
+                                callbackData = "owner_venue_staff_root:$venueId",
+                            ),
+                        ),
+                    )
+                },
         )
 
     fun inlineStaffInviteDecisionActions(code: String): InlineKeyboardMarkup =

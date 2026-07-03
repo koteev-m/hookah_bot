@@ -14,6 +14,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
 import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteAcceptAuditBestEffort
 import com.hookah.platform.backend.platform.OwnerAccountAssignmentPreparationResult
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
+import com.hookah.platform.backend.telegram.buildTelegramStartUrl
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -52,6 +53,12 @@ data class StaffInviteResponse(
     val expiresAt: String,
     val ttlSeconds: Long,
     val instructions: String,
+    val role: String,
+    val venueName: String,
+    val startPayload: String,
+    val deepLink: String? = null,
+    val fallbackCommand: String,
+    val copyText: String,
 )
 
 @Serializable
@@ -83,6 +90,7 @@ fun Route.venueStaffRoutes(
     staffInviteConfig: StaffInviteConfig,
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     auditLogRepository: AuditLogRepository = AuditLogRepository(null),
+    telegramBotUsername: String? = null,
 ) {
     val logger = LoggerFactory.getLogger("VenueStaffRoutes")
     route("/venue") {
@@ -104,7 +112,12 @@ fun Route.venueStaffRoutes(
         post("/{venueId}/staff/invites") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            val requesterMembership =
+                venueAccessRepository.findVenueMembership(userId, venueId)
+                    ?: throw ForbiddenException()
+            val requesterRole =
+                VenueRoleMapping.fromDb(requesterMembership.role)
+                    ?: throw ForbiddenException()
             val request = call.receive<StaffInviteRequest>()
             val targetRole = parseVenueRole(request.role)
             if (targetRole == VenueRole.OWNER) {
@@ -124,12 +137,38 @@ fun Route.venueStaffRoutes(
                     role = targetRole.name,
                     ttlSeconds = ttlSeconds,
                 ) ?: throw DatabaseUnavailableException()
+            val startPayload = buildStaffInviteStartPayload(result.code)
+            val deepLink =
+                telegramBotUsername
+                    ?.trim()
+                    ?.removePrefix("@")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { buildTelegramStartUrl(it, startPayload) }
+            val fallbackCommand = "/start $startPayload"
+            val copyText = deepLink ?: fallbackCommand
+            val venueName =
+                requesterMembership.venueName
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "Заведение #$venueId"
             call.respond(
                 StaffInviteResponse(
                     inviteCode = result.code,
                     expiresAt = result.expiresAt.toString(),
                     ttlSeconds = result.ttlSeconds,
-                    instructions = "Передайте сотруднику команду для бота: /start staff_invite_${result.code}.",
+                    instructions =
+                        buildStaffInviteInstructions(
+                            role = targetRole.name,
+                            venueName = venueName,
+                            deepLink = deepLink,
+                            fallbackCommand = fallbackCommand,
+                        ),
+                    role = targetRole.name,
+                    venueName = venueName,
+                    startPayload = startPayload,
+                    deepLink = deepLink,
+                    fallbackCommand = fallbackCommand,
+                    copyText = copyText,
                 ),
             )
         }
@@ -252,3 +291,23 @@ private fun resolveInviteTtl(
     }
     return ttl
 }
+
+private fun buildStaffInviteStartPayload(code: String): String = "staff_invite_$code"
+
+private fun buildStaffInviteInstructions(
+    role: String,
+    venueName: String,
+    deepLink: String?,
+    fallbackCommand: String,
+): String =
+    buildString {
+        append("Передайте сотруднику приглашение.")
+        append("\nЗаведение: $venueName")
+        append("\nРоль: $role")
+        if (deepLink != null) {
+            append("\nСсылка: $deepLink")
+        } else {
+            append("\nСсылка недоступна: не задан TELEGRAM_BOT_USERNAME.")
+        }
+        append("\nЗапасная команда: $fallbackCommand")
+    }

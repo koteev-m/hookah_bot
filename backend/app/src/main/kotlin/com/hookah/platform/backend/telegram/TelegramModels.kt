@@ -106,6 +106,12 @@ data class InlineKeyboardButton(
     @SerialName("callback_data") val callbackData: String? = null,
     val url: String? = null,
     @SerialName("web_app") val webApp: WebAppInfo? = null,
+    @SerialName("copy_text") val copyText: CopyTextButton? = null,
+)
+
+@Serializable
+data class CopyTextButton(
+    val text: String,
 )
 
 @Serializable

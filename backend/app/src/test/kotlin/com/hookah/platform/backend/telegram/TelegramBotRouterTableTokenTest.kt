@@ -76,7 +76,10 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderServiceChargeDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderStatusUpdateResult
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCodeResult
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreview
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreviewResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
@@ -258,7 +261,10 @@ class TelegramBotRouterTableTokenTest {
     private val auditLogRepository: AuditLogRepository = mockk(relaxed = true)
     private val router = routerWithWebAppPublicUrl(null)
 
-    private fun routerWithWebAppPublicUrl(webAppPublicUrl: String?): TelegramBotRouter =
+    private fun routerWithWebAppPublicUrl(
+        webAppPublicUrl: String?,
+        botUsername: String? = null,
+    ): TelegramBotRouter =
         TelegramBotRouter(
             config =
                 TelegramBotConfig(
@@ -273,6 +279,7 @@ class TelegramBotRouterTableTokenTest {
                     staffChatLinkTtlSeconds = 900,
                     staffChatLinkSecretPepper = "pepper",
                     requireStaffChatAdmin = false,
+                    botUsername = botUsername,
                 ),
             apiClient = apiClient,
             outboxEnqueuer = outboxEnqueuer,
@@ -1794,6 +1801,165 @@ class TelegramBotRouterTableTokenTest {
                     createdByUserId = 200L,
                     role = "STAFF",
                     ttlSeconds = any(),
+                )
+            }
+        }
+
+    @Test
+    fun `telegram staff invite creation includes copyable deep link with accepted start payload`() =
+        runBlocking {
+            val inviteRouter = routerWithWebAppPublicUrl(null, botUsername = "HookahInviteBot")
+            val inviteCode = "ABC234"
+            val startPayload = "staff_invite_$inviteCode"
+            val deepLink = "https://t.me/HookahInviteBot?start=$startPayload"
+            val fallbackCommand = "/start $startPayload"
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Hookah Place",
+                    city = "City",
+                    address = "Address",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery {
+                staffInviteRepositoryForRouter.createInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "MANAGER",
+                    ttlSeconds = any(),
+                )
+            } returns
+                StaffInviteCodeResult(
+                    code = inviteCode,
+                    expiresAt = Instant.parse("2026-04-08T10:15:00Z"),
+                    ttlSeconds = 604800L,
+                )
+
+            inviteRouter.process(
+                TelegramUpdate(
+                    updateId = 9_014,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-manager-invite",
+                            from = User(id = 200L),
+                            message = Message(messageId = 24, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_select:10:manager",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Приглашение для роли Manager создано") &&
+                            it.contains("Заведение: Hookah Place") &&
+                            it.contains("Действует до:") &&
+                            it.contains(deepLink) &&
+                            it.contains(fallbackCommand)
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.text == "📋 Скопировать ссылку" && it.copyText?.text == deepLink } &&
+                            buttons.any {
+                                it.text == "📋 Скопировать команду" &&
+                                    it.copyText?.text == fallbackCommand
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `generated staff invite start payload opens landing and accept uses same code`() =
+        runBlocking {
+            val inviteCode = "ABC234"
+            coEvery { staffInviteRepositoryForRouter.previewInvite(inviteCode) } returns
+                StaffInvitePreviewResult.Success(
+                    StaffInvitePreview(
+                        venueId = 10L,
+                        role = "STAFF",
+                        createdByUserId = 200L,
+                        expiresAt = Instant.parse("2026-04-08T10:15:00Z"),
+                    ),
+                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Hookah Place",
+                    city = "City",
+                    address = "Address",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery { staffInviteRepositoryForRouter.acceptInvite(inviteCode, 300L, any()) } returns
+                StaffInviteAcceptResult.Success(
+                    member =
+                        VenueStaffMember(
+                            venueId = 10L,
+                            userId = 300L,
+                            role = "STAFF",
+                            createdAt = Instant.parse("2026-04-01T10:20:00Z"),
+                            invitedByUserId = 200L,
+                        ),
+                    alreadyMember = false,
+                    invitedRole = "STAFF",
+                    inviteCreatedByUserId = 200L,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_015,
+                    message =
+                        Message(
+                            messageId = 25,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 300L),
+                            text = "/start staff_invite_$inviteCode",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_016,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-accept-staff-invite",
+                            from = User(id = 300L),
+                            message = Message(messageId = 26, chat = Chat(id = 100, type = "private")),
+                            data = "staff_invite_accept:$inviteCode",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("Вас приглашают в заведение Hookah Place") &&
+                            it.contains("Роль: Staff / Оператор смены")
+                    },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "✅ Принять приглашение" &&
+                                it.callbackData == "staff_invite_accept:$inviteCode"
+                        }
+                    },
+                )
+            }
+            coVerify { staffInviteRepositoryForRouter.acceptInvite(inviteCode, 300L, any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Теперь у вас есть доступ к заведению") },
+                    any(),
                 )
             }
         }

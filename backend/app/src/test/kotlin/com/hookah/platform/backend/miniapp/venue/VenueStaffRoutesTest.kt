@@ -147,7 +147,7 @@ class VenueStaffRoutesTest {
     fun `owner can create invite and accept it`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("staff-invite")
-            val config = buildConfig(jdbcUrl)
+            val config = buildConfig(jdbcUrl, botUsername = "HookahInviteBot")
 
             environment { this.config = config }
             application { module() }
@@ -170,6 +170,16 @@ class VenueStaffRoutesTest {
             assertEquals(HttpStatusCode.OK, inviteResponse.status)
             val invitePayload = json.decodeFromString(StaffInviteResponse.serializer(), inviteResponse.bodyAsText())
             assertTrue(invitePayload.inviteCode.isNotBlank())
+            val startPayload = "staff_invite_${invitePayload.inviteCode}"
+            assertEquals("STAFF", invitePayload.role)
+            assertEquals("Venue", invitePayload.venueName)
+            assertEquals(startPayload, invitePayload.startPayload)
+            assertEquals("https://t.me/HookahInviteBot?start=$startPayload", invitePayload.deepLink)
+            val fallbackCommand = "/start $startPayload"
+            assertEquals(fallbackCommand, invitePayload.fallbackCommand)
+            assertEquals(invitePayload.deepLink, invitePayload.copyText)
+            assertTrue(invitePayload.instructions.contains(invitePayload.deepLink!!))
+            assertTrue(invitePayload.instructions.contains(fallbackCommand))
 
             val inviteeToken = issueToken(config, inviteeId)
             val acceptResponse =
@@ -193,6 +203,106 @@ class VenueStaffRoutesTest {
             assertEquals(venueId, acceptPayload.venueId)
             assertEquals(inviteeId, acceptPayload.member.userId)
             assertEquals("STAFF", acceptPayload.member.role)
+        }
+
+    @Test
+    fun `used staff invite is rejected on repeat accept`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-used")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 2101L
+            val firstInviteeId = 2102L
+            val secondInviteeId = 2103L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedUser(jdbcUrl, firstInviteeId)
+            seedUser(jdbcUrl, secondInviteeId)
+            val ownerToken = issueToken(config, ownerId)
+
+            val inviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "STAFF")))
+                }
+            assertEquals(HttpStatusCode.OK, inviteResponse.status)
+            val invitePayload = json.decodeFromString(StaffInviteResponse.serializer(), inviteResponse.bodyAsText())
+
+            val firstAcceptResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, firstInviteeId)}") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = invitePayload.inviteCode),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, firstAcceptResponse.status)
+
+            val repeatAcceptResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, secondInviteeId)}") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = invitePayload.inviteCode),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, repeatAcceptResponse.status)
+            assertApiErrorEnvelope(repeatAcceptResponse, ApiErrorCodes.INVALID_INPUT)
+        }
+
+    @Test
+    fun `expired staff invite is rejected on accept`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-expired")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 2201L
+            val inviteeId = 2202L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedUser(jdbcUrl, inviteeId)
+            val ownerToken = issueToken(config, ownerId)
+
+            val inviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "STAFF")))
+                }
+            assertEquals(HttpStatusCode.OK, inviteResponse.status)
+            val invitePayload = json.decodeFromString(StaffInviteResponse.serializer(), inviteResponse.bodyAsText())
+            expireStaffInvite(jdbcUrl, venueId, invitePayload.inviteCode)
+
+            val acceptResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, inviteeId)}") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = invitePayload.inviteCode),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, acceptResponse.status)
+            assertApiErrorEnvelope(acceptResponse, ApiErrorCodes.INVALID_INPUT)
         }
 
     @Test
@@ -501,15 +611,23 @@ class VenueStaffRoutesTest {
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String): MapApplicationConfig {
-        return MapApplicationConfig(
-            "app.env" to appEnv,
-            "api.session.jwtSecret" to "test-secret",
-            "db.jdbcUrl" to jdbcUrl,
-            "db.user" to "sa",
-            "db.password" to "",
-            "venue.staffInviteSecretPepper" to "invite-pepper",
-        )
+    private fun buildConfig(
+        jdbcUrl: String,
+        botUsername: String? = null,
+    ): MapApplicationConfig {
+        val entries =
+            mutableMapOf(
+                "app.env" to appEnv,
+                "api.session.jwtSecret" to "test-secret",
+                "db.jdbcUrl" to jdbcUrl,
+                "db.user" to "sa",
+                "db.password" to "",
+                "venue.staffInviteSecretPepper" to "invite-pepper",
+            )
+        if (botUsername != null) {
+            entries["telegram.botUsername"] = botUsername
+        }
+        return MapApplicationConfig(*entries.toList().toTypedArray())
     }
 
     private fun issueToken(
@@ -586,6 +704,27 @@ class VenueStaffRoutesTest {
         }
     }
 
+    private fun expireStaffInvite(
+        jdbcUrl: String,
+        venueId: Long,
+        code: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE venue_staff_invites
+                SET expires_at = ?
+                WHERE venue_id = ? AND code_hint = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setTimestamp(1, java.sql.Timestamp.from(java.time.Instant.parse("2000-01-01T00:00:00Z")))
+                statement.setLong(2, venueId)
+                statement.setString(3, code.take(3))
+                statement.executeUpdate()
+            }
+        }
+    }
+
     @Serializable
     private data class StaffListResponse(
         val members: List<StaffMemberDto>,
@@ -603,6 +742,12 @@ class VenueStaffRoutesTest {
         val expiresAt: String,
         val ttlSeconds: Long,
         val instructions: String,
+        val role: String? = null,
+        val venueName: String? = null,
+        val startPayload: String? = null,
+        val deepLink: String? = null,
+        val fallbackCommand: String? = null,
+        val copyText: String? = null,
     )
 
     @Serializable

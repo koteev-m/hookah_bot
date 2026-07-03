@@ -64,6 +64,12 @@ export type VenueStaffInviteResponse = {
   expiresAt: string
   ttlSeconds: number
   instructions: string
+  role?: 'OWNER' | 'MANAGER' | 'STAFF' | string
+  venueName?: string
+  startPayload?: string
+  deepLink?: string | null
+  fallbackCommand?: string
+  copyText?: string
 }
 
 export type VenueStaffInviteAcceptRequest = {

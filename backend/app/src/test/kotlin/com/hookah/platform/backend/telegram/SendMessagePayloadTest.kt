@@ -93,6 +93,49 @@ class SendMessagePayloadTest {
     }
 
     @Test
+    fun `build payload with inline copy text button`() {
+        val payload =
+            buildSendMessagePayload(
+                json = json,
+                chatId = 123L,
+                text = "copy",
+                replyMarkup =
+                    InlineKeyboardMarkup(
+                        inlineKeyboard =
+                            listOf(
+                                listOf(
+                                    InlineKeyboardButton(
+                                        text = "📋 Скопировать ссылку",
+                                        copyText = CopyTextButton("https://t.me/TestBot?start=staff_invite_ABC123"),
+                                    ),
+                                ),
+                            ),
+                    ),
+            )
+
+        val encoded = json.encodeToString(SendMessagePayload.serializer(), payload)
+        val button =
+            json
+                .parseToJsonElement(encoded)
+                .jsonObject
+                .getValue("reply_markup")
+                .jsonObject
+                .getValue("inline_keyboard")
+                .jsonArray
+                .single()
+                .jsonArray
+                .single()
+                .jsonObject
+
+        assertEquals(
+            "https://t.me/TestBot?start=staff_invite_ABC123",
+            button.getValue("copy_text").jsonObject.getValue("text").jsonPrimitive.content,
+        )
+        assertNull(button["callback_data"])
+        assertNull(button["url"])
+    }
+
+    @Test
     fun `build send photo payload with caption and inline keyboard`() {
         val payload =
             buildSendPhotoPayload(
