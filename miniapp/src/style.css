@@ -1508,20 +1508,6 @@ input[type="number"] {
   gap: 0.45rem;
 }
 
-.venue-invite-link,
-.venue-invite-command {
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.venue-invite-command {
-  display: block;
-  padding: 0.55rem;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #0f172a;
-}
-
 .venue-invite-field {
   width: 100%;
   min-height: 2.75rem;
@@ -1532,6 +1518,25 @@ input[type="number"] {
   background: #ffffff;
   color: #0f172a;
   font: inherit;
+}
+
+.venue-invite-fallback {
+  border-top: 1px solid #c7d2fe;
+  padding-top: 0.55rem;
+}
+
+.venue-invite-fallback summary {
+  cursor: pointer;
+  color: #334155;
+  font-weight: 600;
+}
+
+.venue-invite-fallback .venue-invite-field {
+  margin-top: 0.45rem;
+}
+
+.venue-invite-fallback button {
+  margin-top: 0.45rem;
 }
 
 .venue-invite-copy-status,

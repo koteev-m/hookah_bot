@@ -31,17 +31,14 @@ type StaffRefs = {
   inviteResult: HTMLDivElement
   inviteRoleLabel: HTMLSpanElement
   inviteVenueName: HTMLSpanElement
-  invitePrimaryLink: HTMLAnchorElement
   inviteLinkField: HTMLTextAreaElement
   inviteCopyLinkButton: HTMLButtonElement
   inviteShareButton: HTMLButtonElement
-  inviteOpenLinkButton: HTMLButtonElement
-  inviteFallbackCommand: HTMLElement
+  inviteFallbackDetails: HTMLDetailsElement
   inviteCommandField: HTMLTextAreaElement
   inviteCopyCommandButton: HTMLButtonElement
-  inviteCode: HTMLSpanElement
   inviteExpires: HTMLSpanElement
-  inviteInstructions: HTMLParagraphElement
+  inviteHelper: HTMLParagraphElement
   inviteCopyStatus: HTMLParagraphElement
   list: HTMLDivElement
 }
@@ -95,10 +92,6 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
 
   const inviteLinkLabel = el('label', { className: 'field-label', text: 'Ссылка для сотрудника' })
   inviteLinkLabel.htmlFor = 'venue-staff-invite-link'
-  const invitePrimaryLink = document.createElement('a')
-  invitePrimaryLink.className = 'venue-invite-link'
-  invitePrimaryLink.target = '_blank'
-  invitePrimaryLink.rel = 'noopener noreferrer'
   const inviteLinkField = document.createElement('textarea')
   inviteLinkField.id = 'venue-staff-invite-link'
   inviteLinkField.className = 'venue-invite-field'
@@ -112,28 +105,31 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     className: 'button-small button-secondary',
     text: '📤 Поделиться в Telegram'
   }) as HTMLButtonElement
-  const inviteOpenLinkButton = el('button', {
-    className: 'button-small button-secondary',
-    text: 'Открыть ссылку'
-  }) as HTMLButtonElement
   const inviteLinkActions = el('div', { className: 'venue-invite-actions' })
-  append(inviteLinkActions, inviteCopyLinkButton, inviteShareButton, inviteOpenLinkButton)
+  append(inviteLinkActions, inviteCopyLinkButton, inviteShareButton)
 
-  const inviteCommandLabel = el('label', { className: 'field-label', text: 'Команда, если ссылка не открылась' })
-  inviteCommandLabel.htmlFor = 'venue-staff-invite-command'
-  const inviteFallbackCommand = el('code', { className: 'venue-invite-command' })
+  const inviteHelper = el('p', { className: 'venue-invite-help', text: '' })
+
+  const inviteFallbackDetails = document.createElement('details')
+  inviteFallbackDetails.className = 'venue-invite-fallback'
+  const inviteFallbackSummary = document.createElement('summary')
+  inviteFallbackSummary.textContent = 'Если ссылка не открылась'
+  const inviteFallbackHelp = el('p', {
+    className: 'venue-invite-help',
+    text: 'Скопируйте команду и отправьте её сотруднику вручную.'
+  })
+
   const inviteCommandField = document.createElement('textarea')
   inviteCommandField.id = 'venue-staff-invite-command'
   inviteCommandField.className = 'venue-invite-field'
   inviteCommandField.readOnly = true
   inviteCommandField.rows = 2
+  inviteCommandField.setAttribute('aria-label', 'Команда, если ссылка не открылась')
   const inviteCopyCommandButton = el('button', {
     className: 'button-small button-secondary',
     text: '📋 Скопировать команду'
   }) as HTMLButtonElement
-  const inviteCode = el('span')
-  const inviteInstructions = el('p', { text: '' })
-  inviteInstructions.className = 'venue-invite-help'
+  append(inviteFallbackDetails, inviteFallbackSummary, inviteFallbackHelp, inviteCommandField, inviteCopyCommandButton)
   const inviteCopyStatus = el('p', { className: 'venue-invite-copy-status', text: '' })
   inviteCopyStatus.setAttribute('aria-live', 'polite')
   append(
@@ -141,16 +137,10 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     inviteResultTitle,
     inviteMeta,
     inviteLinkLabel,
-    invitePrimaryLink,
     inviteLinkField,
     inviteLinkActions,
-    inviteCommandLabel,
-    inviteFallbackCommand,
-    inviteCommandField,
-    inviteCopyCommandButton,
-    el('p', { text: 'Код:' }),
-    inviteCode,
-    inviteInstructions,
+    inviteHelper,
+    inviteFallbackDetails,
     inviteCopyStatus
   )
 
@@ -183,17 +173,14 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     inviteResult,
     inviteRoleLabel,
     inviteVenueName,
-    invitePrimaryLink,
     inviteLinkField,
     inviteCopyLinkButton,
     inviteShareButton,
-    inviteOpenLinkButton,
-    inviteFallbackCommand,
+    inviteFallbackDetails,
     inviteCommandField,
     inviteCopyCommandButton,
-    inviteCode,
     inviteExpires,
-    inviteInstructions,
+    inviteHelper,
     inviteCopyStatus,
     list
   }
@@ -216,6 +203,10 @@ function formatInviteExpires(value: string): string {
 function buildTelegramShareUrl(inviteLink: string, venueName: string, role: string): string {
   const text = `Приглашение в ${venueName}. Роль: ${role}. Откройте ссылку, чтобы принять доступ.`
   return `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent(text)}`
+}
+
+function buildInviteHelperText(role: string, venueName: string, expiresAt: string): string {
+  return `Отправьте эту ссылку сотруднику. Он откроет её в Telegram и получит роль ${role} в заведении «${venueName}». Ссылка одноразовая и действует до ${expiresAt}.`
 }
 
 function selectVisibleField(field: HTMLTextAreaElement) {
@@ -321,30 +312,26 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     const deepLink = currentInvite.deepLink?.trim() || null
     const role = currentInvite.role ?? refs.inviteRole.value
     const venueName = currentInvite.venueName ?? access.venueName ?? `Venue ${venueId}`
+    const expiresAt = formatInviteExpires(currentInvite.expiresAt)
     refs.inviteRoleLabel.textContent = role
     refs.inviteVenueName.textContent = venueName
     refs.inviteCopyStatus.textContent = ''
-    refs.invitePrimaryLink.hidden = false
     refs.inviteCopyLinkButton.disabled = !deepLink
     refs.inviteShareButton.disabled = !deepLink
-    refs.inviteOpenLinkButton.disabled = !deepLink
+    refs.inviteFallbackDetails.open = false
     if (deepLink) {
-      refs.invitePrimaryLink.href = deepLink
-      refs.invitePrimaryLink.textContent = deepLink
       refs.inviteLinkField.value = deepLink
       const shareUrl = buildTelegramShareUrl(deepLink, venueName, role)
       refs.inviteShareButton.dataset.shareUrl = shareUrl
     } else {
-      refs.invitePrimaryLink.removeAttribute('href')
-      refs.invitePrimaryLink.textContent = 'Ссылка недоступна'
       refs.inviteLinkField.value = 'Ссылка недоступна. Используйте запасную команду ниже.'
       delete refs.inviteShareButton.dataset.shareUrl
     }
-    refs.inviteFallbackCommand.textContent = fallbackCommand
     refs.inviteCommandField.value = fallbackCommand
-    refs.inviteCode.textContent = currentInvite.inviteCode
-    refs.inviteExpires.textContent = formatInviteExpires(currentInvite.expiresAt)
-    refs.inviteInstructions.textContent = currentInvite.instructions
+    refs.inviteExpires.textContent = expiresAt
+    refs.inviteHelper.textContent = deepLink
+      ? buildInviteHelperText(role, venueName, expiresAt)
+      : 'Ссылка недоступна. Скопируйте команду ниже и отправьте её сотруднику вручную.'
     refs.inviteResult.hidden = false
   }
 
@@ -506,16 +493,6 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
         return
       }
       openUrl(shareUrl)
-    })
-  )
-  disposables.push(
-    on(refs.inviteOpenLinkButton, 'click', () => {
-      const link = currentInviteDeepLink()
-      if (!link) {
-        showToast('Ссылка недоступна')
-        return
-      }
-      openUrl(link)
     })
   )
   disposables.push(

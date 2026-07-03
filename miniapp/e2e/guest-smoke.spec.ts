@@ -3989,17 +3989,31 @@ test('venue owner creates manager staff invite with copyable deep link', async (
 
   await expect(page.locator('.venue-invite-result')).toContainText('MANAGER')
   await expect(page.locator('.venue-invite-result')).toContainText('Микс')
+  await expect(page.locator('.venue-invite-result')).toContainText('Приглашение создано')
   await expect(page.getByText('Ссылка для сотрудника')).toBeVisible()
-  await expect(page.getByRole('link', { name: deepLink })).toHaveAttribute('href', deepLink)
   await expect(page.getByLabel('Ссылка для сотрудника')).toHaveValue(deepLink)
+  await expect(page.getByLabel('Ссылка для сотрудника')).toBeVisible()
+  await expect(page.locator('.venue-invite-result textarea#venue-staff-invite-link')).toHaveCount(1)
+  await expect(page.locator('.venue-invite-result a')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Скопировать ссылку/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /Поделиться в Telegram/ })).toHaveAttribute('data-share-url', shareUrl)
-  await expect(page.getByRole('button', { name: 'Открыть ссылку' })).toBeVisible()
-  await expect(page.getByText('Команда, если ссылка не открылась')).toBeVisible()
-  await expect(page.locator('.venue-invite-command')).toHaveText(fallbackCommand)
+  await expect(page.getByRole('button', { name: 'Открыть ссылку' })).toHaveCount(0)
+  await expect(page.getByText('Код:')).toHaveCount(0)
+  await expect(page.getByText('Передайте сотруднику приглашение.')).toHaveCount(0)
+  await expect(page.locator('.venue-invite-result')).toContainText(
+    'Отправьте эту ссылку сотруднику. Он откроет её в Telegram и получит роль MANAGER в заведении «Микс».'
+  )
+  await expect(page.getByText('Если ссылка не открылась')).toBeVisible()
+  await expect(page.getByText('Скопируйте команду и отправьте её сотруднику вручную.')).not.toBeVisible()
+  await page.getByText('Если ссылка не открылась').click()
+  await expect(page.getByText('Скопируйте команду и отправьте её сотруднику вручную.')).toBeVisible()
   await expect(page.getByLabel('Команда, если ссылка не открылась')).toHaveValue(fallbackCommand)
   await expect(page.getByRole('button', { name: /Скопировать команду/ })).toBeVisible()
-  await expect(page.locator('.venue-invite-result span').filter({ hasText: /^ABC234$/ })).toBeVisible()
+  const fallbackCommandFields = await page.locator('.venue-invite-result').evaluate((node, command) => {
+    const fields = Array.from(node.querySelectorAll('textarea')) as HTMLTextAreaElement[]
+    return fields.filter((field) => field.value === command).length
+  }, fallbackCommand)
+  expect(fallbackCommandFields).toBe(1)
   expect(api.getStaffInvites()).toBe(1)
 
   await page.getByRole('button', { name: /Скопировать ссылку/ }).click()
