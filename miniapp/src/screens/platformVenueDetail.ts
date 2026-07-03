@@ -27,6 +27,7 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
+import { formatBillingDate, formatNextBillingDate, isoDateOnly } from '../shared/ui/billingDates'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
 
@@ -306,11 +307,6 @@ function formatDateTime(value: string) {
   return new Date(value).toLocaleString()
 }
 
-function formatDate(value?: string | null) {
-  if (!value) return '—'
-  return value.split('T')[0]
-}
-
 function formatMoney(amountMinor?: number | null, currency?: string | null) {
   if (amountMinor === null || amountMinor === undefined) return '—'
   return formatPrice(amountMinor, currency ?? 'RUB')
@@ -382,7 +378,8 @@ function paymentReasonLabel(reason?: string | null) {
 function isTrialExpired(overview: OwnerBillingOverviewResponse) {
   const trialEnd = overview.settingsTrialEndDate ?? overview.trialEndAt
   if (!trialEnd || overview.subscriptionStatus.toLowerCase() !== 'trial') return false
-  const dateOnly = formatDate(trialEnd)
+  const dateOnly = isoDateOnly(trialEnd)
+  if (!dateOnly) return false
   return new Date(`${dateOnly}T23:59:59`).getTime() < Date.now()
 }
 
@@ -404,7 +401,7 @@ function billingDisplayState(overview: OwnerBillingOverviewResponse) {
   }
   const invoice = currentPayableInvoice(overview)
   if (overview.paidThrough) {
-    return `Оплачено до ${formatDate(overview.paidThrough)}`
+    return `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно`
   }
   if (invoice) {
     return `Платный период настроен, счёт ${invoiceStatusLabel(invoice.status).toLowerCase()}`
@@ -414,7 +411,7 @@ function billingDisplayState(overview: OwnerBillingOverviewResponse) {
   }
   const trialEnd = overview.settingsTrialEndDate ?? overview.trialEndAt
   if (trialEnd && !isTrialExpired(overview)) {
-    return `Пробный период до ${formatDate(trialEnd)}`
+    return `Пробный период до ${formatBillingDate(trialEnd)}`
   }
   if (trialEnd) {
     return 'Пробный период закончился.'
@@ -455,7 +452,7 @@ function billingNextStep(overview: OwnerBillingOverviewResponse) {
     return `Счёт создан. ${paymentReasonLabel(overview.unavailableReason)}`
   }
   if (overview.paidThrough) {
-    return 'Оплата учтена.'
+    return `Оплата учтена. Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}.`
   }
   if (overview.checkoutEnsureAvailable) {
     return 'Настройки заполнены. Создайте счёт для текущего периода.'
@@ -479,6 +476,16 @@ function canEnsureCheckout(overview: OwnerBillingOverviewResponse | null) {
   if (!overview.priceMinor) return false
   if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) return false
   return true
+}
+
+function paidThroughRows(overview: OwnerBillingOverviewResponse) {
+  if (!overview.paidThrough) {
+    return [el('p', { text: 'Оплачено до: —' })]
+  }
+  return [
+    el('p', { text: `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно` }),
+    el('p', { text: `Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}` })
+  ]
 }
 
 function safeCheckoutUrl(url?: string | null) {
@@ -709,9 +716,13 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       el('p', { text: `Состояние: ${billingDisplayState(currentBilling)}` }),
       el('p', { text: `Статус подписки: ${billingStatusLabel(currentBilling.subscriptionStatus)}` }),
       el('p', { text: `Цена: ${formatMoney(currentBilling.priceMinor, currentBilling.currency)}` }),
-      el('p', { text: `Пробный период до: ${formatDate(currentBilling.settingsTrialEndDate ?? currentBilling.trialEndAt)}` }),
-      el('p', { text: `Платный период с: ${formatDate(currentBilling.settingsPaidStartDate ?? currentBilling.paidStartAt)}` }),
-      el('p', { text: `Оплачено до: ${formatDate(currentBilling.paidThrough)}` }),
+      el('p', {
+        text: `Пробный период до: ${formatBillingDate(currentBilling.settingsTrialEndDate ?? currentBilling.trialEndAt)}`
+      }),
+      el('p', {
+        text: `Платный период с: ${formatBillingDate(currentBilling.settingsPaidStartDate ?? currentBilling.paidStartAt)}`
+      }),
+      ...paidThroughRows(currentBilling),
       el('p', { text: invoiceStateLabel(currentBilling) }),
       el('p', { text: onlinePaymentStateLabel(currentBilling) }),
       el('p', { text: `Что сделать дальше: ${billingNextStep(currentBilling)}` })
@@ -737,15 +748,17 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       el('strong', { text: `Счёт #${invoice.id} · ${invoiceStatusLabel(invoice.status)}` }),
       el('p', {
         className: 'venue-order-sub',
-        text: `${formatDate(invoice.periodStart)} — ${formatDate(invoice.periodEnd)} · ${formatMoney(
+        text: `Период: ${formatBillingDate(invoice.periodStart)} — ${formatBillingDate(
+          invoice.periodEnd
+        )} включительно · ${formatMoney(
           invoice.amountMinor,
           invoice.currency
         )}`
       }),
-      el('p', { className: 'venue-order-sub', text: `Срок оплаты: ${formatDate(invoice.dueAt)}` }),
+      el('p', { className: 'venue-order-sub', text: `Срок оплаты: ${formatBillingDate(invoice.dueAt)}` }),
       el('p', {
         className: 'venue-order-sub',
-        text: invoice.paidAt ? `Оплачен: ${formatDate(invoice.paidAt)}` : ''
+        text: invoice.paidAt ? `Оплачен: ${formatBillingDate(invoice.paidAt)}` : ''
       })
     )
     const actions = el('div', { className: 'venue-staff-actions' })

@@ -8,6 +8,7 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
+import { formatBillingDate, formatNextBillingDate } from '../shared/ui/billingDates'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
 
@@ -35,11 +36,6 @@ type VenueSubscriptionRefs = {
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
-}
-
-function formatDate(value?: string | null) {
-  if (!value) return '—'
-  return value.split('T')[0]
 }
 
 function formatMoney(amountMinor?: number | null, currency?: string | null) {
@@ -115,10 +111,21 @@ function safeCheckoutUrl(url?: string | null) {
 }
 
 function subscriptionNextStep(overview: OwnerBillingOverviewResponse) {
+  if (overview.paidThrough) return `Оплата учтена. Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}.`
   if (!overview.priceMinor) return paymentReasonLabel('missing_price')
   if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) return paymentReasonLabel('missing_billing_period')
   if (!overview.paymentAvailable) return paymentReasonLabel(overview.unavailableReason)
   return 'Можно перейти к оплате картой.'
+}
+
+function paidThroughRows(overview: OwnerBillingOverviewResponse) {
+  if (!overview.paidThrough) {
+    return [el('p', { text: 'Оплачено до: —' })]
+  }
+  return [
+    el('p', { text: `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно` }),
+    el('p', { text: `Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}` })
+  ]
 }
 
 function buildDom(root: HTMLDivElement): VenueSubscriptionRefs {
@@ -242,13 +249,18 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
       el('strong', { text: `Счёт #${invoice.id} · ${invoiceStatusLabel(invoice.status)}` }),
       el('p', {
         className: 'venue-order-sub',
-        text: `${formatDate(invoice.periodStart)} — ${formatDate(invoice.periodEnd)} · ${formatMoney(
+        text: `Период: ${formatBillingDate(invoice.periodStart)} — ${formatBillingDate(
+          invoice.periodEnd
+        )} включительно · ${formatMoney(
           invoice.amountMinor,
           invoice.currency
         )}`
       }),
-      el('p', { className: 'venue-order-sub', text: `Срок оплаты: ${formatDate(invoice.dueAt)}` }),
-      el('p', { className: 'venue-order-sub', text: invoice.paidAt ? `Оплачен: ${formatDate(invoice.paidAt)}` : '' })
+      el('p', { className: 'venue-order-sub', text: `Срок оплаты: ${formatBillingDate(invoice.dueAt)}` }),
+      el('p', {
+        className: 'venue-order-sub',
+        text: invoice.paidAt ? `Оплачен: ${formatBillingDate(invoice.paidAt)}` : ''
+      })
     )
     append(row, info)
     return row
@@ -266,9 +278,9 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
     refs.summary.replaceChildren(
       el('p', { text: `Статус: ${subscriptionStatusLabel(current.subscriptionStatus)}` }),
       el('p', { text: `Цена: ${formatMoney(current.priceMinor, current.currency)}` }),
-      el('p', { text: `Пробный период до: ${formatDate(current.settingsTrialEndDate ?? current.trialEndAt)}` }),
-      el('p', { text: `Платный период с: ${formatDate(current.settingsPaidStartDate ?? current.paidStartAt)}` }),
-      el('p', { text: `Оплачено до: ${formatDate(current.paidThrough)}` }),
+      el('p', { text: `Пробный период до: ${formatBillingDate(current.settingsTrialEndDate ?? current.trialEndAt)}` }),
+      el('p', { text: `Платный период с: ${formatBillingDate(current.settingsPaidStartDate ?? current.paidStartAt)}` }),
+      ...paidThroughRows(current),
       el('p', { text: subscriptionNextStep(current) })
     )
     if (!current.invoices.length) {
