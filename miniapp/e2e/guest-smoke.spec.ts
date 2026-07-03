@@ -3976,6 +3976,9 @@ test('venue owner creates manager staff invite with copyable deep link', async (
   const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: true })
   const deepLink = 'https://t.me/TestHookahBot?start=staff_invite_ABC234'
   const fallbackCommand = '/start staff_invite_ABC234'
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(deepLink)}&text=${encodeURIComponent(
+    'Приглашение в Микс. Роль: MANAGER. Откройте ссылку, чтобы принять доступ.'
+  )}`
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
@@ -3986,17 +3989,52 @@ test('venue owner creates manager staff invite with copyable deep link', async (
 
   await expect(page.locator('.venue-invite-result')).toContainText('MANAGER')
   await expect(page.locator('.venue-invite-result')).toContainText('Микс')
+  await expect(page.getByText('Ссылка для сотрудника')).toBeVisible()
   await expect(page.getByRole('link', { name: deepLink })).toHaveAttribute('href', deepLink)
+  await expect(page.getByLabel('Ссылка для сотрудника')).toHaveValue(deepLink)
+  await expect(page.getByRole('button', { name: /Скопировать ссылку/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Поделиться в Telegram/ })).toHaveAttribute('data-share-url', shareUrl)
+  await expect(page.getByRole('button', { name: 'Открыть ссылку' })).toBeVisible()
+  await expect(page.getByText('Команда, если ссылка не открылась')).toBeVisible()
   await expect(page.locator('.venue-invite-command')).toHaveText(fallbackCommand)
+  await expect(page.getByLabel('Команда, если ссылка не открылась')).toHaveValue(fallbackCommand)
+  await expect(page.getByRole('button', { name: /Скопировать команду/ })).toBeVisible()
   await expect(page.locator('.venue-invite-result span').filter({ hasText: /^ABC234$/ })).toBeVisible()
   expect(api.getStaffInvites()).toBe(1)
 
-  await page.getByRole('button', { name: 'Скопировать ссылку' }).click()
+  await page.getByRole('button', { name: /Скопировать ссылку/ }).click()
   await expect.poll(() => page.evaluate(() => (window as Window & { __copiedText?: string }).__copiedText)).toBe(deepLink)
-  await page.getByRole('button', { name: 'Скопировать команду' }).click()
+  await expect(page.locator('.venue-invite-copy-status')).toHaveText('Ссылка скопирована')
+  await page.getByRole('button', { name: /Скопировать команду/ }).click()
   await expect.poll(() => page.evaluate(() => (window as Window & { __copiedText?: string }).__copiedText)).toBe(
     fallbackCommand
   )
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error('clipboard denied')
+        }
+      }
+    })
+  })
+  await page.getByRole('button', { name: /Скопировать ссылку/ }).click()
+  await expect(page.locator('.venue-invite-copy-status')).toHaveText(
+    'Не удалось скопировать автоматически. Ссылка выделена ниже.'
+  )
+  await expect
+    .poll(() =>
+      page
+        .getByLabel('Ссылка для сотрудника')
+        .evaluate(
+          (node) =>
+            document.activeElement === node &&
+            (node as HTMLTextAreaElement).selectionStart === 0 &&
+            (node as HTMLTextAreaElement).selectionEnd === (node as HTMLTextAreaElement).value.length
+        )
+    )
+    .toBe(true)
 })
 
 test('expired staff chat link code is not presented as usable', async ({ page }) => {

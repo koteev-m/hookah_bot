@@ -4,6 +4,7 @@ import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { venueCreateInvite, venueGetStaff, venueRemoveStaff, venueUpdateRole } from '../shared/api/venueApi'
 import type { VenueAccessDto, VenueStaffMemberDto, VenueStaffInviteResponse } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
+import { getTelegramContext } from '../shared/telegram'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
@@ -31,12 +32,17 @@ type StaffRefs = {
   inviteRoleLabel: HTMLSpanElement
   inviteVenueName: HTMLSpanElement
   invitePrimaryLink: HTMLAnchorElement
+  inviteLinkField: HTMLTextAreaElement
   inviteCopyLinkButton: HTMLButtonElement
+  inviteShareButton: HTMLButtonElement
+  inviteOpenLinkButton: HTMLButtonElement
   inviteFallbackCommand: HTMLElement
+  inviteCommandField: HTMLTextAreaElement
   inviteCopyCommandButton: HTMLButtonElement
   inviteCode: HTMLSpanElement
   inviteExpires: HTMLSpanElement
   inviteInstructions: HTMLParagraphElement
+  inviteCopyStatus: HTMLParagraphElement
   list: HTMLDivElement
 }
 
@@ -72,41 +78,80 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
 
   const inviteResult = el('div', { className: 'venue-invite-result' })
   inviteResult.hidden = true
+  const inviteResultTitle = el('h3', { text: 'Приглашение создано' })
   const inviteRoleLabel = el('span')
   const inviteVenueName = el('span')
-  const invitePrimaryLink = document.createElement('a')
-  invitePrimaryLink.className = 'venue-invite-link'
-  invitePrimaryLink.target = '_blank'
-  invitePrimaryLink.rel = 'noopener noreferrer'
-  const inviteCopyLinkButton = el('button', {
-    className: 'button-small button-secondary',
-    text: 'Скопировать ссылку'
-  }) as HTMLButtonElement
-  const inviteFallbackCommand = el('code', { className: 'venue-invite-command' })
-  const inviteCopyCommandButton = el('button', {
-    className: 'button-small button-secondary',
-    text: 'Скопировать команду'
-  }) as HTMLButtonElement
-  const inviteCode = el('span')
   const inviteExpires = el('span')
-  const inviteInstructions = el('p', { text: '' })
+  const inviteMeta = el('div', { className: 'venue-invite-meta' })
   append(
-    inviteResult,
+    inviteMeta,
     el('p', { text: 'Роль:' }),
     inviteRoleLabel,
     el('p', { text: 'Заведение:' }),
     inviteVenueName,
-    el('p', { text: 'Ссылка:' }),
+    el('p', { text: 'Действует до:' }),
+    inviteExpires
+  )
+
+  const inviteLinkLabel = el('label', { className: 'field-label', text: 'Ссылка для сотрудника' })
+  inviteLinkLabel.htmlFor = 'venue-staff-invite-link'
+  const invitePrimaryLink = document.createElement('a')
+  invitePrimaryLink.className = 'venue-invite-link'
+  invitePrimaryLink.target = '_blank'
+  invitePrimaryLink.rel = 'noopener noreferrer'
+  const inviteLinkField = document.createElement('textarea')
+  inviteLinkField.id = 'venue-staff-invite-link'
+  inviteLinkField.className = 'venue-invite-field'
+  inviteLinkField.readOnly = true
+  inviteLinkField.rows = 2
+  const inviteCopyLinkButton = el('button', {
+    className: 'button-small button-secondary',
+    text: '📋 Скопировать ссылку'
+  }) as HTMLButtonElement
+  const inviteShareButton = el('button', {
+    className: 'button-small button-secondary',
+    text: '📤 Поделиться в Telegram'
+  }) as HTMLButtonElement
+  const inviteOpenLinkButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Открыть ссылку'
+  }) as HTMLButtonElement
+  const inviteLinkActions = el('div', { className: 'venue-invite-actions' })
+  append(inviteLinkActions, inviteCopyLinkButton, inviteShareButton, inviteOpenLinkButton)
+
+  const inviteCommandLabel = el('label', { className: 'field-label', text: 'Команда, если ссылка не открылась' })
+  inviteCommandLabel.htmlFor = 'venue-staff-invite-command'
+  const inviteFallbackCommand = el('code', { className: 'venue-invite-command' })
+  const inviteCommandField = document.createElement('textarea')
+  inviteCommandField.id = 'venue-staff-invite-command'
+  inviteCommandField.className = 'venue-invite-field'
+  inviteCommandField.readOnly = true
+  inviteCommandField.rows = 2
+  const inviteCopyCommandButton = el('button', {
+    className: 'button-small button-secondary',
+    text: '📋 Скопировать команду'
+  }) as HTMLButtonElement
+  const inviteCode = el('span')
+  const inviteInstructions = el('p', { text: '' })
+  inviteInstructions.className = 'venue-invite-help'
+  const inviteCopyStatus = el('p', { className: 'venue-invite-copy-status', text: '' })
+  inviteCopyStatus.setAttribute('aria-live', 'polite')
+  append(
+    inviteResult,
+    inviteResultTitle,
+    inviteMeta,
+    inviteLinkLabel,
     invitePrimaryLink,
-    inviteCopyLinkButton,
-    el('p', { text: 'Запасная команда:' }),
+    inviteLinkField,
+    inviteLinkActions,
+    inviteCommandLabel,
     inviteFallbackCommand,
+    inviteCommandField,
     inviteCopyCommandButton,
     el('p', { text: 'Код:' }),
     inviteCode,
-    el('p', { text: 'Действует до:' }),
-    inviteExpires,
-    inviteInstructions
+    inviteInstructions,
+    inviteCopyStatus
   )
 
   append(header, title, inviteRow, inviteResult)
@@ -139,14 +184,44 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     inviteRoleLabel,
     inviteVenueName,
     invitePrimaryLink,
+    inviteLinkField,
     inviteCopyLinkButton,
+    inviteShareButton,
+    inviteOpenLinkButton,
     inviteFallbackCommand,
+    inviteCommandField,
     inviteCopyCommandButton,
     inviteCode,
     inviteExpires,
     inviteInstructions,
+    inviteCopyStatus,
     list
   }
+}
+
+function formatInviteExpires(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return date.toLocaleString([], {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function buildTelegramShareUrl(inviteLink: string, venueName: string, role: string): string {
+  const text = `Приглашение в ${venueName}. Роль: ${role}. Откройте ссылку, чтобы принять доступ.`
+  return `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent(text)}`
+}
+
+function selectVisibleField(field: HTMLTextAreaElement) {
+  field.focus()
+  field.select()
+  field.setSelectionRange(0, field.value.length)
 }
 
 function renderMemberRow(
@@ -244,32 +319,81 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     const startPayload = currentInvite.startPayload ?? `staff_invite_${currentInvite.inviteCode}`
     const fallbackCommand = currentInvite.fallbackCommand ?? `/start ${startPayload}`
     const deepLink = currentInvite.deepLink?.trim() || null
-    refs.inviteRoleLabel.textContent = currentInvite.role ?? refs.inviteRole.value
-    refs.inviteVenueName.textContent = currentInvite.venueName ?? access.venueName ?? `Venue ${venueId}`
-    refs.invitePrimaryLink.hidden = !deepLink
-    refs.inviteCopyLinkButton.hidden = !deepLink
+    const role = currentInvite.role ?? refs.inviteRole.value
+    const venueName = currentInvite.venueName ?? access.venueName ?? `Venue ${venueId}`
+    refs.inviteRoleLabel.textContent = role
+    refs.inviteVenueName.textContent = venueName
+    refs.inviteCopyStatus.textContent = ''
+    refs.invitePrimaryLink.hidden = false
     refs.inviteCopyLinkButton.disabled = !deepLink
+    refs.inviteShareButton.disabled = !deepLink
+    refs.inviteOpenLinkButton.disabled = !deepLink
     if (deepLink) {
       refs.invitePrimaryLink.href = deepLink
       refs.invitePrimaryLink.textContent = deepLink
+      refs.inviteLinkField.value = deepLink
+      const shareUrl = buildTelegramShareUrl(deepLink, venueName, role)
+      refs.inviteShareButton.dataset.shareUrl = shareUrl
     } else {
       refs.invitePrimaryLink.removeAttribute('href')
       refs.invitePrimaryLink.textContent = 'Ссылка недоступна'
+      refs.inviteLinkField.value = 'Ссылка недоступна. Используйте запасную команду ниже.'
+      delete refs.inviteShareButton.dataset.shareUrl
     }
     refs.inviteFallbackCommand.textContent = fallbackCommand
+    refs.inviteCommandField.value = fallbackCommand
     refs.inviteCode.textContent = currentInvite.inviteCode
-    refs.inviteExpires.textContent = new Date(currentInvite.expiresAt).toLocaleString()
+    refs.inviteExpires.textContent = formatInviteExpires(currentInvite.expiresAt)
     refs.inviteInstructions.textContent = currentInvite.instructions
     refs.inviteResult.hidden = false
   }
 
-  const copyInviteText = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      showToast('Скопировано')
-    } catch {
-      window.prompt('Скопируйте текст', text)
+  const copyInviteText = async (
+    text: string,
+    field: HTMLTextAreaElement,
+    successMessage: string,
+    fallbackMessage: string
+  ) => {
+    refs.inviteCopyStatus.textContent = ''
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text)
+        refs.inviteCopyStatus.textContent = successMessage
+        showToast(successMessage)
+        return
+      } catch {
+        // Fall through to visible manual selection below.
+      }
     }
+    selectVisibleField(field)
+    refs.inviteCopyStatus.textContent = fallbackMessage
+    showToast(fallbackMessage)
+  }
+
+  const openUrl = (url: string) => {
+    const telegram = getTelegramContext()
+    if (telegram.webApp?.openTelegramLink) {
+      try {
+        telegram.webApp.openTelegramLink(url)
+        return
+      } catch {
+        // Fall through to the browser fallback below.
+      }
+    }
+    const opened = window.open(url, '_blank', 'noopener,noreferrer')
+    if (!opened) {
+      window.location.href = url
+    }
+  }
+
+  const currentInviteDeepLink = () => currentInvite?.deepLink?.trim() || null
+
+  const currentInviteShareUrl = () => {
+    const link = currentInviteDeepLink()
+    if (!link) return null
+    const role = currentInvite?.role ?? refs.inviteRole.value
+    const venueName = currentInvite?.venueName ?? access.venueName ?? `Venue ${venueId}`
+    return buildTelegramShareUrl(link, venueName, role)
   }
 
   const renderStaff = (members: VenueStaffMemberDto[], currentUserId: number) => {
@@ -361,15 +485,49 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   disposables.push(on(refs.inviteButton, 'click', () => void createInvite()))
   disposables.push(
     on(refs.inviteCopyLinkButton, 'click', () => {
-      const link = currentInvite?.deepLink?.trim()
-      if (link) void copyInviteText(link)
+      const link = currentInviteDeepLink()
+      if (!link) {
+        showToast('Ссылка недоступна')
+        return
+      }
+      void copyInviteText(
+        link,
+        refs.inviteLinkField,
+        'Ссылка скопирована',
+        'Не удалось скопировать автоматически. Ссылка выделена ниже.'
+      )
+    })
+  )
+  disposables.push(
+    on(refs.inviteShareButton, 'click', () => {
+      const shareUrl = currentInviteShareUrl()
+      if (!shareUrl) {
+        showToast('Ссылка недоступна')
+        return
+      }
+      openUrl(shareUrl)
+    })
+  )
+  disposables.push(
+    on(refs.inviteOpenLinkButton, 'click', () => {
+      const link = currentInviteDeepLink()
+      if (!link) {
+        showToast('Ссылка недоступна')
+        return
+      }
+      openUrl(link)
     })
   )
   disposables.push(
     on(refs.inviteCopyCommandButton, 'click', () => {
       if (!currentInvite) return
       const startPayload = currentInvite.startPayload ?? `staff_invite_${currentInvite.inviteCode}`
-      void copyInviteText(currentInvite.fallbackCommand ?? `/start ${startPayload}`)
+      void copyInviteText(
+        currentInvite.fallbackCommand ?? `/start ${startPayload}`,
+        refs.inviteCommandField,
+        'Команда скопирована',
+        'Не удалось скопировать автоматически. Команда выделена ниже.'
+      )
     })
   )
 
