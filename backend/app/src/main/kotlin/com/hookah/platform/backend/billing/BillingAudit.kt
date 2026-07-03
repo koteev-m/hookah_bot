@@ -41,3 +41,26 @@ suspend fun appendBillingCheckoutEnsureAudit(
             },
     )
 }
+
+suspend fun appendBillingCourtesyDaysAudit(
+    auditLogRepository: AuditLogRepository,
+    actorUserId: Long,
+    adjustment: BillingAdjustment,
+) {
+    auditLogRepository.appendJson(
+        actorUserId = actorUserId,
+        action = "BILLING_COURTESY_DAYS_ADDED",
+        entityType = "billing_adjustment",
+        entityId = adjustment.id,
+        payload =
+            buildJsonObject {
+                put("actorUserId", actorUserId)
+                put("venueId", adjustment.venueId)
+                put("adjustmentId", adjustment.id)
+                put("days", adjustment.days)
+                put("reason", adjustment.reason)
+                put("previousPaidThrough", adjustment.previousPaidThrough.toString())
+                put("newPaidThrough", adjustment.newPaidThrough.toString())
+            },
+    )
+}

@@ -216,6 +216,24 @@ export async function platformEnsureBillingCheckout(
   )
 }
 
+export async function platformAddCourtesyDays(
+  backendUrl: string,
+  venueId: number,
+  body: { days: number; reason: string },
+  deps: RequestDependencies
+) {
+  return requestApi<OwnerBillingOverviewResponse>(
+    backendUrl,
+    `/api/platform/venues/${venueId}/billing/courtesy-days`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    },
+    deps
+  )
+}
+
 export async function platformMarkInvoicePaid(
   backendUrl: string,
   invoiceId: number,

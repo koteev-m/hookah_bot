@@ -31,7 +31,11 @@ fun Route.venueBillingRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             requireVenueOwner(venueAccessRepository, userId, venueId)
-            val overview = billingOverviewService.ensureCheckout(venueId) ?: throw NotFoundException()
+            val overview =
+                billingOverviewService.ensureCheckout(
+                    venueId = venueId,
+                    allowAdvance = false,
+                ) ?: throw NotFoundException()
             appendBillingCheckoutEnsureAudit(
                 auditLogRepository = auditLogRepository,
                 actorUserId = userId,

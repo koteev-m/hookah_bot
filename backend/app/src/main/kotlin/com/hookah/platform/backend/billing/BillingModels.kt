@@ -34,6 +34,18 @@ enum class PaymentStatus(val dbValue: String) {
     }
 }
 
+enum class BillingAdjustmentKind(val dbValue: String) {
+    COURTESY_DAYS("COURTESY_DAYS"),
+    ;
+
+    companion object {
+        fun fromDb(value: String?): BillingAdjustmentKind? {
+            val normalized = value?.trim()?.uppercase(Locale.ROOT) ?: return null
+            return entries.firstOrNull { it.dbValue == normalized }
+        }
+    }
+}
+
 data class BillingInvoice(
     val id: Long,
     val venueId: Long,
@@ -52,6 +64,18 @@ data class BillingInvoice(
     val updatedAt: Instant,
     val paidAt: Instant?,
     val updatedByUserId: Long?,
+)
+
+data class BillingAdjustment(
+    val id: Long,
+    val venueId: Long,
+    val kind: BillingAdjustmentKind,
+    val days: Int,
+    val reason: String,
+    val previousPaidThrough: LocalDate,
+    val newPaidThrough: LocalDate,
+    val actorUserId: Long,
+    val createdAt: Instant,
 )
 
 data class BillingPayment(

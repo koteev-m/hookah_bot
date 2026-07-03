@@ -17,6 +17,7 @@ import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.ApiHeaders
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.billing.BillingAdjustmentRepository
 import com.hookah.platform.backend.billing.BillingConfig
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingNotificationRepository
@@ -412,6 +413,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val platformVenueMemberRepository = PlatformVenueMemberRepository(dataSource)
     val venueOwnerAccountRepository = VenueOwnerAccountRepository(dataSource)
     val billingInvoiceRepository = BillingInvoiceRepository(dataSource)
+    val billingAdjustmentRepository = BillingAdjustmentRepository(dataSource)
     val billingPaymentRepository = BillingPaymentRepository(dataSource)
     val billingNotificationRepository = BillingNotificationRepository(dataSource)
     val billingProviderRegistry =
@@ -445,6 +447,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             subscriptionRepository = subscriptionRepository,
             settingsRepository = subscriptionSettingsRepository,
             invoiceRepository = billingInvoiceRepository,
+            adjustmentRepository = billingAdjustmentRepository,
             billingService = billingService,
             provider = billingProvider,
             config = subscriptionBillingConfig,
@@ -456,6 +459,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             settingsRepository = subscriptionSettingsRepository,
             billingService = billingService,
             invoiceRepository = billingInvoiceRepository,
+            adjustmentRepository = billingAdjustmentRepository,
             notificationRepository = billingNotificationRepository,
             subscriptionRepository = subscriptionRepository,
             auditLogRepository = auditLogRepository,

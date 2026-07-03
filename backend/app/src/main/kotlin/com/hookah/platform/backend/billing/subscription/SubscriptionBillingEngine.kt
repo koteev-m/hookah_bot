@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.billing.subscription
 
+import com.hookah.platform.backend.billing.BillingAdjustmentRepository
 import com.hookah.platform.backend.billing.BillingInvoice
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingNotificationKind
@@ -32,6 +33,7 @@ class SubscriptionBillingEngine(
     private val settingsRepository: PlatformSubscriptionSettingsRepository,
     private val billingService: BillingService,
     private val invoiceRepository: BillingInvoiceRepository,
+    private val adjustmentRepository: BillingAdjustmentRepository = BillingAdjustmentRepository(dataSource),
     private val notificationRepository: BillingNotificationRepository,
     private val subscriptionRepository: SubscriptionRepository,
     private val auditLogRepository: AuditLogRepository,
@@ -68,12 +70,22 @@ class SubscriptionBillingEngine(
                 logger.debug("Subscription billing skipped: venueId={} not configured", venueId)
                 continue
             }
-            val periodStart = SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
+            val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(venueId)
+            val latestCourtesy = adjustmentRepository.findLatestCourtesyAdjustment(venueId)
+            val effectivePaidThrough =
+                listOfNotNull(basePaidThrough, latestCourtesy?.newPaidThrough)
+                    .maxOrNull()
+            val periodStart =
+                if (effectivePaidThrough == null) {
+                    SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
+                } else {
+                    SubscriptionBillingPeriodResolver.resolveNextPeriodStart(effectivePaidThrough)
+                }
             val leadDate = periodStart.minusDays(config.leadDays)
             if (today.isBefore(leadDate)) {
                 continue
             }
-            val periodEnd = periodStart.plusMonths(1).minusDays(1)
+            val periodEnd = SubscriptionBillingPeriodResolver.resolvePeriodEnd(periodStart)
             val effectivePrice =
                 settingsRepository.resolveEffectivePrice(
                     settings = snapshot.settings,

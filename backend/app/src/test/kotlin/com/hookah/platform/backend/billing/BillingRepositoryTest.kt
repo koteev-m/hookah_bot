@@ -92,6 +92,18 @@ class BillingRepositoryTest {
                     assertEquals(1, rs.getInt(1))
                 }
             }
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_NAME = 'billing_adjustments'
+                """.trimIndent(),
+            ).use { statement ->
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    assertEquals(1, rs.getInt(1))
+                }
+            }
         }
     }
 

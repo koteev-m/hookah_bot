@@ -20,8 +20,17 @@ export type OwnerBillingOverviewResponse = {
   settingsPaidStartDate?: string | null
   priceMinor?: number | null
   currency?: string | null
+  basePaidThrough?: string | null
   paidThrough?: string | null
+  nextPaymentDate?: string | null
+  nextInvoicePeriodStart?: string | null
+  nextInvoicePeriodEnd?: string | null
+  courtesyDays?: number | null
+  lastCourtesyDays?: number | null
+  lastCourtesyReason?: string | null
+  lastCourtesyCreatedAt?: string | null
   paymentAvailable: boolean
+  platformCheckoutEnsureAvailable?: boolean
   checkoutEnsureAvailable: boolean
   unavailableReason?: string | null
   checkoutUrl?: string | null

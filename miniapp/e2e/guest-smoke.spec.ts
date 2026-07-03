@@ -243,8 +243,17 @@ type BillingOverviewFixture = {
   settingsPaidStartDate?: string | null
   priceMinor?: number | null
   currency?: string | null
+  basePaidThrough?: string | null
   paidThrough?: string | null
+  nextPaymentDate?: string | null
+  nextInvoicePeriodStart?: string | null
+  nextInvoicePeriodEnd?: string | null
+  courtesyDays?: number | null
+  lastCourtesyDays?: number | null
+  lastCourtesyReason?: string | null
+  lastCourtesyCreatedAt?: string | null
   paymentAvailable: boolean
+  platformCheckoutEnsureAvailable?: boolean
   checkoutEnsureAvailable: boolean
   unavailableReason?: string | null
   checkoutUrl?: string | null
@@ -373,9 +382,9 @@ type TestTelegramWindow = Window & {
   __e2eTelegramOpenedLinks?: string[]
 }
 
-function jsonResponse(data: unknown) {
+function jsonResponse(data: unknown, status = 200) {
   return {
-    status: 200,
+    status,
     contentType: 'application/json',
     body: JSON.stringify(data)
   }
@@ -1947,8 +1956,14 @@ function buildBillingOverview(overrides: Partial<BillingOverviewFixture> = {}): 
     settingsPaidStartDate: '2026-07-01',
     priceMinor: 150000,
     currency: 'RUB',
+    basePaidThrough: null,
     paidThrough: null,
+    nextPaymentDate: null,
+    nextInvoicePeriodStart: '2026-07-01',
+    nextInvoicePeriodEnd: '2026-07-31',
+    courtesyDays: 0,
     paymentAvailable: false,
+    platformCheckoutEnsureAvailable: true,
     checkoutEnsureAvailable: true,
     unavailableReason: 'external_checkout_unavailable',
     checkoutUrl: null,
@@ -1959,9 +1974,12 @@ function buildBillingOverview(overrides: Partial<BillingOverviewFixture> = {}): 
 }
 
 function withCheckout(overview: BillingOverviewFixture): BillingOverviewFixture {
+  const payableInvoice =
+    overview.invoices.find((invoice) => invoice.status === 'OPEN' || invoice.status === 'PAST_DUE') ??
+    overview.invoices[0]
   const invoice = {
-    ...overview.invoices[0],
-    checkoutUrl: 'https://pay.example.test/checkout?invoice_id=77'
+    ...payableInvoice,
+    checkoutUrl: `https://pay.example.test/checkout?invoice_id=${payableInvoice.id}`
   }
   return {
     ...overview,
@@ -1969,8 +1987,31 @@ function withCheckout(overview: BillingOverviewFixture): BillingOverviewFixture 
     unavailableReason: null,
     checkoutUrl: invoice.checkoutUrl,
     payableInvoice: invoice,
-    invoices: [invoice]
+    invoices: overview.invoices.map((item) => (item.id === invoice.id ? invoice : item))
   }
+}
+
+function addDaysIso(dateOnly: string, days: number): string {
+  const [year, month, day] = dateOnly.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  date.setUTCDate(date.getUTCDate() + days)
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0')
+  ].join('-')
+}
+
+function nextPeriodEndIso(periodStart: string): string {
+  const [year, month, day] = periodStart.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  date.setUTCMonth(date.getUTCMonth() + 1)
+  date.setUTCDate(date.getUTCDate() - 1)
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0')
+  ].join('-')
 }
 
 async function mockPlatformBillingApi(
@@ -1982,6 +2023,7 @@ async function mockPlatformBillingApi(
 ) {
   let billingGetCalls = 0
   let checkoutPostCalls = 0
+  let courtesyPostCalls = 0
   let markPaidCalls = 0
   let lastSubscriptionUpdate: Record<string, unknown> | null = null
   let overview = buildBillingOverview(options.overview)
@@ -2077,7 +2119,56 @@ async function mockPlatformBillingApi(
 
   await page.route('**/api/platform/venues/1/billing/checkout', async (route) => {
     checkoutPostCalls += 1
+    const hasPayable = overview.invoices.some((invoice) => invoice.status === 'OPEN' || invoice.status === 'PAST_DUE')
+    if (!hasPayable && overview.nextInvoicePeriodStart && overview.nextInvoicePeriodEnd) {
+      const nextInvoice: BillingInvoiceFixture = {
+        id: 78,
+        periodStart: overview.nextInvoicePeriodStart,
+        periodEnd: overview.nextInvoicePeriodEnd,
+        dueAt: `${overview.nextInvoicePeriodStart}T00:00:00Z`,
+        amountMinor: overview.priceMinor ?? 150000,
+        currency: overview.currency ?? 'RUB',
+        status: 'OPEN',
+        checkoutUrl: null
+      }
+      overview = {
+        ...overview,
+        unavailableReason: 'external_checkout_unavailable',
+        payableInvoice: nextInvoice,
+        invoices: [nextInvoice, ...overview.invoices]
+      }
+    }
     overview = options.manualOnly ? overview : withCheckout(overview)
+    await route.fulfill(jsonResponse(overview))
+  })
+
+  await page.route('**/api/platform/venues/1/billing/courtesy-days', async (route) => {
+    courtesyPostCalls += 1
+    const body = route.request().postDataJSON() as { days?: number; reason?: string }
+    if (!body.reason?.trim()) {
+      await route.fulfill(jsonResponse({ error: { code: 'INVALID_INPUT', message: 'reason must not be blank' } }, 400))
+      return
+    }
+    const previousPaidThrough = overview.paidThrough ?? overview.basePaidThrough
+    if (!previousPaidThrough) {
+      await route.fulfill(
+        jsonResponse({ error: { code: 'INVALID_INPUT', message: 'NO_PAID_PERIOD_TO_EXTEND' } }, 400)
+      )
+      return
+    }
+    const days = body.days ?? 0
+    const newPaidThrough = addDaysIso(previousPaidThrough, days)
+    const nextStart = addDaysIso(newPaidThrough, 1)
+    overview = {
+      ...overview,
+      paidThrough: newPaidThrough,
+      nextPaymentDate: nextStart,
+      nextInvoicePeriodStart: nextStart,
+      nextInvoicePeriodEnd: nextPeriodEndIso(nextStart),
+      courtesyDays: (overview.courtesyDays ?? 0) + days,
+      lastCourtesyDays: days,
+      lastCourtesyReason: body.reason
+    }
     await route.fulfill(jsonResponse(overview))
   })
 
@@ -2087,8 +2178,13 @@ async function mockPlatformBillingApi(
     overview = {
       ...overview,
       subscriptionStatus: 'active',
+      basePaidThrough: paidInvoice.periodEnd,
       paidThrough: paidInvoice.periodEnd,
+      nextPaymentDate: '2026-08-01',
+      nextInvoicePeriodStart: '2026-08-01',
+      nextInvoicePeriodEnd: '2026-08-31',
       paymentAvailable: false,
+      platformCheckoutEnsureAvailable: true,
       unavailableReason: 'already_paid',
       checkoutUrl: null,
       payableInvoice: null,
@@ -2100,6 +2196,7 @@ async function mockPlatformBillingApi(
   return {
     getBillingGetCalls: () => billingGetCalls,
     getCheckoutPostCalls: () => checkoutPostCalls,
+    getCourtesyPostCalls: () => courtesyPostCalls,
     getMarkPaidCalls: () => markPaidCalls,
     getLastSubscriptionUpdate: () => lastSubscriptionUpdate
   }
@@ -4513,8 +4610,24 @@ test('platform billing cockpit shows invoices and uses explicit checkout and mar
   await expect(page.getByText('Счёт #77 · Оплачен')).toBeVisible()
   await expect(page.getByText('Оплачено до 31.07.2026 включительно', { exact: true })).toBeVisible()
   await expect(page.getByText('Следующая оплата с 01.08.2026', { exact: true })).toBeVisible()
+  await expect(page.getByText('Следующий период: 01.08.2026 — 31.08.2026')).toBeVisible()
   await expect(page.getByText('Что сделать дальше: Оплата учтена. Следующая оплата с 01.08.2026.')).toBeVisible()
   expect(api.getMarkPaidCalls()).toBe(1)
+
+  await page.getByLabel('Бесплатные дни').fill('3')
+  await page.getByLabel('Причина').fill('Сбой сервиса')
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: 'Добавить бесплатные дни' }).click()
+  await expect(page.getByText('Оплачено до 03.08.2026 включительно', { exact: true })).toBeVisible()
+  await expect(page.getByText('Следующая оплата с 04.08.2026', { exact: true })).toBeVisible()
+  await expect(page.getByText('Следующий период: 04.08.2026 — 03.09.2026')).toBeVisible()
+  await expect(page.getByText('Бесплатные дни: 3')).toBeVisible()
+  expect(api.getCourtesyPostCalls()).toBe(1)
+
+  await page.getByRole('button', { name: 'Создать счёт за следующий период' }).click()
+  await expect(page.getByText('Счёт: #78 · Открыт')).toBeVisible()
+  await expect(page.getByText(/Период: 04\.08\.2026 — 03\.09\.2026 включительно/)).toBeVisible()
+  expect(api.getCheckoutPostCalls()).toBe(2)
 })
 
 test('platform billing cockpit explains missing setup before checkout', async ({ page }) => {

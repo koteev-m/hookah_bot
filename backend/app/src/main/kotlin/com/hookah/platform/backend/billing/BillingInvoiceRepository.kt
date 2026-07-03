@@ -349,6 +349,74 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findLatestPaidInvoicePeriodEnd(venueId: Long): LocalDate? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT MAX(period_end)
+                        FROM billing_invoices
+                        WHERE venue_id = ?
+                          AND status = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setString(2, InvoiceStatus.PAID.dbValue)
+                        statement.executeQuery().use { rs ->
+                            rs.next()
+                            rs.getDate(1)?.toLocalDate()
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun findOpenOrPastDueInvoiceOverlapping(
+        venueId: Long,
+        periodStart: LocalDate,
+        periodEnd: LocalDate,
+    ): BillingInvoice? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT *
+                        FROM billing_invoices
+                        WHERE venue_id = ?
+                          AND status IN (?, ?)
+                          AND period_start <= ?
+                          AND period_end >= ?
+                        ORDER BY period_start ASC, id ASC
+                        LIMIT 1
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setString(2, InvoiceStatus.OPEN.dbValue)
+                        statement.setString(3, InvoiceStatus.PAST_DUE.dbValue)
+                        statement.setDate(4, java.sql.Date.valueOf(periodEnd))
+                        statement.setDate(5, java.sql.Date.valueOf(periodStart))
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) mapInvoice(rs) else null
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun listInvoicesByVenue(
         venueId: Long,
         status: InvoiceStatus?,

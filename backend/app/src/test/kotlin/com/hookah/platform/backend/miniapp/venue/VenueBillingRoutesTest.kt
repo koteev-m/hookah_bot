@@ -5,18 +5,24 @@ import com.hookah.platform.backend.billing.OwnerBillingOverviewResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.platform.PlatformAddCourtesyDaysRequest
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import java.sql.DriverManager
 import java.sql.Statement
+import java.sql.Timestamp
+import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.Test
@@ -53,6 +59,7 @@ class VenueBillingRoutesTest {
             val staffToken = issueToken(config, staffUserId)
             val invoiceCountBefore = countInvoices(jdbcUrl, venueId)
             val subscriptionRowsBefore = countSubscriptionRows(jdbcUrl, venueId)
+            val adjustmentRowsBefore = countAdjustments(jdbcUrl, venueId)
 
             val ownerResponse =
                 client.get("/api/venue/$venueId/subscription") {
@@ -67,8 +74,10 @@ class VenueBillingRoutesTest {
             assertEquals(venueId, payload.venueId)
             assertEquals(0, invoiceCountBefore)
             assertEquals(0, subscriptionRowsBefore)
+            assertEquals(0, adjustmentRowsBefore)
             assertEquals(invoiceCountBefore, countInvoices(jdbcUrl, venueId))
             assertEquals(subscriptionRowsBefore, countSubscriptionRows(jdbcUrl, venueId))
+            assertEquals(adjustmentRowsBefore, countAdjustments(jdbcUrl, venueId))
 
             val managerResponse =
                 client.get("/api/venue/$venueId/subscription") {
@@ -90,6 +99,42 @@ class VenueBillingRoutesTest {
                 }
             assertEquals(HttpStatusCode.Forbidden, staffCheckoutResponse.status)
             assertApiErrorEnvelope(staffCheckoutResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `venue owner manager and staff cannot add courtesy days`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-billing-courtesy-rbac")
+            val config = buildConfig(jdbcUrl, platformOwnerId = 9999L)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerUserId = 6111L
+            val managerUserId = 6112L
+            val staffUserId = 6113L
+            val venueId = seedVenueWithMembership(jdbcUrl, ownerUserId, "OWNER")
+            addMembership(jdbcUrl, venueId, managerUserId, "MANAGER")
+            addMembership(jdbcUrl, venueId, staffUserId, "STAFF")
+
+            listOf(ownerUserId, managerUserId, staffUserId).forEach { userId ->
+                val response =
+                    client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, userId)}") }
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            json.encodeToString(
+                                PlatformAddCourtesyDaysRequest.serializer(),
+                                PlatformAddCourtesyDaysRequest(days = 1, reason = "Service outage"),
+                            ),
+                        )
+                    }
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            }
+            assertEquals(0, countAdjustments(jdbcUrl, venueId))
         }
 
     @Test
@@ -138,6 +183,98 @@ class VenueBillingRoutesTest {
             assertEquals(1, countInvoices(jdbcUrl, venueId))
             assertEquals(0, countInvoices(jdbcUrl, otherVenueId))
             assertEquals(2, countAuditActions(jdbcUrl, "BILLING_CHECKOUT_ENSURE", ownerUserId))
+        }
+
+    @Test
+    fun `venue owner checkout outside lead window does not create next invoice`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-billing-lead-window")
+            val config = buildConfig(jdbcUrl, genericCheckout = true)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerUserId = 6251L
+            val venueId = seedVenueWithMembership(jdbcUrl, ownerUserId, "OWNER")
+            seedSubscriptionSettings(jdbcUrl, venueId)
+            val today = LocalDate.now()
+            val paidThrough = today.plusDays(30)
+            seedInvoice(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                periodStart = today.minusDays(1),
+                periodEnd = paidThrough,
+                status = "PAID",
+            )
+            val ownerToken = issueToken(config, ownerUserId)
+
+            val response =
+                client.post("/api/venue/$venueId/subscription/checkout") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload =
+                json.decodeFromString(
+                    OwnerBillingOverviewResponse.serializer(),
+                    response.bodyAsText(),
+                )
+            assertFalse(payload.checkoutEnsureAvailable)
+            assertEquals("advance_window_not_open", payload.unavailableReason)
+            assertEquals(paidThrough.toString(), payload.paidThrough)
+            assertEquals(paidThrough.plusDays(1).toString(), payload.nextPaymentDate)
+            assertEquals(1, countInvoices(jdbcUrl, venueId))
+        }
+
+    @Test
+    fun `venue owner sees courtesy adjusted paid through`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-billing-courtesy-visible")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerUserId = 6261L
+            val venueId = seedVenueWithMembership(jdbcUrl, ownerUserId, "OWNER")
+            seedSubscriptionSettings(jdbcUrl, venueId)
+            val basePaidThrough = LocalDate.of(2026, 8, 1)
+            val adjustedPaidThrough = LocalDate.of(2026, 8, 4)
+            seedInvoice(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                periodStart = LocalDate.of(2026, 7, 2),
+                periodEnd = basePaidThrough,
+                status = "PAID",
+            )
+            seedCourtesyAdjustment(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                days = 3,
+                previousPaidThrough = basePaidThrough,
+                newPaidThrough = adjustedPaidThrough,
+                actorUserId = 9999L,
+            )
+            val ownerToken = issueToken(config, ownerUserId)
+
+            val response =
+                client.get("/api/venue/$venueId/subscription") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload =
+                json.decodeFromString(
+                    OwnerBillingOverviewResponse.serializer(),
+                    response.bodyAsText(),
+                )
+            assertEquals(basePaidThrough.toString(), payload.basePaidThrough)
+            assertEquals(adjustedPaidThrough.toString(), payload.paidThrough)
+            assertEquals(adjustedPaidThrough.plusDays(1).toString(), payload.nextPaymentDate)
+            assertEquals(3, payload.courtesyDays)
+            assertEquals(3, payload.lastCourtesyDays)
         }
 
     @Test
@@ -190,6 +327,7 @@ class VenueBillingRoutesTest {
     private fun buildConfig(
         jdbcUrl: String,
         genericCheckout: Boolean = false,
+        platformOwnerId: Long? = null,
     ): MapApplicationConfig {
         val values =
             mutableMapOf(
@@ -201,6 +339,9 @@ class VenueBillingRoutesTest {
                 "venue.staffInviteSecretPepper" to "invite-pepper",
                 "billing.subscription.intervalSeconds" to "0",
             )
+        if (platformOwnerId != null) {
+            values["platform.ownerUserId"] = platformOwnerId.toString()
+        }
         if (genericCheckout) {
             values["billing.provider"] = "generic_hmac"
             values["billing.generic.checkoutBaseUrl"] = "https://pay.example.test/checkout"
@@ -251,6 +392,96 @@ class VenueBillingRoutesTest {
             }
             return venueId
         }
+    }
+
+    private fun seedInvoice(
+        jdbcUrl: String,
+        venueId: Long,
+        periodStart: LocalDate,
+        periodEnd: LocalDate,
+        status: String,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO billing_invoices (
+                    venue_id,
+                    period_start,
+                    period_end,
+                    due_at,
+                    amount_minor,
+                    currency,
+                    description,
+                    provider,
+                    provider_invoice_id,
+                    payment_url,
+                    paid_at,
+                    status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setDate(2, java.sql.Date.valueOf(periodStart))
+                statement.setDate(3, java.sql.Date.valueOf(periodEnd))
+                statement.setTimestamp(4, Timestamp.from(Instant.now().plusSeconds(86400)))
+                statement.setInt(5, 12000)
+                statement.setString(6, "RUB")
+                statement.setString(7, "Subscription")
+                statement.setString(8, "FAKE")
+                statement.setString(9, "fake-invoice-$venueId-$periodStart")
+                statement.setString(10, "fake://invoice/fake-invoice-$venueId-$periodStart")
+                statement.setTimestamp(
+                    11,
+                    if (status == "PAID") Timestamp.from(Instant.now()) else null,
+                )
+                statement.setString(12, status)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert invoice")
+    }
+
+    private fun seedCourtesyAdjustment(
+        jdbcUrl: String,
+        venueId: Long,
+        days: Int,
+        previousPaidThrough: LocalDate,
+        newPaidThrough: LocalDate,
+        actorUserId: Long,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO billing_adjustments (
+                    venue_id,
+                    kind,
+                    days,
+                    reason,
+                    previous_paid_through,
+                    new_paid_through,
+                    actor_user_id
+                )
+                VALUES (?, 'COURTESY_DAYS', ?, 'Service outage', ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setInt(2, days)
+                statement.setDate(3, java.sql.Date.valueOf(previousPaidThrough))
+                statement.setDate(4, java.sql.Date.valueOf(newPaidThrough))
+                statement.setLong(5, actorUserId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert billing adjustment")
     }
 
     private fun addMembership(
@@ -353,6 +584,27 @@ class VenueBillingRoutesTest {
                 """
                 SELECT COUNT(*)
                 FROM venue_subscriptions
+                WHERE venue_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) return rs.getInt(1)
+                }
+            }
+        }
+        return 0
+    }
+
+    private fun countAdjustments(
+        jdbcUrl: String,
+        venueId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM billing_adjustments
                 WHERE venue_id = ?
                 """.trimIndent(),
             ).use { statement ->

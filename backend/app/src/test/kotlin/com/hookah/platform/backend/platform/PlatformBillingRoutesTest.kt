@@ -53,6 +53,7 @@ class PlatformBillingRoutesTest {
             val token = issueToken(config, userId = ownerId)
             val invoiceCountBefore = countInvoices(jdbcUrl, venueId)
             val subscriptionRowsBefore = countSubscriptionRows(jdbcUrl, venueId)
+            val adjustmentRowsBefore = countAdjustments(jdbcUrl, venueId)
 
             val response =
                 client.get("/api/platform/venues/$venueId/billing") {
@@ -72,8 +73,10 @@ class PlatformBillingRoutesTest {
             assertEquals(null, payload.invoices.single().checkoutUrl)
             assertEquals(1, invoiceCountBefore)
             assertEquals(0, subscriptionRowsBefore)
+            assertEquals(0, adjustmentRowsBefore)
             assertEquals(invoiceCountBefore, countInvoices(jdbcUrl, venueId))
             assertEquals(subscriptionRowsBefore, countSubscriptionRows(jdbcUrl, venueId))
+            assertEquals(adjustmentRowsBefore, countAdjustments(jdbcUrl, venueId))
         }
 
     @Test
@@ -220,6 +223,265 @@ class PlatformBillingRoutesTest {
         }
 
     @Test
+    fun `platform owner can create next invoice in advance idempotently from paid through`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-next-invoice")
+            val ownerId = 5162L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val token = issueToken(config, userId = ownerId)
+            seedSubscriptionSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                paidStart = LocalDate.of(2026, 7, 2),
+            )
+            seedInvoice(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                periodStart = LocalDate.of(2026, 7, 2),
+                periodEnd = LocalDate.of(2026, 8, 1),
+                status = "PAID",
+            )
+
+            val overviewResponse =
+                client.get("/api/platform/venues/$venueId/billing") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, overviewResponse.status)
+            val overview =
+                json.decodeFromString(
+                    OwnerBillingOverviewResponse.serializer(),
+                    overviewResponse.bodyAsText(),
+                )
+            assertEquals("2026-08-01", overview.basePaidThrough)
+            assertEquals("2026-08-01", overview.paidThrough)
+            assertEquals("2026-08-02", overview.nextPaymentDate)
+            assertEquals("2026-08-02", overview.nextInvoicePeriodStart)
+            assertEquals("2026-09-01", overview.nextInvoicePeriodEnd)
+            assertTrue(overview.platformCheckoutEnsureAvailable)
+
+            repeat(2) {
+                val ensureResponse =
+                    client.post("/api/platform/venues/$venueId/billing/checkout") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                assertEquals(HttpStatusCode.OK, ensureResponse.status)
+                val ensured =
+                    json.decodeFromString(
+                        OwnerBillingOverviewResponse.serializer(),
+                        ensureResponse.bodyAsText(),
+                    )
+                val invoice = assertNotNull(ensured.payableInvoice)
+                assertEquals("OPEN", invoice.status)
+                assertEquals("2026-08-02", invoice.periodStart)
+                assertEquals("2026-09-01", invoice.periodEnd)
+            }
+
+            assertEquals(2, countInvoices(jdbcUrl, venueId))
+        }
+
+    @Test
+    fun `platform owner adds courtesy days with reason and audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-courtesy")
+            val ownerId = 5163L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val token = issueToken(config, userId = ownerId)
+            seedSubscriptionSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                paidStart = LocalDate.of(2026, 7, 2),
+            )
+            seedInvoice(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                periodStart = LocalDate.of(2026, 7, 2),
+                periodEnd = LocalDate.of(2026, 8, 1),
+                status = "PAID",
+            )
+
+            val courtesyResponse =
+                client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformAddCourtesyDaysRequest.serializer(),
+                            PlatformAddCourtesyDaysRequest(days = 3, reason = "Service outage"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, courtesyResponse.status)
+            val courtesyOverview =
+                json.decodeFromString(
+                    OwnerBillingOverviewResponse.serializer(),
+                    courtesyResponse.bodyAsText(),
+                )
+            assertEquals("2026-08-01", courtesyOverview.basePaidThrough)
+            assertEquals("2026-08-04", courtesyOverview.paidThrough)
+            assertEquals("2026-08-05", courtesyOverview.nextPaymentDate)
+            assertEquals("2026-08-05", courtesyOverview.nextInvoicePeriodStart)
+            assertEquals("2026-09-04", courtesyOverview.nextInvoicePeriodEnd)
+            assertEquals(3, courtesyOverview.courtesyDays)
+            assertEquals(3, courtesyOverview.lastCourtesyDays)
+            assertEquals("Service outage", courtesyOverview.lastCourtesyReason)
+            assertEquals(1, countAdjustments(jdbcUrl, venueId))
+            assertEquals(1, countAuditActions(jdbcUrl, "BILLING_COURTESY_DAYS_ADDED", ownerId))
+            val auditPayload = lastAuditPayload(jdbcUrl, "BILLING_COURTESY_DAYS_ADDED")
+            assertTrue(auditPayload.contains("\"venueId\":$venueId"))
+            assertTrue(auditPayload.contains("\"days\":3"))
+            assertTrue(auditPayload.contains("\"reason\":\"Service outage\""))
+            assertTrue(auditPayload.contains("\"previousPaidThrough\":\"2026-08-01\""))
+            assertTrue(auditPayload.contains("\"newPaidThrough\":\"2026-08-04\""))
+
+            val ensureResponse =
+                client.post("/api/platform/venues/$venueId/billing/checkout") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, ensureResponse.status)
+            val ensured =
+                json.decodeFromString(
+                    OwnerBillingOverviewResponse.serializer(),
+                    ensureResponse.bodyAsText(),
+                )
+            val invoice = assertNotNull(ensured.payableInvoice)
+            assertEquals("2026-08-05", invoice.periodStart)
+            assertEquals("2026-09-04", invoice.periodEnd)
+            assertEquals(2, countInvoices(jdbcUrl, venueId))
+        }
+
+    @Test
+    fun `platform courtesy days require reason and paid period`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-courtesy-validation")
+            val ownerId = 5164L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val paidVenueId = seedVenue(jdbcUrl)
+            val unpaidVenueId = seedVenue(jdbcUrl)
+            val token = issueToken(config, userId = ownerId)
+            seedSubscriptionSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = paidVenueId,
+                paidStart = LocalDate.of(2026, 7, 2),
+            )
+            seedInvoice(
+                jdbcUrl = jdbcUrl,
+                venueId = paidVenueId,
+                periodStart = LocalDate.of(2026, 7, 2),
+                periodEnd = LocalDate.of(2026, 8, 1),
+                status = "PAID",
+            )
+            seedSubscriptionSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = unpaidVenueId,
+                paidStart = LocalDate.of(2026, 7, 2),
+            )
+
+            val missingReasonResponse =
+                client.post("/api/platform/venues/$paidVenueId/billing/courtesy-days") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformAddCourtesyDaysRequest.serializer(),
+                            PlatformAddCourtesyDaysRequest(days = 3, reason = " "),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, missingReasonResponse.status)
+            val missingReasonError = assertApiErrorEnvelope(missingReasonResponse, ApiErrorCodes.INVALID_INPUT)
+            assertTrue(missingReasonError.error.message.contains("reason"))
+            assertEquals(0, countAdjustments(jdbcUrl, paidVenueId))
+
+            val missingPaidThroughResponse =
+                client.post("/api/platform/venues/$unpaidVenueId/billing/courtesy-days") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformAddCourtesyDaysRequest.serializer(),
+                            PlatformAddCourtesyDaysRequest(days = 3, reason = "Service outage"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, missingPaidThroughResponse.status)
+            val missingPaidThroughError =
+                assertApiErrorEnvelope(missingPaidThroughResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals("NO_PAID_PERIOD_TO_EXTEND", missingPaidThroughError.error.message)
+            assertEquals(0, countAdjustments(jdbcUrl, unpaidVenueId))
+        }
+
+    @Test
+    fun `platform courtesy days reject overlap with open future invoice`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-billing-courtesy-overlap")
+            val ownerId = 5165L
+            val config = buildConfig(jdbcUrl, ownerId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val token = issueToken(config, userId = ownerId)
+            seedSubscriptionSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                paidStart = LocalDate.of(2026, 7, 2),
+            )
+            seedInvoice(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                periodStart = LocalDate.of(2026, 7, 2),
+                periodEnd = LocalDate.of(2026, 8, 1),
+                status = "PAID",
+            )
+            seedInvoice(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                periodStart = LocalDate.of(2026, 8, 2),
+                periodEnd = LocalDate.of(2026, 9, 1),
+                status = "OPEN",
+            )
+
+            val response =
+                client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformAddCourtesyDaysRequest.serializer(),
+                            PlatformAddCourtesyDaysRequest(days = 3, reason = "Service outage"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            val error = assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            assertEquals("OPEN_INVOICE_OVERLAPS_COURTESY_PERIOD", error.error.message)
+            assertEquals(0, countAdjustments(jdbcUrl, venueId))
+        }
+
+    @Test
     fun `platform checkout ensure is idempotent and audited`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-billing-checkout-idempotent")
@@ -290,6 +552,20 @@ class PlatformBillingRoutesTest {
                 }
             assertEquals(HttpStatusCode.Forbidden, checkoutResponse.status)
             assertApiErrorEnvelope(checkoutResponse, ApiErrorCodes.FORBIDDEN)
+
+            val courtesyResponse =
+                client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            PlatformAddCourtesyDaysRequest.serializer(),
+                            PlatformAddCourtesyDaysRequest(days = 1, reason = "Service outage"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, courtesyResponse.status)
+            assertApiErrorEnvelope(courtesyResponse, ApiErrorCodes.FORBIDDEN)
 
             val markResponse =
                 client.post("/api/platform/invoices/$invoiceId/mark-paid") {
@@ -469,6 +745,8 @@ class PlatformBillingRoutesTest {
         jdbcUrl: String,
         venueId: Long,
         status: String = "OPEN",
+        periodStart: LocalDate = LocalDate.now(),
+        periodEnd: LocalDate = periodStart.plusDays(30),
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -484,24 +762,28 @@ class PlatformBillingRoutesTest {
                     provider,
                     provider_invoice_id,
                     payment_url,
+                    paid_at,
                     status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
-                val today = LocalDate.now()
                 statement.setLong(1, venueId)
-                statement.setDate(2, java.sql.Date.valueOf(today))
-                statement.setDate(3, java.sql.Date.valueOf(today.plusDays(30)))
+                statement.setDate(2, java.sql.Date.valueOf(periodStart))
+                statement.setDate(3, java.sql.Date.valueOf(periodEnd))
                 statement.setTimestamp(4, Timestamp.from(Instant.now().plusSeconds(86400)))
                 statement.setInt(5, 12000)
                 statement.setString(6, "RUB")
                 statement.setString(7, "Subscription")
                 statement.setString(8, "FAKE")
-                statement.setString(9, "fake-invoice-$venueId")
-                statement.setString(10, "fake://invoice/fake-invoice-$venueId")
-                statement.setString(11, status)
+                statement.setString(9, "fake-invoice-$venueId-$periodStart")
+                statement.setString(10, "fake://invoice/fake-invoice-$venueId-$periodStart")
+                statement.setTimestamp(
+                    11,
+                    if (status == "PAID") Timestamp.from(Instant.now()) else null,
+                )
+                statement.setString(12, status)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) return rs.getLong(1)
@@ -514,6 +796,7 @@ class PlatformBillingRoutesTest {
     private fun seedSubscriptionSettings(
         jdbcUrl: String,
         venueId: Long,
+        paidStart: LocalDate = LocalDate.now().minusDays(1),
     ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -530,7 +813,6 @@ class PlatformBillingRoutesTest {
                 VALUES (?, ?, ?, ?, NULL, 'RUB', ?)
                 """.trimIndent(),
             ).use { statement ->
-                val paidStart = LocalDate.now().minusDays(1)
                 statement.setLong(1, venueId)
                 statement.setDate(2, java.sql.Date.valueOf(paidStart.minusDays(14)))
                 statement.setDate(3, java.sql.Date.valueOf(paidStart))
@@ -616,6 +898,27 @@ class PlatformBillingRoutesTest {
                 """
                 SELECT COUNT(*)
                 FROM venue_subscriptions
+                WHERE venue_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) return rs.getInt(1)
+                }
+            }
+        }
+        return 0
+    }
+
+    private fun countAdjustments(
+        jdbcUrl: String,
+        venueId: Long,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM billing_adjustments
                 WHERE venue_id = ?
                 """.trimIndent(),
             ).use { statement ->

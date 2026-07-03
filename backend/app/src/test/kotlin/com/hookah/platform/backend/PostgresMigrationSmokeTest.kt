@@ -35,6 +35,11 @@ class PostgresMigrationSmokeTest {
                         resultSet.next()
                     }
                 }
+                connection.prepareStatement("SELECT 1 FROM billing_adjustments LIMIT 1").use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        resultSet.next()
+                    }
+                }
             }
         }
 }

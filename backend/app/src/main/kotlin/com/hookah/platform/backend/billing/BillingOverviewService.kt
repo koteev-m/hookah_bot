@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.billing
 
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingConfig
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingPeriodResolver
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
@@ -21,6 +22,7 @@ enum class BillingCheckoutUnavailableReason(val wire: String) {
     MISSING_BILLING_PERIOD("missing_billing_period"),
     FAKE_PROVIDER_MANUAL_ONLY("fake_provider_manual_only"),
     ALREADY_PAID("already_paid"),
+    ADVANCE_WINDOW_NOT_OPEN("advance_window_not_open"),
 }
 
 data class BillingOverview(
@@ -28,11 +30,18 @@ data class BillingOverview(
     val subscriptionState: VenueSubscriptionState?,
     val settings: PlatformSubscriptionSettings,
     val effectivePrice: PlatformEffectivePrice?,
+    val basePaidThrough: LocalDate?,
     val paidThrough: LocalDate?,
+    val nextPaymentDate: LocalDate?,
+    val nextInvoicePeriodStart: LocalDate?,
+    val nextInvoicePeriodEnd: LocalDate?,
+    val courtesyDays: Int,
+    val latestCourtesyAdjustment: BillingAdjustment?,
     val payableInvoice: BillingInvoice?,
     val invoices: List<BillingInvoice>,
     val checkoutUrl: String?,
     val paymentAvailable: Boolean,
+    val platformCheckoutEnsureAvailable: Boolean,
     val checkoutEnsureAvailable: Boolean,
     val unavailableReason: BillingCheckoutUnavailableReason?,
 )
@@ -61,8 +70,17 @@ data class OwnerBillingOverviewResponse(
     val settingsPaidStartDate: String? = null,
     val priceMinor: Int? = null,
     val currency: String? = null,
+    val basePaidThrough: String? = null,
     val paidThrough: String? = null,
+    val nextPaymentDate: String? = null,
+    val nextInvoicePeriodStart: String? = null,
+    val nextInvoicePeriodEnd: String? = null,
+    val courtesyDays: Int = 0,
+    val lastCourtesyDays: Int? = null,
+    val lastCourtesyReason: String? = null,
+    val lastCourtesyCreatedAt: String? = null,
     val paymentAvailable: Boolean,
+    val platformCheckoutEnsureAvailable: Boolean = false,
     val checkoutEnsureAvailable: Boolean,
     val unavailableReason: String? = null,
     val checkoutUrl: String? = null,
@@ -74,6 +92,7 @@ class BillingOverviewService(
     private val subscriptionRepository: SubscriptionRepository,
     private val settingsRepository: PlatformSubscriptionSettingsRepository,
     private val invoiceRepository: BillingInvoiceRepository,
+    private val adjustmentRepository: BillingAdjustmentRepository,
     private val billingService: BillingService,
     private val provider: BillingProvider,
     private val config: SubscriptionBillingConfig,
@@ -81,18 +100,29 @@ class BillingOverviewService(
 ) {
     suspend fun readOverview(venueId: Long): BillingOverview? {
         val snapshot = settingsRepository.getSubscriptionSnapshot(venueId) ?: return null
+        val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(venueId)
+        val latestCourtesyAdjustment = adjustmentRepository.findLatestCourtesyAdjustment(venueId)
         return buildOverview(
             venueId = venueId,
             snapshot = snapshot,
             subscriptionState = subscriptionRepository.findSubscriptionState(venueId),
             invoices = invoiceRepository.listInvoicesByVenue(venueId, status = null, limit = 50, offset = 0),
+            basePaidThrough = basePaidThrough,
+            latestCourtesyAdjustment = latestCourtesyAdjustment,
+            courtesyDays = adjustmentRepository.countCourtesyDays(venueId),
         )
     }
 
-    suspend fun ensureCheckout(venueId: Long): BillingOverview? {
+    suspend fun ensureCheckout(
+        venueId: Long,
+        allowAdvance: Boolean,
+    ): BillingOverview? {
         val snapshot = settingsRepository.getSubscriptionSnapshot(venueId) ?: return null
         subscriptionRepository.ensureRowExistsForVenue(venueId)
-        val period = resolveBillablePeriod(snapshot)
+        val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(venueId)
+        val latestCourtesyAdjustment = adjustmentRepository.findLatestCourtesyAdjustment(venueId)
+        val effectivePaidThrough = effectivePaidThrough(basePaidThrough, latestCourtesyAdjustment)
+        val period = resolveBillablePeriod(snapshot, effectivePaidThrough, enforceLeadWindow = !allowAdvance)
         if (period != null) {
             val existing =
                 invoiceRepository.getInvoiceByPeriod(
@@ -130,57 +160,177 @@ class BillingOverviewService(
         return readOverview(venueId)
     }
 
+    suspend fun addCourtesyDays(
+        venueId: Long,
+        days: Int,
+        reason: String,
+        actorUserId: Long,
+    ): BillingAdjustment {
+        if (days <= 0) {
+            throw InvalidInputException("days must be greater than 0")
+        }
+        val trimmedReason = reason.trim()
+        if (trimmedReason.isEmpty()) {
+            throw InvalidInputException("reason must not be blank")
+        }
+        val snapshot =
+            settingsRepository.getSubscriptionSnapshot(venueId)
+                ?: throw InvalidInputException("venue not found")
+        val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(venueId)
+        val latestCourtesyAdjustment = adjustmentRepository.findLatestCourtesyAdjustment(venueId)
+        val previousPaidThrough =
+            effectivePaidThrough(basePaidThrough, latestCourtesyAdjustment)
+                ?: throw InvalidInputException("NO_PAID_PERIOD_TO_EXTEND")
+        val newPaidThrough = previousPaidThrough.plusDays(days.toLong())
+        val overlapping =
+            invoiceRepository.findOpenOrPastDueInvoiceOverlapping(
+                venueId = venueId,
+                periodStart = previousPaidThrough.plusDays(1),
+                periodEnd = newPaidThrough,
+            )
+        if (overlapping != null) {
+            throw InvalidInputException("OPEN_INVOICE_OVERLAPS_COURTESY_PERIOD")
+        }
+        val adjustment =
+            adjustmentRepository.createCourtesyDaysAdjustment(
+                venueId = venueId,
+                days = days,
+                reason = trimmedReason,
+                previousPaidThrough = previousPaidThrough,
+                newPaidThrough = newPaidThrough,
+                actorUserId = actorUserId,
+            )
+        val today = LocalDate.now(clock.withZone(config.timeZone))
+        if (!newPaidThrough.isBefore(today)) {
+            subscriptionRepository.updateStatusIfCurrentIn(
+                venueId = snapshot.settings.venueId,
+                allowedCurrentStatuses = setOf(SubscriptionStatus.PAST_DUE),
+                nextStatus = SubscriptionStatus.ACTIVE,
+            )
+        }
+        return adjustment
+    }
+
     private fun buildOverview(
         venueId: Long,
         snapshot: PlatformSubscriptionSnapshot,
         subscriptionState: VenueSubscriptionState?,
         invoices: List<BillingInvoice>,
+        basePaidThrough: LocalDate?,
+        latestCourtesyAdjustment: BillingAdjustment?,
+        courtesyDays: Int,
     ): BillingOverview {
         val payableInvoice =
             invoices.firstOrNull {
                 it.status == InvoiceStatus.OPEN || it.status == InvoiceStatus.PAST_DUE
             }
-        val paidThrough =
-            invoices
-                .asSequence()
-                .filter { it.status == InvoiceStatus.PAID }
-                .maxByOrNull { it.periodEnd }
-                ?.periodEnd
-        val currentPeriod = resolveBillablePeriod(snapshot)
-        val currentPeriodPaid =
-            currentPeriod != null &&
-                invoices.any {
-                    it.periodStart == currentPeriod.periodStart &&
-                        it.periodEnd == currentPeriod.periodEnd &&
-                        it.status == InvoiceStatus.PAID
-                }
+        val paidThrough = effectivePaidThrough(basePaidThrough, latestCourtesyAdjustment)
+        val platformPeriod = resolveBillablePeriod(snapshot, paidThrough, enforceLeadWindow = false)
+        val venuePeriod = resolveBillablePeriod(snapshot, paidThrough, enforceLeadWindow = true)
         val checkoutUrl = payableInvoice?.let(::safeOwnerCheckoutUrl)
         val unavailableReason =
             when {
                 checkoutUrl != null -> null
-                currentPeriodPaid -> BillingCheckoutUnavailableReason.ALREADY_PAID
-                currentPeriod == null -> resolveBillablePeriodUnavailableReason(snapshot)
                 payableInvoice != null -> resolveCheckoutUnavailableReason(payableInvoice)
+                platformPeriod == null -> resolveBillablePeriodUnavailableReason(snapshot, paidThrough)
+                venuePeriod == null -> BillingCheckoutUnavailableReason.ADVANCE_WINDOW_NOT_OPEN
                 !provider.ownerCheckoutAvailable() -> providerUnavailableReason()
                 else -> BillingCheckoutUnavailableReason.EXTERNAL_CHECKOUT_UNAVAILABLE
             }
-        val checkoutEnsureAvailable =
-            currentPeriod != null &&
-                !currentPeriodPaid
+        val nextPaymentDate = paidThrough?.plusDays(1)
 
         return BillingOverview(
             venueId = venueId,
             subscriptionState = subscriptionState,
             settings = snapshot.settings,
-            effectivePrice = snapshot.effectivePriceToday,
+            effectivePrice = platformPeriod?.price ?: snapshot.effectivePriceToday,
+            basePaidThrough = basePaidThrough,
             paidThrough = paidThrough,
+            nextPaymentDate = nextPaymentDate,
+            nextInvoicePeriodStart = platformPeriod?.periodStart,
+            nextInvoicePeriodEnd = platformPeriod?.periodEnd,
+            courtesyDays = courtesyDays,
+            latestCourtesyAdjustment = latestCourtesyAdjustment,
             payableInvoice = payableInvoice,
             invoices = invoices,
             checkoutUrl = checkoutUrl,
             paymentAvailable = checkoutUrl != null,
-            checkoutEnsureAvailable = checkoutEnsureAvailable,
+            platformCheckoutEnsureAvailable = platformPeriod != null,
+            checkoutEnsureAvailable = venuePeriod != null,
             unavailableReason = unavailableReason,
         )
+    }
+
+    private fun effectivePaidThrough(
+        basePaidThrough: LocalDate?,
+        latestCourtesyAdjustment: BillingAdjustment?,
+    ): LocalDate? =
+        listOfNotNull(basePaidThrough, latestCourtesyAdjustment?.newPaidThrough)
+            .maxOrNull()
+
+    private fun resolveBillablePeriod(
+        snapshot: PlatformSubscriptionSnapshot,
+        paidThrough: LocalDate?,
+        enforceLeadWindow: Boolean,
+    ): BillablePeriod? {
+        val anchor =
+            SubscriptionBillingPeriodResolver.resolvePaidAnchor(
+                trialEndDate = snapshot.settings.trialEndDate,
+                paidStartDate = snapshot.settings.paidStartDate,
+            ) ?: return null
+        val today = LocalDate.now(clock.withZone(config.timeZone))
+        val periodStart =
+            if (paidThrough == null) {
+                SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
+            } else {
+                SubscriptionBillingPeriodResolver.resolveNextPeriodStart(paidThrough)
+            }
+        val leadDate = periodStart.minusDays(config.leadDays)
+        if (enforceLeadWindow && today.isBefore(leadDate)) {
+            return null
+        }
+        val periodEnd = SubscriptionBillingPeriodResolver.resolvePeriodEnd(periodStart)
+        val price =
+            settingsRepository.resolveEffectivePrice(
+                settings = snapshot.settings,
+                schedule = snapshot.schedule,
+                today = periodStart,
+            ) ?: return null
+        return BillablePeriod(
+            venueId = snapshot.settings.venueId,
+            periodStart = periodStart,
+            periodEnd = periodEnd,
+            price = price,
+        )
+    }
+
+    private fun resolveBillablePeriodUnavailableReason(
+        snapshot: PlatformSubscriptionSnapshot,
+        paidThrough: LocalDate?,
+    ): BillingCheckoutUnavailableReason {
+        val anchor =
+            SubscriptionBillingPeriodResolver.resolvePaidAnchor(
+                trialEndDate = snapshot.settings.trialEndDate,
+                paidStartDate = snapshot.settings.paidStartDate,
+            ) ?: return BillingCheckoutUnavailableReason.MISSING_BILLING_PERIOD
+        val today = LocalDate.now(clock.withZone(config.timeZone))
+        val periodStart =
+            if (paidThrough == null) {
+                SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
+            } else {
+                SubscriptionBillingPeriodResolver.resolveNextPeriodStart(paidThrough)
+            }
+        val price =
+            settingsRepository.resolveEffectivePrice(
+                settings = snapshot.settings,
+                schedule = snapshot.schedule,
+                today = periodStart,
+            )
+        return if (price == null) {
+            BillingCheckoutUnavailableReason.MISSING_PRICE
+        } else {
+            BillingCheckoutUnavailableReason.EXTERNAL_CHECKOUT_UNAVAILABLE
+        }
     }
 
     private suspend fun createManualInvoice(period: BillablePeriod) {
@@ -254,60 +404,6 @@ class BillingOverviewService(
             else -> BillingCheckoutUnavailableReason.PROVIDER_NOT_CONFIGURED
         }
 
-    private fun resolveBillablePeriod(snapshot: PlatformSubscriptionSnapshot): BillablePeriod? {
-        val anchor =
-            SubscriptionBillingPeriodResolver.resolvePaidAnchor(
-                trialEndDate = snapshot.settings.trialEndDate,
-                paidStartDate = snapshot.settings.paidStartDate,
-            ) ?: return null
-        val today = LocalDate.now(clock.withZone(config.timeZone))
-        val periodStart = SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
-        val leadDate = periodStart.minusDays(config.leadDays)
-        if (today.isBefore(leadDate)) {
-            return null
-        }
-        val periodEnd = periodStart.plusMonths(1).minusDays(1)
-        val price =
-            settingsRepository.resolveEffectivePrice(
-                settings = snapshot.settings,
-                schedule = snapshot.schedule,
-                today = periodStart,
-            ) ?: return null
-        return BillablePeriod(
-            venueId = snapshot.settings.venueId,
-            periodStart = periodStart,
-            periodEnd = periodEnd,
-            price = price,
-        )
-    }
-
-    private fun resolveBillablePeriodUnavailableReason(
-        snapshot: PlatformSubscriptionSnapshot,
-    ): BillingCheckoutUnavailableReason {
-        val anchor =
-            SubscriptionBillingPeriodResolver.resolvePaidAnchor(
-                trialEndDate = snapshot.settings.trialEndDate,
-                paidStartDate = snapshot.settings.paidStartDate,
-            ) ?: return BillingCheckoutUnavailableReason.MISSING_BILLING_PERIOD
-        val today = LocalDate.now(clock.withZone(config.timeZone))
-        val periodStart = SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
-        val leadDate = periodStart.minusDays(config.leadDays)
-        if (today.isBefore(leadDate)) {
-            return BillingCheckoutUnavailableReason.MISSING_BILLING_PERIOD
-        }
-        val price =
-            settingsRepository.resolveEffectivePrice(
-                settings = snapshot.settings,
-                schedule = snapshot.schedule,
-                today = periodStart,
-            )
-        return if (price == null) {
-            BillingCheckoutUnavailableReason.MISSING_PRICE
-        } else {
-            BillingCheckoutUnavailableReason.EXTERNAL_CHECKOUT_UNAVAILABLE
-        }
-    }
-
     fun safeOwnerCheckoutUrl(invoice: BillingInvoice): String? {
         if (!provider.ownerCheckoutAvailable()) {
             return null
@@ -342,8 +438,17 @@ fun BillingOverview.toResponse(service: BillingOverviewService): OwnerBillingOve
         settingsPaidStartDate = settings.paidStartDate?.toString(),
         priceMinor = effectivePrice?.priceMinor,
         currency = effectivePrice?.currency ?: settings.currency,
+        basePaidThrough = basePaidThrough?.toString(),
         paidThrough = paidThrough?.toString(),
+        nextPaymentDate = nextPaymentDate?.toString(),
+        nextInvoicePeriodStart = nextInvoicePeriodStart?.toString(),
+        nextInvoicePeriodEnd = nextInvoicePeriodEnd?.toString(),
+        courtesyDays = courtesyDays,
+        lastCourtesyDays = latestCourtesyAdjustment?.days,
+        lastCourtesyReason = latestCourtesyAdjustment?.reason,
+        lastCourtesyCreatedAt = latestCourtesyAdjustment?.createdAt?.toString(),
         paymentAvailable = paymentAvailable,
+        platformCheckoutEnsureAvailable = platformCheckoutEnsureAvailable,
         checkoutEnsureAvailable = checkoutEnsureAvailable,
         unavailableReason = unavailableReason?.wire,
         checkoutUrl = checkoutUrl,

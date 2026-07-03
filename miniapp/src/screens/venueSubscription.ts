@@ -95,9 +95,16 @@ function paymentReasonLabel(reason?: string | null) {
       return 'Онлайн-оплата не подключена. Оплату ведёт платформа вручную.'
     case 'already_paid':
       return 'Текущий период уже оплачен.'
+    case 'advance_window_not_open':
+      return 'Следующий период ещё не в окне оплаты.'
     default:
       return reason ? `Оплата недоступна: ${reason}` : 'Оплата недоступна.'
   }
+}
+
+function formatNextPaymentDate(overview: OwnerBillingOverviewResponse) {
+  if (overview.nextPaymentDate) return formatBillingDate(overview.nextPaymentDate)
+  return formatNextBillingDate(overview.paidThrough)
 }
 
 function safeCheckoutUrl(url?: string | null) {
@@ -111,7 +118,7 @@ function safeCheckoutUrl(url?: string | null) {
 }
 
 function subscriptionNextStep(overview: OwnerBillingOverviewResponse) {
-  if (overview.paidThrough) return `Оплата учтена. Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}.`
+  if (overview.paidThrough) return `Оплата учтена. Следующая оплата с ${formatNextPaymentDate(overview)}.`
   if (!overview.priceMinor) return paymentReasonLabel('missing_price')
   if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) return paymentReasonLabel('missing_billing_period')
   if (!overview.paymentAvailable) return paymentReasonLabel(overview.unavailableReason)
@@ -124,7 +131,7 @@ function paidThroughRows(overview: OwnerBillingOverviewResponse) {
   }
   return [
     el('p', { text: `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно` }),
-    el('p', { text: `Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}` })
+    el('p', { text: `Следующая оплата с ${formatNextPaymentDate(overview)}` })
   ]
 }
 

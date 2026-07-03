@@ -21,6 +21,10 @@ object SubscriptionBillingPeriodResolver {
         return start
     }
 
+    fun resolveNextPeriodStart(paidThrough: LocalDate): LocalDate = paidThrough.plusDays(1)
+
+    fun resolvePeriodEnd(periodStart: LocalDate): LocalDate = periodStart.plusMonths(1).minusDays(1)
+
     fun buildInvoiceDescription(
         periodStart: LocalDate,
         periodEnd: LocalDate,

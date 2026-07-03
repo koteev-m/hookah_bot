@@ -2,6 +2,7 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  platformAddCourtesyDays,
   platformAssignOwner,
   platformChangeVenueStatus,
   platformCreateOwnerInvite,
@@ -75,6 +76,9 @@ type DetailRefs = {
   billingRefreshButton: HTMLButtonElement
   billingEnsureCheckoutButton: HTMLButtonElement
   billingOpenCheckoutButton: HTMLButtonElement
+  billingCourtesyDaysInput: HTMLInputElement
+  billingCourtesyReasonInput: HTMLInputElement
+  billingAddCourtesyButton: HTMLButtonElement
   billingInvoices: HTMLDivElement
 }
 
@@ -240,9 +244,29 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
     className: 'button-small button-secondary',
     text: 'Открыть оплату'
   }) as HTMLButtonElement
+  const billingCourtesyDaysInput = document.createElement('input')
+  billingCourtesyDaysInput.className = 'venue-input'
+  billingCourtesyDaysInput.type = 'number'
+  billingCourtesyDaysInput.min = '1'
+  billingCourtesyDaysInput.step = '1'
+  billingCourtesyDaysInput.placeholder = '3'
+  const billingCourtesyReasonInput = document.createElement('input')
+  billingCourtesyReasonInput.className = 'venue-input'
+  billingCourtesyReasonInput.placeholder = 'Причина'
+  const billingAddCourtesyButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Добавить бесплатные дни'
+  }) as HTMLButtonElement
+  const courtesyForm = el('div', { className: 'venue-form-grid' })
+  append(
+    courtesyForm,
+    labeledField('Бесплатные дни', billingCourtesyDaysInput),
+    labeledField('Причина', billingCourtesyReasonInput),
+    billingAddCourtesyButton
+  )
   const billingInvoices = el('div', { className: 'venue-staff-list' }) as HTMLDivElement
   append(billingActions, billingRefreshButton, billingEnsureCheckoutButton, billingOpenCheckoutButton)
-  append(billingCard, billingTitle, billingSummary, billingActions, billingInvoices)
+  append(billingCard, billingTitle, billingSummary, billingActions, courtesyForm, billingInvoices)
 
   const status = el('p', { className: 'status', text: '' })
 
@@ -294,6 +318,9 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
     billingRefreshButton,
     billingEnsureCheckoutButton,
     billingOpenCheckoutButton,
+    billingCourtesyDaysInput,
+    billingCourtesyReasonInput,
+    billingAddCourtesyButton,
     billingInvoices
   }
 }
@@ -370,6 +397,8 @@ function paymentReasonLabel(reason?: string | null) {
       return 'Онлайн-оплата не подключена. Можно вести оплату вручную.'
     case 'already_paid':
       return 'Текущий период уже оплачен.'
+    case 'advance_window_not_open':
+      return 'Следующий период ещё не в окне оплаты для владельца заведения.'
     default:
       return reason ? `Оплата недоступна: ${reason}` : 'Оплата недоступна.'
   }
@@ -399,10 +428,10 @@ function billingDisplayState(overview: OwnerBillingOverviewResponse) {
   if (isBlockingSubscriptionStatus(overview.subscriptionStatus)) {
     return billingStatusLabel(overview.subscriptionStatus)
   }
-  const invoice = currentPayableInvoice(overview)
   if (overview.paidThrough) {
-    return `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно`
+    return 'Текущий период оплачен'
   }
+  const invoice = currentPayableInvoice(overview)
   if (invoice) {
     return `Платный период настроен, счёт ${invoiceStatusLabel(invoice.status).toLowerCase()}`
   }
@@ -452,7 +481,7 @@ function billingNextStep(overview: OwnerBillingOverviewResponse) {
     return `Счёт создан. ${paymentReasonLabel(overview.unavailableReason)}`
   }
   if (overview.paidThrough) {
-    return `Оплата учтена. Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}.`
+    return `Оплата учтена. Следующая оплата с ${formatNextPaymentDate(overview)}.`
   }
   if (overview.checkoutEnsureAvailable) {
     return 'Настройки заполнены. Создайте счёт для текущего периода.'
@@ -472,10 +501,15 @@ function ensureResultToast(overview: OwnerBillingOverviewResponse) {
 
 function canEnsureCheckout(overview: OwnerBillingOverviewResponse | null) {
   if (!overview) return false
-  if (!overview.checkoutEnsureAvailable) return false
+  if (!(overview.platformCheckoutEnsureAvailable ?? overview.checkoutEnsureAvailable)) return false
   if (!overview.priceMinor) return false
   if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) return false
   return true
+}
+
+function formatNextPaymentDate(overview: OwnerBillingOverviewResponse) {
+  if (overview.nextPaymentDate) return formatBillingDate(overview.nextPaymentDate)
+  return formatNextBillingDate(overview.paidThrough)
 }
 
 function paidThroughRows(overview: OwnerBillingOverviewResponse) {
@@ -484,8 +518,17 @@ function paidThroughRows(overview: OwnerBillingOverviewResponse) {
   }
   return [
     el('p', { text: `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно` }),
-    el('p', { text: `Следующая оплата с ${formatNextBillingDate(overview.paidThrough)}` })
+    el('p', {
+      text: `Следующая оплата с ${formatNextPaymentDate(overview)}`
+    })
   ]
+}
+
+function nextPeriodText(overview: OwnerBillingOverviewResponse) {
+  if (!overview.nextInvoicePeriodStart || !overview.nextInvoicePeriodEnd) return null
+  return `Следующий период: ${formatBillingDate(overview.nextInvoicePeriodStart)} — ${formatBillingDate(
+    overview.nextInvoicePeriodEnd
+  )}`
 }
 
 function safeCheckoutUrl(url?: string | null) {
@@ -571,6 +614,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   let isUpdatingSchedule = false
   let isUpdatingStatus = false
   let isEnsuringCheckout = false
+  let isAddingCourtesyDays = false
   let isMarkingInvoicePaid = false
   let isInviting = false
   let isRevokingOwner = false
@@ -609,6 +653,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.billingRefreshButton.disabled = value
     refs.billingEnsureCheckoutButton.disabled = value || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
     refs.billingOpenCheckoutButton.disabled = value || !safeCheckoutUrl(currentBilling?.checkoutUrl)
+    refs.billingAddCourtesyButton.disabled = value || isAddingCourtesyDays || !currentBilling?.paidThrough
     updateActionButtons()
   }
 
@@ -706,6 +751,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.billingInvoices.replaceChildren()
     refs.billingOpenCheckoutButton.disabled = isLoading || !safeCheckoutUrl(currentBilling?.checkoutUrl)
     refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
+    refs.billingAddCourtesyButton.disabled = isLoading || isAddingCourtesyDays || !currentBilling?.paidThrough
     if (!currentBilling) {
       refs.billingSummary.appendChild(el('p', { className: 'venue-empty', text: 'Биллинг не загружен.' }))
       refs.billingInvoices.appendChild(el('p', { className: 'venue-empty', text: 'Счета не загружены.' }))
@@ -723,11 +769,20 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
         text: `Платный период с: ${formatBillingDate(currentBilling.settingsPaidStartDate ?? currentBilling.paidStartAt)}`
       }),
       ...paidThroughRows(currentBilling),
+      ...(nextPeriodText(currentBilling) ? [el('p', { text: nextPeriodText(currentBilling)! })] : []),
+      ...(currentBilling.courtesyDays ? [el('p', { text: `Бесплатные дни: ${currentBilling.courtesyDays}` })] : []),
+      ...(!currentBilling.paidThrough
+        ? [el('p', { text: 'Бесплатные дни можно добавить после оплаченного периода.' })]
+        : []),
       el('p', { text: invoiceStateLabel(currentBilling) }),
       el('p', { text: onlinePaymentStateLabel(currentBilling) }),
       el('p', { text: `Что сделать дальше: ${billingNextStep(currentBilling)}` })
     )
+    refs.billingEnsureCheckoutButton.textContent = currentBilling.paidThrough
+      ? 'Создать счёт за следующий период'
+      : 'Создать счёт/ссылку'
     refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
+    refs.billingAddCourtesyButton.disabled = isLoading || isAddingCourtesyDays || !currentBilling.paidThrough
 
     if (!currentBilling.invoices.length) {
       refs.billingInvoices.appendChild(el('p', { className: 'venue-empty', text: 'Счетов пока нет.' }))
@@ -1186,6 +1241,38 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     showToast(ensureResultToast(result.data))
   }
 
+  const handleAddCourtesyDays = async () => {
+    if (isAddingCourtesyDays || !currentBilling?.paidThrough) return
+    const days = Number(refs.billingCourtesyDaysInput.value.trim())
+    const reason = refs.billingCourtesyReasonInput.value.trim()
+    if (!Number.isInteger(days) || days <= 0) {
+      showToast('Укажите количество дней больше 0')
+      return
+    }
+    if (!reason) {
+      showToast('Укажите причину')
+      return
+    }
+    const ok = window.confirm(`Добавить ${days} бесплатных дн. для заведения? Причина: ${reason}`)
+    if (!ok) return
+    isAddingCourtesyDays = true
+    refs.billingAddCourtesyButton.disabled = true
+    hideError()
+    const result = await platformAddCourtesyDays(backendUrl, venueId, { days, reason }, deps)
+    isAddingCourtesyDays = false
+    if (disposed) return
+    if (!result.ok) {
+      refs.billingAddCourtesyButton.disabled = isLoading || !currentBilling?.paidThrough
+      showError(result.error, handleAddCourtesyDays)
+      return
+    }
+    currentBilling = result.data
+    refs.billingCourtesyDaysInput.value = ''
+    refs.billingCourtesyReasonInput.value = ''
+    renderBilling()
+    showToast('Бесплатные дни добавлены')
+  }
+
   const handleBillingRefresh = async () => {
     setStatus('Обновление счетов...')
     await loadBilling()
@@ -1250,6 +1337,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   const disposeBillingRefresh = on(refs.billingRefreshButton, 'click', () => void handleBillingRefresh())
   const disposeBillingEnsureCheckout = on(refs.billingEnsureCheckoutButton, 'click', () => void handleEnsureCheckout())
   const disposeBillingOpenCheckout = on(refs.billingOpenCheckoutButton, 'click', () => handleOpenCheckout())
+  const disposeBillingAddCourtesy = on(refs.billingAddCourtesyButton, 'click', () => void handleAddCourtesyDays())
 
   void loadAll()
 
@@ -1274,5 +1362,6 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     disposeBillingRefresh()
     disposeBillingEnsureCheckout()
     disposeBillingOpenCheckout()
+    disposeBillingAddCourtesy()
   }
 }

@@ -7,6 +7,7 @@ import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.billing.InvoiceStatus
 import com.hookah.platform.backend.billing.appendBillingCheckoutEnsureAudit
+import com.hookah.platform.backend.billing.appendBillingCourtesyDaysAudit
 import com.hookah.platform.backend.billing.toResponse
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import io.ktor.server.application.call
@@ -51,6 +52,12 @@ data class PlatformMarkInvoicePaidResponse(
     val alreadyPaid: Boolean,
 )
 
+@Serializable
+data class PlatformAddCourtesyDaysRequest(
+    val days: Int,
+    val reason: String,
+)
+
 fun Route.platformBillingRoutes(
     platformConfig: PlatformConfig,
     billingInvoiceRepository: BillingInvoiceRepository,
@@ -73,13 +80,39 @@ fun Route.platformBillingRoutes(
             val venueId =
                 call.parameters["venueId"]?.toLongOrNull()
                     ?: throw InvalidInputException("venueId must be a number")
-            val overview = billingOverviewService.ensureCheckout(venueId) ?: throw NotFoundException()
+            val overview =
+                billingOverviewService.ensureCheckout(
+                    venueId = venueId,
+                    allowAdvance = true,
+                ) ?: throw NotFoundException()
             appendBillingCheckoutEnsureAudit(
                 auditLogRepository = auditLogRepository,
                 actorUserId = actorUserId,
                 actorType = "platform_owner",
                 overview = overview,
             )
+            call.respond(overview.toResponse(billingOverviewService))
+        }
+
+        post("/{venueId}/billing/courtesy-days") {
+            val actorUserId = call.requirePlatformOwner(platformConfig)
+            val venueId =
+                call.parameters["venueId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("venueId must be a number")
+            val request = call.receive<PlatformAddCourtesyDaysRequest>()
+            val adjustment =
+                billingOverviewService.addCourtesyDays(
+                    venueId = venueId,
+                    days = request.days,
+                    reason = request.reason,
+                    actorUserId = actorUserId,
+                )
+            appendBillingCourtesyDaysAudit(
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                adjustment = adjustment,
+            )
+            val overview = billingOverviewService.readOverview(venueId) ?: throw NotFoundException()
             call.respond(overview.toResponse(billingOverviewService))
         }
 
