@@ -3,6 +3,11 @@ package com.hookah.platform.backend.support
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.TooManyRequestsException
+import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
+import com.hookah.platform.backend.miniapp.guest.GuestRateLimitKey
+import com.hookah.platform.backend.miniapp.guest.GuestRateLimitPolicy
+import com.hookah.platform.backend.miniapp.guest.RateLimiter
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
@@ -108,6 +113,11 @@ data class SupportThreadCreateRequest(
 )
 
 @Serializable
+data class VenueChatCreateRequest(
+    val venueId: Long? = null,
+)
+
+@Serializable
 data class SupportMessageCreateResponse(
     val thread: SupportThreadDto,
     val message: SupportMessageDto,
@@ -140,17 +150,61 @@ fun Route.guestSupportRoutes(
     tableSessionConfig: TableSessionConfig,
     guestBookingRepository: GuestBookingRepository,
     auditLogRepository: AuditLogRepository? = null,
+    guestRateLimitConfig: GuestRateLimitConfig? = null,
+    rateLimiter: RateLimiter? = null,
 ) {
+    route("/support/venue-chats") {
+        post {
+            val userId = call.requireUserId()
+            val request = call.receive<VenueChatCreateRequest>()
+            val venueId =
+                request.venueId?.takeIf { it > 0 }
+                    ?: throw InvalidInputException("venueId is required")
+            val venue = venueRepository.findCatalogVenueByIdForGuest(venueId) ?: throw NotFoundException()
+            val existing =
+                supportThreadRepository.findVenueChat(
+                    venueId = venue.id,
+                    guestUserId = userId,
+                )
+            if (existing != null) {
+                supportThreadRepository.markThreadRead(threadId = existing.thread.id, userId = userId)
+                call.respond(existing.toResponse(unreadCountOverride = 0))
+                return@post
+            }
+            enforceGuestSupportRateLimit(
+                guestRateLimitConfig = guestRateLimitConfig,
+                rateLimiter = rateLimiter,
+                userId = userId,
+                venueId = venue.id,
+                tableSessionId = null,
+                endpoint = "venue-chat-create",
+                selector = { venueChat },
+            )
+            val detail =
+                supportThreadRepository.createOrFindVenueChat(
+                    venueId = venue.id,
+                    guestUserId = userId,
+                    title = "Чат с ${venue.name}",
+                )
+            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            call.respond(detail.toResponse(unreadCountOverride = 0))
+        }
+    }
+
     route("/support/threads") {
         get {
             val userId = call.requireUserId()
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
-            val threadType = parseOptionalThreadType(call.request.queryParameters["threadType"])
+            val threadTypes =
+                parseOptionalThreadTypes(
+                    threadType = call.request.queryParameters["threadType"],
+                    threadTypes = call.request.queryParameters["threadTypes"],
+                )
             val threads =
                 supportThreadRepository.listGuestThreads(
                     userId = userId,
                     filter = filter,
-                    threadType = threadType,
+                    threadTypes = threadTypes,
                 )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
@@ -170,8 +224,18 @@ fun Route.guestSupportRoutes(
                     tableSessionConfig = tableSessionConfig,
                     guestBookingRepository = guestBookingRepository,
                     supportThreadRepository = supportThreadRepository,
+                    venueRepository = venueRepository,
                 )
             val assigneeScope = defaultAssigneeScope(category, verified.venueId)
+            enforceGuestSupportRateLimit(
+                guestRateLimitConfig = guestRateLimitConfig,
+                rateLimiter = rateLimiter,
+                userId = userId,
+                venueId = verified.venueId,
+                tableSessionId = verified.tableSessionId,
+                endpoint = "support-ticket-create",
+                selector = { supportTicket },
+            )
             val detail =
                 supportThreadRepository.createTicket(
                     SupportTicketCreateInput(
@@ -252,6 +316,15 @@ fun Route.guestSupportRoutes(
             val messageText = normalizeSupportMessage(request.message)
             val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
             requireThreadMessageAllowed(detail.thread)
+            enforceGuestSupportRateLimit(
+                guestRateLimitConfig = guestRateLimitConfig,
+                rateLimiter = rateLimiter,
+                userId = userId,
+                venueId = detail.thread.venueId,
+                tableSessionId = detail.thread.tableSessionId,
+                endpoint = "support-message",
+                selector = { supportMessage },
+            )
             val message =
                 supportThreadRepository.addMessage(
                     threadId = detail.thread.id,
@@ -294,14 +367,18 @@ fun Route.venueSupportRoutes(
             requireSupportManage(venueAccessRepository, userId, venueId)
             val bookingId = call.request.queryParameters["bookingId"]?.toLongOrNull()
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
-            val threadType = parseOptionalThreadType(call.request.queryParameters["threadType"])
+            val threadTypes =
+                parseOptionalThreadTypes(
+                    threadType = call.request.queryParameters["threadType"],
+                    threadTypes = call.request.queryParameters["threadTypes"],
+                )
             val threads =
                 supportThreadRepository.listVenueThreads(
                     venueId = venueId,
                     viewerUserId = userId,
                     bookingId = bookingId,
                     filter = filter,
-                    threadType = threadType,
+                    threadTypes = threadTypes,
                 )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
@@ -450,14 +527,25 @@ fun Route.platformSupportRoutes(
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
             val assigneeScope = parseOptionalAssigneeScope(call.request.queryParameters["assigneeScope"])
             val venueId = call.request.queryParameters["venueId"]?.toLongOrNull()
-            val threadType = parseOptionalThreadType(call.request.queryParameters["threadType"])
+            val requestedThreadTypes =
+                parseOptionalThreadTypes(
+                    threadType = call.request.queryParameters["threadType"],
+                    threadTypes = call.request.queryParameters["threadTypes"],
+                )
+            if (requestedThreadTypes != null && requestedThreadTypes.any { it != SupportThreadType.SUPPORT_TICKET }) {
+                call.respond(SupportThreadListResponse(items = emptyList()))
+                return@get
+            }
+            val threadTypes =
+                requestedThreadTypes
+                    ?: setOf(SupportThreadType.SUPPORT_TICKET)
             val threads =
                 supportThreadRepository.listPlatformThreads(
                     viewerUserId = userId,
                     filter = filter,
                     assigneeScope = assigneeScope,
                     venueId = venueId,
-                    threadType = threadType,
+                    threadTypes = threadTypes,
                 )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
@@ -466,6 +554,9 @@ fun Route.platformSupportRoutes(
             val userId = call.requirePlatformOwner(platformConfig)
             val threadId = call.parseThreadId()
             val detail = supportThreadRepository.getPlatformThread(threadId) ?: throw NotFoundException()
+            if (detail.thread.threadType != SupportThreadType.SUPPORT_TICKET) {
+                throw NotFoundException()
+            }
             supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
@@ -476,6 +567,9 @@ fun Route.platformSupportRoutes(
             val request = call.receive<SupportMessageCreateRequest>()
             val messageText = normalizeSupportMessage(request.message)
             val detail = supportThreadRepository.getPlatformThread(threadId) ?: throw NotFoundException()
+            if (detail.thread.threadType != SupportThreadType.SUPPORT_TICKET) {
+                throw NotFoundException()
+            }
             requireThreadMessageAllowed(detail.thread)
             val message =
                 supportThreadRepository.addMessage(
@@ -514,6 +608,9 @@ fun Route.platformSupportRoutes(
             val request = call.receive<SupportAssigneeScopeRequest>()
             val newScope = parseRequiredAssigneeScope(request.assigneeScope)
             val detail = supportThreadRepository.getPlatformThread(threadId) ?: throw NotFoundException()
+            if (detail.thread.threadType != SupportThreadType.SUPPORT_TICKET) {
+                throw NotFoundException()
+            }
             if (newScope == SupportAssigneeScope.VENUE && detail.thread.venueId == null) {
                 throw InvalidInputException("venue-scoped assignment requires venue context")
             }
@@ -536,6 +633,9 @@ fun Route.platformSupportRoutes(
             val request = call.receive<SupportStatusChangeRequest>()
             val newStatus = parseWritableStatus(request.status)
             val detail = supportThreadRepository.getPlatformThread(threadId) ?: throw NotFoundException()
+            if (detail.thread.threadType != SupportThreadType.SUPPORT_TICKET) {
+                throw NotFoundException()
+            }
             changeThreadStatus(
                 supportThreadRepository = supportThreadRepository,
                 auditLogRepository = auditLogRepository,
@@ -560,6 +660,36 @@ private data class VerifiedTicketContext(
     val bookingDisplayNumber: Int? = null,
 )
 
+private fun enforceGuestSupportRateLimit(
+    guestRateLimitConfig: GuestRateLimitConfig?,
+    rateLimiter: RateLimiter?,
+    userId: Long,
+    venueId: Long?,
+    tableSessionId: Long?,
+    endpoint: String,
+    selector: GuestRateLimitConfig.() -> GuestRateLimitPolicy,
+) {
+    if (guestRateLimitConfig == null || rateLimiter == null) {
+        return
+    }
+    val policy = guestRateLimitConfig.selector()
+    val allowed =
+        rateLimiter.tryAcquire(
+            key =
+                GuestRateLimitKey(
+                    venueId = venueId ?: 0L,
+                    userId = userId,
+                    tableSessionId = tableSessionId ?: 0L,
+                    endpoint = endpoint,
+                ),
+            limit = policy.maxRequests,
+            window = policy.window,
+        )
+    if (!allowed) {
+        throw TooManyRequestsException(message = "Too many requests. Please try again later.")
+    }
+}
+
 private suspend fun verifyGuestTicketContext(
     request: SupportThreadCreateRequest,
     userId: Long,
@@ -569,6 +699,7 @@ private suspend fun verifyGuestTicketContext(
     tableSessionConfig: TableSessionConfig,
     guestBookingRepository: GuestBookingRepository,
     supportThreadRepository: SupportThreadRepository,
+    venueRepository: VenueRepository,
 ): VerifiedTicketContext {
     var venueId: Long? = null
     var tableId: Long? = null
@@ -590,6 +721,17 @@ private suspend fun verifyGuestTicketContext(
         }
     }
 
+    if (request.venueId != null) {
+        val requestedVenueId =
+            request.venueId.takeIf { it > 0 }
+                ?: throw InvalidInputException("venueId must be a positive number")
+        val venue = venueRepository.findCatalogVenueByIdForGuest(requestedVenueId) ?: throw NotFoundException()
+        if (venueId != null && venueId != venue.id) {
+            throw InvalidInputException("venue does not match verified context")
+        }
+        venueId = venue.id
+    }
+
     var bookingId: Long? = null
     var bookingDisplayNumber: Int? = null
     if (request.bookingId != null) {
@@ -600,8 +742,8 @@ private suspend fun verifyGuestTicketContext(
         venueId = booking.venueId
         bookingId = booking.id
         bookingDisplayNumber = booking.displayNumber
-    } else if (category == SupportThreadCategory.BOOKING) {
-        throw InvalidInputException("bookingId is required for booking support")
+    } else if (category == SupportThreadCategory.BOOKING && venueId == null) {
+        throw InvalidInputException("Выберите бронь или заведение для обращения по брони.")
     }
 
     var orderId: Long? = null
@@ -619,6 +761,10 @@ private suspend fun verifyGuestTicketContext(
         tableSessionId = tableSessionId ?: order.tableSessionId
         orderId = order.orderId
         orderDisplayLabel = order.displayLabel
+    }
+
+    if (category == SupportThreadCategory.ORDER_SERVICE && venueId == null) {
+        throw InvalidInputException("Выберите заведение для обращения по заказу или обслуживанию.")
     }
 
     return VerifiedTicketContext(
@@ -730,7 +876,8 @@ fun buildSupportReplyMessageForGuest(
     authorLabel: String,
 ): String {
     val venueSuffix = thread.venueName?.let { " в «$it»" }.orEmpty()
-    return "Сообщение от $authorLabel по обращению «${thread.formatSupportThreadLabel()}»$venueSuffix:\n\n$messageText"
+    val subject = if (thread.threadType == SupportThreadType.VENUE_CHAT) "по чату" else "по обращению"
+    return "Сообщение от $authorLabel $subject «${thread.formatSupportThreadLabel()}»$venueSuffix:\n\n$messageText"
 }
 
 fun buildVenueSupportMessageForGuest(
@@ -964,8 +1111,25 @@ private fun parseOptionalAssigneeScope(value: String?): SupportAssigneeScope? =
 private fun parseOptionalThreadType(value: String?): SupportThreadType? =
     value?.trim()?.takeIf { it.isNotBlank() }?.uppercase()?.let { raw ->
         runCatching { SupportThreadType.valueOf(raw) }.getOrNull()
-            ?: throw InvalidInputException("threadType must be BOOKING_THREAD or SUPPORT_TICKET")
+            ?: throw InvalidInputException("threadType must be BOOKING_THREAD, VENUE_CHAT or SUPPORT_TICKET")
     }
+
+private fun parseOptionalThreadTypes(
+    threadType: String?,
+    threadTypes: String?,
+): Set<SupportThreadType>? {
+    val values =
+        buildList {
+            threadType?.takeIf { it.isNotBlank() }?.let { add(it) }
+            threadTypes
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                ?.let { addAll(it) }
+        }
+    if (values.isEmpty()) return null
+    return values.map { parseOptionalThreadType(it) ?: throw InvalidInputException("threadType is required") }.toSet()
+}
 
 private fun parseRequiredAssigneeScope(value: String?): SupportAssigneeScope =
     value?.trim()?.uppercase()?.let { raw ->

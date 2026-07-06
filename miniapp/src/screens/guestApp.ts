@@ -47,6 +47,7 @@ type GuestTableMode = 'no-table' | 'active-table' | 'ended-table'
 type Route = {
   name: RouteName
   venueId: number | null
+  threadId: number | null
   openStaffCall: boolean
 }
 
@@ -83,13 +84,13 @@ function resolveRoute(): Route {
   const rawHash = window.location.hash.replace(/^#/, '')
   const cleaned = rawHash.startsWith('/') ? rawHash.slice(1) : rawHash
   if (!cleaned) {
-    return { name: 'catalog', venueId: null, openStaffCall: false }
+    return { name: 'catalog', venueId: null, threadId: null, openStaffCall: false }
   }
   const [pathPart, queryPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
   if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'messages', 'support'].includes(route)) {
-    return { name: 'catalog', venueId: null, openStaffCall: false }
+    return { name: 'catalog', venueId: null, threadId: null, openStaffCall: false }
   }
   if (route === 'venue') {
     const venueIdFromPath = parsePositiveInt(segments[1])
@@ -98,18 +99,20 @@ function resolveRoute(): Route {
     return {
       name: 'venue',
       venueId: venueIdFromPath ?? venueIdFromQuery ?? null,
+      threadId: null,
       openStaffCall: params.get('staff') === '1'
     }
   }
-  if (route === 'bookings') {
+  if (route === 'bookings' || route === 'messages' || route === 'support') {
     const params = new URLSearchParams(queryPart ?? '')
     return {
-      name: 'bookings',
+      name: route,
       venueId: parsePositiveInt(params.get('venueId')) ?? parsePositiveInt(params.get('venue_id')) ?? null,
+      threadId: parsePositiveInt(params.get('threadId')) ?? parsePositiveInt(params.get('thread_id')) ?? null,
       openStaffCall: false
     }
   }
-  return { name: route, venueId: null, openStaffCall: false }
+  return { name: route, venueId: null, threadId: null, openStaffCall: false }
 }
 
 function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | null {
@@ -236,6 +239,9 @@ function renderRouteContent(
         openStaffCall: route.openStaffCall,
         onBookVenue: (venueId) => {
           window.location.hash = `#/bookings?venueId=${venueId}`
+        },
+        onAskVenue: (venueId) => {
+          window.location.hash = `#/messages?venueId=${venueId}`
         }
       })
     case 'cart':
@@ -276,7 +282,9 @@ function renderRouteContent(
         tableSnapshot,
         onBack: onNavigateSupportBack,
         onOpenVenueStaffCall,
-        onOpenBot: onOpenSupportBot
+        onOpenBot: onOpenSupportBot,
+        initialThreadId: route.threadId,
+        createVenueChatVenueId: route.venueId
       })
     case 'support':
       return renderGuestSupportThreadsScreen({
@@ -288,7 +296,9 @@ function renderRouteContent(
         tableSnapshot,
         onBack: onNavigateSupportBack,
         onOpenVenueStaffCall,
-        onOpenBot: onOpenSupportBot
+        onOpenBot: onOpenSupportBot,
+        initialThreadId: route.threadId,
+        prefillSupportVenueId: route.venueId
       })
     case 'catalog':
     default:
@@ -299,6 +309,9 @@ function renderRouteContent(
         onOpenVenue,
         onBookVenue: (venueId) => {
           window.location.hash = `#/bookings?venueId=${venueId}`
+        },
+        onAskVenue: (venueId) => {
+          window.location.hash = `#/messages?venueId=${venueId}`
         }
       })
   }
@@ -369,9 +382,9 @@ function formatActionLabel(
     case 'account':
       return variant === 'nav' ? 'Профиль' : '👤 Профиль'
     case 'messages':
-      return mode === 'active-table' ? '💬 Связаться с заведением' : 'Сообщения'
+      return 'Чаты'
     case 'support':
-      return mode === 'active-table' ? '🆘 Сообщить о проблеме' : 'Обращения'
+      return 'Помощь'
     case 'refresh':
       return '🔄 Обновить'
     default:
@@ -843,6 +856,10 @@ export function mountGuestApp(options: GuestAppOptions) {
         navigateSecondaryGuestScreen('#/messages')
         return
       case 'support':
+        if (currentRoute.name === 'venue' && currentRoute.venueId && resolveTableMode(tableSnapshot) !== 'active-table') {
+          navigateSecondaryGuestScreen(`#/support?venueId=${currentRoute.venueId}`)
+          return
+        }
         navigateSecondaryGuestScreen('#/support')
         return
       case 'refresh':

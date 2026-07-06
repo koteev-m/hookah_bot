@@ -4674,8 +4674,8 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Сообщения' }).click()
-  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await page.getByRole('button', { name: 'Чаты' }).click()
+  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Активные' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Завершённые' })).toBeVisible()
   const guestThreadCard = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })
@@ -4686,7 +4686,7 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
   await expect(guestThreadCard.locator('.menu-item-badge')).toHaveCount(0)
   await expect(page.locator('.venue-messages-detail').getByText(/На 19:00 все столы заняты/)).toBeVisible()
   await page.getByRole('button', { name: 'Завершённые' }).click()
-  await expect(page.getByText('Сообщений пока нет.')).toBeVisible()
+  await expect(page.getByText('Пока нет чатов. Вы можете задать вопрос заведению из каталога или карточки заведения.')).toBeVisible()
   await page.getByRole('button', { name: 'Активные' }).click()
   await expect(guestThreadCard).toBeVisible()
   await page.getByRole('button', { name: 'Завершить переписку' }).click()
@@ -4694,7 +4694,7 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
   await expect(page.getByRole('button', { name: 'Возобновить переписку' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Завершённые' })).toHaveAttribute('data-active', 'true')
   await page.getByRole('button', { name: 'Активные' }).click()
-  await expect(page.getByText('Сообщений пока нет.')).toBeVisible()
+  await expect(page.getByText('Пока нет чатов. Вы можете задать вопрос заведению из каталога или карточки заведения.')).toBeVisible()
   await page.getByRole('button', { name: 'Завершённые' }).click()
   await expect(guestThreadCard).toBeVisible()
   await page.getByRole('button', { name: 'Возобновить переписку' }).click()
@@ -4706,6 +4706,70 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
     page.locator('.venue-messages-detail .status').filter({ hasText: 'Сообщение отправлено заведению.' })
   ).toBeVisible()
   expect(messages.map((message) => message.text)).toContain('Да, 20:30 подходит.')
+})
+
+test('guest opens venue chat from catalog and venue card question actions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: null })
+
+  const thread: SupportThreadFixture = {
+    threadId: 4150,
+    venueId: 1,
+    venueName: 'Микс',
+    threadType: 'VENUE_CHAT',
+    assigneeScope: 'VENUE',
+    category: 'OTHER',
+    contextLabel: 'Чат с Микс',
+    status: 'IN_PROGRESS',
+    statusLabel: 'В работе',
+    title: 'Чат с Микс',
+    lastMessagePreview: null,
+    lastMessageAt: null,
+    unreadCount: 0,
+    createdAt: '2030-01-10T18:00:00Z',
+    updatedAt: '2030-01-10T18:00:00Z'
+  }
+  let createCalls = 0
+
+  await page.route('**/api/guest/support/venue-chats', async (route) => {
+    createCalls += 1
+    await route.fulfill(jsonResponse({ thread, messages: [] }))
+  })
+  await page.route('**/api/guest/support/threads**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)$/)
+    if (!threadMatch && request.method() === 'GET') {
+      const threadTypes = url.searchParams.get('threadTypes') ?? url.searchParams.get('threadType') ?? ''
+      await route.fulfill(jsonResponse({ items: threadTypes.includes('VENUE_CHAT') ? [thread] : [] }))
+      return
+    }
+    if (threadMatch && request.method() === 'GET' && Number(threadMatch[1]) === thread.threadId) {
+      await route.fulfill(jsonResponse({ thread, messages: [] }))
+      return
+    }
+    await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Помощь' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Задать вопрос' }).click()
+  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Чат с Микс' })).toBeVisible()
+  expect(createCalls).toBe(1)
+
+  await page.evaluate(() => {
+    window.location.hash = '#/catalog'
+  })
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect(page.getByRole('button', { name: '💬 Задать вопрос' })).toBeVisible()
+  await page.getByRole('button', { name: '💬 Задать вопрос' }).click()
+  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Чат с Микс' })).toBeVisible()
+  expect(createCalls).toBe(2)
 })
 
 test('guest support tickets stay list-first and open detail only by choice or creation', async ({ page }) => {
@@ -4753,8 +4817,9 @@ test('guest support tickets stay list-first and open detail only by choice or cr
     const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)(?:\/messages)?$/)
     if (!threadMatch && request.method() === 'GET') {
       const threadType = url.searchParams.get('threadType')
+      const threadTypes = url.searchParams.get('threadTypes') ?? threadType ?? ''
       const items =
-        threadType === 'BOOKING_THREAD'
+        threadTypes.includes('BOOKING_THREAD') || threadTypes.includes('VENUE_CHAT')
           ? []
           : threads.filter((thread) => ['OPEN', 'NEW', 'IN_PROGRESS', 'WAITING_USER'].includes(thread.status))
       await route.fulfill(jsonResponse({ items }))
@@ -4814,13 +4879,13 @@ test('guest support tickets stay list-first and open detail only by choice or cr
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: '💬 Связаться с заведением' })).toBeVisible()
-  await page.getByRole('button', { name: '💬 Связаться с заведением' }).click()
-  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
-  await expect(page.getByText('Здесь ваши чаты с заведениями: по броням, заказам и другим вопросам. Обращения по проблемам находятся отдельно.')).toBeVisible()
+  await expect(page.getByRole('button', { name: '💬 Связаться с заведением' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Чаты' }).click()
+  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByText('Здесь все ваши чаты с заведениями: вопросы, брони и другие переписки. Проблемы и жалобы находятся в разделе Помощь.')).toBeVisible()
 
-  await page.getByRole('button', { name: '🆘 Сообщить о проблеме' }).click()
-  await expect(page.getByRole('heading', { name: 'Обращения' })).toBeVisible()
+  await page.getByRole('button', { name: 'Помощь' }).click()
+  await expect(page.getByRole('heading', { name: 'Мои обращения' })).toBeVisible()
   const existingTicket = page.locator('.venue-message-thread-card').filter({ hasText: 'Нужна помощь по заказу' })
   await expect(existingTicket).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).toHaveText('')
@@ -4893,7 +4958,8 @@ test('venue manager support queue is list-first and transfers ticket with clear 
     const url = new URL(request.url())
     const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)(?:\/(escalate|messages))?$/)
     if (!threadMatch && request.method() === 'GET') {
-      const items = url.searchParams.get('threadType') === 'SUPPORT_TICKET' ? [thread] : []
+      const threadTypes = url.searchParams.get('threadTypes') ?? url.searchParams.get('threadType') ?? ''
+      const items = threadTypes.includes('SUPPORT_TICKET') ? [thread] : []
       await route.fulfill(jsonResponse({ items }))
       return
     }

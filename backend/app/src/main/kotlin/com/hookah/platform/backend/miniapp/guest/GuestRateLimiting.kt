@@ -127,6 +127,9 @@ data class GuestRateLimitPolicy(
 data class GuestRateLimitConfig(
     val staffCall: GuestRateLimitPolicy,
     val addBatch: GuestRateLimitPolicy,
+    val supportTicket: GuestRateLimitPolicy = GuestRateLimitPolicy(3, Duration.ofMinutes(1)),
+    val venueChat: GuestRateLimitPolicy = GuestRateLimitPolicy(3, Duration.ofMinutes(5)),
+    val supportMessage: GuestRateLimitPolicy = GuestRateLimitPolicy(10, Duration.ofMinutes(1)),
 ) {
     companion object {
         fun from(config: ApplicationConfig): GuestRateLimitConfig =
@@ -142,6 +145,24 @@ data class GuestRateLimitConfig(
                         "guest.rateLimit.addBatch",
                         defaultMaxRequests = 5,
                         defaultWindowSeconds = 10,
+                    ),
+                supportTicket =
+                    config.readPolicy(
+                        "guest.rateLimit.supportTicket",
+                        defaultMaxRequests = 3,
+                        defaultWindowSeconds = 60,
+                    ),
+                venueChat =
+                    config.readPolicy(
+                        "guest.rateLimit.venueChat",
+                        defaultMaxRequests = 3,
+                        defaultWindowSeconds = 300,
+                    ),
+                supportMessage =
+                    config.readPolicy(
+                        "guest.rateLimit.supportMessage",
+                        defaultMaxRequests = 10,
+                        defaultWindowSeconds = 60,
                     ),
             )
 

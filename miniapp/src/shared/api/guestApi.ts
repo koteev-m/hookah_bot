@@ -47,7 +47,8 @@ import type {
   SupportThreadCreateResponse,
   SupportThreadFilter,
   SupportThreadType,
-  SupportThreadListResponse
+  SupportThreadListResponse,
+  VenueChatCreateRequest
 } from './supportDtos'
 import { ApiErrorCodes, type ApiResult } from './types'
 import { normalizeTableToken } from '../validation/tableToken'
@@ -265,7 +266,7 @@ export async function guestGetSupportThreads(
   backendUrl: string,
   deps: RequestDependencies,
   signal?: AbortSignal,
-  options?: { filter?: SupportThreadFilter; threadType?: SupportThreadType }
+  options?: { filter?: SupportThreadFilter; threadType?: SupportThreadType; threadTypes?: SupportThreadType[] }
 ): Promise<ApiResult<SupportThreadListResponse>> {
   const search = new URLSearchParams()
   if (options?.filter) {
@@ -274,8 +275,33 @@ export async function guestGetSupportThreads(
   if (options?.threadType) {
     search.set('threadType', options.threadType)
   }
+  if (options?.threadTypes?.length) {
+    search.set('threadTypes', options.threadTypes.join(','))
+  }
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadListResponse>(backendUrl, `/api/guest/support/threads${suffix}`, { signal }, deps)
+}
+
+export async function guestCreateVenueChat(
+  backendUrl: string,
+  payload: VenueChatCreateRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportThreadDetailResponse>> {
+  if (!Number.isFinite(payload.venueId) || !Number.isInteger(payload.venueId) || payload.venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    '/api/guest/support/venue-chats',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
 }
 
 export async function guestGetSupportThread(

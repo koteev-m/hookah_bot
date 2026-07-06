@@ -14,6 +14,7 @@ type CatalogScreenOptions = {
   isDebug: boolean
   onOpenVenue: (venueId: number) => void
   onBookVenue?: (venueId: number) => void
+  onAskVenue?: (venueId: number) => void
 }
 
 type CatalogRefs = {
@@ -95,6 +96,7 @@ function renderCatalogList(
   venues: CatalogVenueDto[],
   onOpenVenue: (venueId: number) => void,
   onBookVenue: ((venueId: number) => void) | undefined,
+  onAskVenue: ((venueId: number) => void) | undefined,
   refs: CatalogRefs,
   emptyMessage: string
 ) {
@@ -136,6 +138,13 @@ function renderCatalogList(
     button.textContent = 'Открыть карточку'
     button.addEventListener('click', () => onOpenVenue(venue.id))
     actions.appendChild(button)
+    if (onAskVenue) {
+      const askButton = document.createElement('button')
+      askButton.className = 'button-small button-secondary'
+      askButton.textContent = 'Задать вопрос'
+      askButton.addEventListener('click', () => onAskVenue(venue.id))
+      actions.appendChild(askButton)
+    }
     if (onBookVenue) {
       const bookingButton = document.createElement('button')
       bookingButton.className = 'button-small button-secondary'
@@ -151,7 +160,7 @@ function renderCatalogList(
 }
 
 export function renderCatalogScreen(options: CatalogScreenOptions) {
-  const { root, backendUrl, isDebug, onOpenVenue, onBookVenue } = options
+  const { root, backendUrl, isDebug, onOpenVenue, onBookVenue, onAskVenue } = options
   if (!root) return () => undefined
 
   const refs = buildCatalogDom(root)
@@ -205,7 +214,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     const emptyMessage = venues.length
       ? 'Ничего не найдено по заданному фильтру.'
       : 'Пока нет доступных заведений.'
-    renderCatalogList(filtered, onOpenVenue, onBookVenue, refs, emptyMessage)
+    renderCatalogList(filtered, onOpenVenue, onBookVenue, onAskVenue, refs, emptyMessage)
   }
 
   async function loadCatalog() {

@@ -58,6 +58,7 @@ enum class SupportMessageSource {
 enum class SupportThreadType {
     BOOKING_THREAD,
     SUPPORT_TICKET,
+    VENUE_CHAT,
 }
 
 enum class SupportAssigneeScope {
@@ -235,6 +236,48 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         }
     }
 
+    open suspend fun createOrFindVenueChat(
+        venueId: Long,
+        guestUserId: Long,
+        title: String,
+    ): SupportThreadDetailRecord {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val thread =
+                    selectVenueChat(
+                        connection = connection,
+                        venueId = venueId,
+                        guestUserId = guestUserId,
+                    ) ?: insertVenueChatThread(
+                        connection = connection,
+                        venueId = venueId,
+                        guestUserId = guestUserId,
+                        title = title,
+                    )
+                SupportThreadDetailRecord(thread = thread, messages = listMessages(connection, thread.id))
+            }
+        }
+    }
+
+    open suspend fun findVenueChat(
+        venueId: Long,
+        guestUserId: Long,
+    ): SupportThreadDetailRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                selectVenueChat(
+                    connection = connection,
+                    venueId = venueId,
+                    guestUserId = guestUserId,
+                )?.let { thread ->
+                    SupportThreadDetailRecord(thread = thread, messages = listMessages(connection, thread.id))
+                }
+            }
+        }
+    }
+
     open suspend fun findOrderContextForGuest(
         orderId: Long,
         userId: Long,
@@ -314,12 +357,13 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         bookingId: Long? = null,
         filter: SupportInboxFilter? = null,
         threadType: SupportThreadType? = null,
+        threadTypes: Set<SupportThreadType>? = threadType?.let { setOf(it) },
     ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val bookingFilter = if (bookingId == null) "" else "AND st.booking_id = ?"
-                val typeFilter = if (threadType == null) "" else "AND st.thread_type = ?"
+                val typeFilter = threadTypesFilterCondition(threadTypes)
                 val statusFilter = statusFilterCondition(filter)
                 connection.prepareStatement(
                     """
@@ -339,8 +383,8 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                     if (bookingId != null) {
                         statement.setLong(index++, bookingId)
                     }
-                    if (threadType != null) {
-                        statement.setString(index, threadType.name)
+                    threadTypes.orEmpty().forEach { type ->
+                        statement.setString(index++, type.name)
                     }
                     statement.executeQuery().use { rs ->
                         buildList {
@@ -360,6 +404,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         assigneeScope: SupportAssigneeScope? = null,
         venueId: Long? = null,
         threadType: SupportThreadType? = null,
+        threadTypes: Set<SupportThreadType>? = threadType?.let { setOf(it) },
     ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -367,7 +412,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                 val statusFilter = statusFilterCondition(filter)
                 val scopeFilter = if (assigneeScope == null) "" else "AND st.assignee_scope = ?"
                 val venueFilter = if (venueId == null) "" else "AND st.venue_id = ?"
-                val typeFilter = if (threadType == null) "" else "AND st.thread_type = ?"
+                val typeFilter = threadTypesFilterCondition(threadTypes)
                 connection.prepareStatement(
                     """
                     ${threadSelect(unreadCountExpression())}
@@ -389,8 +434,8 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                     if (venueId != null) {
                         statement.setLong(index++, venueId)
                     }
-                    if (threadType != null) {
-                        statement.setString(index, threadType.name)
+                    threadTypes.orEmpty().forEach { type ->
+                        statement.setString(index++, type.name)
                     }
                     statement.executeQuery().use { rs ->
                         buildList {
@@ -425,12 +470,13 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         userId: Long,
         filter: SupportInboxFilter?,
         threadType: SupportThreadType? = null,
+        threadTypes: Set<SupportThreadType>? = threadType?.let { setOf(it) },
     ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val statusFilter = statusFilterCondition(filter)
-                val typeFilter = if (threadType == null) "" else "AND st.thread_type = ?"
+                val typeFilter = threadTypesFilterCondition(threadTypes)
                 connection.prepareStatement(
                     """
                     ${threadSelect(unreadCountExpression())}
@@ -445,8 +491,8 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                     statement.setLong(index++, userId)
                     statement.setLong(index++, userId)
                     statement.setLong(index++, userId)
-                    if (threadType != null) {
-                        statement.setString(index, threadType.name)
+                    threadTypes.orEmpty().forEach { type ->
+                        statement.setString(index++, type.name)
                     }
                     statement.executeQuery().use { rs ->
                         buildList {
@@ -600,6 +646,27 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             statement.executeQuery().use { rs -> if (rs.next()) rs.toThreadRecord() else null }
         }
 
+    private fun selectVenueChat(
+        connection: Connection,
+        venueId: Long,
+        guestUserId: Long,
+    ): SupportThreadRecord? =
+        connection.prepareStatement(
+            """
+            ${threadSelect()}
+            WHERE st.venue_id = ?
+              AND st.guest_user_id = ?
+              AND st.booking_id IS NULL
+              AND st.thread_type = 'VENUE_CHAT'
+            ORDER BY st.id ASC
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, guestUserId)
+            statement.executeQuery().use { rs -> if (rs.next()) rs.toThreadRecord() else null }
+        }
+
     private fun insertBookingThread(
         connection: Connection,
         venueId: Long,
@@ -635,6 +702,40 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                 }
             }
         return selectVenueThread(connection, venueId, threadId) ?: error("support thread was not found after insert")
+    }
+
+    private fun insertVenueChatThread(
+        connection: Connection,
+        venueId: Long,
+        guestUserId: Long,
+        title: String,
+    ): SupportThreadRecord {
+        val threadId =
+            connection.prepareStatement(
+                """
+                INSERT INTO support_threads (
+                    venue_id,
+                    guest_user_id,
+                    category,
+                    status,
+                    thread_type,
+                    assignee_scope,
+                    created_source,
+                    title
+                )
+                VALUES (?, ?, 'OTHER', 'IN_PROGRESS', 'VENUE_CHAT', 'VENUE', 'GUEST_MINIAPP', ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, guestUserId)
+                statement.setString(3, title)
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    if (keys.next()) keys.getLong(1) else error("venue chat thread id was not generated")
+                }
+            }
+        return selectVenueThread(connection, venueId, threadId) ?: error("venue chat thread was not found after insert")
     }
 
     private fun selectVenueThread(
@@ -913,6 +1014,12 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                 SupportInboxFilter.RESOLVED -> "AND st.status IN ('RESOLVED', 'CLOSED')"
                 null -> ""
             }
+
+        private fun threadTypesFilterCondition(threadTypes: Set<SupportThreadType>?): String {
+            if (threadTypes.isNullOrEmpty()) return ""
+            val placeholders = threadTypes.joinToString(", ") { "?" }
+            return "AND st.thread_type IN ($placeholders)"
+        }
 
         private fun unreadCountExpression(): String =
             """

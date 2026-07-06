@@ -11,7 +11,7 @@ export type SupportThreadDto = {
   venueId?: number | null
   venueName?: string | null
   guestDisplayName?: string | null
-  threadType: 'BOOKING_THREAD' | 'SUPPORT_TICKET' | string
+  threadType: 'BOOKING_THREAD' | 'SUPPORT_TICKET' | 'VENUE_CHAT' | string
   assigneeScope: 'VENUE' | 'PLATFORM' | string
   category: 'BOOKING' | 'ORDER_SERVICE' | 'MINIAPP_TECHNICAL' | 'BILLING' | 'OTHER' | string
   contextLabel?: string | null
@@ -33,7 +33,7 @@ export type SupportThreadDto = {
 }
 
 export type SupportThreadFilter = 'active' | 'resolved'
-export type SupportThreadType = 'BOOKING_THREAD' | 'SUPPORT_TICKET'
+export type SupportThreadType = 'BOOKING_THREAD' | 'SUPPORT_TICKET' | 'VENUE_CHAT'
 
 export type SupportMessageDto = {
   messageId: number
@@ -80,6 +80,10 @@ export type SupportThreadCreateResponse = {
   thread: SupportThreadDto
   message: SupportMessageDto
   queued: boolean
+}
+
+export type VenueChatCreateRequest = {
+  venueId: number
 }
 
 export type SupportAssigneeScopeRequest = {

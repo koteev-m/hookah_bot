@@ -37,7 +37,7 @@ type VenueMessagesCopy = {
   title: string
   hint: string
   emptyText: string
-  threadType: SupportThreadType
+  threadTypes: SupportThreadType[]
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -145,15 +145,21 @@ function screenCopy(screenMode: VenueMessagesOptions['screenMode']): VenueMessag
       title: 'Обращения',
       hint: 'Очередь обращений гостей. Срочные вызовы стола остаются в разделе «Вызовы».',
       emptyText: 'Обращений пока нет.',
-      threadType: 'SUPPORT_TICKET'
+      threadTypes: ['SUPPORT_TICKET']
     }
   }
   return {
     title: 'Сообщения',
-    hint: 'Переписка с гостями по броням. Обращения по проблемам находятся отдельно.',
+    hint: 'Переписка с гостями по броням и обычным вопросам. Обращения по проблемам находятся отдельно.',
     emptyText: 'Сообщений пока нет.',
-    threadType: 'BOOKING_THREAD'
+    threadTypes: ['BOOKING_THREAD', 'VENUE_CHAT']
   }
+}
+
+function threadKindLabel(thread: SupportThreadDto): string {
+  if (thread.threadType === 'BOOKING_THREAD') return 'Бронь'
+  if (thread.threadType === 'VENUE_CHAT') return 'Чат'
+  return 'Обращение'
 }
 
 function buildDom(root: HTMLDivElement, copy: VenueMessagesCopy): VenueMessagesRefs {
@@ -219,7 +225,7 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
       const guest = el('p', { className: 'venue-order-sub', text: `Гость: ${guestDisplay(thread)}` })
       const meta = el('p', {
         className: 'venue-order-sub',
-        text: `${thread.threadType === 'BOOKING_THREAD' ? 'Бронь' : 'Обращение'} · ${statusLabel(thread.status)} · ${thread.assigneeScope === 'PLATFORM' ? 'Платформа' : 'Заведение'} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
+        text: `${threadKindLabel(thread)} · ${statusLabel(thread.status)} · ${thread.assigneeScope === 'PLATFORM' ? 'Платформа' : 'Заведение'} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
       })
       const preview = el('p', { className: 'message-preview', text: previewText(thread) })
       const unread = unreadCount(thread)
@@ -241,7 +247,7 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     updateFilterButtons()
     const result = await venueGetSupportThreads(
       backendUrl,
-      { venueId, filter: currentFilter, threadType: copy.threadType },
+      { venueId, filter: currentFilter, threadTypes: copy.threadTypes },
       deps,
       controller.signal
     )

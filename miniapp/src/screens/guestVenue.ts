@@ -44,6 +44,7 @@ type VenueScreenOptions = {
   venueId: number | null
   openStaffCall?: boolean
   onBookVenue?: (venueId: number) => void
+  onAskVenue?: (venueId: number) => void
 }
 
 type MenuItemRefs = {
@@ -70,6 +71,7 @@ type VenueRefs = {
   routeLink: HTMLAnchorElement
   copyAddressButton: HTMLButtonElement
   bookingButton: HTMLButtonElement
+  questionButton: HTMLButtonElement
   extensionSlot: HTMLDivElement
   menuBody: HTMLDivElement
   message: HTMLParagraphElement
@@ -156,7 +158,8 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   }) as HTMLButtonElement
   copyAddressButton.hidden = true
   const bookingButton = el('button', { className: 'button-secondary button-small', text: 'Забронировать' }) as HTMLButtonElement
-  append(header, venueTitle, venueLocation, venueSchedule, routeLink, copyAddressButton, bookingButton)
+  const questionButton = el('button', { className: 'button-small', text: '💬 Задать вопрос' }) as HTMLButtonElement
+  append(header, venueTitle, venueLocation, venueSchedule, routeLink, copyAddressButton, bookingButton, questionButton)
 
   const status = el('p', { className: 'status', text: '' })
   const message = el('p', { className: 'status menu-message', text: '' })
@@ -236,6 +239,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     routeLink,
     copyAddressButton,
     bookingButton,
+    questionButton,
     extensionSlot,
     menuBody,
     message,
@@ -550,11 +554,12 @@ function updateItemControls(refs: MenuItemRefs, qty: number, canOrder: boolean) 
 }
 
 export function renderGuestVenueScreen(options: VenueScreenOptions) {
-  const { root, backendUrl, isDebug, venueId, onBookVenue } = options
+  const { root, backendUrl, isDebug, venueId, onBookVenue, onAskVenue } = options
   if (!root) return () => undefined
 
   const refs = buildVenueDom(root)
   refs.bookingButton.disabled = !venueId
+  refs.questionButton.disabled = !venueId
   refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
   let disposed = false
   let menuAbort: AbortController | null = null
@@ -681,6 +686,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     typeof tableSnapshot.tableSessionId === 'number' &&
     Number.isFinite(tableSnapshot.tableSessionId) &&
     tableSnapshot.tableSessionId > 0
+  const updateQuestionAction = () => {
+    refs.questionButton.hidden = !venueId || !onAskVenue || isTableVenueContext()
+    refs.questionButton.disabled = !venueId || isTableVenueContext()
+  }
   const shouldShowOrderMenu = () => canPlaceOrders()
 
   const currentStaffStatusParams = () => {
@@ -834,6 +843,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const inTableContext = isTableVenueContext()
     refs.bookingButton.hidden = inTableContext || !onBookVenue
     refs.bookingButton.disabled = !venueId || inTableContext
+    updateQuestionAction()
   }
 
   const updateStaffState = () => {
@@ -917,6 +927,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     } else {
       refs.routeLink.removeAttribute('href')
     }
+    updateQuestionAction()
   }
 
   const renderPreQrInfo = (venue: VenueDto, sections: VenueInfoSectionDto[]) => {
@@ -1454,6 +1465,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     on(refs.bookingButton, 'click', () => {
       if (venueId) {
         onBookVenue?.(venueId)
+      }
+    }),
+    on(refs.questionButton, 'click', () => {
+      if (venueId) {
+        onAskVenue?.(venueId)
       }
     }),
     on(refs.retryButton, 'click', () => {

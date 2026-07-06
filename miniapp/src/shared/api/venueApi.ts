@@ -506,7 +506,13 @@ export async function venueResolveLocation(
 
 export async function venueGetSupportThreads(
   backendUrl: string,
-  params: { venueId: number; bookingId?: number | null; filter?: SupportThreadFilter; threadType?: SupportThreadType },
+  params: {
+    venueId: number
+    bookingId?: number | null
+    filter?: SupportThreadFilter
+    threadType?: SupportThreadType
+    threadTypes?: SupportThreadType[]
+  },
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
@@ -519,6 +525,9 @@ export async function venueGetSupportThreads(
   }
   if (params.threadType) {
     search.set('threadType', params.threadType)
+  }
+  if (params.threadTypes?.length) {
+    search.set('threadTypes', params.threadTypes.join(','))
   }
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadListResponse>(

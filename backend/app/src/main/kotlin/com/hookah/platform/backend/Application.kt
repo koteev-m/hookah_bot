@@ -1138,6 +1138,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         tableSessionConfig = tableSessionConfig,
                         guestBookingRepository = guestBookingRepository,
                         auditLogRepository = auditLogRepository,
+                        guestRateLimitConfig = guestRateLimitConfig,
+                        rateLimiter = guestRateLimiter,
                     )
                     guestVisitRoutes(visitRepository = visitRepository)
                     guestStaffCallRoutes(

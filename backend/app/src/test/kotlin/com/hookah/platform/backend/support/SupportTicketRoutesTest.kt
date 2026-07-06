@@ -133,6 +133,360 @@ class SupportTicketRoutesTest {
         }
 
     @Test
+    fun `guest venue chat is reused and does not notify staff chat or platform support`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-chat-routing")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, staffChatId = STAFF_CHAT_ID)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, OWNER_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedUser(jdbcUrl, STAFF_ID)
+            seedUser(jdbcUrl, platformOwnerId)
+            seedVenueMember(jdbcUrl, venueId, OWNER_ID, "OWNER")
+            seedVenueMember(jdbcUrl, foreignVenueId, MANAGER_ID, "MANAGER")
+            seedVenueMember(jdbcUrl, venueId, STAFF_ID, "STAFF")
+
+            val guestToken = issueToken(config, GUEST_ID)
+            val ownerToken = issueToken(config, OWNER_ID)
+            val foreignManagerToken = issueToken(config, MANAGER_ID)
+            val staffToken = issueToken(config, STAFF_ID)
+            val platformToken = issueToken(config, platformOwnerId)
+
+            val createChatResponse =
+                client.post("/api/guest/support/venue-chats") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId}""")
+                }
+            assertEquals(HttpStatusCode.OK, createChatResponse.status)
+            val createdChat =
+                json.parseToJsonElement(createChatResponse.bodyAsText())
+                    .jsonObject
+            val thread = createdChat.getValue("thread").jsonObject
+            val threadId = thread.getValue("threadId").jsonPrimitive.content.toLong()
+            assertEquals("VENUE_CHAT", thread.getValue("threadType").jsonPrimitive.content)
+            assertEquals(venueId.toString(), thread.getValue("venueId").jsonPrimitive.content)
+            assertEquals("VENUE", thread.getValue("assigneeScope").jsonPrimitive.content)
+            assertTrue(createdChat.getValue("messages").jsonArray.isEmpty())
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+
+            val duplicateChatResponse =
+                client.post("/api/guest/support/venue-chats") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId}""")
+                }
+            assertEquals(HttpStatusCode.OK, duplicateChatResponse.status)
+            assertEquals(
+                threadId.toString(),
+                json.parseToJsonElement(duplicateChatResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            val venueChatList =
+                client.get("/api/venue/$venueId/support/threads?threadType=VENUE_CHAT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, venueChatList.status)
+            assertEquals(
+                threadId.toString(),
+                json.parseToJsonElement(venueChatList.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            val staffList =
+                client.get("/api/venue/$venueId/support/threads?threadType=VENUE_CHAT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffList.status)
+
+            val staffDetail =
+                client.get("/api/venue/$venueId/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffDetail.status)
+
+            val staffReply =
+                client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"staff must not handle venue chat"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffReply.status)
+
+            val foreignVenueDetail =
+                client.get("/api/venue/$foreignVenueId/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $foreignManagerToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, foreignVenueDetail.status)
+
+            val foreignVenueReply =
+                client.post("/api/venue/$foreignVenueId/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $foreignManagerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"foreign venue must not see venue chat"}""")
+                }
+            assertEquals(HttpStatusCode.NotFound, foreignVenueReply.status)
+
+            val platformVenueChats =
+                client.get("/api/platform/support/threads?threadType=VENUE_CHAT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.OK, platformVenueChats.status)
+            assertTrue(
+                json.parseToJsonElement(platformVenueChats.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .isEmpty(),
+            )
+
+            val venueReply =
+                client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $ownerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Можно задать вопрос здесь."}""")
+                }
+            assertEquals(HttpStatusCode.OK, venueReply.status)
+            assertTrue(outboxTexts(jdbcUrl, GUEST_ID).last().contains("по чату"))
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+
+            val guestReply =
+                client.post("/api/guest/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Спасибо, это не обращение."}""")
+                }
+            assertEquals(HttpStatusCode.OK, guestReply.status)
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+        }
+
+    @Test
+    fun `guest support outside table requires verified venue for venue related categories`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-ticket-venue-required")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            val suspendedVenueId = seedVenue(jdbcUrl, status = "SUSPENDED")
+            seedUser(jdbcUrl, GUEST_ID)
+            val guestToken = issueToken(config, GUEST_ID)
+
+            val missingVenueResponse =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"category":"ORDER_SERVICE","message":"Проблема с обслуживанием"}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, missingVenueResponse.status)
+
+            val missingBookingContextResponse =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"category":"BOOKING","message":"Вопрос по брони"}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, missingBookingContextResponse.status)
+
+            val venueScopedResponse =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"category":"ORDER_SERVICE","venueId":$venueId,"message":"Проблема с обслуживанием"}""")
+                }
+            assertEquals(HttpStatusCode.OK, venueScopedResponse.status)
+            val venueScopedThread =
+                json.parseToJsonElement(venueScopedResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+            assertEquals(venueId.toString(), venueScopedThread.getValue("venueId").jsonPrimitive.content)
+            assertEquals("VENUE", venueScopedThread.getValue("assigneeScope").jsonPrimitive.content)
+            assertEquals("SUPPORT_TICKET", venueScopedThread.getValue("threadType").jsonPrimitive.content)
+
+            val hiddenVenueChatResponse =
+                client.post("/api/guest/support/venue-chats") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$suspendedVenueId}""")
+                }
+            assertEquals(HttpStatusCode.NotFound, hiddenVenueChatResponse.status)
+        }
+
+    @Test
+    fun `guest support ticket venue chat and support message routes are rate limited`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-ticket-rate-limit")
+            val platformOwnerId = 900001L
+            val config =
+                buildConfig(
+                    jdbcUrl = jdbcUrl,
+                    platformOwnerId = platformOwnerId,
+                    extra =
+                        mapOf(
+                            "guest.rateLimit.supportTicket.maxRequests" to "1",
+                            "guest.rateLimit.supportTicket.windowSeconds" to "3600",
+                            "guest.rateLimit.venueChat.maxRequests" to "1",
+                            "guest.rateLimit.venueChat.windowSeconds" to "3600",
+                            "guest.rateLimit.supportMessage.maxRequests" to "1",
+                            "guest.rateLimit.supportMessage.windowSeconds" to "3600",
+                        ),
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, GUEST_ID)
+            val guestToken = issueToken(config, GUEST_ID)
+
+            val firstTicket =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"category":"MINIAPP_TECHNICAL","message":"Первое обращение"}""")
+                }
+            assertEquals(HttpStatusCode.OK, firstTicket.status)
+            val ticketId =
+                json.parseToJsonElement(firstTicket.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+
+            val secondTicket =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"category":"MINIAPP_TECHNICAL","message":"Второе обращение"}""")
+                }
+            assertEquals(HttpStatusCode.TooManyRequests, secondTicket.status)
+
+            val firstChat =
+                client.post("/api/guest/support/venue-chats") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId}""")
+                }
+            assertEquals(HttpStatusCode.OK, firstChat.status)
+            val chatId =
+                json.parseToJsonElement(firstChat.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+
+            val duplicateChatOpen =
+                client.post("/api/guest/support/venue-chats") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId}""")
+                }
+            assertEquals(HttpStatusCode.OK, duplicateChatOpen.status)
+            assertEquals(
+                chatId.toString(),
+                json.parseToJsonElement(duplicateChatOpen.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive
+                    .content,
+            )
+
+            deleteSupportThread(jdbcUrl, chatId)
+            val secondNewChat =
+                client.post("/api/guest/support/venue-chats") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"venueId":$venueId}""")
+                }
+            assertEquals(HttpStatusCode.TooManyRequests, secondNewChat.status)
+
+            val firstMessage =
+                client.post("/api/guest/support/threads/$ticketId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Первое уточнение"}""")
+                }
+            assertEquals(HttpStatusCode.OK, firstMessage.status)
+
+            val secondMessage =
+                client.post("/api/guest/support/threads/$ticketId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Второе уточнение"}""")
+                }
+            assertEquals(HttpStatusCode.TooManyRequests, secondMessage.status)
+        }
+
+    @Test
     fun `support tickets are scoped across guest venue staff and platform`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("support-ticket-routes")
@@ -424,19 +778,24 @@ class SupportTicketRoutesTest {
     private fun buildConfig(
         jdbcUrl: String,
         platformOwnerId: Long,
+        extra: Map<String, String> = emptyMap(),
     ): MapApplicationConfig =
         MapApplicationConfig(
-            "ktor.environment" to "test",
-            "app.env" to "test",
-            "db.jdbcUrl" to jdbcUrl,
-            "db.user" to "sa",
-            "db.password" to "",
-            "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
-            "api.session.issuer" to "hookah",
-            "api.session.audience" to "miniapp",
-            "api.session.ttlSeconds" to "3600",
-            "platform.ownerUserId" to platformOwnerId.toString(),
-            "venue.staffInviteSecretPepper" to "invite-pepper",
+            *(
+                listOf(
+                    "ktor.environment" to "test",
+                    "app.env" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                    "platform.ownerUserId" to platformOwnerId.toString(),
+                    "venue.staffInviteSecretPepper" to "invite-pepper",
+                ) + extra.toList()
+            ).toTypedArray(),
         )
 
     private fun issueToken(
@@ -456,20 +815,22 @@ class SupportTicketRoutesTest {
     private fun seedVenue(
         jdbcUrl: String,
         staffChatId: Long? = null,
+        status: String = "PUBLISHED",
     ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val venueId =
                 connection.prepareStatement(
                     """
                     INSERT INTO venues (name, city, address, status, staff_chat_id)
-                    VALUES ('Support Venue', 'City', 'Address', 'PUBLISHED', ?)
+                    VALUES ('Support Venue', 'City', 'Address', ?, ?)
                     """.trimIndent(),
                     Statement.RETURN_GENERATED_KEYS,
                 ).use { statement ->
+                    statement.setString(1, status)
                     if (staffChatId == null) {
-                        statement.setNull(1, java.sql.Types.BIGINT)
+                        statement.setNull(2, java.sql.Types.BIGINT)
                     } else {
-                        statement.setLong(1, staffChatId)
+                        statement.setLong(2, staffChatId)
                     }
                     statement.executeUpdate()
                     statement.generatedKeys.use { keys ->
@@ -680,6 +1041,22 @@ class SupportTicketRoutesTest {
                 }
             }
         }
+
+    private fun deleteSupportThread(
+        jdbcUrl: String,
+        threadId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("DELETE FROM support_messages WHERE thread_id = ?").use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement("DELETE FROM support_threads WHERE id = ?").use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun outboxTexts(
         jdbcUrl: String,
