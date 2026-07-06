@@ -1,12 +1,21 @@
 # Platform Owner
 
-Дата актуализации: 2026-07-03.
+Дата актуализации: 2026-07-06.
 
-Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`.
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`.
 
 ## Current status
 
 Platform Owner управляет платформенным onboarding, коммерческими условиями, подписками и lifecycle заведений. Это отдельная роль от Venue Owner/Manager/Staff.
+
+Platform Mode is one cockpit for:
+- venues and venue detail;
+- onboarding requests;
+- venue lifecycle;
+- owner/access and OWNER invites/revoke;
+- billing, subscriptions and invoices;
+- Support Center / `Обращения`;
+- analytics, audit, events and operational risk/health indicators.
 
 Recent closed milestones:
 - Platform Owner Invite / ADMIN Semantics Hardening: **CLOSED / staging smoke passed**.
@@ -58,6 +67,35 @@ Platform Mini App does not expose `ADMIN` as a selectable runtime owner/admin as
 
 Telegram bot remains the richer platform onboarding surface for connection requests and commercial terms. Platform Mini App cockpit is still partial for onboarding/placements/analytics, but manual billing and support-ticket MVPs are smoke-tested.
 
+## Venue lifecycle model
+
+Current implementation:
+- `DRAFT`;
+- `PUBLISHED`;
+- `HIDDEN`;
+- `PAUSED`;
+- `SUSPENDED`;
+- `ARCHIVED`;
+- `DELETED` with `deleted_at`.
+
+Target product model:
+- `draft`;
+- `onboarding`;
+- `published`;
+- `hidden`;
+- `paused_by_owner`;
+- `suspended_by_platform`;
+- `archived`;
+- `deletion_requested`;
+- `deleted`.
+
+Current mapping caveat:
+- legacy `onboarding` is normalized to `DRAFT`;
+- legacy `paused_by_owner` is normalized to `PAUSED`;
+- legacy `suspended_by_platform` is normalized to `SUSPENDED`;
+- legacy `deletion_requested` is normalized to `DELETED`;
+- do not promise separate owner-pause, billing-created suspension or deletion-request workflows until a migration/product decision splits them.
+
 ## Allowed actions
 
 - View and process platform connection requests.
@@ -82,6 +120,21 @@ Telegram bot remains the richer platform onboarding surface for connection reque
 - List active `venue_members` rows with role `OWNER` as the current owner list.
 - Revoke one OWNER membership when at least one other active OWNER remains.
 
+## Analytics / audit
+
+Current audit foundation:
+- venue lifecycle/status changes write platform status audit evidence;
+- owner invite create/accept and `VENUE_OWNER_REVOKE` write audit evidence;
+- billing checkout ensure, manual mark-paid and courtesy days write audit evidence;
+- support ticket status/scope/assignment/escalation and message-add audit exists where implemented.
+
+Needed Platform analytics remain future/partial:
+- venue counts by lifecycle/subscription/risk state;
+- onboarding funnel and owner invite conversion;
+- billing metrics such as active/trialing/past_due/suspended venues, open/overdue invoices, paid-through risk and MRR after a real provider exists;
+- support metrics such as TTFR, TTR, escalation rate, reopen rate, CSAT and top issue themes;
+- integration health for Telegram outbox/webhooks, billing webhooks, staff-chat links and Mini App errors.
+
 ## Denied actions / constraints
 
 - Platform Owner role does not bypass venue-specific RBAC for ordinary venue operations unless the user also has a venue membership.
@@ -101,7 +154,7 @@ Telegram bot remains the richer platform onboarding surface for connection reque
 
 - Platform Mini App cockpit is still partial compared with Telegram bot for onboarding requests, placements and analytics.
 - Advanced support features remain future work: SLA automation, auto-escalation worker, macros, attachments, CSAT, diagnostics report and broad support analytics.
-- Real acquiring provider, Telegram Stars and recurring automatic payment remain future work.
+- Real acquiring provider, Telegram Stars and recurring automatic payment remain future work. `GenericHmacBillingProvider` is an integration base, not a completed provider rollout.
 - Audited invoice void/reissue for courtesy conflicts with already-open future invoices remains future work.
 - Distinguishing billing-created versus manual `SUSPENDED_BY_PLATFORM` remains needed before broader auto-reactivation.
 - `ADMIN` remains a legacy alias to `MANAGER`; product copy should avoid promising separate venue-admin behavior until implemented.
@@ -131,3 +184,5 @@ Telegram bot remains the richer platform onboarding surface for connection reque
 18. Add courtesy/free days with required reason; verify `billing_adjustments`, `BILLING_COURTESY_DAYS_ADDED`, adjusted paid-through/next-payment and no mutation of paid invoice rows.
 19. Verify Venue Owner sees adjusted state while Venue Owner/Manager/Staff cannot mark paid or add courtesy days.
 20. Open Platform Mini App `Обращения`; verify platform-only and venue-transferred support tickets are visible, ordinary `VENUE_CHAT` is not visible, and Platform Owner can reply/close support tickets.
+21. Verify Staff does not see Platform Mode or Platform Support Center.
+22. Verify lifecycle, owner, billing and support audit payloads contain safe ids/status/scope/reason fields and no secrets/raw provider payloads/raw Telegram payloads.

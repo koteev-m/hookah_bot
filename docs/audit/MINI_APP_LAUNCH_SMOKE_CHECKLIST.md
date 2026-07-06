@@ -39,6 +39,7 @@
 - Platform Billing Renewal / Advance Invoice / Courtesy Days: CLOSED / staging smoke passed. Next invoice period is based on effective paid-through + 1 day, repeated next-invoice ensure is idempotent, Platform Owner can create the next invoice in advance, `billing_adjustments` stores `COURTESY_DAYS`, Platform Owner courtesy/free days require reason, `BILLING_COURTESY_DAYS_ADDED` audit is written, paid-through/next-payment dates shift, Venue Owner sees adjusted state, and Manager/Staff cannot access payment controls.
 - Staff/Manager invite deep-link sharing polish: CLOSED / staging smoke passed. Telegram invite messages use valid `t.me` staff invite links and copy-text buttons where supported; Venue Mini App invite result has one selectable invite link field, primary copy-link/share-in-Telegram actions, a secondary fallback command and no self-open result-card action. Manager/Staff invite acceptance smoke passed and payment controls stayed hidden/forbidden.
 - Guest Communication UX / Support Tickets MVP: CLOSED / smoke passed. Canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL`; Guest nav is `Чаты` / `Помощь`; catalog/venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` stays `BOOKING_CHAT`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support and venue chat create/reply paths do not post to staff-chat.
+- Platform Cockpit docs: current source is `docs/PLATFORM_COCKPIT.md`. Manual billing and Platform Support Center are smoke-closed; onboarding request cockpit, placements, analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -228,12 +229,14 @@ Manual runtime coverage for each release batch:
 - non-platform user cannot create owner invite or revoke OWNER;
 - `owner_account_id` and `venue_owner_accounts.primary_owner_user_id` are not relinked by membership revoke;
 - `VENUE_OWNER_REVOKE` audit evidence exists;
-- safe sections `#/onboarding`, `#/placements`, `#/support`, `#/analytics` show explanations without fake data or dead-end controls.
+- safe sections `#/onboarding`, `#/placements` and `#/analytics` show explanations without fake data or dead-end controls.
+- `#/support` / Platform `Обращения` is real only for backend-backed `SUPPORT_TICKET`; it must not show ordinary `VENUE_CHAT`.
 - Platform Owner billing cockpit shows current paid state, next period dates, explicit next-invoice action and courtesy-days action.
 - Platform billing and Venue subscription GET overviews are read-only; invoice/checkout ensure and courtesy-days actions happen only through POST.
 - Platform Owner can create/reuse current and next-period invoices, mark manual invoice paid with audit, add courtesy/free days with required reason and audit, and repeat next invoice ensure without duplicates.
 - Venue Owner sees adjusted paid-through and next-payment state but cannot mark paid or add courtesy days.
 - Manager/Staff cannot access payment controls after invite acceptance.
+- Current lifecycle smoke uses `DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`; target states `onboarding`, `paused_by_owner`, `suspended_by_platform` and `deletion_requested` are future normalization work.
 - requests/commercial terms/create-link venue, suspend/archive/delete and hidden deleted venues are smoke-tested in Telegram bot flow.
 
 ## 2. Telegram Bot Manual Smoke
@@ -484,19 +487,28 @@ Steps:
 3. Open venue list.
 4. Confirm venue status and subscription summary are visible.
 5. Open venue detail.
-6. Confirm venue status controls are visible.
+6. Confirm venue status controls are visible and dangerous lifecycle actions require explicit action/confirmation where implemented.
 7. Confirm owners/invite/subscription/price schedule basics are visible.
 8. Confirm deleted venues are not shown in the normal/default list.
 9. Open `Подключение`.
 10. Open `Размещения`.
-11. Open `Поддержка`.
+11. Open `Обращения` / Platform Support Center.
 12. Open `Аналитика`.
+13. Open billing cockpit and verify GET overview did not create invoices, checkout links, lifecycle rows or adjustments.
+14. Create/reuse current or next invoice through explicit POST action; repeat next invoice ensure and verify no duplicate invoice.
+15. Mark invoice paid manually and verify audit plus human paid-through/next-payment copy.
+16. Add courtesy/free days with required reason and verify `billing_adjustments`, `BILLING_COURTESY_DAYS_ADDED` and no mutation of paid invoices.
+17. Open platform-assigned/transferred support ticket, reply/close where implemented, and confirm ordinary `VENUE_CHAT` is absent.
+18. Confirm Staff cannot see Platform Mode or Platform Support Center.
+19. Confirm lifecycle, owner, billing and support audit payloads contain safe ids/status/scope/reason fields and no raw provider/Telegram payloads.
 
 Expected:
 
 - real venue/subscription sections use backend data;
-- safe sections contain no fake numbers;
-- safe sections do not expose half-working approve/pay/support controls;
+- safe onboarding/placement/analytics sections contain no fake numbers;
+- safe sections do not expose half-working approve/pay controls;
+- Platform Support Center is real only for backend-backed `SUPPORT_TICKET` and does not show ordinary `VENUE_CHAT`;
+- real acquiring provider, Telegram Stars and recurring payments are not claimed by this smoke;
 - every safe section has a clear path back to venue list.
 
 ## 6. Staging Smoke

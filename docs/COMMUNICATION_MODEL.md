@@ -41,7 +41,7 @@ Guest communication is split into four different product scenarios. Do not merge
 - Venue detail can prefill venue context for venue-related support categories.
 - Table context can attach verified `venue_id`, `table_id`, `table_session_id` and active order/batch context when available.
 - Venue can transfer a venue support ticket to Platform through `Передать платформе`.
-- Platform can reply/close support tickets and see platform-assigned/transferred tickets.
+- Platform can reply/close support tickets and see platform-assigned/transferred tickets. Platform cockpit and support-center boundaries are detailed in `docs/PLATFORM_COCKPIT.md`.
 
 ## RBAC
 

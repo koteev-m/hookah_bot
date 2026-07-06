@@ -29,6 +29,8 @@
 > Current checkpoint as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Platform Owner billing cockpit and Venue Owner subscription screen show safe human subscription/payment state through read-only GET overviews; invoice/checkout creation happens only through explicit POST ensure actions; the manual/fake invoice flow no longer exposes provider-internal fake URLs; manual mark-paid is audited; paid-through and next-payment copy use human dates. Renewal now creates the next period from effective paid-through + 1 day, reuses existing OPEN/PAST_DUE invoices for the same period, and is idempotent. Courtesy/free days are represented in `billing_adjustments` as `COURTESY_DAYS`, require Platform Owner reason, write `BILLING_COURTESY_DAYS_ADDED` audit, and shift effective paid-through/next-payment dates without mutating paid invoice history. Venue Owner sees the adjusted subscription state but cannot mark paid or add courtesy days. Manager/Staff cannot access billing payment controls. Staff/Manager invites now use valid Telegram deep links, copy/share Mini App UX, one selectable invite link field and a secondary fallback command; invite acceptance smoke passed for Manager/Staff. No real acquiring provider, Telegram Stars, recurring card payment, invoice void/reissue, guest order runtime change or staff-chat runtime change is claimed by this checkpoint.
 >
 > Current checkpoint as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. The canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`. Guest visible nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` stays `BOOKING_CHAT`; support tickets are separate `SUPPORT_TICKET` threads with Guest/Venue/Platform routing; Platform does not see ordinary `VENUE_CHAT`; Staff sees neither support tickets nor ordinary venue chats; support/venue chat create/reply does not post to staff-chat; guest support/venue chat create and support message routes are rate-limited. Advanced SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
+>
+> Current docs checkpoint as of 2026-07-06: Platform cockpit docs are consolidated in `docs/PLATFORM_COCKPIT.md`. Current implementation uses venue lifecycle statuses `DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`; target product states such as `onboarding`, `paused_by_owner`, `suspended_by_platform` and `deletion_requested` require explicit normalization/migration if needed. Manual/fake billing cockpit, owner invites/revoke and Platform support-ticket center are smoke-closed; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
 
 # Краткое резюме
 
@@ -61,7 +63,7 @@
 - Table QR: batch create/rotate/export есть, single edit/delete/capacity incomplete.
 - Statistics: Telegram stats and Venue Mini App read-only stats exist; custom ranges/platform analytics remain later.
 - Settings: broad Telegram setup exists; Mini App settings now covers booking hold, shift extension settings, public profile/card basics with provider-free structured location and weekly hours/date exceptions. Info/media editing, preview/readiness and other broad settings should still be expanded through small slices.
-- Platform mode: venues/status/owners/subscription, billing cockpit MVP and support-ticket center are staging/smoke-closed; requests/analytics cockpit and real acquiring provider remain incomplete.
+- Platform mode: venues/status/owners/subscription, manual billing cockpit MVP and support-ticket center are staging/smoke-closed; `docs/PLATFORM_COCKPIT.md` is the current source for Platform lifecycle/billing/support boundaries. Onboarding request cockpit, placements, analytics cockpit, real acquiring provider, Telegram Stars and recurring payments remain incomplete.
 
 # Что отсутствует
 
@@ -70,7 +72,7 @@
 - Real acquiring provider, Telegram Stars and automatic recurring card payments.
 - Invoice void/reissue for open future-invoice conflicts after courtesy adjustments.
 - Better distinction between billing-created and manual `SUSPENDED_BY_PLATFORM` before broader auto-reactivation.
-- Platform analytics dashboards.
+- Platform analytics dashboards and support/billing metrics beyond operational audit rows.
 - Clear `venue_admin` behavior distinct from `manager`.
 - Wider frontend/browser e2e beyond current smoke harness.
 
@@ -80,7 +82,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 
 1. **P1/P2**: Real acquiring provider or Telegram Stars rollout, only if commercial launch requires online payment. Current billing MVP is manual/fake-provider only and must not be described as card acquiring or Stars.
 2. **P2**: Guest history/repeat/favorites/post-visit feedback polish. Several backend/account surfaces exist, but repeat-order and post-visit retention loops are not launch-complete.
-3. **P2**: Advanced support features beyond MVP if pilot operations need them: SLA automation, macros, attachments, CSAT, diagnostics reports and support analytics.
+3. **P2**: Platform analytics/operations cockpit polish: onboarding requests, placements, lifecycle risk/health indicators, support metrics and billing metrics after provider semantics are stable.
 
 # Рекомендуемый порядок дальнейшей работы
 
@@ -128,11 +130,11 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 | Display order number per day | DONE/PARTIAL | `OrdersRepository.insertActiveOrder`, `orders.display_number`, `OrdersRepositoryTest` | Runtime display uses venue-local date; no DB uniqueness constraint |
 | Booking flow | PARTIAL | `GuestBookingRoutes`, `VenueBookingRoutes`, bot booking methods | Mini App screens and analytics event |
 | Split bill / personal/shared tabs | DONE/PARTIAL | `GuestTabsRoutes`, `GuestTabsRepository`, `cart.ts`, `order.ts`, `venueOrderDetail.ts` | Tab-scoped order views are code-test-backed; shared-tab DB uniqueness remains repository-idempotent |
-| Platform mode | PARTIAL | `platformApp.ts`, `PlatformVenueRoutes` | Billing/support/analytics/request cockpit |
+| Platform mode | PARTIAL | `platformApp.ts`, `PlatformVenueRoutes`, `docs/PLATFORM_COCKPIT.md` | Manual billing/support MVP is smoke-closed; onboarding requests, placements, analytics/risk cockpit and lifecycle normalization remain future/partial |
 | Onboarding venue/application flow | PARTIAL | `venue_connection_requests`, `TelegramBotRouterVenueConnectionRequestFlowTest` | Integrate with platform UI |
 | Subscriptions/billing | DONE/PARTIAL | `SubscriptionRepository`, `SubscriptionBillingEngine`, `PlatformBillingRoutes`, `billing_adjustments` | Manual/fake billing cockpit, advance next invoice and courtesy days are staging-smoked; real acquiring, Stars, void/reissue and suspended-status distinction remain future |
 | Support/tickets | MVP / smoke passed | `SupportRoutes`, `SupportThreadRepository`, `support_threads.thread_type`, `guestSupportThreads.ts`, `venueMessages.ts`, `platformSupport.ts` | Advanced SLA/macros/attachments/CSAT/diagnostics/support analytics |
-| Analytics/events | PARTIAL | `AnalyticsEventRepository`, event writes | Add booking/support events and UI |
+| Analytics/events | PARTIAL | `AnalyticsEventRepository`, event writes, `AuditLogRepository` | Platform cockpit still needs venue lifecycle/subscription, billing, support TTFR/TTR/escalation/reopen/CSAT and onboarding funnel reports |
 | Staff chat notifications | PARTIAL | `StaffChatNotifier`, bot notify methods | Mini App staff-call notification path is CLOSED / code-test verification passed; keep orders/bookings/shift-extension runtime delivery in regression |
 | Telegram commands | PARTIAL | `/start`, `/menu`, `/my`, `/help`, `/link`, `/unlink`, `/link_test` | Add support/help consistency and QR test mode |
 | Mini App env/CORS/initData | DONE/PARTIAL | `Application.kt`, `TelegramInitDataValidator`, `miniapp/src/main.ts` | CORS mutation methods are CLOSED / code-test verification passed; keep preflight/env diagnostics in regression |

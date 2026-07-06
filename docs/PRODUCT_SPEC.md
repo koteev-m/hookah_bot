@@ -14,6 +14,9 @@ Platform Owner manages onboarding of venues, venue OWNER invitations/revocation,
 ## Roles (RBAC)
 Platform:
 - platform_owner (super-admin)
+
+Platform Mode source of truth:
+- Platform cockpit model and current-vs-target lifecycle/billing/support status are tracked in `docs/PLATFORM_COCKPIT.md`.
 Venue:
 - OWNER, MANAGER, STAFF in `venue_members`
 - ADMIN is a legacy DB compatibility alias that maps to MANAGER; it is not a separate runtime permission model or selectable Platform Mini App assignment role.
@@ -304,18 +307,21 @@ Implementation slices:
 
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
 MUST:
+- Treat Platform Mode as one cockpit for venues, onboarding requests, venue lifecycle, owner/access, billing/subscriptions/invoices, Support Center, analytics/audit and operational risk/health indicators.
 - Platform Owner can create venue, invite/add venue OWNER users, list active OWNER memberships and revoke one OWNER only when another active OWNER remains.
 - OWNER invite/revoke actions are audited; membership revoke does not relink primary/legal/billing owner linkage.
-- Lifecycle statuses: draft/onboarding/published/hidden/suspended/archived/deleted.
+- Current implementation lifecycle statuses are `DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`.
+- Target product lifecycle is `draft`, `onboarding`, `published`, `hidden`, `paused_by_owner`, `suspended_by_platform`, `archived`, `deletion_requested`, `deleted`; currently `onboarding` is folded into `DRAFT`, `paused_by_owner` into `PAUSED`, `suspended_by_platform` into `SUSPENDED`, and `deletion_requested` into `DELETED`.
 - Ability to hide/archive/delete venues; clean inactive venues.
 SHOULD:
-- Moderation flags and notes; bulk actions.
+- Moderation flags and notes; onboarding request cockpit; bulk actions; risk/health indicators.
 
 ## Block 12 — Monetization & subscription
 MUST:
-- Subscription per venue with trial and per-venue price overrides.
-- Future card payment: external checkout link + webhook verification + idempotency. Current staging-smoked MVP is manual/fake-provider only and does not implement a real acquiring provider.
-- Optional Telegram Stars method remains future work if implemented.
+- Subscription per venue with trial, `active`, `past_due`, `canceled`, `suspended`, `suspended_by_platform` and per-venue price overrides.
+- Current staging-smoked MVP is manual/fake-provider billing: Platform/Venue overviews, explicit invoice/checkout ensure POST, manual mark-paid, next-period invoice creation and courtesy days. It does not close a real acquiring provider rollout.
+- External card checkout and `GenericHmacBillingProvider` are provider-integration foundations; production acquiring still requires provider-specific secrets, webhook verification/idempotency and smoke.
+- Optional Telegram Stars method remains future work unless implemented as a dedicated flow.
 - Gating policy: `past_due` allows guest actions (orders/booking), while `suspended`, `suspended_by_platform`, and `canceled` block guest actions until status recovery.
 - Platform owner can set/override prices without code changes.
 - Platform Owner billing cockpit and Venue Owner subscription screen show read-only subscription/payment overviews through GET routes; invoice/checkout creation happens through explicit POST ensure actions.
@@ -323,6 +329,7 @@ MUST:
 - Renewal invoices use real invoice periods: the next monthly period starts at current effective paid-through + 1 day, and repeated ensure reuses an existing OPEN/PAST_DUE invoice for the same period.
 - Courtesy/free days are represented by `billing_adjustments` rows with kind `COURTESY_DAYS`, positive days, required reason, previous/new paid-through dates, actor user id and creation time. Courtesy writes `BILLING_COURTESY_DAYS_ADDED` audit and must not mutate paid invoice history.
 - Venue Owner sees adjusted paid-through and next-payment dates but cannot mark invoices paid or add courtesy days. Manager/Staff cannot access billing payment controls.
+- Payment/support problems route through `SUPPORT_TICKET` / Platform Support Center when platform-scoped.
 SHOULD:
 - Billing events log; self-serve invoice link generation.
 - Follow-up: audited invoice void/reissue for open future invoice conflicts after courtesy adjustments.
@@ -330,11 +337,13 @@ SHOULD:
 
 ## Block 13 — Analytics/KPI/events
 MUST:
-- Server-side events for: table_session_started, batch_created, batch_status_changed, booking_status_changed, subscription_status_changed.
+- Current event/audit foundation is partial: platform venue status audit, owner invite/revoke audit, billing checkout/mark-paid/courtesy audit, support ticket status/scope/assignment/escalation audit and staff-call/order audit exist where implemented.
+- Server-side events needed for reporting include: table_session_started, batch_created, batch_status_changed, booking_status_changed, subscription_status_changed, venue_lifecycle_changed, owner_invite_created/accepted, billing_invoice_state_changed, support_ticket_status_changed and support_ticket_scope_changed.
 - Correlation IDs (venue/table/session/order/batch/tab).
 - Minimal PII; pseudonymize in analytics if exported.
 SHOULD:
 - Dashboards: platform + venue (owner) + shift (manager).
+- Platform cockpit reports: venue lifecycle/subscription distribution, active/trialing/past_due/suspended counts, MRR after real providers exist, open/overdue invoices, support TTFR/TTR/escalation/reopen/CSAT/top issue themes, onboarding funnel and integration health.
 
 ## Block 14 — Security/anti-fraud/audit
 MUST:

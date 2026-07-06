@@ -13,6 +13,7 @@ M1 безопасно привёл Venue Mini App shell к bot-like information 
 - Canonical roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`
 - Product concept/spec: `docs/PRODUCT_SPEC.md`
 - Guest communication model: `docs/COMMUNICATION_MODEL.md`
+- Platform cockpit model: `docs/PLATFORM_COCKPIT.md`
 - Launch smoke: `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`
 - Historical parity evidence: `docs/audit/BOT_MINIAPP_PARITY_AUDIT.md`
 - Bot venue hub: `backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramKeyboards.kt`
@@ -474,6 +475,7 @@ Definition of Done:
 - Settings mismatch: `VENUE_SETTINGS` can imply a broad settings screen while current Mini App settings only controls backend-backed slices: booking hold, shift extension, M8b structured public card/location basics and M9b working hours/date exceptions. Continue with small settings slices, not a bulk settings rewrite.
 - Stats advanced gap: Mini App now has read-only per-venue stats, but no custom date range picker, AI summaries, advanced analytics, platform dashboards or consolidated network stats.
 - Messages/support regression risk: M4B/M4C unified inbox UX and the later Guest Communication UX / Support Tickets MVP are staging-smoke closed. Future support work must keep multi-venue/thread scoping, active/resolved filters, unread clearing, resolve/reopen lifecycle, venue scoping, Platform support-ticket visibility and Staff denial covered. Structured reschedule proposals, venue/admin bot full inbox, SLA automation, diagnostics, macros, CSAT, attachments and support analytics remain follow-ups.
+- Platform cockpit boundary: manual billing and Platform Support Center are documented in `docs/PLATFORM_COCKPIT.md`; onboarding requests, placements, Platform analytics, real acquiring/Stars and lifecycle normalization remain Platform follow-ups, not Venue Mini App parity work.
 - Promotions gap: bot marketing hub is broad and callback-heavy; Mini App should start read-only.
 - Queue scale: Venue Mini App order queue currently uses a fixed limit and does not expose pagination.
 - Runtime Telegram dependencies still need manual smoke: WebApp `initData`, staff chat group binding, QR export/download.

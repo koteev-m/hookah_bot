@@ -36,6 +36,7 @@
 - STAFF booking policy разделён: STAFF видит брони и отмечает `Гость пришёл` / `Не пришёл`, а confirm/cancel/change/message/settings остаются MANAGER/OWNER.
 - Venue Mini App booking card opens a persisted booking conversation thread: venue messages, Guest Bot replies and Guest Mini App replies share one source of truth; staff chat remains a notification mirror. M4A staging smoke passed after UX polish. M4B/M4C unified `Сообщения` inbox and resolve/reopen lifecycle are CLOSED after staging smoke: thread cards show context/status/last message/unread, active/resolved filters work, and explicit resolve/reopen does not mutate booking lifecycle.
 - Guest Communication UX / Support Tickets MVP is CLOSED after smoke: canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Guest nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` remains `BOOKING_CHAT`; Support tickets are separated through `SUPPORT_TICKET`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; table context keeps `Вызвать персонал` as the live operational flow; support/venue chat creation and replies do not post to staff-chat and guest create/reply routes are rate-limited.
+- Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; onboarding/placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
 - M5 staff calls lifecycle is CLOSED after staging smoke: Guest Mini App uses a transient staff-call modal and compact status card, Venue Mini App has a real `Вызовы` queue with accept/close, backend/staff-chat callbacks share the same lifecycle, and ACK/DONE audit hardening is CLOSED / staging smoke passed across Venue Mini App and Telegram staff-chat surfaces. Staff-chat order activity cards now hide DONE/CANCELLED generic calls from active `Оперативно`, and closing an order/bill resolves linked active BILL requests plus closed-visit staff-call leftovers. Keep notification delivery plus actor audit evidence in regression.
 - Platform Owner определяется через `PLATFORM_OWNER_TELEGRAM_ID`; legacy aliases остаются совместимостью.
 - Platform Owner config parity between Bot and API is implemented; `PLATFORM_OWNER_TELEGRAM_ID` is the canonical access source and legacy aliases remain compatibility only.
@@ -221,6 +222,7 @@ Done:
 - Billing renewal with effective paid-through based next-period invoice creation, idempotent advance invoice ensure and `billing_adjustments` courtesy-days model with required reason plus `BILLING_COURTESY_DAYS_ADDED` audit.
 - Venue Owner subscription screen shows adjusted paid-through and next-payment state, but cannot mark paid or add courtesy days; Manager/Staff payment controls stay hidden/forbidden.
 - Platform Support Center / `Обращения` for `SUPPORT_TICKET`, including platform-only technical tickets and venue-transferred tickets; ordinary `VENUE_CHAT` is intentionally not visible to Platform.
+- Platform cockpit model in `docs/PLATFORM_COCKPIT.md` separates current implementation (`DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`) from the target lifecycle (`draft`, `onboarding`, `published`, `hidden`, `paused_by_owner`, `suspended_by_platform`, `archived`, `deletion_requested`, `deleted`).
 
 Remaining P1/P2:
 
@@ -859,6 +861,8 @@ Do not start these before Mini App launch hardening and public-safe tools:
 
 Keep these documents:
 
+- `docs/PLATFORM_COCKPIT.md` - Platform Mode source of truth for cockpit, lifecycle, billing, support, analytics/audit and remaining Platform gaps.
+- `docs/COMMUNICATION_MODEL.md` - Guest communication model and Support Ticket boundaries.
 - `docs/audit/MINI_APP_PRODUCTION_READINESS_AUDIT.md` - audit history and original P0/P1 findings.
 - `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` - manual pilot smoke checklist.
 - `docs/audit/PRODUCT_AUDIT_SUMMARY.md` - broader product audit context.

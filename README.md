@@ -164,6 +164,8 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 - `BillingService` хранит инвойс/платёж и применяет события оплаты через идемпотентные provider event id.
 - `SubscriptionBillingEngine` + `SubscriptionBillingJob` периодически создают инвойсы, рассылают напоминания, переводят просроченные счета в `PAST_DUE` и замораживают подписку. При оплате через `BillingHooks` подписка возвращается в `ACTIVE`.
 
+Platform/billing product status is tracked in `docs/PLATFORM_COCKPIT.md`. The smoke-closed MVP is manual/fake-provider billing with explicit invoice/checkout ensure, manual mark-paid, advance next invoice and courtesy days. `GenericHmacBillingProvider` is an integration base; real acquiring provider rollout, Telegram Stars and recurring automatic payments are separate future milestones unless explicitly implemented and smoked.
+
 ## Telegram payments: Stars vs external billing
 Telegram поддерживает оплату Stars и внешние платежи, это разные потоки:
 - Stars API: https://core.telegram.org/api/stars

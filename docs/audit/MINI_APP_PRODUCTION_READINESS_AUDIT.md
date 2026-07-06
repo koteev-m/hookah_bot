@@ -11,6 +11,8 @@
 > Current correction as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Historical billing and invite-share risks below must be read as superseded for the manual/fake billing MVP: read-only billing/subscription GET overviews, explicit invoice/checkout POST ensure, manual mark-paid audit, next-period invoice ensure, `billing_adjustments` courtesy days, Venue Owner adjusted state, Manager/Staff payment-control denial and Mini App invite copy/share have all passed smoke. Real acquiring, Telegram Stars, invoice void/reissue and analytics remain future work.
 >
 > Current correction as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. The current source of truth is `docs/COMMUNICATION_MODEL.md`: `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate flows; Guest nav is `Чаты` / `Помощь`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support/venue chat creation and replies do not post to staff-chat. Historical support/ticket missing claims below are superseded; SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
+>
+> Current docs correction as of 2026-07-06: Platform cockpit source of truth is `docs/PLATFORM_COCKPIT.md`. Platform Mini App has smoke-passed manual billing and support-ticket MVPs; onboarding requests, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -381,6 +383,7 @@ Affected files/modules:
 - `miniapp/src/screens/platformVenuesList.ts`
 - `miniapp/src/screens/platformVenueDetail.ts`
 - `miniapp/src/screens/platformSupport.ts`
+- `docs/PLATFORM_COCKPIT.md`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/platform/PlatformVenueRoutes.kt`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/platform/PlatformBillingRoutes.kt`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/support/SupportRoutes.kt`
