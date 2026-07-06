@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-06.
 
-Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`.
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
 
 ## Current status
 
@@ -15,6 +15,7 @@ Platform Mode is one cockpit for:
 - owner/access and OWNER invites/revoke;
 - billing, subscriptions and invoices;
 - Support Center / `Обращения`;
+- future promotion moderation/paid placement only after the Growth/retention and Platform billing/moderation/analytics prerequisites are implemented;
 - analytics, audit, events and operational risk/health indicators.
 
 Recent closed milestones:
@@ -65,7 +66,7 @@ Platform Mini App baseline:
 
 Platform Mini App does not expose `ADMIN` as a selectable runtime owner/admin assignment role.
 
-Telegram bot remains the richer platform onboarding surface for connection requests and commercial terms. Platform Mini App cockpit is still partial for onboarding/placements/analytics, but manual billing and support-ticket MVPs are smoke-tested.
+Telegram bot remains the richer platform onboarding surface for connection requests and commercial terms. Platform Mini App cockpit is still partial for onboarding/placements/analytics, but manual billing and support-ticket MVPs are smoke-tested. Paid placement/promotion boosting is not part of the Growth MVP; if implemented later, it must be clearly labeled as advertising/promoted placement.
 
 ## Venue lifecycle model
 
@@ -133,6 +134,7 @@ Needed Platform analytics remain future/partial:
 - onboarding funnel and owner invite conversion;
 - billing metrics such as active/trialing/past_due/suspended venues, open/overdue invoices, paid-through risk and MRR after a real provider exists;
 - support metrics such as TTFR, TTR, escalation rate, reopen rate, CSAT and top issue themes;
+- future growth metrics such as favorite rate, repeat visit rate, promo view/redeem, review completion, opt-in/unsubscribe and abuse/rate-limit indicators;
 - integration health for Telegram outbox/webhooks, billing webhooks, staff-chat links and Mini App errors.
 
 ## Denied actions / constraints
@@ -149,10 +151,13 @@ Needed Platform analytics remain future/partial:
 - OWNER membership revoke deletes only the venue membership and never deletes the user account.
 - Runtime owner access is based on active `venue_members` OWNER membership. `venues.owner_account_id` and `venue_owner_accounts.primary_owner_user_id` are not relinked by membership revoke.
 - Platform Owner does not see ordinary `VENUE_CHAT`; only support tickets are in Platform Support Center unless future product policy explicitly changes.
+- Paid placement/promotion boosting must not be offered without billing, moderation, analytics and visible advertising labels.
+- Cashback/points/flexible loyalty must not be approved before the financial model and discount accounting are correct.
 
 ## Known gaps / needs smoke
 
 - Platform Mini App cockpit is still partial compared with Telegram bot for onboarding requests, placements and analytics.
+- Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`; Platform paid placements, promotion boosting, growth analytics and moderation are future/advanced, not required for MVP.
 - Advanced support features remain future work: SLA automation, auto-escalation worker, macros, attachments, CSAT, diagnostics report and broad support analytics.
 - Real acquiring provider, Telegram Stars and recurring automatic payment remain future work. `GenericHmacBillingProvider` is an integration base, not a completed provider rollout.
 - Audited invoice void/reissue for courtesy conflicts with already-open future invoices remains future work.

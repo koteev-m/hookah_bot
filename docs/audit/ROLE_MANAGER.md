@@ -6,7 +6,7 @@
 
 ## Current status
 
-Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права.
+Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; `Акции и удержание` remain partial/future unless backend-backed and smoked.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue.
 
@@ -28,6 +28,7 @@ Manager bot flow покрывает:
 - tables/QR operations;
 - staff chat operations where allowed;
 - stats where implemented.
+- future `Акции и удержание` only if the backend-backed MVP grants Manager access; Staff must not manage campaigns.
 
 Manager copy should follow the same naming split:
 - `🍽 Заказное меню` - structured menu;
@@ -73,6 +74,7 @@ Manager Mini App areas:
 - Manage tables and QR export according to current permissions.
 - Link/test staff chat if current role permission allows.
 - View staff list and create conservative STAFF invites if current route policy allows.
+- Create/manage simple `VENUE_PROMOTION` only if the growth MVP explicitly allows Manager access; terms, period and visibility/status are mandatory, and promo notifications require guest opt-in.
 
 ## Denied actions
 
@@ -84,6 +86,8 @@ Manager Mini App areas:
 - Rotate all table tokens or other owner-only QR actions if backend permission does not allow it.
 - Unlink staff chat if backend keeps unlink owner-only.
 - Hard delete venue data.
+- Promise automatic discounts, cashback, points or promo-code redemption without a real promotion/loyalty engine and discount accounting.
+- Send marketing/promo notifications without guest opt-in, frequency limits and unsubscribe.
 
 ## Known gaps / needs smoke
 
@@ -97,6 +101,7 @@ Manager Mini App areas:
 - Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 - Guest Communication UX split is CLOSED / smoke passed for Manager surfaces: `Сообщения` handles booking/venue chats, `Помощь` handles support tickets, Staff is not granted access, and support/venue chats do not post to staff-chat. SLA automation, macros, attachments, CSAT and diagnostics remain future support follow-ups.
+- Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
 
 ## Smoke-critical checks
 
@@ -113,3 +118,10 @@ Manager Mini App areas:
 11. Linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
 12. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
 13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
+
+Future Growth/retention checks:
+
+14. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
+15. Promotion is visible only during active period and hidden/suspended promotions are absent.
+16. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
+17. Staff cannot see or manage `Акции и удержание`.

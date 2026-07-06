@@ -8,7 +8,7 @@
 
 Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call, сообщения с заведением и просмотр своего заказа/счёта.
 
-Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems.
+Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
 
 Ключевое разделение:
 - **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;
@@ -65,9 +65,16 @@ Account/bookings:
 - guest booking MVP присутствует: create/list active bookings/status refresh, cancel/accept changed time where supported;
 - M7b Guest Mini App `Мои брони` implemented with staging visual parity: account-level list shows active/upcoming bookings across venues with bot-compatible public `Бронь №...`, venue-local date/time, status, party size, comment and `Держим до HH:mm` when applicable; recorded staging evidence compares Bot `/my` and Guest Mini App public label, venue-local time and deadline, while real two-account Telegram runtime isolation remains unverified;
 - account baseline включает history/favorites sections;
+- Growth/retention target UX:
+  - `Избранное` in catalog/card for favorite venues;
+  - `История` as visits, bookings and closed orders, not raw technical ids;
+  - `Повторить` as a template applied only on the next verified table context;
+  - `Оценить` only after confirmed visit;
+  - `Акции` with clear period and terms;
+  - promo/retention notifications only after opt-in.
 - `Чаты` показывает persisted `BOOKING_CHAT` and `VENUE_CHAT` threads with context/status/unread and active/resolved filters. Copy must explain that problems and complaints are in `Помощь`.
 - `Помощь` / `Мои обращения` shows `SUPPORT_TICKET` only. Technical/Mini App/QR/platform issues can be submitted without venue; order/service and booking categories require verified venue/booking/table context.
-- profile/promotions/loyalty остаются partial или safe fallback, если backend не отдаёт полноценные данные.
+- full growth/retention remains partial/future: profile/promotions/loyalty may show safe fallback only when backend does not provide a complete, smoked product flow.
 
 ## Allowed actions
 
@@ -84,7 +91,7 @@ Account/bookings:
 - Смотреть свой active/current order и backend-owned счёт.
 - Запросить счёт по своему active order/tab and choose an on-site payment note for staff.
 - Завершать свой table context, если нет активного счёта/обязательств и активного вызова персонала.
-- Пользоваться account/favorites/history baseline, где он доступен.
+- Пользоваться account/favorites/history baseline, где он доступен; full `FAVORITE_VENUE`, `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`, `REPEAT_TEMPLATE`, `POST_VISIT_FEEDBACK`, `VENUE_PROMOTION` and `OPT_IN_NOTIFICATION` behavior remains governed by `docs/GROWTH_RETENTION.md`.
 
 ## Denied actions
 
@@ -93,6 +100,8 @@ Account/bookings:
 - Получать hidden info sections или hidden media.
 - Получать raw Telegram `file_id`, raw Telegram file URL или bot token.
 - Управлять меню, stop-list, столами, персоналом, счетами, скидками, venue settings или platform features.
+- Получать marketing/promo notifications без явного opt-in или после unsubscribe.
+- Создавать order через `Повторить` без active table context/current tab/menu validation.
 - Видеть чужие bookings/orders/tabs.
 - Видеть чужие chats/support tickets.
 - Завершать или скрывать чужой table context/session за тем же физическим столом.
@@ -102,7 +111,7 @@ Account/bookings:
 - M7b `Мои брони` still needs real two-account Telegram runtime isolation smoke; local tests/e2e and staging Bot `/my` visual parity for the same booking's label/time/deadline are already green.
 - M7c adaptive booking reminders passed one controlled real Telegram staging smoke but remain disabled by default for rollout; `Да, буду` records attendance intent without changing booking status, edits the guest reminder message, and Guest Mini App shows `Вы подтвердили, что придёте` when recorded.
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
-- Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
+- Favorites/history есть как baseline, но full growth/retention MVP remains `SPEC UPDATED / PARTIAL-FUTURE` until staging smoke proves favorite/unfavorite, visit/order/booking history, repeat template, post-visit feedback, simple promotions and opt-in notification behavior.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
 - Guest Communication UX split is CLOSED / smoke passed: global `Чаты`, global `Помощь`, catalog/venue-detail `Задать вопрос`, `VENUE_CHAT` reuse, support ticket context routing and table-context staff-call separation stay in regression. Advanced support features such as SLA automation, attachments, macros, CSAT and diagnostics reports remain future work.
 - M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Staff-chat activity-card polish also passed: DONE/CANCELLED generic calls no longer stay active in `Оперативно`, and linked closed-visit call leftovers are resolved on order/bill close.
@@ -132,3 +141,12 @@ Account/bookings:
 14. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
 15. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
 16. На active order screen нажать `Попросить счёт`, выбрать `Картой на месте` / `Наличными` / `Пока не знаю`, проверить JSON request contract, guest confirmation, duplicate active request copy and staff notification context.
+
+Future Growth/retention smoke from `docs/GROWTH_RETENTION.md`:
+
+17. Favorite and unfavorite a venue; verify it appears/disappears in favorite venues.
+18. Open history and verify visits, closed orders and bookings are shown with safe labels.
+19. Use `Повторить`; confirm it creates only a repeat template and requires the next table context before order creation.
+20. Confirm unavailable/stopped items are skipped or clearly marked during repeat template application.
+21. Confirm feedback is requested only after a confirmed visit and low ratings do not auto-open a public review link.
+22. Confirm promotions show active period/terms, hidden/suspended promotions are absent, and marketing notifications require opt-in plus unsubscribe.

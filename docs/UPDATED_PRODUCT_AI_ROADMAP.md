@@ -37,6 +37,7 @@
 - Venue Mini App booking card opens a persisted booking conversation thread: venue messages, Guest Bot replies and Guest Mini App replies share one source of truth; staff chat remains a notification mirror. M4A staging smoke passed after UX polish. M4B/M4C unified `Сообщения` inbox and resolve/reopen lifecycle are CLOSED after staging smoke: thread cards show context/status/last message/unread, active/resolved filters work, and explicit resolve/reopen does not mutate booking lifecycle.
 - Guest Communication UX / Support Tickets MVP is CLOSED after smoke: canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Guest nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` remains `BOOKING_CHAT`; Support tickets are separated through `SUPPORT_TICKET`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; table context keeps `Вызвать персонал` as the live operational flow; support/venue chat creation and replies do not post to staff-chat and guest create/reply routes are rate-limited.
 - Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; onboarding/placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
+- Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: favorites, history, repeat templates, post-visit feedback, simple promotions, opt-in notifications and anti-spam/privacy rules are specified as `SPEC UPDATED / PARTIAL-FUTURE`. Do not mark growth flows DONE until Bot + Mini App + backend behavior is implemented and smoked.
 - M5 staff calls lifecycle is CLOSED after staging smoke: Guest Mini App uses a transient staff-call modal and compact status card, Venue Mini App has a real `Вызовы` queue with accept/close, backend/staff-chat callbacks share the same lifecycle, and ACK/DONE audit hardening is CLOSED / staging smoke passed across Venue Mini App and Telegram staff-chat surfaces. Staff-chat order activity cards now hide DONE/CANCELLED generic calls from active `Оперативно`, and closing an order/bill resolves linked active BILL requests plus closed-visit staff-call leftovers. Keep notification delivery plus actor audit evidence in regression.
 - Platform Owner определяется через `PLATFORM_OWNER_TELEGRAM_ID`; legacy aliases остаются совместимостью.
 - Platform Owner config parity between Bot and API is implemented; `PLATFORM_OWNER_TELEGRAM_ID` is the canonical access source and legacy aliases remain compatibility only.
@@ -101,7 +102,8 @@ Supporting docs остаются источниками деталей и eviden
 - `docs/audit/ROLE_STAFF.md`;
 - `docs/audit/ROLE_VENUE_OWNER.md`;
 - `docs/audit/ROLE_PLATFORM_OWNER.md`;
-- `docs/audit/PRODUCT_IDEAS_REVIEW.md`.
+- `docs/audit/PRODUCT_IDEAS_REVIEW.md`;
+- `docs/GROWTH_RETENTION.md`;
 - `docs/audit/VENUE_BOT_TO_MINIAPP_PARITY_PROGRAM.md`.
 
 Word roadmap status:
@@ -122,9 +124,7 @@ Done:
 - table sessions and tabs;
 - staff chat notifications;
 - order queue and lifecycle;
-- full bill/history/stats;
-- feedback/reviews;
-- favorites/history;
+- full bill/stats and history-related foundations;
 - role-aware Telegram menus and callbacks.
 
 Launch focus:
@@ -133,6 +133,7 @@ Launch focus:
 - webhook/outbox/staff notification monitoring;
 - fallback/error paths;
 - pilot venue runbook.
+- growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`, not Bot-first core DONE.
 
 ### Guest Flow
 
@@ -151,13 +152,13 @@ Done:
 - bookings MVP;
 - guest communication split: `Чаты` for `BOOKING_CHAT` / `VENUE_CHAT`, `Помощь` for `SUPPORT_TICKET`, and table-context `Вызвать персонал` for `STAFF_CALL`;
 - account hub baseline with history/favorites and safe bot-only fallbacks where needed;
-- loyalty progress/redemption display;
 - support tickets MVP with verified context routing and Platform/Venue visibility;
 - active order scoping through `tableSessionId` and `tabId` in Mini App client/backend path.
 
 Remaining P1/P2:
 
-- richer profile/promotions/loyalty polish in Mini App;
+- guest growth/retention MVP from `docs/GROWTH_RETENTION.md`: favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications;
+- richer profile/promotions/loyalty polish in Mini App only after the underlying product/accounting rules are implemented and smoked;
 - richer active order display with totals/promo/loyalty parity where needed;
 - booking create/confirm/change/cancel smoke passed for current staging MVP; keep it in regression smoke after future booking changes.
 
@@ -235,36 +236,36 @@ Remaining P1/P2:
 - primary/legal/billing owner relink and a dedicated platform-mediated legal transfer helper;
 - billing payer transfer if commercial ownership transfer requires it.
 
-### Promotions / Marketing / Loyalty
+### Guest Growth / Retention / Promotions
 
-Status: `DONE / STABILIZE`.
+Status: `SPEC UPDATED / PARTIAL-FUTURE`.
 
-Done:
+Canonical model: `docs/GROWTH_RETENTION.md`.
 
-- `TEXT_ONLY`;
-- `BANNER`;
-- `HAPPY_HOURS_PERCENT`;
-- `GIFT_WITH_ITEM`;
-- fixed and choice rewards;
-- item/category targets;
-- schedules;
-- compatibility/stackability resolver;
-- promo ledger;
-- guest/staff/full bill/history promo breakdowns;
-- global promotions feed;
-- banner placements;
-- top-in-actions;
-- archive UX;
-- loyalty accrual and redemption through ledger;
-- marketing hub.
+Current foundation:
 
-Launch focus:
+- account/history/favorites baselines are referenced in role docs and need separate staging smoke before being called complete;
+- booking, table-session and order-close signals are foundations for `VISIT_HISTORY`, but a canonical guest retention history is not closed;
+- promotion/loyalty/bill-breakdown foundations may exist in backend or bot surfaces, but simple guest-visible `VENUE_PROMOTION` management and cross-surface growth UX are not launch-complete;
+- transactional booking reminders are not marketing notifications.
 
-- preview vs checkout parity smoke;
-- item-level discount caps;
-- loyalty + Happy Hours conflict smoke;
-- repeat order behavior;
-- archived/paused/unavailable edge cases.
+MVP target:
+
+- `FAVORITE_VENUE`;
+- `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY` after visit/order model stabilization;
+- `REPEAT_TEMPLATE` that applies only in the next verified table context and never creates an order without table context;
+- `POST_VISIT_FEEDBACK` after confirmed visit;
+- simple `VENUE_PROMOTION` with title, description, active period, terms and visibility/status;
+- `OPT_IN_NOTIFICATION` with frequency limits and unsubscribe before any promo/retention sends.
+
+After MVP:
+
+- `PROMO_CODE` with limits/accounting;
+- `LOYALTY_STAMP` / `LOYALTY_POINTS`;
+- `REFERRAL`;
+- segmentation/campaigns;
+- paid placement/promotion boosting with visible ad labels;
+- advanced recommendations/taste quiz.
 
 ### Mini App Readiness
 
@@ -680,9 +681,9 @@ Ranked next candidates:
    - Why: manual/fake billing cockpit, renewal and courtesy are staging-smoked, but no real card acquiring, Telegram Stars or recurring automatic payment is implemented. Commercial launch may require one provider path.
    - Acceptance: provider secrets stay server-side, webhook verification/idempotency are tested, provider payloads/internal IDs are not exposed to Mini App/audit copy, and the manual invoice path remains safe.
 
-2. Guest history / repeat / favorites / post-visit feedback polish.
-   - Why: retention features are valuable after stable operations and billing. History/favorites foundations vary by surface, and repeat/post-visit feedback need careful availability and privacy rules.
-   - Acceptance: closed visits/orders are visible in guest history, repeat actions respect current menu/stop-list/tab rules, favorites can be managed safely, and post-visit feedback does not spam or leak table/session context.
+2. Guest growth / retention MVP.
+   - Why: retention features are valuable after stable operations and billing, but they depend on a trustworthy visit/order/session model and opt-in notification rules.
+   - Acceptance: closed visits/orders/bookings are visible in guest history, favorites can be managed safely, repeat actions create templates that require the next table context and current menu/stop-list validation, post-visit feedback is requested only after confirmed visit, simple promotions have terms/period/status, and promo notifications require opt-in.
 
 Not selected as implementation right now:
 - H2/PostgreSQL active-order + personal-tab uniqueness fidelity is closed; keep it in regression.
@@ -698,7 +699,7 @@ Not selected as implementation right now:
 
 - remaining booking regression smoke, including real two-account Guest Mini App isolation and schedule validation;
 - remaining backend-backed venue settings slices beyond booking hold, shift extension, public card/location and schedule;
-- guest profile/history/favorites polish;
+- guest growth/retention MVP from `docs/GROWTH_RETENTION.md`: favorites, history, repeat template, post-visit feedback, simple venue promotions and opt-in notifications;
 - custom date range venue stats and AI summaries;
 - platform placements cockpit parity;
 - platform support-ticket regression and advanced support follow-ups;
@@ -713,7 +714,7 @@ Not selected as implementation right now:
 - richer venue cards;
 - media-heavy menu polish;
 - advanced analytics;
-- promo codes/cashback/tiered loyalty;
+- promo codes/cashback/tiered loyalty/referrals/paid placement boosting;
 - managed branded bots;
 - Telegram Business / Secretary automation;
 - Telegram Guest Mode;
@@ -863,6 +864,7 @@ Keep these documents:
 
 - `docs/PLATFORM_COCKPIT.md` - Platform Mode source of truth for cockpit, lifecycle, billing, support, analytics/audit and remaining Platform gaps.
 - `docs/COMMUNICATION_MODEL.md` - Guest communication model and Support Ticket boundaries.
+- `docs/GROWTH_RETENTION.md` - Guest growth/retention model, MVP/future scope, dependencies, opt-in/privacy and future smoke checklist.
 - `docs/audit/MINI_APP_PRODUCTION_READINESS_AUDIT.md` - audit history and original P0/P1 findings.
 - `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` - manual pilot smoke checklist.
 - `docs/audit/PRODUCT_AUDIT_SUMMARY.md` - broader product audit context.
@@ -880,12 +882,12 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 Latest closed smoke blocks: Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish; Guest Communication UX / Support Tickets MVP.
 
-Recommended next bounded milestone: Real acquiring provider / Telegram Stars decision and provider-specific billing rollout, if commercial launch requires online payment. Otherwise choose Guest history / repeat / favorites / post-visit feedback polish for retention after stable operations.
+Recommended next bounded milestone: Real acquiring provider / Telegram Stars decision and provider-specific billing rollout, if commercial launch requires online payment. Otherwise choose Guest Growth/Retention MVP from `docs/GROWTH_RETENTION.md` after stable operations.
 
 Why:
 - support/tickets MVP and guest communication routing are now backend-backed, role-scoped and smoke-tested;
 - manual billing and renewal/courtesy are closed, but no real acquiring provider, Telegram Stars or recurring automatic payment path is implemented;
-- retention features are useful only after operational and billing paths stay stable in pilot regression.
+- retention features are useful only after operational and billing paths stay stable in pilot regression, and they depend on stable visit/order/session history plus opt-in notification rules.
 
 Acceptance target for provider rollout:
 - provider secrets stay server-side;

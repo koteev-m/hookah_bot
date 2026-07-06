@@ -344,6 +344,7 @@ MUST:
 SHOULD:
 - Dashboards: platform + venue (owner) + shift (manager).
 - Platform cockpit reports: venue lifecycle/subscription distribution, active/trialing/past_due/suspended counts, MRR after real providers exist, open/overdue invoices, support TTFR/TTR/escalation/reopen/CSAT/top issue themes, onboarding funnel and integration health.
+- Future growth analytics after `docs/GROWTH_RETENTION.md` MVP: favorite rate, repeat visit rate, promo view/redeem, review completion and opt-in/unsubscribe.
 
 ## Block 14 — Security/anti-fraud/audit
 MUST:
@@ -358,11 +359,17 @@ SHOULD:
 
 ## Block 15 — Growth (guest retention)
 MUST:
-- Favorites (venues), visit history, “repeat template” (applies on next visit/table context).
-- Venue promotions/announcements.
-- Post-visit review flow (rating + optional comment).
+- Use `docs/GROWTH_RETENTION.md` as the canonical model for guest growth and retention. Current status is `SPEC UPDATED / PARTIAL-FUTURE`, not a closed implementation claim.
+- `FAVORITE_VENUE`: guest can favorite/unfavorite venues and list favorite venues.
+- `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`: guest history combines confirmed visits, closed orders and bookings only after the visit/order/session model is stable.
+- `REPEAT_TEMPLATE`: repeat uses a saved template and applies it on the next verified table context; it must not create an order without QR/table context, selected tab and current menu/stop-list validation.
+- `POST_VISIT_FEEDBACK`: rating 1-5, tags and optional comment only after a confirmed visit/order close signal.
+- `VENUE_PROMOTION`: simple venue promotions/banners with title, description, period, terms and visibility/status; do not promise automatic discounts without a real promo engine/accounting path.
+- `OPT_IN_NOTIFICATION`: retention/promo notifications require explicit guest opt-in, frequency limits and unsubscribe.
 SHOULD:
-- Flavor quiz/recommendations; referral sharing.
+- `PROMO_CODE` with limits/accounting, `LOYALTY_STAMP` / `LOYALTY_POINTS`, `REFERRAL`, segmentation/campaigns, paid placement/promotion boosting, flavor quiz and advanced recommendations remain future work.
+- Paid placement must be labeled and depends on Platform billing, moderation and analytics.
+- Cashback/points/flexible loyalty must wait for a correct financial model and discount accounting.
 
 ## Block 16 — Support (tickets + diagnostics + escalations)
 MUST:

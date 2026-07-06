@@ -31,6 +31,8 @@
 > Current checkpoint as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. The canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`. Guest visible nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` stays `BOOKING_CHAT`; support tickets are separate `SUPPORT_TICKET` threads with Guest/Venue/Platform routing; Platform does not see ordinary `VENUE_CHAT`; Staff sees neither support tickets nor ordinary venue chats; support/venue chat create/reply does not post to staff-chat; guest support/venue chat create and support message routes are rate-limited. Advanced SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
 >
 > Current docs checkpoint as of 2026-07-06: Platform cockpit docs are consolidated in `docs/PLATFORM_COCKPIT.md`. Current implementation uses venue lifecycle statuses `DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`; target product states such as `onboarding`, `paused_by_owner`, `suspended_by_platform` and `deletion_requested` require explicit normalization/migration if needed. Manual/fake billing cockpit, owner invites/revoke and Platform support-ticket center are smoke-closed; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
+>
+> Current docs checkpoint as of 2026-07-06: Guest growth/retention is consolidated in `docs/GROWTH_RETENTION.md`. Status is `SPEC UPDATED / PARTIAL-FUTURE`: favorites/history baselines and promotion/loyalty foundations are not enough to call the retention product done. MVP terms are `FAVORITE_VENUE`, `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`, `REPEAT_TEMPLATE`, `POST_VISIT_FEEDBACK`, `VENUE_PROMOTION` and `OPT_IN_NOTIFICATION`; promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and advanced recommendations remain future.
 
 # Краткое резюме
 
@@ -68,7 +70,7 @@
 # Что отсутствует
 
 - Advanced support features beyond MVP: SLA automation, macros, attachments, CSAT, diagnostics reports and support analytics.
-- Promotions/referrals/reviews/favorites/repeat order/history as full cross-channel product flows; several backend/bot baselines exist, but Mini App parity varies by feature.
+- Guest growth/retention as full cross-channel product flows: `FAVORITE_VENUE`, `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`, `REPEAT_TEMPLATE`, `POST_VISIT_FEEDBACK`, simple `VENUE_PROMOTION` and `OPT_IN_NOTIFICATION`. Several backend/bot baselines may exist, but the complete product loop remains partial/future until Bot + Mini App + backend smoke proves it.
 - Real acquiring provider, Telegram Stars and automatic recurring card payments.
 - Invoice void/reissue for open future-invoice conflicts after courtesy adjustments.
 - Better distinction between billing-created and manual `SUSPENDED_BY_PLATFORM` before broader auto-reactivation.
@@ -81,18 +83,18 @@
 No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b, Platform Owner invite/revoke closure, H2/PostgreSQL uniqueness fidelity validation, the Mini App mutation/operational verification pack, Staff Call Lifecycle ACK/DONE audit hardening, the two guest table-context milestones, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card and hookah preparation placeholder polish. Current priorities:
 
 1. **P1/P2**: Real acquiring provider or Telegram Stars rollout, only if commercial launch requires online payment. Current billing MVP is manual/fake-provider only and must not be described as card acquiring or Stars.
-2. **P2**: Guest history/repeat/favorites/post-visit feedback polish. Several backend/account surfaces exist, but repeat-order and post-visit retention loops are not launch-complete.
+2. **P2**: Guest growth/retention MVP from `docs/GROWTH_RETENTION.md`: favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notification rules. Several backend/account surfaces exist, but repeat-order, post-visit feedback and promo/retention notification loops are not launch-complete.
 3. **P2**: Platform analytics/operations cockpit polish: onboarding requests, placements, lifecycle risk/health indicators, support metrics and billing metrics after provider semantics are stable.
 
 # Рекомендуемый порядок дальнейшей работы
 
 1. Keep Support/tickets MVP, Guest Communication UX split, Platform billing cockpit/renewal/courtesy, staff invite deep-link sharing, Platform Owner invite/revoke, M7b/M7c, M9b schedule, Mini App mutation/staff-call/fallback payload paths, bill parity, staff-chat activity card and guest table-context exit in regression.
 2. Plan real acquiring provider / Telegram Stars as a separate milestone with provider secrets, webhook hardening and payment audit; do not fold it into the manual billing MVP.
-3. Defer growth features (repeat/favorites/reviews/promotions) until monetization and support operations have a clearer owner workflow.
+3. Defer growth feature implementation until visit/order/session history, opt-in notification rules and owner promotion workflow are clear; use `docs/GROWTH_RETENTION.md` before opening the milestone.
 
 # Какие функции лучше не трогать пока
 
-- Promotions/referrals/reviews/favorites: product core has higher-risk gaps.
+- Promotions/referrals/reviews/favorites/repeat: product core has higher-risk gaps and the growth MVP depends on stable visit/order/session history.
 - Advanced analytics dashboards: first ensure events are complete and reliable.
 - Deep menu media/top-list polish: first fix order modifiers and guest bill correctness.
 - Real acquiring provider, Telegram Stars and recurring billing: current manual billing cockpit is staging-smoked, but production payment providers need a separate provider-specific design and smoke.
@@ -131,6 +133,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 | Booking flow | PARTIAL | `GuestBookingRoutes`, `VenueBookingRoutes`, bot booking methods | Mini App screens and analytics event |
 | Split bill / personal/shared tabs | DONE/PARTIAL | `GuestTabsRoutes`, `GuestTabsRepository`, `cart.ts`, `order.ts`, `venueOrderDetail.ts` | Tab-scoped order views are code-test-backed; shared-tab DB uniqueness remains repository-idempotent |
 | Platform mode | PARTIAL | `platformApp.ts`, `PlatformVenueRoutes`, `docs/PLATFORM_COCKPIT.md` | Manual billing/support MVP is smoke-closed; onboarding requests, placements, analytics/risk cockpit and lifecycle normalization remain future/partial |
+| Guest growth/retention | SPEC UPDATED / PARTIAL-FUTURE | `docs/GROWTH_RETENTION.md`, account/history/favorites baselines where present | MVP is favorite venues, visit/order/booking history, repeat template, post-visit feedback, simple venue promotions and opt-in notifications; promo codes, loyalty, referrals, paid placement boosting and segmentation remain future |
 | Onboarding venue/application flow | PARTIAL | `venue_connection_requests`, `TelegramBotRouterVenueConnectionRequestFlowTest` | Integrate with platform UI |
 | Subscriptions/billing | DONE/PARTIAL | `SubscriptionRepository`, `SubscriptionBillingEngine`, `PlatformBillingRoutes`, `billing_adjustments` | Manual/fake billing cockpit, advance next invoice and courtesy days are staging-smoked; real acquiring, Stars, void/reissue and suspended-status distinction remain future |
 | Support/tickets | MVP / smoke passed | `SupportRoutes`, `SupportThreadRepository`, `support_threads.thread_type`, `guestSupportThreads.ts`, `venueMessages.ts`, `platformSupport.ts` | Advanced SLA/macros/attachments/CSAT/diagnostics/support analytics |

@@ -61,6 +61,7 @@ Guest communication is split into four different product scenarios. Do not merge
 - Support/venue replies may notify the guest through the existing safe Telegram outbox when possible.
 - `STAFF_CALL` keeps the existing operational notification behavior.
 - Guest support ticket creation, venue chat creation and guest support/venue chat messages are rate-limited through the existing guest rate-limit infrastructure.
+- Retention/promo notifications are not covered by this communication MVP; they require `OPT_IN_NOTIFICATION`, frequency limits and unsubscribe as defined in `docs/GROWTH_RETENTION.md`.
 
 ## Open Follow-Ups
 

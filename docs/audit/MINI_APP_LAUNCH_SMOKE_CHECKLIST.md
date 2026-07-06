@@ -101,7 +101,7 @@ Remaining:
 - invoice void/reissue for courtesy conflicts with already-open future invoices remains a follow-up;
 - billing-created versus manual `SUSPENDED_BY_PLATFORM` distinction remains a follow-up before broader auto-reactivation;
 - Support/Tickets MVP beyond booking threads is closed and stays in regression; SLA automation, auto-escalation, macros, attachments, CSAT, diagnostics and support analytics remain future work;
-- guest history/repeat/favorites/feedback/growth flows remain future work;
+- guest growth/retention flows remain `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`: favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are future smoke targets;
 - platform analytics dashboards remain future work;
 - P1 follow-up: paid venue/shift extension is implemented in backend, Guest/Venue Mini App, Guest Bot entry and staff-chat action path; remaining parity is Owner/Manager Bot settings smoke/closure where still needed by roadmap;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
@@ -568,7 +568,24 @@ Expected:
 - M4A booking conversation threads, M4B/M4C unified inbox lifecycle and the later Guest Communication UX / Support Tickets MVP are staging/smoke-closed. Guest/Venue inbox cards show multi-venue/context clarity, status/unread state, active/resolved filters and explicit `Завершить переписку` / `Возобновить переписку` actions. Venue/admin bot full inbox, structured reschedule proposals, advanced support automation/diagnostics, attachments, CSAT, support analytics and DB-level duplicate/race protection are follow-ups.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
-## 10. Recommended Next Test Investment
+## 10. Future Growth/Retention Smoke Checklist
+
+Use this checklist only after a dedicated Growth/retention implementation milestone. Current status is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`.
+
+1. Guest can favorite and unfavorite a venue from catalog/card.
+2. Guest sees favorite venues.
+3. Guest sees visit, order and booking history with safe public labels.
+4. `Повторить` creates a repeat template and requires table context before any order is created.
+5. Repeat template skips or clearly marks unavailable/stopped items.
+6. Feedback is requested only after confirmed visit.
+7. Low rating does not automatically push a public review link.
+8. Promotion is visible only during active period.
+9. Suspended/hidden venue promotions are not visible.
+10. Promo/retention notifications require opt-in and can be disabled.
+11. Staff does not see or manage growth campaigns.
+12. Platform paid placement label is visible if/when paid placement is implemented.
+
+## 11. Recommended Next Test Investment
 
 1. Expand the lightweight Playwright/Vite smoke harness with fixture-driven UI tests for:
    - guest cart/order/staff call;
@@ -582,7 +599,7 @@ Expected:
    - Guest Bot and Guest Mini App submit the same structured selected-option shape.
 3. Extend cross-channel bill snapshots when selected option price deltas are implemented.
 
-## 11. Next Implementation Smoke Target
+## 12. Next Implementation Smoke Target
 
 Current implementation block after M9b.3: M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed, with the standard deploy command still supported and the opt-in ControlMaster helper validated as a persistent-connection workaround for unreliable fresh SSH/rsync connections. The exact SSH/network root cause remains unconfirmed and belongs to future operations hardening, not the M9a closure. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED / staging smoke passed in provider-free mode: OWNER tested country, city, manual address, save/reload, guest card reflection and route opening; visual polish remains deferred until functional blocks are complete. M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges, guest-facing reason/comment, human booking rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c, M8b-Free, M9a and M9b/M9b.1/M9b.2/M9b.3 stay in regression smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 

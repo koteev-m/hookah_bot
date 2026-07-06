@@ -13,6 +13,8 @@
 > Current correction as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. The current source of truth is `docs/COMMUNICATION_MODEL.md`: `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate flows; Guest nav is `Чаты` / `Помощь`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support/venue chat creation and replies do not post to staff-chat. Historical support/ticket missing claims below are superseded; SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
 >
 > Current docs correction as of 2026-07-06: Platform cockpit source of truth is `docs/PLATFORM_COCKPIT.md`. Platform Mini App has smoke-passed manual billing and support-ticket MVPs; onboarding requests, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
+>
+> Current docs correction as of 2026-07-06: Growth/retention source of truth is `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty stamps/points, referrals, paid placement/boosting, segmentation and advanced recommendations remain future.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -55,7 +57,7 @@ Status: `PARTIAL`.
 - stale/superseded: fallback chat order now sends the router-supported `cmd=start_quick_order` payload and has Mini App e2e coverage;
 - active order scoping by `tableSessionId/tabId` needs launch regression coverage;
 - guest booking/profile/history and advanced support UI parity need dedicated regression passes;
-- promotions/loyalty display must be smoke-tested against bot output.
+- promotions/loyalty/growth display must be smoke-tested against backend and bot output before being called complete.
 
 ### Venue Mini App
 
@@ -406,7 +408,7 @@ Tests to add/update:
 ## 5. P2 Improvements
 
 - Guest Mini App public venue card enrichment: media, hours, richer promo previews.
-- Profile/history/favorites polish in Mini App.
+- Growth/retention MVP from `docs/GROWTH_RETENTION.md`: favorite venues, visit/order/booking history, repeat templates that require table context, post-visit feedback, simple venue promotions and opt-in notification rules.
 - Platform analytics dashboard beyond operational baseline.
 - Menu photos/modifiers/top-list if not required for launch.
 - Channel sync polish: start in bot, continue in Mini App, back to bot.
@@ -429,7 +431,7 @@ Tests to add/update:
 6. Venue settings: make real or hide.
 7. Bookings screens if launch scope.
 8. Stop-list options parity.
-9. Platform analytics/placements baseline; keep Platform support-ticket center in regression.
+9. Platform analytics/placements baseline; keep Platform support-ticket center in regression. Paid placement/promotion boosting stays future until billing, moderation, analytics and visible ad labels are implemented.
 
 ## 8. Tests To Add / Update
 
