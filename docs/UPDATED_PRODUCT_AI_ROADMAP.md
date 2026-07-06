@@ -38,6 +38,7 @@
 - Guest Communication UX / Support Tickets MVP is CLOSED after smoke: canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Guest nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` remains `BOOKING_CHAT`; Support tickets are separated through `SUPPORT_TICKET`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; table context keeps `Вызвать персонал` as the live operational flow; support/venue chat creation and replies do not post to staff-chat and guest create/reply routes are rate-limited.
 - Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; onboarding/placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
 - Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: favorites, history, repeat templates, post-visit feedback, simple promotions, opt-in notifications and anti-spam/privacy rules are specified as `SPEC UPDATED / PARTIAL-FUTURE`. Do not mark growth flows DONE until Bot + Mini App + backend behavior is implemented and smoked.
+- Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping is closed; visit entity/history, force-close policy/audit, some DB-level uniqueness nuances and broader analytics remain partial/future.
 - M5 staff calls lifecycle is CLOSED after staging smoke: Guest Mini App uses a transient staff-call modal and compact status card, Venue Mini App has a real `Вызовы` queue with accept/close, backend/staff-chat callbacks share the same lifecycle, and ACK/DONE audit hardening is CLOSED / staging smoke passed across Venue Mini App and Telegram staff-chat surfaces. Staff-chat order activity cards now hide DONE/CANCELLED generic calls from active `Оперативно`, and closing an order/bill resolves linked active BILL requests plus closed-visit staff-call leftovers. Keep notification delivery plus actor audit evidence in regression.
 - Platform Owner определяется через `PLATFORM_OWNER_TELEGRAM_ID`; legacy aliases остаются совместимостью.
 - Platform Owner config parity between Bot and API is implemented; `PLATFORM_OWNER_TELEGRAM_ID` is the canonical access source and legacy aliases remain compatibility only.
@@ -687,7 +688,7 @@ Ranked next candidates:
 
 Not selected as implementation right now:
 - H2/PostgreSQL active-order + personal-tab uniqueness fidelity is closed; keep it in regression.
-- Broad Guest Order / Table Session / Tab Scoping Hardening is not reopened without new evidence; current runtime is documented as `table_session_id`/`tab_id` scoped.
+- Broad Guest Order / Table Session / Tab Scoping Hardening is not reopened without new evidence; current runtime is documented as `table_session_id`/`tab_id` scoped and the canonical model/status is now in `docs/ORDER_SESSION_TAB_CORE.md`.
 - Mini App mutation and fallback payload verification is closed; keep it in regression.
 - Guest-facing bill/display-number/full-bill parity, Venue Mini App full bill parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card and hookah placeholder polish are closed; keep them in regression rather than selecting them again.
 - Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are closed; keep read-only GET checks, explicit POST creation, courtesy audit, Manager/Staff payment-control denials and invite acceptance/share UX in regression.
@@ -864,6 +865,7 @@ Keep these documents:
 
 - `docs/PLATFORM_COCKPIT.md` - Platform Mode source of truth for cockpit, lifecycle, billing, support, analytics/audit and remaining Platform gaps.
 - `docs/COMMUNICATION_MODEL.md` - Guest communication model and Support Ticket boundaries.
+- `docs/ORDER_SESSION_TAB_CORE.md` - Order/session/tab source of truth for table context, active orders, batches, tabs, bill flow, lifecycle and privacy boundaries.
 - `docs/GROWTH_RETENTION.md` - Guest growth/retention model, MVP/future scope, dependencies, opt-in/privacy and future smoke checklist.
 - `docs/audit/MINI_APP_PRODUCTION_READINESS_AUDIT.md` - audit history and original P0/P1 findings.
 - `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` - manual pilot smoke checklist.
@@ -882,12 +884,12 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 Latest closed smoke blocks: Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish; Guest Communication UX / Support Tickets MVP.
 
-Recommended next bounded milestone: Real acquiring provider / Telegram Stars decision and provider-specific billing rollout, if commercial launch requires online payment. Otherwise choose Guest Growth/Retention MVP from `docs/GROWTH_RETENTION.md` after stable operations.
+Recommended next bounded milestone: Real acquiring provider / Telegram Stars decision and provider-specific billing rollout, if commercial launch requires online payment. Otherwise choose Guest Growth/Retention MVP from `docs/GROWTH_RETENTION.md` after stable operations and keep `docs/ORDER_SESSION_TAB_CORE.md` in regression.
 
 Why:
 - support/tickets MVP and guest communication routing are now backend-backed, role-scoped and smoke-tested;
 - manual billing and renewal/courtesy are closed, but no real acquiring provider, Telegram Stars or recurring automatic payment path is implemented;
-- retention features are useful only after operational and billing paths stay stable in pilot regression, and they depend on stable visit/order/session history plus opt-in notification rules.
+- retention features are useful only after operational and billing paths stay stable in pilot regression, and they depend on stable visit/order/session/tab history plus opt-in notification rules.
 
 Acceptance target for provider rollout:
 - provider secrets stay server-side;

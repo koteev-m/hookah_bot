@@ -10,6 +10,7 @@ Growth не должен превращать QR-меню в спам-канал
 
 Transactional flows remain separate:
 - `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are governed by `docs/COMMUNICATION_MODEL.md`.
+- Order/session/tab semantics for history, repeat and feedback dependencies are governed by `docs/ORDER_SESSION_TAB_CORE.md`.
 - Booking reminders are transactional booking operations, not growth marketing.
 - Staff-chat is operational and must not receive marketing/growth events unless a separate operational event already exists.
 
@@ -90,7 +91,7 @@ Platform may moderate growth monetization later, but it is not required for MVP:
 ## Dependencies And Blockers
 
 - Growth implementation depends on stable visit/order history.
-- Repeat/favorites/history depend on active order scoped by `table_session` / `tab`.
+- Repeat/favorites/history depend on active order scoped by `table_session` / `tab` according to `docs/ORDER_SESSION_TAB_CORE.md`.
 - Repeat templates depend on current menu availability, stop-list and selected-option validation.
 - Feedback depends on a correct close visit/order signal.
 - Preorder depends on booking lifecycle and reliable `visit_count`.

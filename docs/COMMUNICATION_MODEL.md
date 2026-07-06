@@ -20,7 +20,7 @@ Guest communication is split into four different product scenarios. Do not merge
 - `BOOKING_CHAT` is represented by booking conversation threads. It is opened from booking flows and must remain separate from support ticket queues.
 - `VENUE_CHAT` is represented by a venue-scoped ordinary chat thread for one guest and one venue. If an ordinary guest+venue chat already exists, reuse it instead of creating duplicates.
 - `SUPPORT_TICKET` is represented by support-ticket threads with status, category, assignee scope and audit/status behavior.
-- `STAFF_CALL` is not a support thread. It remains a staff-call/order operational flow.
+- `STAFF_CALL` is not a support thread. It remains a staff-call/order operational flow governed by the table/session/order boundaries in `docs/ORDER_SESSION_TAB_CORE.md`.
 
 ## Guest UX
 

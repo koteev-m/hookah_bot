@@ -9,6 +9,8 @@
 > Current docs correction as of 2026-07-06: Platform cockpit status is consolidated in `docs/PLATFORM_COCKPIT.md`. Manual billing and support-ticket center are closed as MVPs; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle state normalization remain future/partial.
 >
 > Current docs correction as of 2026-07-06: Guest growth/retention status is consolidated in `docs/GROWTH_RETENTION.md`. MVP scope is favorite venues, visit/order/booking history after the visit/order model stabilizes, repeat as a template for the next table context, post-visit feedback after confirmed visit, simple venue promotions/banners and opt-in notifications. Promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and recommendations remain future.
+>
+> Current docs correction as of 2026-07-06: Order/session/tab core status is consolidated in `docs/ORDER_SESSION_TAB_CORE.md`. Current docs still say the old active-order-by-physical-table risk is closed through table-session/tab scoping; the canonical model now defines `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, lifecycle, privacy/RBAC and visit-history dependencies. Visit entity/history, force-close reason/audit, some DB-level uniqueness nuances and analytics events remain future/partial.
 
 ## Executive summary
 
@@ -20,6 +22,7 @@
 
 Главные зависимости:
 - Core order/session/tab scoping is no longer the old April P0; current code scopes active orders by table session/tab, PostgreSQL has the intended active-order and active personal-tab uniqueness constraints, and H2 now mirrors those predicates for local/test schema fidelity.
+- `docs/ORDER_SESSION_TAB_CORE.md` is the current source for future order/session/tab tasks; do not infer session/tab semantics from this historical audit alone.
 - P1 ops: table-context exit, guest/staff bill display parity, bill request/payment method UX, staff-chat activity card, manual platform billing cockpit, renewal/courtesy, staff invite sharing, Platform cockpit documentation and support/tickets MVP are now staging/smoke-closed or docs-closed; provider payment decision is the next launch-commercial gap before broad growth.
 - P2 growth: favorites, visit/order/booking history, repeat templates, simple promotions, post-visit feedback and opt-in notifications need stable visit/order history.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.
@@ -1124,6 +1127,7 @@ No current P0 is selected from this historical list. The original P0 order/sessi
 ## Просмотренные файлы и источники
 
 - `docs/PRODUCT_SPEC.md`
+- `docs/ORDER_SESSION_TAB_CORE.md`
 - `docs/GROWTH_RETENTION.md`
 - `docs/audit/PRODUCT_AUDIT_SUMMARY.md`
 - `docs/audit/ROLE_GUEST.md`

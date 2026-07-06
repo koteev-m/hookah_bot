@@ -6,6 +6,10 @@ Guests can browse a catalog, book a visit, and in-venue scan a table QR to open 
 Venue OWNER/MANAGER/STAFF users manage their own venue according to runtime `venue_members` permissions: tables/QRs, menu with photos/options, stop-list, bookings, staff roles, and order processing.
 Platform Owner manages onboarding of venues, venue OWNER invitations/revocation, lifecycle (publish/hide/suspend/archive/delete), subscriptions (trial/prices), support and analytics.
 
+Order/session/tab source of truth:
+- Canonical `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close and visit-history foundation model is `docs/ORDER_SESSION_TAB_CORE.md`.
+- Current runtime docs say the old active-order-by-physical-table risk is closed; future work must keep current-vs-target gaps explicit.
+
 ## Core surfaces
 - Telegram Bot (chat): navigation, fallback ordering, booking fallback
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)
@@ -39,6 +43,7 @@ Guest:
 - order_service_charge: non-menu bill charge such as approved paid extension; included in bill totals but not shown as a normal order-menu item
 - subscription: venue_id, status trialing/active/past_due/suspended/canceled, price override, trial_end, paid_until, grace_end, methods enabled(card/stars)
 - support_ticket: guest/venue/platform tickets with context (venue/table/order)
+- visit: product-level history/retention concept derived from table session + closed order + booking seated/no-show where implemented; see `docs/ORDER_SESSION_TAB_CORE.md`
 
 ## Key UX decisions (must)
 - Mini App is primary UX. If Mini App fails to load, show button: “Не грузится? → Оформить в чате” which triggers fallback ordering in chat.
@@ -71,6 +76,7 @@ SHOULD:
 MUST:
 - Catalog entry, venue link entry, table QR entry.
 - Table QR sets context (venue_id + table_id via opaque token).
+- QR/table token is a context pointer, not authorization; server validates guest/session/tab/venue access for every order, staff call, bill and tab action.
 - Tokens are non-guessable; support re-issue.
 SHOULD:
 - Venue “general QR” (no table) that opens venue card/menu preview.
@@ -91,8 +97,11 @@ SHOULD:
 
 ## Block 5 — Orders (one active order per table_session + batches)
 MUST:
+- Follow `docs/ORDER_SESSION_TAB_CORE.md` for canonical order/session/tab behavior and current-vs-target notes.
 - One active order per `table_session_id`; multiple batches (dosa orders).
+- Target scope for `ACTIVE_TABLE_ORDER` is `venue_id + table_id + table_session_id`, not physical `table_id` alone.
 - Guest: browse menu, add to cart, submit batch with notes.
+- Every `ORDER_BATCH` belongs to the active order and current `tab_id`, has source such as Mini App or bot fallback, is idempotent by client idempotency key and preserves item/price/option snapshots.
 - Staff: receive and process batches with statuses.
 - Staff assignment optional; prevent double-accept conflicts.
 - PostgreSQL and the H2 test schema both enforce one `ACTIVE` order per `table_session_id`; the H2/PostgreSQL fidelity milestone is CLOSED / validation passed and did not change runtime API/routes/Mini App/Bot behavior.
@@ -105,9 +114,12 @@ SHOULD:
 
 ## Block 6 — Split bill (personal/shared) with anti-abuse
 MUST:
+- Follow `docs/ORDER_SESSION_TAB_CORE.md` for canonical split-bill/tab invariants.
 - Default personal tab per user in a table_session.
 - Shared tab creation; join requires explicit consent/invite.
 - Prevent ordering on another user’s tab without permission.
+- Guest can add batches only to own personal tab or a joined shared tab.
+- Closed/paid tabs are immutable for new batches unless reopened by an allowed role with audit.
 - PostgreSQL and the H2 test schema both enforce one active `PERSONAL` tab per `table_session_id + owner_user_id`.
 SHOULD:
 - Show clearly “which tab you’re ordering to” in UI.
@@ -184,6 +196,7 @@ Remaining follow-ups after parity closure:
 
 ## Block 9 — Tables & QR
 MUST:
+- Follow `docs/ORDER_SESSION_TAB_CORE.md` for `TABLE_SESSION` lifecycle, close/expire policy and guest re-entry rules.
 - Table CRUD; unique QR per table.
 - QR token rotation/reissue.
 - Print/export QR for venues.
@@ -339,6 +352,7 @@ SHOULD:
 MUST:
 - Current event/audit foundation is partial: platform venue status audit, owner invite/revoke audit, billing checkout/mark-paid/courtesy audit, support ticket status/scope/assignment/escalation audit and staff-call/order audit exist where implemented.
 - Server-side events needed for reporting include: table_session_started, batch_created, batch_status_changed, booking_status_changed, subscription_status_changed, venue_lifecycle_changed, owner_invite_created/accepted, billing_invoice_state_changed, support_ticket_status_changed and support_ticket_scope_changed.
+- Order/session/tab analytics from `docs/ORDER_SESSION_TAB_CORE.md` need: table_session_started/closed, batch_created/status_changed, tab_bill_requested/paid/closed, order_closed, booking_seated/no_show when implemented.
 - Correlation IDs (venue/table/session/order/batch/tab).
 - Minimal PII; pseudonymize in analytics if exported.
 SHOULD:

@@ -166,6 +166,8 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 
 Platform/billing product status is tracked in `docs/PLATFORM_COCKPIT.md`. The smoke-closed MVP is manual/fake-provider billing with explicit invoice/checkout ensure, manual mark-paid, advance next invoice and courtesy days. `GenericHmacBillingProvider` is an integration base; real acquiring provider rollout, Telegram Stars and recurring automatic payments are separate future milestones unless explicitly implemented and smoked.
 
+Order/session/tab core product status is tracked in `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say active order scoping by `tableSessionId`/`tabId` is closed and must stay in regression; visit history/entity, force-close audit, DB-level uniqueness nuances and broader analytics events remain partial/future.
+
 Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
 
 ## Telegram payments: Stars vs external billing

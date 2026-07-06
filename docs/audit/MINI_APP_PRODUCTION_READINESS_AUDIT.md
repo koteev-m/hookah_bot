@@ -15,6 +15,8 @@
 > Current docs correction as of 2026-07-06: Platform cockpit source of truth is `docs/PLATFORM_COCKPIT.md`. Platform Mini App has smoke-passed manual billing and support-ticket MVPs; onboarding requests, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 >
 > Current docs correction as of 2026-07-06: Growth/retention source of truth is `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty stamps/points, referrals, paid placement/boosting, segmentation and advanced recommendations remain future.
+>
+> Current docs correction as of 2026-07-06: Order/session/tab core source of truth is `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-table risk is closed through `tableSessionId`/`tabId` scoping; keep the core in regression for QR session, active order, batches, tabs, bill request/paid/closed flow and privacy boundaries. Visit entity/history, force-close reason/audit, DB-level uniqueness nuances and broader analytics events remain future/partial.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -244,6 +246,8 @@ Tests to add/update:
 
 ### P0.5 — Active order scoping needs launch regression coverage
 
+Status: SPEC UPDATED in `docs/ORDER_SESSION_TAB_CORE.md`. Current audit/roadmap notes say the old table-only active-order risk is closed; this section remains a regression checklist, not a claim that the bug is currently open.
+
 Why it matters:
 
 Active order scoping by `tableSessionId` and `tabId` was previously the highest-risk privacy issue. Current backend has session/tab scoped paths, but this must be covered by launch regression tests.
@@ -431,7 +435,8 @@ Tests to add/update:
 6. Venue settings: make real or hide.
 7. Bookings screens if launch scope.
 8. Stop-list options parity.
-9. Platform analytics/placements baseline; keep Platform support-ticket center in regression. Paid placement/promotion boosting stays future until billing, moderation, analytics and visible ad labels are implemented.
+9. Keep order/session/tab core from `docs/ORDER_SESSION_TAB_CORE.md` in regression for sequential visits, shared/personal tabs, fallback order and session close/expire.
+10. Platform analytics/placements baseline; keep Platform support-ticket center in regression. Paid placement/promotion boosting stays future until billing, moderation, analytics and visible ad labels are implemented.
 
 ## 8. Tests To Add / Update
 

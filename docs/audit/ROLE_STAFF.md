@@ -8,7 +8,7 @@
 
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
@@ -53,7 +53,7 @@ STAFF opens Venue Mini App through inline `web_app` entry (`📱 Открыть 
 STAFF Mini App behavior:
 - dashboard shows operational counters, not staff chat diagnostics;
 - order queue/detail;
-- full bill read-only with human order display label, personal/shared account context, discounts, service charges and excluded/non-payable items;
+- full bill read-only with human order display label, batches/doporders, personal/shared account context, discounts, service charges and excluded/non-payable items;
 - accept/deliver allowed statuses;
 - close bill/order;
 - staff calls view/accept/close;
@@ -67,7 +67,7 @@ STAFF Mini App behavior:
 ## Allowed actions
 
 - View venue order queue.
-- View order detail and full bill read-only.
+- View order detail with batches/tabs and full bill read-only.
 - Update allowed order statuses.
 - Close bill/order.
 - View active staff calls.
@@ -105,6 +105,7 @@ STAFF Mini App behavior:
 - See or reply to ordinary `VENUE_CHAT`.
 - Manage venue settings.
 - Manage billing/subscription/platform features, including mark-paid, invoice ensure, courtesy/free-days or payment controls.
+- Treat staff chat as the source of truth for order/bill state or merge orders from different table sessions.
 
 ## Known gaps / needs smoke
 
@@ -115,6 +116,7 @@ STAFF Mini App behavior:
 - Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Direct API denial tests remain critical: UI hiding is not a security boundary.
 - Guest Communication UX split is CLOSED / smoke passed for STAFF boundaries: staff remains operational, support/venue-chat API access is denied, and staff-call/order behavior stays separate.
+- Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: STAFF can operate statuses according to role, but queue/detail must preserve table-session, batch and tab boundaries. Force close should require reason/audit if implemented by an allowed role.
 
 ## Smoke-critical checks
 
@@ -131,3 +133,4 @@ STAFF Mini App behavior:
 11. STAFF does not see `Помощь` / `Обращения`, cannot open/reply support tickets, and cannot open/reply ordinary venue chats through direct API calls.
 12. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.
 13. Newly invited STAFF can open Venue Mode after accepting deep link, but cannot see billing/payment controls.
+14. STAFF order detail shows batches and tabs without exposing unrelated guests' private/support data; staff chat order notification mirrors the backend order state but is not treated as source of truth.

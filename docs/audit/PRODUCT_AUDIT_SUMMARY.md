@@ -33,6 +33,8 @@
 > Current docs checkpoint as of 2026-07-06: Platform cockpit docs are consolidated in `docs/PLATFORM_COCKPIT.md`. Current implementation uses venue lifecycle statuses `DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`; target product states such as `onboarding`, `paused_by_owner`, `suspended_by_platform` and `deletion_requested` require explicit normalization/migration if needed. Manual/fake billing cockpit, owner invites/revoke and Platform support-ticket center are smoke-closed; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
 >
 > Current docs checkpoint as of 2026-07-06: Guest growth/retention is consolidated in `docs/GROWTH_RETENTION.md`. Status is `SPEC UPDATED / PARTIAL-FUTURE`: favorites/history baselines and promotion/loyalty foundations are not enough to call the retention product done. MVP terms are `FAVORITE_VENUE`, `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`, `REPEAT_TEMPLATE`, `POST_VISIT_FEEDBACK`, `VENUE_PROMOTION` and `OPT_IN_NOTIFICATION`; promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and advanced recommendations remain future.
+>
+> Current docs checkpoint as of 2026-07-06: Order/session/tab core is consolidated in `docs/ORDER_SESSION_TAB_CORE.md`. Status is `SPEC UPDATED`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are now the canonical model. Current runtime docs still say the old table-only active-order risk is closed; remaining gaps are visit entity/history, force-close reason/audit, DB-level uniqueness nuances and broader analytics events.
 
 # Краткое резюме
 
@@ -115,6 +117,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 
 | Блок | Статус | Evidence | Что дальше |
 |---|---|---|---|
+| Order/session/tab core | SPEC UPDATED / runtime scoping closed with partial follow-ups | `docs/ORDER_SESSION_TAB_CORE.md`, `GuestOrderRoutes`, `TableSessionRepository`, `GuestTabsRoutes`, `VenueOrdersRepository` | Keep table-session/tab scoping, personal/shared tab visibility, batch idempotency, bill request and close/expire behavior in regression; visit entity/history, force-close audit and DB-level uniqueness nuances remain future/partial |
 | Guest QR/table flow | DONE / staging smoke passed | `GuestTableResolveRoutes`, `TableSessionRepository`, `GuestTableResolveRoutesTest`, `guest_table_session_exits` | Keep QR/table restore, user-scoped exit, active obligation blocking and explicit QR re-entry in regression |
 | Guest menu/order/cart/comment | PARTIAL | `GuestMenuRepository`, `GuestOrderRoutes`, `cart.ts` | Options/modifiers, fallback contract |
 | Order batches / дозаказы | PARTIAL | `OrdersRepository.createGuestOrderBatch`, `order_batches`, `VenueOrdersRepository` | Full DTO and session scoping |
@@ -196,7 +199,8 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 8. Booking create/update/cancel emits analytics and appears in venue queue.
 9. Display number resets per venue day and appears in Guest/Venue Mini App order surfaces.
 10. Guest opens `Мой заказ`, requests bill with `Картой на месте`, repeats while active to verify duplicate copy/no duplicate staff-chat notification, then repeats after DONE with `Наличными`.
-10. Owner invite from platform can be accepted end-to-end.
+11. Order/session/tab core regression from `docs/ORDER_SESSION_TAB_CORE.md`: first batch and second batch use the same active order/session with separate batches; second guest cannot see the first guest personal tab; fallback chat order uses the same session/tab rules; stop-list change before submit blocks stale unavailable item/option.
+12. Owner invite from platform can be accepted end-to-end.
 
 # Созданные файлы отчёта
 

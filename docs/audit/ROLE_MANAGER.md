@@ -8,7 +8,7 @@
 
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; `Акции и удержание` remain partial/future unless backend-backed and smoked.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`.
 
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
@@ -41,7 +41,7 @@ Manager opens Venue Mini App through inline `web_app` entry, so Telegram initDat
 Manager Mini App areas:
 - dashboard;
 - orders queue/detail;
-- full bill with human order display label, personal/shared account context, discounts, service charges and excluded/non-payable items;
+- full bill with human order display label, batches/doporders, personal/shared account context, discounts, service charges and excluded/non-payable items;
 - bill controls: manual discount, exclude/restore item;
 - close bill/order;
 - bookings;
@@ -60,6 +60,7 @@ Manager Mini App areas:
 - View and operate venue order queue.
 - Update allowed order/batch statuses.
 - Close bill/order.
+- View order detail with batches/tabs while preserving table-session boundaries.
 - View full bill.
 - Apply/change/remove manual item discount.
 - Exclude/restore bill item.
@@ -86,6 +87,7 @@ Manager Mini App areas:
 - Rotate all table tokens or other owner-only QR actions if backend permission does not allow it.
 - Unlink staff chat if backend keeps unlink owner-only.
 - Hard delete venue data.
+- Mix orders/batches from different `table_session_id` values or treat staff chat as the source of truth for order state.
 - Promise automatic discounts, cashback, points or promo-code redemption without a real promotion/loyalty engine and discount accounting.
 - Send marketing/promo notifications without guest opt-in, frequency limits and unsubscribe.
 
@@ -101,6 +103,7 @@ Manager Mini App areas:
 - Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 - Guest Communication UX split is CLOSED / smoke passed for Manager surfaces: `Сообщения` handles booking/venue chats, `Помощь` handles support tickets, Staff is not granted access, and support/venue chats do not post to staff-chat. SLA automation, macros, attachments, CSAT and diagnostics remain future support follow-ups.
+- Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: queue may group by table, but detail must preserve batches/tabs/session boundaries; force close should require reason/audit if implemented.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
 
 ## Smoke-critical checks
@@ -118,10 +121,11 @@ Manager Mini App areas:
 11. Linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
 12. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
 13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
+14. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
 
 Future Growth/retention checks:
 
-14. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
-15. Promotion is visible only during active period and hidden/suspended promotions are absent.
-16. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
-17. Staff cannot see or manage `Акции и удержание`.
+15. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
+16. Promotion is visible only during active period and hidden/suspended promotions are absent.
+17. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
+18. Staff cannot see or manage `Акции и удержание`.

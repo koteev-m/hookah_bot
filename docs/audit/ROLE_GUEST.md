@@ -8,7 +8,7 @@
 
 Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call, сообщения с заведением и просмотр своего заказа/счёта.
 
-Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
+Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
 
 Ключевое разделение:
 - **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;
@@ -47,18 +47,19 @@ Pre-QR Guest Mini App:
 - add-to-cart/order actions недоступны без table context.
 
 QR/table Guest Mini App:
-- table token resolve и active table session;
+- table token resolve и active `TABLE_SESSION`;
 - structured order menu;
 - option/flavor picker for configured item-scoped options and line-level `preferenceNote`;
 - cart preview backend-owned;
-- submit order/add batch;
-- fallback chat order emits `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`;
-- active order screen с refresh/polling, human order label `Заказ №...`, selected account label `Личный счёт` / `Общий счёт`, selected-tab bill totals, discounts and service charges;
+- submit order/add batch into the current active table order/session and selected personal/shared tab;
+- fallback chat order emits `Telegram.WebApp.sendData` payload `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }` and must follow the same session/tab rules;
+- active order screen с refresh/polling, human order label `Заказ №...`, selected account label `Личный счёт` / `Общий счёт`, selected-tab bill totals, discounts and service charges; guest must not see another guest's personal tab;
 - active order screen exposes `Попросить счёт` with on-site operational payment note choices `Картой на месте`, `Наличными`, `Пока не знаю`; backend dedupes active `NEW`/`ACK` bill requests for the current user/tab and staff sees order/account/total/payment context on the live staff-chat order activity card when available, with standalone fallback only when the card cannot be loaded. This is not online payment/acquiring/Telegram Payments/Stars and does not close the bill automatically;
 - staff call flow as transient compose + compact NEW/ACK/DONE status;
 - `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when current active order/bill state makes it actionable, and hidden again after bill/order close;
 - `🚪 Завершить визит` в active table context очищает только текущий guest restore/local context и возвращает в обычный каталог. Empty personal tab/no order allows exit; active order/bill or active `NEW`/`ACK` staff call blocks with clear copy.
 - закрытый счёт больше не должен выглядеть активным.
+- expired/closed table context should show safe copy such as `Отсканируйте QR на столе заново.`
 - Guest-visible account labels must not expose raw `tabId`; technical ids remain internal/request-only.
 
 Account/bookings:
@@ -84,6 +85,7 @@ Account/bookings:
 - Создавать и отменять свои бронирования, если booking flow доступен.
 - Задать вопрос заведению до визита через catalog card or venue detail; existing ordinary guest+venue chat is reused.
 - После QR/table context смотреть заказное меню, собирать корзину, отправлять заказ/дозаказ.
+- Добавлять batch только в свой personal tab or joined shared tab in the current table session.
 - Выбирать item-scoped option/flavor where configured and add optional line-level preparation preference in Mini App.
 - Вызывать персонал из active table context.
 - Читать и отвечать на свои `BOOKING_CHAT`, `VENUE_CHAT` and `SUPPORT_TICKET` threads.
@@ -103,6 +105,7 @@ Account/bookings:
 - Получать marketing/promo notifications без явного opt-in или после unsubscribe.
 - Создавать order через `Повторить` без active table context/current tab/menu validation.
 - Видеть чужие bookings/orders/tabs.
+- Добавлять batch в чужой personal tab or shared tab without membership.
 - Видеть чужие chats/support tickets.
 - Завершать или скрывать чужой table context/session за тем же физическим столом.
 
@@ -141,12 +144,13 @@ Account/bookings:
 14. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
 15. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
 16. На active order screen нажать `Попросить счёт`, выбрать `Картой на месте` / `Наличными` / `Пока не знаю`, проверить JSON request contract, guest confirmation, duplicate active request copy and staff notification context.
+17. Verify order/session/tab core from `docs/ORDER_SESSION_TAB_CORE.md`: first and second batches stay in the same active table session/order with separate batches; second guest at the same table gets own personal tab and cannot see the first guest personal tab; joined shared tab is visible only after consent; expired session shows `Отсканируйте QR на столе заново.`
 
 Future Growth/retention smoke from `docs/GROWTH_RETENTION.md`:
 
-17. Favorite and unfavorite a venue; verify it appears/disappears in favorite venues.
-18. Open history and verify visits, closed orders and bookings are shown with safe labels.
-19. Use `Повторить`; confirm it creates only a repeat template and requires the next table context before order creation.
-20. Confirm unavailable/stopped items are skipped or clearly marked during repeat template application.
-21. Confirm feedback is requested only after a confirmed visit and low ratings do not auto-open a public review link.
-22. Confirm promotions show active period/terms, hidden/suspended promotions are absent, and marketing notifications require opt-in plus unsubscribe.
+18. Favorite and unfavorite a venue; verify it appears/disappears in favorite venues.
+19. Open history and verify visits, closed orders and bookings are shown with safe labels.
+20. Use `Повторить`; confirm it creates only a repeat template and requires the next table context before order creation.
+21. Confirm unavailable/stopped items are skipped or clearly marked during repeat template application.
+22. Confirm feedback is requested only after a confirmed visit and low ratings do not auto-open a public review link.
+23. Confirm promotions show active period/terms, hidden/suspended promotions are absent, and marketing notifications require opt-in plus unsubscribe.
