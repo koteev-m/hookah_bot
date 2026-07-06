@@ -27,12 +27,14 @@
 > Current checkpoint as of 2026-07-02: Hookah preparation placeholder polish is CLOSED / staging smoke passed. Guest Mini App hookah/flavor note fields, including the nested option/flavor flow when semantic metadata is missing or generic, use `Например: покрепче, полегче, больше мяты, без ментола`; drink/food options keep `Например: без сахара, без льда, потеплее`.
 >
 > Current checkpoint as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Platform Owner billing cockpit and Venue Owner subscription screen show safe human subscription/payment state through read-only GET overviews; invoice/checkout creation happens only through explicit POST ensure actions; the manual/fake invoice flow no longer exposes provider-internal fake URLs; manual mark-paid is audited; paid-through and next-payment copy use human dates. Renewal now creates the next period from effective paid-through + 1 day, reuses existing OPEN/PAST_DUE invoices for the same period, and is idempotent. Courtesy/free days are represented in `billing_adjustments` as `COURTESY_DAYS`, require Platform Owner reason, write `BILLING_COURTESY_DAYS_ADDED` audit, and shift effective paid-through/next-payment dates without mutating paid invoice history. Venue Owner sees the adjusted subscription state but cannot mark paid or add courtesy days. Manager/Staff cannot access billing payment controls. Staff/Manager invites now use valid Telegram deep links, copy/share Mini App UX, one selectable invite link field and a secondary fallback command; invite acceptance smoke passed for Manager/Staff. No real acquiring provider, Telegram Stars, recurring card payment, invoice void/reissue, guest order runtime change or staff-chat runtime change is claimed by this checkpoint.
+>
+> Current checkpoint as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. The canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`. Guest visible nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` stays `BOOKING_CHAT`; support tickets are separate `SUPPORT_TICKET` threads with Guest/Venue/Platform routing; Platform does not see ordinary `VENUE_CHAT`; Staff sees neither support tickets nor ordinary venue chats; support/venue chat create/reply does not post to staff-chat; guest support/venue chat create and support message routes are rate-limited. Advanced SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
 
 # Краткое резюме
 
 Проект уже содержит серьёзный backend-фундамент для Telegram bot + Mini App: auth через Telegram initData, JWT session, venue RBAC, guest catalog, QR/table sessions, cart/order batches, venue order queue, staff chat notifications, staff invites, menu/table management, billing/subscriptions, platform venue management, migrations and tests.
 
-Исторический главный риск этого аудита был core guest order model: в апреле active order был связан с `table_id`, а не с `table_session_id`. Этот риск закрыт в текущем кодовом срезе: active order/table-session/tab scoping, CORS mutation methods, staff-call lifecycle and staff stop-list RBAC были исправлены последующими M1-M6 работами. H2/PostgreSQL active-order and active personal-tab uniqueness fidelity is now also closed as a test/database-fidelity milestone. Guest table context cleanup and user-scoped table-session exit are also closed after staging smoke. Guest/staff bill display parity, Venue Mini App bill-detail parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are staging-smoked as of 2026-07-03. Текущие проверяемые риски: real acquiring provider/Telegram Stars remain future, invoice void/reissue for courtesy conflicts remains a follow-up, billing-created vs manual `SUSPENDED_BY_PLATFORM` distinction remains a follow-up, support/analytics cockpit gaps, booking/reminder rollout controls, and per-venue real Telegram runtime regression.
+Исторический главный риск этого аудита был core guest order model: в апреле active order был связан с `table_id`, а не с `table_session_id`. Этот риск закрыт в текущем кодовом срезе: active order/table-session/tab scoping, CORS mutation methods, staff-call lifecycle and staff stop-list RBAC были исправлены последующими M1-M6 работами. H2/PostgreSQL active-order and active personal-tab uniqueness fidelity is now also closed as a test/database-fidelity milestone. Guest table context cleanup and user-scoped table-session exit are also closed after staging smoke. Guest/staff bill display parity, Venue Mini App bill-detail parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days, Staff/Manager invite deep-link sharing polish and Guest Communication UX / Support Tickets MVP are staging/smoke-closed as of 2026-07-06. Текущие проверяемые риски: real acquiring provider/Telegram Stars remain future, invoice void/reissue for courtesy conflicts remains a follow-up, billing-created vs manual `SUSPENDED_BY_PLATFORM` distinction remains a follow-up, advanced support/analytics cockpit gaps, booking/reminder rollout controls, and per-venue real Telegram runtime regression.
 
 # Что реально готово
 
@@ -59,11 +61,11 @@
 - Table QR: batch create/rotate/export есть, single edit/delete/capacity incomplete.
 - Statistics: Telegram stats and Venue Mini App read-only stats exist; custom ranges/platform analytics remain later.
 - Settings: broad Telegram setup exists; Mini App settings now covers booking hold, shift extension settings, public profile/card basics with provider-free structured location and weekly hours/date exceptions. Info/media editing, preview/readiness and other broad settings should still be expanded through small slices.
-- Platform mode: venues/status/owners/subscription and billing cockpit MVP are staging-smoked; requests/support/analytics cockpit and real acquiring provider remain incomplete.
+- Platform mode: venues/status/owners/subscription, billing cockpit MVP and support-ticket center are staging/smoke-closed; requests/analytics cockpit and real acquiring provider remain incomplete.
 
 # Что отсутствует
 
-- General support/tickets product block beyond booking threads.
+- Advanced support features beyond MVP: SLA automation, macros, attachments, CSAT, diagnostics reports and support analytics.
 - Promotions/referrals/reviews/favorites/repeat order/history as full cross-channel product flows; several backend/bot baselines exist, but Mini App parity varies by feature.
 - Real acquiring provider, Telegram Stars and automatic recurring card payments.
 - Invoice void/reissue for open future-invoice conflicts after courtesy adjustments.
@@ -76,16 +78,15 @@
 
 No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b, Platform Owner invite/revoke closure, H2/PostgreSQL uniqueness fidelity validation, the Mini App mutation/operational verification pack, Staff Call Lifecycle ACK/DONE audit hardening, the two guest table-context milestones, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card and hookah preparation placeholder polish. Current priorities:
 
-1. **P1**: Support/tickets MVP beyond booking threads. Booking conversations and inbox lifecycle are staging-closed, but general guest/venue/platform support routing remains later.
-2. **P1/P2**: Real acquiring provider or Telegram Stars rollout, only if commercial launch requires online payment. Current billing MVP is manual/fake-provider only and must not be described as card acquiring or Stars.
-3. **P2**: Guest history/repeat/favorites/post-visit feedback polish. Several backend/account surfaces exist, but repeat-order and post-visit retention loops are not launch-complete.
+1. **P1/P2**: Real acquiring provider or Telegram Stars rollout, only if commercial launch requires online payment. Current billing MVP is manual/fake-provider only and must not be described as card acquiring or Stars.
+2. **P2**: Guest history/repeat/favorites/post-visit feedback polish. Several backend/account surfaces exist, but repeat-order and post-visit retention loops are not launch-complete.
+3. **P2**: Advanced support features beyond MVP if pilot operations need them: SLA automation, macros, attachments, CSAT, diagnostics reports and support analytics.
 
 # Рекомендуемый порядок дальнейшей работы
 
-1. Build Support/tickets MVP beyond booking threads as the next bounded milestone unless pilot commercial payment becomes the stronger blocker.
-2. Keep Platform billing cockpit/renewal/courtesy, staff invite deep-link sharing, Platform Owner invite/revoke, M7b/M7c, M9b schedule, Mini App mutation/staff-call/fallback payload paths, bill parity, staff-chat activity card and guest table-context exit in regression.
-3. Plan real acquiring provider / Telegram Stars as a separate milestone with provider secrets, webhook hardening and payment audit; do not fold it into the manual billing MVP.
-4. Defer growth features (repeat/favorites/reviews/promotions) until monetization and support operations have a clearer owner workflow.
+1. Keep Support/tickets MVP, Guest Communication UX split, Platform billing cockpit/renewal/courtesy, staff invite deep-link sharing, Platform Owner invite/revoke, M7b/M7c, M9b schedule, Mini App mutation/staff-call/fallback payload paths, bill parity, staff-chat activity card and guest table-context exit in regression.
+2. Plan real acquiring provider / Telegram Stars as a separate milestone with provider secrets, webhook hardening and payment audit; do not fold it into the manual billing MVP.
+3. Defer growth features (repeat/favorites/reviews/promotions) until monetization and support operations have a clearer owner workflow.
 
 # Какие функции лучше не трогать пока
 
@@ -130,7 +131,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 | Platform mode | PARTIAL | `platformApp.ts`, `PlatformVenueRoutes` | Billing/support/analytics/request cockpit |
 | Onboarding venue/application flow | PARTIAL | `venue_connection_requests`, `TelegramBotRouterVenueConnectionRequestFlowTest` | Integrate with platform UI |
 | Subscriptions/billing | DONE/PARTIAL | `SubscriptionRepository`, `SubscriptionBillingEngine`, `PlatformBillingRoutes`, `billing_adjustments` | Manual/fake billing cockpit, advance next invoice and courtesy days are staging-smoked; real acquiring, Stars, void/reissue and suspended-status distinction remain future |
-| Support/tickets | MISSING | No product routes/tables found | Design MVP |
+| Support/tickets | MVP / smoke passed | `SupportRoutes`, `SupportThreadRepository`, `support_threads.thread_type`, `guestSupportThreads.ts`, `venueMessages.ts`, `platformSupport.ts` | Advanced SLA/macros/attachments/CSAT/diagnostics/support analytics |
 | Analytics/events | PARTIAL | `AnalyticsEventRepository`, event writes | Add booking/support events and UI |
 | Staff chat notifications | PARTIAL | `StaffChatNotifier`, bot notify methods | Mini App staff-call notification path is CLOSED / code-test verification passed; keep orders/bookings/shift-extension runtime delivery in regression |
 | Telegram commands | PARTIAL | `/start`, `/menu`, `/my`, `/help`, `/link`, `/unlink`, `/link_test` | Add support/help consistency and QR test mode |

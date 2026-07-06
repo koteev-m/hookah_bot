@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-03.
+Дата: 2026-07-06.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -38,6 +38,7 @@
 - Platform Billing Cockpit / Owner Payment UX: CLOSED / staging smoke passed. Platform Owner billing cockpit and Venue Owner subscription screen show human paid-through/next-payment state through read-only GET overviews. Invoice/checkout creation uses explicit POST ensure actions. Manual/fake invoices do not expose provider-internal fake URLs, and manual mark-paid writes audit.
 - Platform Billing Renewal / Advance Invoice / Courtesy Days: CLOSED / staging smoke passed. Next invoice period is based on effective paid-through + 1 day, repeated next-invoice ensure is idempotent, Platform Owner can create the next invoice in advance, `billing_adjustments` stores `COURTESY_DAYS`, Platform Owner courtesy/free days require reason, `BILLING_COURTESY_DAYS_ADDED` audit is written, paid-through/next-payment dates shift, Venue Owner sees adjusted state, and Manager/Staff cannot access payment controls.
 - Staff/Manager invite deep-link sharing polish: CLOSED / staging smoke passed. Telegram invite messages use valid `t.me` staff invite links and copy-text buttons where supported; Venue Mini App invite result has one selectable invite link field, primary copy-link/share-in-Telegram actions, a secondary fallback command and no self-open result-card action. Manager/Staff invite acceptance smoke passed and payment controls stayed hidden/forbidden.
+- Guest Communication UX / Support Tickets MVP: CLOSED / smoke passed. Canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL`; Guest nav is `Чаты` / `Помощь`; catalog/venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` stays `BOOKING_CHAT`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support and venue chat create/reply paths do not post to staff-chat.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1.1 staging re-smoke passed on 2026-06-04; the previous P1 `Guest pre-QR endless "Загрузка информации..."` is resolved.
@@ -50,7 +51,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE THROUGH PLATFORM BILLING RENEWAL / COURTESY DAYS AND STAFF INVITE SHARING POLISH`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy and staff invite deep-link sharing polish.
+Status: `PASSED FOR CURRENT RELEASE THROUGH GUEST COMMUNICATION UX / SUPPORT TICKETS MVP`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish and guest communication/support-ticket split.
 
 Confirmed:
 
@@ -88,6 +89,7 @@ Confirmed:
 - Platform Billing Cockpit / Owner Payment UX smoke passed: Platform Owner sees billing cockpit state, Venue Owner sees subscription/payment state, GET billing/subscription overviews are read-only, invoice/checkout ensure is POST-only, manual/fake invoice flow does not leak provider-internal fake URLs, manual mark-paid is audited, and paid-through/next-payment copy is human.
 - Platform Billing Renewal / Advance Invoice / Courtesy Days smoke passed: next-period invoice starts from effective paid-through + 1 day, repeated ensure does not duplicate invoices, advance next invoice creation works, `COURTESY_DAYS` adjustments require reason, `BILLING_COURTESY_DAYS_ADDED` audit exists, paid-through/next-payment shift, Venue Owner sees adjusted state, and Venue Owner/Manager/Staff cannot access mark-paid/courtesy controls.
 - Staff/Manager invite sharing smoke passed: owner/manager can share/copy the valid Telegram deep link from the Venue Mini App result, fallback command remains available in a secondary block, fresh account acceptance grants the intended Manager/Staff role, and Manager/Staff cannot access billing/payment controls.
+- Guest Communication UX / Support Tickets smoke passed: Guest `Чаты` and `Помощь` are separate; catalog and venue detail `Задать вопрос` open/reuse `VENUE_CHAT`; ordinary venue chats are visible to Venue Owner/Manager and hidden from Staff/Platform; booking `Открыть переписку` still opens `BOOKING_CHAT`; support tickets are visible in Guest/Venue/Platform support surfaces with transfer to Platform; support and venue chat messages do not post to staff-chat.
 
 Remaining:
 
@@ -97,7 +99,7 @@ Remaining:
 - Telegram Stars remains future work;
 - invoice void/reissue for courtesy conflicts with already-open future invoices remains a follow-up;
 - billing-created versus manual `SUSPENDED_BY_PLATFORM` distinction remains a follow-up before broader auto-reactivation;
-- support/tickets beyond booking threads remain missing;
+- Support/Tickets MVP beyond booking threads is closed and stays in regression; SLA automation, auto-escalation, macros, attachments, CSAT, diagnostics and support analytics remain future work;
 - guest history/repeat/favorites/feedback/growth flows remain future work;
 - platform analytics dashboards remain future work;
 - P1 follow-up: paid venue/shift extension is implemented in backend, Guest/Venue Mini App, Guest Bot entry and staff-chat action path; remaining parity is Owner/Manager Bot settings smoke/closure where still needed by roadmap;
@@ -161,7 +163,8 @@ Manual runtime coverage for each release batch:
 - guest sees table context;
 - frontend sends `tableSessionId` in staff call payload.
 - fallback chat order sends `cmd=start_quick_order` and the current `table_token` through `Telegram.WebApp.sendData`.
-- guest `Сообщения` screen opens, shows persisted booking threads when present, allows reply, and uses safe empty state `Сообщений пока нет.` when there are no threads.
+- guest `Чаты` screen opens, shows persisted booking and venue chat threads when present, allows reply, and uses safe empty state when there are no chats.
+- guest `Помощь` creates/lists support tickets separately and does not auto-open an arbitrary ticket from the list.
 
 ### Venue Mini App
 
@@ -186,7 +189,7 @@ Manual runtime coverage for each release batch:
 - order detail renders the user-facing bill block without technical copy;
 - UI displays backend totals directly and does not invent frontend-calculated money.
 - STAFF close bill/order works while bill edit controls stay hidden;
-- venue support screen is informational and points operators to the manual platform support path.
+- venue `Сообщения` handles `BOOKING_CHAT` / `VENUE_CHAT`; venue `Помощь` / `Обращения` handles own-venue `SUPPORT_TICKET` and transfer to Platform.
 
 ### Platform Mini App
 
@@ -303,8 +306,8 @@ Steps:
 9. Trigger staff call.
 10. Confirm guest sees success.
 11. Confirm staff chat receives notification with venue/table/session context.
-12. Open `Поддержка`.
-13. Confirm the screen points to staff/platform support and does not show ticket ids or ticket statuses.
+12. Open `Помощь`.
+13. Confirm support tickets are separate from staff calls: table-context issue creation attaches safe context, while urgent live service still uses `Вызвать персонал`.
 
 Expected:
 
@@ -313,7 +316,7 @@ Expected:
 - request payload includes `tableSessionId`;
 - order belongs only to current `tableSessionId/tabId`;
 - no cross-session order appears after opening the same physical table with a different session.
-- support is clear and informational when ticket automation is not implemented.
+- support tickets are clearly separated from staff-call operations and do not post to staff-chat.
 
 ## 4. Venue Mini App Manual Smoke
 
@@ -352,8 +355,8 @@ Steps:
 19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel and `Написать гостю` as allowed.
 20. As MANAGER/OWNER, click `Написать гостю`, confirm there are no template buttons, send a message, and confirm the modal closes with `Сообщение отправлено гостю.`
 21. Open `Сообщения` and confirm the same booking thread is listed.
-22. Open `Поддержка`.
-23. Confirm the screen explains manual platform support and has no fake ticket controls.
+22. Open `Помощь` / `Обращения` as MANAGER/OWNER.
+23. Confirm own-venue support tickets list/detail work or show a safe empty state, and STAFF does not see this support management entry.
 
 ### M5 staff calls lifecycle smoke status
 
@@ -549,8 +552,8 @@ Expected:
 - Guest/Menu Options & Flavors parity is CLOSED after staging smoke: owner/manager can create hookah items, apply canonical base flavor profiles only to that item, repeat apply without duplicates, manage flavor CRUD and stop-list, stop-list the whole item, water/kitchen/drink items do not receive hookah flavors, Guest Mini App shows the picker only for the selected hookah item, hookah preparation placeholder copy is hookah-specific even in nested flavor/options flow, and `selectedOptionId` / `preferenceNote` still work.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
-- Platform Mini App onboarding/placements/support/analytics are still partial/safe sections, not full cockpit parity.
-- M4A booking conversation threads and M4B/M4C unified inbox lifecycle are staging-closed. Guest/Venue inbox cards show multi-venue/context clarity, status/unread state, active/resolved filters and explicit `Завершить переписку` / `Возобновить переписку` actions. Venue/admin bot full inbox, structured reschedule proposals, general tickets, Platform Support Center, audit events and DB-level duplicate/race protection are follow-ups.
+- Platform Mini App onboarding/placements/analytics are still partial/safe sections, not full cockpit parity; Platform Support Center for `SUPPORT_TICKET` is smoke-passed and stays in regression.
+- M4A booking conversation threads, M4B/M4C unified inbox lifecycle and the later Guest Communication UX / Support Tickets MVP are staging/smoke-closed. Guest/Venue inbox cards show multi-venue/context clarity, status/unread state, active/resolved filters and explicit `Завершить переписку` / `Возобновить переписку` actions. Venue/admin bot full inbox, structured reschedule proposals, advanced support automation/diagnostics, attachments, CSAT, support analytics and DB-level duplicate/race protection are follow-ups.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.
 
 ## 10. Recommended Next Test Investment
@@ -686,10 +689,33 @@ Manual M7c staging regression or rollout smoke, do not execute without approval:
 15. Verify reminder `Перенести` and `Отменить` reuse existing guest flows and cancel/avoid duplicate unsent reminders.
 16. Disable the worker immediately if any acceptance check fails, and return staging to `BOOKING_REMINDER_WORKER_ENABLED=false` after the smoke.
 
+Manual Guest Communication / Support Tickets regression smoke after deployment:
+
+1. Open Guest Mini App outside table context and confirm global nav shows `Чаты` and `Помощь`.
+2. Open catalog and confirm each eligible venue card has `Задать вопрос`.
+3. Tap catalog `Задать вопрос`; confirm `Чат с <venueName>` opens/creates `VENUE_CHAT`, not a support ticket.
+4. Open venue detail and confirm local `💬 Задать вопрос` opens/reuses the same `VENUE_CHAT`.
+5. Open guest `Чаты` and confirm copy says chats are for questions, bookings and other venue conversations, while problems/complaints are in `Помощь`.
+6. Venue Owner/Manager opens Venue Mini App `Сообщения`, sees the `VENUE_CHAT`, replies, and the guest sees the reply in `Чаты`.
+7. Confirm `VENUE_CHAT` create/reply does not create a staff-chat notification.
+8. Booking card `Открыть переписку` still opens `BOOKING_CHAT` / `Сообщения`, not `Помощь` / support.
+9. Guest opens `Помощь` and creates a technical/Mini App/QR support ticket without choosing venue; Platform Owner sees it in Platform `Обращения`.
+10. Guest tries order/service support outside table without venue; UI or API requires venue before submit.
+11. Guest tries booking support outside table without booking/venue; UI or API requires booking or venue context.
+12. Guest table context does not show primary `Связаться с заведением`; table context still shows `Вызвать персонал`.
+13. Create a table-context support ticket and confirm venue/table/session context is attached when available.
+14. Venue Owner/Manager opens `Помощь` / `Обращения`, sees own-venue support tickets, replies and can `Передать платформе`.
+15. Platform Owner opens Platform `Обращения`, verifies `Переданные платформе` support tickets are visible, replies and closes.
+16. Confirm Platform does not see ordinary `VENUE_CHAT`.
+17. Confirm Staff does not see `Помощь` / `Обращения`, cannot open support tickets and cannot open ordinary venue chats through direct API.
+18. Confirm `SUPPORT_TICKET` create/reply does not create a staff-chat notification.
+19. Confirm `STAFF_CALL` still works separately and keeps existing operational staff queue/staff-chat behavior.
+20. Confirm guest support create, venue chat create and guest support messages are rate-limited enough to prevent repeated spam without blocking normal reopen/open-existing-chat behavior.
+
 Manual M4B/M4C inbox regression smoke after deployment:
 
 1. Create or seed multiple booking/general-like threads for one guest across at least two venues.
-2. Open Guest Mini App `Сообщения` / `Мои обращения` and confirm it shows a list of thread cards, not one merged chat.
+2. Open Guest Mini App `Чаты` and confirm it shows a list of `BOOKING_CHAT` / `VENUE_CHAT` thread cards, not one merged chat.
 3. Confirm every guest thread card shows venue name, context label (`Бронь №...`, `Заказ №...`, `Стол №...`, `Общий вопрос` or `Проблема`), status, last message preview, last message time and unread badge/count when applicable.
 4. Confirm `Активные` hides resolved/closed threads and `Завершённые` shows old resolved/closed threads.
 5. Open one thread and confirm M4A booking conversation behavior still works: message history, Guest Bot reply persistence, Guest Mini App reply and Venue Mini App reply.
@@ -701,7 +727,7 @@ Manual M4B/M4C inbox regression smoke after deployment:
 11. In Venue Mini App, resolve and reopen the same thread; confirm this does not change booking confirm/change/cancel/arrived/no-show state.
 12. Confirm booking cards still link to the booking thread through `Открыть переписку`.
 13. Open as STAFF and confirm view/reply/status permissions match the explicit RBAC decision; do not silently broaden STAFF access.
-14. Confirm Platform Support Center is not exposed unless routes and permissions are backend-backed.
+14. Confirm Platform Support Center is exposed only for backend-backed `SUPPORT_TICKET` and does not show ordinary `VENUE_CHAT`.
 15. Keep M4A regression: quick compose closes after send, manager stays on `Брони`, staff chat remains a notification mirror, and booking confirm/change/cancel/arrived/no-show actions are unchanged.
 
 Manual guest table context exit regression smoke after deployment:

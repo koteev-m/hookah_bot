@@ -8,6 +8,8 @@
 
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
 
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`.
+
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
 - `ORDER_STATUS_UPDATE`;
@@ -60,6 +62,7 @@ STAFF Mini App behavior:
 - menu content read-only, with operational item/option availability toggles;
 - tables read-only;
 - forbidden management controls hidden and backend-protected.
+- `Помощь` / `Обращения` and ordinary venue chats are hidden and backend-forbidden.
 
 ## Allowed actions
 
@@ -98,6 +101,8 @@ STAFF Mini App behavior:
 - Read full staff list or manage staff.
 - Create invites/update roles/remove members.
 - Manage staff chat link/status diagnostics.
+- See or reply to `SUPPORT_TICKET`.
+- See or reply to ordinary `VENUE_CHAT`.
 - Manage venue settings.
 - Manage billing/subscription/platform features, including mark-paid, invoice ensure, courtesy/free-days or payment controls.
 
@@ -109,6 +114,7 @@ STAFF Mini App behavior:
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
 - Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Direct API denial tests remain critical: UI hiding is not a security boundary.
+- Guest Communication UX split is CLOSED / smoke passed for STAFF boundaries: staff remains operational, support/venue-chat API access is denied, and staff-call/order behavior stays separate.
 
 ## Smoke-critical checks
 
@@ -122,5 +128,6 @@ STAFF Mini App behavior:
 8. STAFF can accept/close staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
 9. STAFF sees bookings and can mark arrived/no-show only.
 10. Direct STAFF confirm/cancel/change/message/settings booking attempts are denied.
-11. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.
-12. Newly invited STAFF can open Venue Mode after accepting deep link, but cannot see billing/payment controls.
+11. STAFF does not see `Помощь` / `Обращения`, cannot open/reply support tickets, and cannot open/reply ordinary venue chats through direct API calls.
+12. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.
+13. Newly invited STAFF can open Venue Mode after accepting deep link, but cannot see billing/payment controls.

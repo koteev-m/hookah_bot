@@ -13,6 +13,7 @@ Recent closed milestones:
 - Platform Venue OWNER Revocation: **CLOSED / staging smoke passed**.
 - Platform Billing Cockpit / Owner Payment UX: **CLOSED / staging smoke passed**.
 - Platform Billing Renewal / Advance Invoice / Courtesy Days: **CLOSED / staging smoke passed**.
+- Support/Tickets MVP beyond booking threads: **CLOSED / smoke passed** for Platform support-ticket visibility/reply/close and transferred-ticket handling.
 
 Canonical identity:
 - основной ключ: `PLATFORM_OWNER_TELEGRAM_ID`;
@@ -50,11 +51,12 @@ Platform Mini App baseline:
 - subscription summary/settings/price schedule basics;
 - billing cockpit with read-only overview, human paid-through/next-payment copy, explicit invoice/checkout ensure action, manual mark-paid and audit evidence;
 - next-period invoice creation from effective paid-through + 1 day, idempotent advance ensure and courtesy/free days through `billing_adjustments`;
+- Platform Support Center / `Обращения` for `SUPPORT_TICKET`, including platform-only technical tickets and venue-transferred tickets;
 - status/lifecycle controls where implemented.
 
 Platform Mini App does not expose `ADMIN` as a selectable runtime owner/admin assignment role.
 
-Telegram bot remains the richer platform onboarding surface for connection requests and commercial terms. Platform Mini App cockpit is still partial for onboarding/placements/support/analytics, but the manual billing cockpit MVP is staging-smoked.
+Telegram bot remains the richer platform onboarding surface for connection requests and commercial terms. Platform Mini App cockpit is still partial for onboarding/placements/analytics, but manual billing and support-ticket MVPs are smoke-tested.
 
 ## Allowed actions
 
@@ -74,6 +76,7 @@ Telegram bot remains the richer platform onboarding surface for connection reque
 - Create the next-period invoice in advance from effective paid-through + 1 day; repeated ensure must reuse an existing invoice for the same period.
 - Manually mark invoice paid; action must write audit and preserve paid invoice history.
 - Add courtesy/free days for a venue only with a required reason; action writes `billing_adjustments` and `BILLING_COURTESY_DAYS_ADDED` audit.
+- View/list/reply/close `SUPPORT_TICKET`, including platform-only technical tickets and tickets transferred from Venue by `Передать платформе`.
 - Create a venue OWNER invite; the response includes a usable Telegram `deepLink` when bot username is configured and safe `/start staff_invite_<code>` copy text otherwise.
 - Add a venue OWNER through accepted Telegram invite for the intended venue.
 - List active `venue_members` rows with role `OWNER` as the current owner list.
@@ -92,11 +95,12 @@ Telegram bot remains the richer platform onboarding surface for connection reque
 - Last active OWNER revoke is blocked server-side; UI disabling is not the security boundary.
 - OWNER membership revoke deletes only the venue membership and never deletes the user account.
 - Runtime owner access is based on active `venue_members` OWNER membership. `venues.owner_account_id` and `venue_owner_accounts.primary_owner_user_id` are not relinked by membership revoke.
+- Platform Owner does not see ordinary `VENUE_CHAT`; only support tickets are in Platform Support Center unless future product policy explicitly changes.
 
 ## Known gaps / needs smoke
 
-- Platform Mini App cockpit is still partial compared with Telegram bot for onboarding requests, placements, support and analytics.
-- Support/tickets and richer platform analytics remain future work.
+- Platform Mini App cockpit is still partial compared with Telegram bot for onboarding requests, placements and analytics.
+- Advanced support features remain future work: SLA automation, auto-escalation worker, macros, attachments, CSAT, diagnostics report and broad support analytics.
 - Real acquiring provider, Telegram Stars and recurring automatic payment remain future work.
 - Audited invoice void/reissue for courtesy conflicts with already-open future invoices remains future work.
 - Distinguishing billing-created versus manual `SUSPENDED_BY_PLATFORM` remains needed before broader auto-reactivation.
@@ -126,3 +130,4 @@ Telegram bot remains the richer platform onboarding surface for connection reque
 17. Mark invoice paid manually; verify paid-through/next-payment human copy and audit evidence.
 18. Add courtesy/free days with required reason; verify `billing_adjustments`, `BILLING_COURTESY_DAYS_ADDED`, adjusted paid-through/next-payment and no mutation of paid invoice rows.
 19. Verify Venue Owner sees adjusted state while Venue Owner/Manager/Staff cannot mark paid or add courtesy days.
+20. Open Platform Mini App `Обращения`; verify platform-only and venue-transferred support tickets are visible, ordinary `VENUE_CHAT` is not visible, and Platform Owner can reply/close support tickets.

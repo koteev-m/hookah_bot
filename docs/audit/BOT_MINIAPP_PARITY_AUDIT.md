@@ -15,7 +15,8 @@
 > Additional correction as of post-M9b.3 checkpoint on 2026-06-26: M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 Schedule Exception Ranges and Guest Copy, M9b.2 Schedule Exception Save UX and M9b.3 Schedule Exception Range Editing are CLOSED / staging smoke passed. Venue Mini App manages weekly hours, inclusive closed/special-hours ranges and optional guest-facing reason/comment; changed-hours range dates are editable after creation; missing schedule shows `График не указан`; guest booking and Bot closed-date paths use human rejection copy.
 > Additional correction as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. Old claims about missing CORS mutation methods, missing Mini App staff-call `tableSessionId`, missing Mini App staff-call staff-chat notification, and unhandled fallback quick-order payload are stale/superseded by focused backend and Mini App e2e tests. No staging smoke is claimed by this correction.
 > Additional correction as of 2026-07-01: Guest Table Context UX Cleanup / Feature-gated Extension Module and Guest Table Session Exit / Expiry UX are CLOSED / staging smoke passed. Table context no longer prominently shows route/copy address/booking actions, pre-visit venue cards keep those public actions, `Продление работы заведения` is hidden unless active order/bill state makes it actionable, and `Завершить визит` is a user-scoped exit through `guest_table_session_exits`. The initial staging `415 Unsupported Media Type` on `POST /api/guest/table/session/end` is fixed by sending JSON with `Content-Type: application/json`; e2e asserts method, URL, content type and body. Shared `table_sessions` are physical-table/session scoped and are not closed for all guests by one guest exit.
-> Additional correction as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Platform Owner and Venue Owner billing surfaces now cover the manual/fake invoice MVP with read-only GET overviews, explicit invoice/checkout ensure POST, manual mark-paid audit, human paid-through/next-payment copy, next-period invoice creation from effective paid-through + 1 day, idempotent advance invoice ensure, `billing_adjustments` courtesy days with required reason and `BILLING_COURTESY_DAYS_ADDED` audit. Venue Owner sees adjusted state but cannot mark paid or add courtesy days; Manager/Staff payment controls stay hidden/forbidden. Invite messages and Venue Mini App invite result now expose valid staff invite deep links, copy/share actions and a secondary fallback command. Real acquiring, Telegram Stars, recurring card payments, invoice void/reissue, platform support and analytics remain future work.
+> Additional correction as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Platform Owner and Venue Owner billing surfaces now cover the manual/fake invoice MVP with read-only GET overviews, explicit invoice/checkout ensure POST, manual mark-paid audit, human paid-through/next-payment copy, next-period invoice creation from effective paid-through + 1 day, idempotent advance invoice ensure, `billing_adjustments` courtesy days with required reason and `BILLING_COURTESY_DAYS_ADDED` audit. Venue Owner sees adjusted state but cannot mark paid or add courtesy days; Manager/Staff payment controls stay hidden/forbidden. Invite messages and Venue Mini App invite result now expose valid staff invite deep links, copy/share actions and a secondary fallback command. Real acquiring, Telegram Stars, recurring card payments, invoice void/reissue and analytics remain future work.
+> Additional correction as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. Current source of truth is `docs/COMMUNICATION_MODEL.md`: Guest nav is `Чаты` / `Помощь`; `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate flows; catalog/venue detail `Задать вопрос` opens or reuses `VENUE_CHAT`; Platform Support Center sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support and venue chat create/reply paths do not post to staff-chat. Older rows that say general tickets or Platform Support Center are future-only are superseded for the MVP; SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
 
 Режим: read-only аудит. Backend, frontend business logic, миграции, checkout, ledger, promotions, loyalty и AI flows не менялись.
 
@@ -29,7 +30,7 @@ Mini App отстаёт в основном не по расчётам, а по 
 
 - Guest/Menu Options & Flavors parity is closed for structured `selectedOptionId`; the remaining small bot-side gap is optional per-line `preferenceNote` input, while Mini App already supports it;
 - guest profile/promotions/loyalty progress screens не доведены до bot parity; history/favorites baseline уже есть;
-- platform placements/support/analytics частично скрыты или объяснены как bot-only;
+- platform support tickets now have a smoke-passed Support Center; placements/analytics remain partial or explicitly delegated;
 - venue hours/date exceptions are CLOSED / staging smoke passed through M9b/M9b.1/M9b.2/M9b.3;
 - final staging smoke remains required for initData, money, staff notifications and role denied paths.
 
@@ -49,6 +50,7 @@ Known fixed/outdated rows in this document:
 - The `POST /api/guest/table/session/end` 415 incident is resolved: Mini App now sends JSON `Content-Type` and the e2e request contract covers it.
 - `No full billing/invoice cockpit in Mini App` is outdated for the manual MVP: Platform billing cockpit, Venue Owner subscription state, advance next invoice and courtesy-days adjustment are staging-smoked. Real acquiring, Telegram Stars and recurring automatic payments are still not implemented.
 - Old invite-copy friction is outdated: staff/manager invite sharing now uses valid Telegram deep links, copy/share actions and a secondary fallback command in the Venue Mini App result.
+- Old `general tickets/platform support later` claims are outdated for the MVP: Support Tickets / Platform Support Center is smoke-passed for `SUPPORT_TICKET`, while ordinary `VENUE_CHAT` remains intentionally hidden from Platform.
 - Pre-QR guest `🍽 Menu` behavior changed: order menu is available only after QR/table context; `📖 Фото-меню` is an info section.
 - Info-section media parity changed: Mini App uses a backend media proxy instead of Telegram file IDs/raw file URLs.
 
@@ -57,6 +59,7 @@ Known fixed/outdated rows in this document:
 Документы:
 
 - `docs/UPDATED_PRODUCT_AI_ROADMAP.md`
+- `docs/COMMUNICATION_MODEL.md`
 - `docs/audit/MINI_APP_PRODUCTION_READINESS_AUDIT.md`
 - `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`
 - `docs/audit/ROLE_GUEST.md`
@@ -124,7 +127,7 @@ Mini App frontend:
 | History / repeat order | Bot has visit history/detail/repeat flow | Mini App account has history list/detail backed by `GuestVisitRoutes`; repeat remains later | Partial | Repeat order is not Mini App parity | P2 | Keep history in regression; add repeat only after cart/order availability rules are stable. |
 | Favorites | Bot favorite venues/items flows exist | Mini App account has favorite venues/items using backend favorites routes | Partial | Favorite mutations/discovery polish may still be incomplete | P2 | Keep favorites read flow; add mutation polish only after pilot smoke. |
 | Bookings | Bot booking flow exists, `/my` shows active bookings with public `Бронь №...`, `Держим до`, venue status and secondary guest attendance response; Bot sends M7c reminders only when the opt-in worker is explicitly enabled | Guest and Venue Mini App booking baselines exist; Venue M3 lifecycle and M7a hold-minutes settings are closed; Guest Mini App M7b `Мои брони` is implemented with staging visual parity for Bot `/my` label/time/deadline; attendance intent is shown when `lastGuestConfirmationAt` is present | Done / regression | M7c core real Telegram smoke passed but rollout remains opt-in disabled; preorder remains later; M7b real two-account runtime isolation remains unverified | P2 | Keep booking lifecycle, hold settings, M7c disabled-by-default behavior, Guest/Bot public booking label parity, attendance idempotency and stale-action rejection in regression. |
-| Support | Bot chat remains support/fallback path; M4A Guest Bot booking replies persist to support threads | Guest Mini App M4B/M4C `Сообщения` shows thread cards with venue/context/status/last message/unread, active/resolved filters and resolve/reopen actions | Partial / staging smoke passed for booking-thread inbox lifecycle | General tickets and platform support remain later; keep many-thread/venue scoping and conversation lifecycle separate from booking lifecycle in regression | P1/P2 | Do not expose broader support/ticket promises until backend-backed creation/routing exists. |
+| Communication / support | Bot fallback and Guest Bot booking replies persist to shared communication threads where applicable | Guest Mini App uses `Чаты` for `BOOKING_CHAT` / `VENUE_CHAT` and `Помощь` for `SUPPORT_TICKET`; booking inbox lifecycle and general support tickets are smoke-passed | MVP / smoke passed | Advanced SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain later | Regression / P2 | Preserve the split from `docs/COMMUNICATION_MODEL.md`: booking chat, venue chat, support ticket and staff call must not collapse into one workspace. |
 
 ## 4. Venue / Staff / Manager Parity Matrix
 
@@ -162,7 +165,7 @@ Mini App frontend:
 | Loyalty setup | Bot owner/manager controls loyalty program, targets, status | Mini App does not expose loyalty setup | Bot-only | No Mini App parity | P2 | Keep bot canonical for launch. |
 | Reviews / review link | Bot supports reviews and public review link flows | No Mini App review cockpit found | Bot-only | Not launch-critical for order pilot | P2 | Add when venue cockpit expands. |
 | Statistics | Bot stats exist | Venue Mini App read-only stats screen exists for OWNER/MANAGER | Done / staging smoke passed | Custom range/AI summaries remain later | P2 | Keep stats in regression. |
-| Support | Bot remains operational support path; staff chat is a notification mirror for booking replies | Venue Mini App M4B/M4C `Сообщения` shows current-venue thread cards with guest display, context, status, last message, unread badge and resolve/reopen actions for allowed roles | Partial / staging smoke passed for booking-thread inbox lifecycle | Generic tickets remain later; keep strict current-venue scoping, STAFF visibility/reply/status behavior and no booking lifecycle side effects in regression | P1/P2 | Do not expose broader tickets until backend-backed; keep M4B/M4C inbox lifecycle in smoke regression. |
+| Communication / support | Bot remains operational fallback for supported flows; staff chat is not support storage | Venue Mini App `Сообщения` covers `BOOKING_CHAT` / `VENUE_CHAT`; `Помощь` / `Обращения` covers own-venue `SUPPORT_TICKET` with reply/close/transfer behavior | MVP / smoke passed | Advanced support automation and venue/admin bot full inbox remain later | Regression / P2 | Keep current-venue scoping, STAFF denial, no booking lifecycle side effects and no support/venue-chat staff-chat spam in regression. |
 
 ## 6. Platform Owner Parity Matrix
 
@@ -176,7 +179,7 @@ Mini App frontend:
 | Subscriptions/pricing | Bot subscription menus may be limited | Mini App supports subscription basics, Platform Owner billing cockpit, Venue Owner subscription screen, explicit invoice/checkout ensure, advance next invoice and courtesy-days read model | Done / partial | Manual/fake billing MVP is staging-smoked; real acquiring, Telegram Stars, recurring payments, invoice void/reissue and suspended-status distinction remain future | Regression / P1/P2 future providers | Keep read-only GET, explicit POST ensure, manual mark-paid audit, courtesy audit and Manager/Staff payment-control denials in regression. |
 | Onboarding requests | Bot handles connection requests | Mini App safe section says requests remain in bot | Safe fallback | Platform operator must switch surfaces | P1 | Add onboarding request list if platform pilot depends on Mini App. |
 | Placements | Bot supports banner/top placements management | Mini App safe section says placements remain in bot | Safe fallback | Not parity | P1 | Add read-only pending/active placements summary before market launch. |
-| Support | No full Platform Support Center | Mini App must not expose fake platform tickets; M4B documents future platform-wide thread view only when backend-backed | Launch-safe / planned later | Manual support only; platform all-thread cockpit, SLA and escalation are not implemented | P2/P3 | Keep hidden/safe until real routes, permissions and moderation workflow exist. |
+| Support | Platform bot support remains limited | Mini App Platform Support Center / `Обращения` is backend-backed for `SUPPORT_TICKET`, including platform-only and transferred tickets; ordinary `VENUE_CHAT` is hidden | MVP / smoke passed | SLA automation, diagnostics, macros, attachments, CSAT and support analytics are not implemented | Regression / P2 | Keep platform support-ticket RBAC, filters and ordinary venue-chat exclusion in regression. |
 | Analytics | Bot/platform reports partial | Mini App safe analytics section, no fake numbers | Launch-safe | No platform analytics dashboard | P2 | Add real read model later. |
 
 ## 7. Promotions / Loyalty Parity
@@ -199,7 +202,7 @@ Mini App frontend:
 | STAFF | Bot staff can operate orders/calls and operational booking arrival/no-show actions | Mini App permits queue/status/menu/tables read-only and operational booking arrival/no-show actions; dangerous actions are denied backend-side | Mostly aligned | Remaining gaps should be verified by smoke, especially old callbacks and direct API denied paths | P1 smoke | Keep STAFF matrix in role docs and release checklist. |
 | MANAGER | Bot broad operational/marketing menu | Mini App operational panel plus stats and shift-extension settings; no marketing builder/broad venue settings | Partial | Marketing and broad setup remain bot-canonical | P2 | Accept for pilot; add small settings/promotions slices later. |
 | OWNER | Bot full venue setup/marketing/loyalty/reviews | Mini App operational panel plus staff/menu/tables/stats/shift-extension settings; broad setup remains bot-canonical | Partial | Owner product setup mostly bot-only | P1/P2 | Add real settings screen next if launch requires Mini App owner setup. |
-| PLATFORM_OWNER | Bot has platform flows; old docs mention some placeholders | Mini App has venue/subscription/billing baseline and safe sections | Partial | Platform onboarding/placements/support/analytics not full parity; real acquiring/Stars not implemented | P1 | Add support/tickets next if pilot operations need it; provider billing is a separate milestone. |
+| PLATFORM_OWNER | Bot has platform flows; old docs mention some placeholders | Mini App has venue/subscription/billing baseline, manual billing cockpit and Support Center for support tickets | Partial | Platform onboarding/placements/analytics not full parity; real acquiring/Stars not implemented | P1 | Keep support tickets in regression; provider billing, placements and analytics are separate milestones. |
 
 Security notes:
 
@@ -225,7 +228,7 @@ P0-sensitive areas that must stay in pilot smoke:
 Current correction note:
 
 - P1.2, P1.3, P1.4 and P1.6 are historical as written. Keep them only as evidence of earlier gaps; use `docs/UPDATED_PRODUCT_AI_ROADMAP.md` and the launch smoke checklist for current backlog.
-- Still active from this section: Guest profile/promotions/loyalty parity, Platform cockpit partial sections, final staging smoke, frontend/browser e2e gap and broad test heap/runtime risk.
+- Still active from this section: Guest profile/promotions/loyalty parity, Platform cockpit placements/analytics partial sections, final staging smoke, frontend/browser e2e gap and broad test heap/runtime risk.
 
 ### P1.1 — Guest account hub parity is missing
 
@@ -297,9 +300,9 @@ Acceptance:
 - Venue Mini App can show active calls and perform supported lifecycle actions, or states clearly that lifecycle is handled in Telegram bot.
 - STAFF/MANAGER/OWNER permissions are tested.
 
-### P1.5 — Platform cockpit sections are safe fallbacks, not parity
+### P1.5 — Platform cockpit sections are safe fallbacks, not full parity
 
-Why it matters: Platform Mini App is launch-safe, but onboarding requests, placements, support and analytics are informational sections. Platform operator still needs Telegram bot for important platform flows.
+Why it matters: Platform Mini App is launch-safe and support tickets have a backend-backed Support Center, but onboarding requests, placements and analytics are still informational/safe fallback sections. Platform operator still needs Telegram bot or manual operations for those flows.
 
 Affected modules:
 

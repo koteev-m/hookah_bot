@@ -357,16 +357,18 @@ SHOULD:
 
 ## Block 16 — Support (tickets + diagnostics + escalations)
 MUST:
-- “Report a problem” entry in guest + venue.
-- Tickets with context (venue/table/order) and statuses new/in_progress/waiting_user/resolved.
-- Venue handles operational tickets; platform handles technical/billing.
-- Escalation if venue doesn’t respond in SLA.
-- MVP foundation: booking-related guest↔venue conversation threads persist messages with venue, guest and booking context; staff chat is a notification mirror, not the only source of truth. Full platform support/ticket routing remains a later layer.
-- M4B/M4C implemented booking-thread inbox lifecycle: guest `Сообщения` / `Мои обращения` is a list of threads, not one endless global chat. Thread cards show venue, context label (`Бронь №...`, `Заказ №...`, `Стол №...`, `Общий вопрос`, `Проблема`), status, last message preview/time and unread badge; active/resolved filters and resolve/reopen actions are smoke-passed for booking conversations.
-- Venue `Сообщения` is scoped to the selected venue and shows guest display, context, status, last message and unread badge. Platform support later sees all support/ticket threads only through a backend-backed cockpit.
-- Product model: one booking maps to one booking thread; one order issue maps to one order thread; one general question maps to one general thread; one technical/platform problem maps to one platform/support ticket thread. Do not merge all messages with one venue into one endless chat.
+- Use the canonical Guest communication model from `docs/COMMUNICATION_MODEL.md`: `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate scenarios.
+- `BOOKING_CHAT`: booking `Открыть переписку`; Guest + Venue Owner/Manager; not a support ticket; does not post to staff-chat.
+- `VENUE_CHAT`: catalog `Задать вопрос` and venue detail `💬 Задать вопрос`; Guest + Venue Owner/Manager; Staff denied; Platform does not see ordinary venue chats; does not post to staff-chat; new thread creation is rate-limited and existing guest+venue chats are reused.
+- `SUPPORT_TICKET`: global `Помощь` -> `Сообщить о проблеме` plus table-context secondary help/problem entry; Guest own tickets, Venue Owner/Manager own venue tickets, Platform Owner support tickets, Staff denied.
+- Support tickets carry verified context when available: venue, table, table session, order, booking, user, source/app metadata.
+- Support routing: technical/Mini App/bot/QR/platform issue can go to Platform without venue; order/service outside table requires verified venue/order/table context; booking outside table requires booking or venue; table context attaches verified venue/table/session and order context when available.
+- Venue can manually `Передать платформе` a venue support ticket; Platform can list, reply and close support tickets, including platform-only and transferred tickets.
+- Support ticket creation/replies and venue chat creation/replies do not post to staff-chat. Staff-chat remains for existing operational order, booking notification and `STAFF_CALL` behavior.
+- Guest support ticket creation, venue chat creation and guest support messages are rate-limited.
+- M4B/M4C booking-thread inbox lifecycle remains compatibility-critical: guest `Чаты` is a list of `BOOKING_CHAT` / `VENUE_CHAT` threads, not one endless global chat, and booking resolve/reopen/message flows must not regress.
 SHOULD:
-- Diagnostic report from Mini App; CSAT.
+- SLA automation, auto-escalation worker, diagnostic report from Mini App, attachments, macros, CSAT and support analytics.
 
 ## Block 17 — GTM (onboarding pipeline)
 MUST:

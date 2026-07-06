@@ -8,7 +8,9 @@
 >
 > Current correction as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. The old CORS mutation-method, Mini App staff-call `tableSessionId`, Mini App staff-call staff-chat notification, and fallback quick-order payload claims below are stale/superseded by current code and focused regression coverage. No staging smoke is claimed by this correction.
 >
-> Current correction as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Historical billing and invite-share risks below must be read as superseded for the manual/fake billing MVP: read-only billing/subscription GET overviews, explicit invoice/checkout POST ensure, manual mark-paid audit, next-period invoice ensure, `billing_adjustments` courtesy days, Venue Owner adjusted state, Manager/Staff payment-control denial and Mini App invite copy/share have all passed smoke. Real acquiring, Telegram Stars, invoice void/reissue, support/tickets and analytics remain future work.
+> Current correction as of 2026-07-03: Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are CLOSED / staging smoke passed. Historical billing and invite-share risks below must be read as superseded for the manual/fake billing MVP: read-only billing/subscription GET overviews, explicit invoice/checkout POST ensure, manual mark-paid audit, next-period invoice ensure, `billing_adjustments` courtesy days, Venue Owner adjusted state, Manager/Staff payment-control denial and Mini App invite copy/share have all passed smoke. Real acquiring, Telegram Stars, invoice void/reissue and analytics remain future work.
+>
+> Current correction as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. The current source of truth is `docs/COMMUNICATION_MODEL.md`: `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate flows; Guest nav is `Чаты` / `Помощь`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support/venue chat creation and replies do not post to staff-chat. Historical support/ticket missing claims below are superseded; SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -50,7 +52,7 @@ Status: `PARTIAL`.
 - stale/superseded: staff call frontend payload now includes `tableSessionId` and has code-test coverage;
 - stale/superseded: fallback chat order now sends the router-supported `cmd=start_quick_order` payload and has Mini App e2e coverage;
 - active order scoping by `tableSessionId/tabId` needs launch regression coverage;
-- guest booking/profile/history/support UI parity needs a dedicated pass;
+- guest booking/profile/history and advanced support UI parity need dedicated regression passes;
 - promotions/loyalty display must be smoke-tested against bot output.
 
 ### Venue Mini App
@@ -98,7 +100,7 @@ Status: `PARTIAL`.
 - onboarding request cockpit is incomplete;
 - manual billing/invoice workspace MVP is staging-smoked; real acquiring, Telegram Stars, invoice void/reissue and broader provider payment automation remain future;
 - placements are not represented as a platform Mini App workspace;
-- support/tickets product block is missing;
+- Support Tickets MVP / Platform Support Center for support tickets is smoke-passed; advanced support automation/analytics remain future;
 - analytics cockpit is missing or partial.
 
 ### Cross-channel Parity
@@ -367,19 +369,21 @@ Tests to add/update:
 - UI nav permission test if hidden.
 - Owner/manager smoke.
 
-### P1.5 — Platform cockpit lacks support/analytics/placements parity
+### P1.5 — Platform cockpit lacks analytics/placements parity; support MVP exists
 
 Why it matters:
 
-Platform Mini App has venues/create/detail/subscription basics, but market launch needs at least a baseline cockpit for platform operator work.
+Platform Mini App has venues/create/detail/subscription basics and a smoke-passed support-ticket center, but market launch still needs clearer analytics and placements/onboarding cockpit coverage for platform operator work.
 
 Affected files/modules:
 
 - `miniapp/src/screens/platformApp.ts`
 - `miniapp/src/screens/platformVenuesList.ts`
 - `miniapp/src/screens/platformVenueDetail.ts`
+- `miniapp/src/screens/platformSupport.ts`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/platform/PlatformVenueRoutes.kt`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/platform/PlatformBillingRoutes.kt`
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/support/SupportRoutes.kt`
 - placement repositories/routes/screens if added later.
 
 Acceptance criteria:
@@ -387,14 +391,14 @@ Acceptance criteria:
 - Platform owner can manage venue lifecycle and subscription state.
 - Onboarding requests are visible/actionable or explicitly handled in bot.
 - Placements are visible/actionable or explicitly delegated to bot.
-- Support path exists for platform operations.
+- Support-ticket path exists for Platform Owner operations; ordinary `VENUE_CHAT` is intentionally not visible to Platform.
 - Analytics baseline is either present or not promised in UI.
 
 Tests to add/update:
 
 - Platform venue lifecycle smoke.
 - Subscription save smoke.
-- Platform support/placement screen smoke if implemented.
+- Platform support-ticket smoke stays in regression; placement screen smoke if implemented later.
 
 ## 5. P2 Improvements
 
@@ -409,7 +413,7 @@ Tests to add/update:
 - Money display risk: Telegram has richer bill/promo/loyalty formatting than Mini App detail.
 - Permission risk: venue nav checks permissions, but role parity still needs smoke across OWNER/MANAGER/STAFF.
 - DTO/UI mismatch: backend returns or computes fields UI does not surface.
-- Support risk: docs mention support/tickets, but no coherent product block was confirmed in code during the audit.
+- stale/superseded: support/tickets product block is now covered by the Guest Communication UX / Support Tickets MVP; advanced support automation and analytics remain future work.
 - Frontend test gap: backend tests exist, but Mini App e2e/browser smoke coverage is not obvious.
 
 ## 7. Recommended Implementation Order
@@ -422,7 +426,7 @@ Tests to add/update:
 6. Venue settings: make real or hide.
 7. Bookings screens if launch scope.
 8. Stop-list options parity.
-9. Platform support/analytics/placements baseline.
+9. Platform analytics/placements baseline; keep Platform support-ticket center in regression.
 
 ## 8. Tests To Add / Update
 

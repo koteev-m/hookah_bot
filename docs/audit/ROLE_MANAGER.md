@@ -8,6 +8,8 @@
 
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права.
 
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue.
+
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
 - DB `ADMIN` -> `VenueRole.MANAGER` as legacy alias;
@@ -42,7 +44,8 @@ Manager Mini App areas:
 - bill controls: manual discount, exclude/restore item;
 - close bill/order;
 - bookings;
-- messages/support threads for booking conversations;
+- `Сообщения` for `BOOKING_CHAT` and `VENUE_CHAT`;
+- `Помощь` / `Обращения` for own-venue `SUPPORT_TICKET`;
 - staff calls;
 - shift-extension requests/settings;
 - menu and availability management;
@@ -62,6 +65,8 @@ Manager Mini App areas:
 - View and manage staff calls.
 - Manage bookings: confirm, cancel, change/propose time, message guest, mark arrived/no-show and booking settings.
 - Read/reply/resolve booking conversation threads where `BOOKING_MANAGE` allows it.
+- Read/reply to ordinary `VENUE_CHAT` for the manager's venue.
+- Read/reply/resolve own-venue `SUPPORT_TICKET` and manually `Передать платформе` support tickets when needed.
 - View statistics.
 - Manage paid shift-extension settings and confirm requests.
 - Manage structured menu/categories/items and stop-list/availability.
@@ -91,6 +96,7 @@ Manager Mini App areas:
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
 - Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
+- Guest Communication UX split is CLOSED / smoke passed for Manager surfaces: `Сообщения` handles booking/venue chats, `Помощь` handles support tickets, Staff is not granted access, and support/venue chats do not post to staff-chat. SLA automation, macros, attachments, CSAT and diagnostics remain future support follow-ups.
 
 ## Smoke-critical checks
 
@@ -98,11 +104,12 @@ Manager Mini App areas:
 2. Manager can accept/deliver/close orders.
 3. Manager can use bill controls and final total reloads from backend.
 4. Manager can confirm/cancel/propose booking where supported.
-5. Manager can open `Сообщения`, reply to booking threads and use active/resolved filters where backend allows.
-6. Manager can open `Статистика`.
-7. Manager can manage menu/availability and tables according to permissions.
-8. Manager cannot enter platform owner mode.
-9. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
-10. Linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
-11. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
-12. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
+5. Manager can open `Сообщения`, reply to `BOOKING_CHAT` / `VENUE_CHAT` and use active/resolved filters where backend allows.
+6. Manager can open `Помощь` / `Обращения`, reply to own-venue support tickets and transfer support tickets to Platform.
+7. Manager can open `Статистика`.
+8. Manager can manage menu/availability and tables according to permissions.
+9. Manager cannot enter platform owner mode.
+10. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
+11. Linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
+12. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
+13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.

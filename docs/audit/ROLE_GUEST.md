@@ -8,10 +8,13 @@
 
 Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call, сообщения с заведением и просмотр своего заказа/счёта.
 
+Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems.
+
 Ключевое разделение:
 - **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;
+- **до QR / без table context** guest can ask a venue a normal question from catalog card `Задать вопрос` or venue detail `💬 Задать вопрос`; this opens/reuses `VENUE_CHAT`, not a support ticket;
 - **до QR / pre-visit venue card** guest видит address, route/copy address and booking actions;
-- **после QR / active table context** guest получает заказное меню, корзину, дозаказы, staff call и active order; route/copy address/booking actions are not prominent there.
+- **после QR / active table context** guest получает заказное меню, корзину, дозаказы, staff call и active order; route/copy address/booking actions and primary `Связаться с заведением` are not prominent there because live table requests use `Вызвать персонал`.
 
 ## Telegram bot
 
@@ -62,7 +65,8 @@ Account/bookings:
 - guest booking MVP присутствует: create/list active bookings/status refresh, cancel/accept changed time where supported;
 - M7b Guest Mini App `Мои брони` implemented with staging visual parity: account-level list shows active/upcoming bookings across venues with bot-compatible public `Бронь №...`, venue-local date/time, status, party size, comment and `Держим до HH:mm` when applicable; recorded staging evidence compares Bot `/my` and Guest Mini App public label, venue-local time and deadline, while real two-account Telegram runtime isolation remains unverified;
 - account baseline включает history/favorites sections;
-- `Сообщения` показывает persisted support/booking threads with context/status/unread and active/resolved filters;
+- `Чаты` показывает persisted `BOOKING_CHAT` and `VENUE_CHAT` threads with context/status/unread and active/resolved filters. Copy must explain that problems and complaints are in `Помощь`.
+- `Помощь` / `Мои обращения` shows `SUPPORT_TICKET` only. Technical/Mini App/QR/platform issues can be submitted without venue; order/service and booking categories require verified venue/booking/table context.
 - profile/promotions/loyalty остаются partial или safe fallback, если backend не отдаёт полноценные данные.
 
 ## Allowed actions
@@ -71,10 +75,12 @@ Account/bookings:
 - Открывать карточку заведения и заполненные visible info sections.
 - Смотреть `📖 Фото-меню` как информационный media/text section.
 - Создавать и отменять свои бронирования, если booking flow доступен.
+- Задать вопрос заведению до визита через catalog card or venue detail; existing ordinary guest+venue chat is reused.
 - После QR/table context смотреть заказное меню, собирать корзину, отправлять заказ/дозаказ.
 - Выбирать item-scoped option/flavor where configured and add optional line-level preparation preference in Mini App.
 - Вызывать персонал из active table context.
-- Читать и отвечать на свои support/booking threads.
+- Читать и отвечать на свои `BOOKING_CHAT`, `VENUE_CHAT` and `SUPPORT_TICKET` threads.
+- Создавать свои support tickets through `Помощь`; venue-related order/service and booking categories require verified venue/booking context.
 - Смотреть свой active/current order и backend-owned счёт.
 - Запросить счёт по своему active order/tab and choose an on-site payment note for staff.
 - Завершать свой table context, если нет активного счёта/обязательств и активного вызова персонала.
@@ -88,6 +94,7 @@ Account/bookings:
 - Получать raw Telegram `file_id`, raw Telegram file URL или bot token.
 - Управлять меню, stop-list, столами, персоналом, счетами, скидками, venue settings или platform features.
 - Видеть чужие bookings/orders/tabs.
+- Видеть чужие chats/support tickets.
 - Завершать или скрывать чужой table context/session за тем же физическим столом.
 
 ## Known gaps / needs smoke
@@ -97,6 +104,7 @@ Account/bookings:
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
 - Favorites/history есть как baseline, но должны проходить отдельный smoke на staging.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
+- Guest Communication UX split is CLOSED / smoke passed: global `Чаты`, global `Помощь`, catalog/venue-detail `Задать вопрос`, `VENUE_CHAT` reuse, support ticket context routing and table-context staff-call separation stay in regression. Advanced support features such as SLA automation, attachments, macros, CSAT and diagnostics reports remain future work.
 - M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Staff-chat activity-card polish also passed: DONE/CANCELLED generic calls no longer stay active in `Оперативно`, and linked closed-visit call leftovers are resolved on order/bill close.
 - Fallback quick-order payload is CLOSED / code-test verification passed; real Telegram client fallback remains part of release smoke.
 - Media proxy требует ручной проверки для image/PDF и скрытых/удалённых sections.
@@ -118,7 +126,9 @@ Account/bookings:
 8. Без active order/bill/staff call нажать `Завершить визит`; повторное открытие Mini App не должно restore table context, повторный QR scan должен re-enter. Request contract stays `POST /api/guest/table/session/end` with JSON `Content-Type` and `{ tableToken, tableSessionId }`.
 9. С active order/bill или active NEW/ACK staff call нажать `Завершить визит`; exit blocked with clear copy and table context remains.
 10. Нажать fallback `Оформить в чате`; payload должен быть `cmd=start_quick_order` with current `table_token`.
-11. Открыть `Сообщения`; проверить список тредов, unread, active/resolved filters and resolve/reopen.
-12. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
-13. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
-14. На active order screen нажать `Попросить счёт`, выбрать `Картой на месте` / `Наличными` / `Пока не знаю`, проверить JSON request contract, guest confirmation, duplicate active request copy and staff notification context.
+11. Открыть `Чаты`; проверить `BOOKING_CHAT` / `VENUE_CHAT` list, unread, active/resolved filters and resolve/reopen where allowed.
+12. From catalog card and venue detail press `Задать вопрос` / `💬 Задать вопрос`; confirm `Чат с <venueName>` opens and no support ticket or staff-chat message is created.
+13. Открыть `Помощь`; create technical support without venue, and verify order/service support outside table asks for a venue.
+14. Открыть `Профиль → Мои брони`; проверить multi-venue cards, public `Бронь №...`, venue-local `Держим до`, перенос и отмену.
+15. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
+16. На active order screen нажать `Попросить счёт`, выбрать `Картой на месте` / `Наличными` / `Пока не знаю`, проверить JSON request contract, guest confirmation, duplicate active request copy and staff notification context.
