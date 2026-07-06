@@ -2621,7 +2621,13 @@ async function mockVenueBookingsApi(
   } = {}
 ) {
   const role = options.role ?? 'MANAGER'
-  const permissions = options.permissions ?? ['BOOKING_VIEW', 'BOOKING_MANAGE', 'BOOKING_ARRIVAL_UPDATE']
+  const permissions = options.permissions ?? [
+    'BOOKING_VIEW',
+    'BOOKING_MANAGE',
+    'BOOKING_ARRIVAL_UPDATE',
+    'SUPPORT_VIEW',
+    'SUPPORT_MANAGE',
+  ]
   let bookings = options.bookings ?? [buildVenueBooking()]
   let confirmCalls = 0
   let cancelCalls = 0
