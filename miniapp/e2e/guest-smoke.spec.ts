@@ -291,15 +291,21 @@ type GuestBookingFixture = VenueBookingFixture & {
 
 type SupportThreadFixture = {
   threadId: number
-  venueId: number
+  venueId?: number | null
   venueName?: string | null
   guestDisplayName?: string | null
+  threadType?: string
+  assigneeScope?: string
   category: string
   contextLabel?: string | null
   status: string
+  statusLabel?: string | null
   bookingId?: number | null
   orderId?: number | null
+  orderDisplayLabel?: string | null
+  tableId?: number | null
   tableSessionId?: number | null
+  tableLabel?: string | null
   title: string
   lastMessagePreview?: string | null
   lastMessageAt?: string | null
@@ -2653,9 +2659,12 @@ async function mockVenueBookingsApi(
         venueId: 1,
         venueName: 'Микс',
         guestDisplayName: booking.guestDisplayName ?? 'Алексей',
+        threadType: 'BOOKING_THREAD',
+        assigneeScope: 'VENUE',
         category: 'BOOKING',
         contextLabel: booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`,
         status: 'OPEN',
+        statusLabel: 'В работе',
         bookingId: booking.bookingId,
         title: booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`,
         lastMessagePreview: null,
@@ -4529,6 +4538,11 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Брони', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Обращения', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/support'
+  })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
   await page.getByRole('button', { name: 'Брони', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Брони' })).toBeVisible()
   await expect(page.getByText('Бронь №12')).toBeVisible()
@@ -4557,9 +4571,12 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
     threadId: 4100,
     venueId: 1,
     venueName: 'Микс',
+    threadType: 'BOOKING_THREAD',
+    assigneeScope: 'VENUE',
     category: 'BOOKING',
     contextLabel: 'Бронь №12',
     status: 'OPEN',
+    statusLabel: 'В работе',
     bookingId: 701,
     title: 'Бронь №12',
     lastMessagePreview: 'На 19:00 все столы заняты. Можем предложить 20:30?',
@@ -4689,6 +4706,344 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
     page.locator('.venue-messages-detail .status').filter({ hasText: 'Сообщение отправлено заведению.' })
   ).toBeVisible()
   expect(messages.map((message) => message.text)).toContain('Да, 20:30 подходит.')
+})
+
+test('guest support tickets stay list-first and open detail only by choice or creation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+
+  let nextThreadId = 4300
+  let nextMessageId = 6300
+  let threads: SupportThreadFixture[] = [
+    {
+      threadId: 4200,
+      venueId: 1,
+      venueName: 'Микс',
+      threadType: 'SUPPORT_TICKET',
+      assigneeScope: 'VENUE',
+      category: 'ORDER_SERVICE',
+      contextLabel: 'Стол №4',
+      status: 'NEW',
+      statusLabel: 'Новый',
+      tableId: 10,
+      tableSessionId: 77,
+      tableLabel: 'Стол №4',
+      title: 'Обслуживание',
+      lastMessagePreview: 'Нужна помощь по заказу',
+      lastMessageAt: '2030-01-10T18:01:00Z',
+      unreadCount: 0,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:01:00Z'
+    }
+  ]
+  let messages: SupportMessageFixture[] = [
+    {
+      messageId: nextMessageId++,
+      threadId: 4200,
+      authorRole: 'GUEST',
+      source: 'GUEST_MINIAPP',
+      text: 'Нужна помощь по заказу',
+      createdAt: '2030-01-10T18:01:00Z'
+    }
+  ]
+
+  await page.route('**/api/guest/support/threads**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)(?:\/messages)?$/)
+    if (!threadMatch && request.method() === 'GET') {
+      const threadType = url.searchParams.get('threadType')
+      const items =
+        threadType === 'BOOKING_THREAD'
+          ? []
+          : threads.filter((thread) => ['OPEN', 'NEW', 'IN_PROGRESS', 'WAITING_USER'].includes(thread.status))
+      await route.fulfill(jsonResponse({ items }))
+      return
+    }
+    if (!threadMatch && request.method() === 'POST') {
+      const body = (await request.postDataJSON()) as { category?: string; message?: string; tableToken?: string | null; tableSessionId?: number | null }
+      const thread: SupportThreadFixture = {
+        threadId: nextThreadId++,
+        venueId: 1,
+        venueName: 'Микс',
+        threadType: 'SUPPORT_TICKET',
+        assigneeScope: 'VENUE',
+        category: body.category ?? 'ORDER_SERVICE',
+        contextLabel: 'Стол №4',
+        status: 'NEW',
+        statusLabel: 'Новый',
+        tableId: 10,
+        tableSessionId: body.tableSessionId ?? 77,
+        tableLabel: 'Стол №4',
+        title: 'Обслуживание',
+        lastMessagePreview: body.message ?? '',
+        lastMessageAt: '2030-01-10T18:05:00Z',
+        unreadCount: 0,
+        createdAt: '2030-01-10T18:05:00Z',
+        updatedAt: '2030-01-10T18:05:00Z'
+      }
+      const message: SupportMessageFixture = {
+        messageId: nextMessageId++,
+        threadId: thread.threadId,
+        authorRole: 'GUEST',
+        source: 'GUEST_MINIAPP',
+        text: body.message ?? '',
+        createdAt: thread.createdAt
+      }
+      threads = [thread, ...threads]
+      messages = [...messages, message]
+      await route.fulfill(jsonResponse({ thread, message, queued: false }))
+      return
+    }
+    if (!threadMatch) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    const threadId = Number(threadMatch[1])
+    const thread = threads.find((item) => item.threadId === threadId)
+    if (!thread) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    if (request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ thread, messages: messages.filter((message) => message.threadId === threadId) }))
+      return
+    }
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: '💬 Связаться с заведением' })).toBeVisible()
+  await page.getByRole('button', { name: '💬 Связаться с заведением' }).click()
+  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.getByText('Здесь ваши чаты с заведениями: по броням, заказам и другим вопросам. Обращения по проблемам находятся отдельно.')).toBeVisible()
+
+  await page.getByRole('button', { name: '🆘 Сообщить о проблеме' }).click()
+  await expect(page.getByRole('heading', { name: 'Обращения' })).toBeVisible()
+  const existingTicket = page.locator('.venue-message-thread-card').filter({ hasText: 'Нужна помощь по заказу' })
+  await expect(existingTicket).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).toHaveText('')
+
+  await existingTicket.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText('Нужна помощь по заказу')).toBeVisible()
+
+  await page.getByPlaceholder('Опишите проблему. Для срочного вопроса по столу используйте вызов персонала.').fill('Не открывается заказ')
+  await page.getByRole('button', { name: 'Создать обращение' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText('Не открывается заказ')).toBeVisible()
+  expect(threads[0].tableSessionId).toBe(77)
+})
+
+test('venue manager support queue is list-first and transfers ticket with clear copy', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let thread: SupportThreadFixture = {
+    threadId: 5200,
+    venueId: 1,
+    venueName: 'Микс',
+    guestDisplayName: 'Алексей',
+    threadType: 'SUPPORT_TICKET',
+    assigneeScope: 'VENUE',
+    category: 'ORDER_SERVICE',
+    contextLabel: 'Стол №4',
+    status: 'NEW',
+    statusLabel: 'Новый',
+    tableId: 10,
+    tableSessionId: 77,
+    tableLabel: 'Стол №4',
+    title: 'Обслуживание',
+    lastMessagePreview: 'Нужна помощь по заказу',
+    lastMessageAt: '2030-01-10T18:01:00Z',
+    unreadCount: 1,
+    createdAt: '2030-01-10T18:00:00Z',
+    updatedAt: '2030-01-10T18:01:00Z'
+  }
+  const messages: SupportMessageFixture[] = [
+    {
+      messageId: 7200,
+      threadId: thread.threadId,
+      authorRole: 'GUEST',
+      source: 'GUEST_MINIAPP',
+      text: 'Нужна помощь по заказу',
+      createdAt: '2030-01-10T18:01:00Z'
+    }
+  ]
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role: 'MANAGER',
+            permissions: ['SUPPORT_VIEW', 'SUPPORT_MANAGE']
+          }
+        ]
+      })
+    )
+  })
+  await page.route('**/api/venue/1/support/threads**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)(?:\/(escalate|messages))?$/)
+    if (!threadMatch && request.method() === 'GET') {
+      const items = url.searchParams.get('threadType') === 'SUPPORT_TICKET' ? [thread] : []
+      await route.fulfill(jsonResponse({ items }))
+      return
+    }
+    if (!threadMatch) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    const action = threadMatch[2]
+    if (action === 'escalate' && request.method() === 'POST') {
+      thread = { ...thread, assigneeScope: 'PLATFORM', status: 'IN_PROGRESS', statusLabel: 'В работе' }
+      await route.fulfill(jsonResponse({ thread, messages }))
+      return
+    }
+    if (request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ thread, messages }))
+      return
+    }
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Обращения', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Обращения' })).toBeVisible()
+  await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Нужна помощь по заказу' })).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).toHaveText('')
+
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText('Нужна помощь по заказу')).toBeVisible()
+  await page.getByRole('button', { name: 'Передать платформе' }).click()
+  await expect(page.getByRole('heading', { name: 'Передать обращение платформе?' })).toBeVisible()
+  await expect(
+    page.getByText('Используйте это, если проблема связана с Mini App, ботом, QR, оплатой, правами доступа или технической ошибкой. Владелец платформы увидит обращение и сможет ответить гостю.')
+  ).toBeVisible()
+  await page.locator('.error-card').getByRole('button', { name: 'Передать платформе' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText('Обращение передано платформе. Ответы от заведения отключены.')).toBeVisible()
+})
+
+test('platform owner finds transferred support tickets and can reply and close', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let transferred: SupportThreadFixture = {
+    threadId: 6200,
+    venueId: 1,
+    venueName: 'Микс',
+    guestDisplayName: 'Алексей',
+    threadType: 'SUPPORT_TICKET',
+    assigneeScope: 'PLATFORM',
+    category: 'MINIAPP_TECHNICAL',
+    contextLabel: 'Техническая проблема',
+    status: 'IN_PROGRESS',
+    statusLabel: 'В работе',
+    tableLabel: 'Стол №4',
+    title: 'Техническая проблема',
+    lastMessagePreview: 'QR не открывается',
+    lastMessageAt: '2030-01-10T18:01:00Z',
+    unreadCount: 0,
+    createdAt: '2030-01-10T18:00:00Z',
+    updatedAt: '2030-01-10T18:01:00Z'
+  }
+  const venueOwned: SupportThreadFixture = {
+    ...transferred,
+    threadId: 6201,
+    assigneeScope: 'VENUE',
+    title: 'Вопрос по сервису',
+    contextLabel: 'Стол №5',
+    lastMessagePreview: 'Нужна помощь'
+  }
+  let messages: SupportMessageFixture[] = [
+    {
+      messageId: 8200,
+      threadId: transferred.threadId,
+      authorRole: 'GUEST',
+      source: 'GUEST_MINIAPP',
+      text: 'QR не открывается',
+      createdAt: '2030-01-10T18:01:00Z'
+    }
+  ]
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-platform-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+  await page.route('**/api/platform/me', async (route) => {
+    await route.fulfill(jsonResponse({ ownerUserId: 123456789 }))
+  })
+  await page.route('**/api/platform/venues?**', async (route) => {
+    await route.fulfill(jsonResponse({ venues: [] }))
+  })
+  await page.route('**/api/platform/support/threads**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const threadMatch = url.pathname.match(/\/api\/platform\/support\/threads\/(\d+)(?:\/(messages|status))?$/)
+    if (!threadMatch && request.method() === 'GET') {
+      let items = [transferred, venueOwned]
+      if (url.searchParams.get('assigneeScope') === 'PLATFORM') {
+        items = items.filter((thread) => thread.assigneeScope === 'PLATFORM')
+      }
+      await route.fulfill(jsonResponse({ items }))
+      return
+    }
+    if (!threadMatch) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    const threadId = Number(threadMatch[1])
+    const action = threadMatch[2]
+    if (threadId !== transferred.threadId) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    if (action === 'messages' && request.method() === 'POST') {
+      const body = (await request.postDataJSON()) as { message?: string | null }
+      const message: SupportMessageFixture = {
+        messageId: 8201,
+        threadId,
+        authorRole: 'PLATFORM',
+        source: 'PLATFORM_MINIAPP',
+        text: body.message ?? '',
+        createdAt: '2030-01-10T18:05:00Z'
+      }
+      messages = [...messages, message]
+      transferred = { ...transferred, lastMessagePreview: message.text, updatedAt: message.createdAt, lastMessageAt: message.createdAt }
+      await route.fulfill(jsonResponse({ thread: transferred, message, queued: true }))
+      return
+    }
+    if (action === 'status' && request.method() === 'POST') {
+      transferred = { ...transferred, status: 'CLOSED', statusLabel: 'Закрыто' }
+      await route.fulfill(jsonResponse({ thread: transferred, messages }))
+      return
+    }
+    if (request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ thread: transferred, messages }))
+      return
+    }
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
+  })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Обращения' }).click()
+  await expect(page.getByRole('heading', { name: 'Обращения' })).toBeVisible()
+  await page.getByRole('button', { name: 'Переданные платформе' }).click()
+  await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'QR не открывается' })).toBeVisible()
+  await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Нужна помощь' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await page.getByPlaceholder('Ответ гостю').fill('Проверяем QR.')
+  await page.getByRole('button', { name: 'Ответить' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText('Проверяем QR.')).toBeVisible()
+  await page.getByRole('button', { name: 'Закрыть' }).click()
+  await expect(page.locator('.venue-messages-detail').getByText(/Закрыто/)).toBeVisible()
 })
 
 test('venue manager sees read-only statistics and switches period', async ({ page }) => {

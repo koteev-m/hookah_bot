@@ -29,8 +29,19 @@ type GuestAppOptions = {
   root: HTMLDivElement | null
 }
 
-type RouteName = 'catalog' | 'venue' | 'cart' | 'order' | 'bookings' | 'account' | 'support'
-type GuestActionId = 'catalog' | 'qr' | 'menu' | 'cart' | 'order' | 'staff' | 'leave' | 'account' | 'support' | 'refresh'
+type RouteName = 'catalog' | 'venue' | 'cart' | 'order' | 'bookings' | 'account' | 'messages' | 'support'
+type GuestActionId =
+  | 'catalog'
+  | 'qr'
+  | 'menu'
+  | 'cart'
+  | 'order'
+  | 'staff'
+  | 'leave'
+  | 'account'
+  | 'messages'
+  | 'support'
+  | 'refresh'
 type GuestTableMode = 'no-table' | 'active-table' | 'ended-table'
 
 type Route = {
@@ -56,9 +67,9 @@ const primaryActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
   'active-table': ['staff', 'leave']
 }
 const navActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
-  'no-table': ['catalog', 'qr', 'account', 'support'],
-  'ended-table': ['catalog', 'qr', 'account', 'support'],
-  'active-table': ['menu', 'cart', 'order', 'account', 'support']
+  'no-table': ['catalog', 'qr', 'messages', 'account', 'support'],
+  'ended-table': ['catalog', 'qr', 'messages', 'account', 'support'],
+  'active-table': ['menu', 'cart', 'order', 'messages', 'support', 'account']
 }
 
 function ensureDefaultHash() {
@@ -77,7 +88,7 @@ function resolveRoute(): Route {
   const [pathPart, queryPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
-  if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'support'].includes(route)) {
+  if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'messages', 'support'].includes(route)) {
     return { name: 'catalog', venueId: null, openStaffCall: false }
   }
   if (route === 'venue') {
@@ -113,7 +124,7 @@ function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | 
   const [pathPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
-  if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'support'].includes(route)) {
+  if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'messages', 'support'].includes(route)) {
     return null
   }
   return route
@@ -255,11 +266,24 @@ function renderRouteContent(
         onOpenVenue,
         onOpenBot: onOpenSupportBot
       })
+    case 'messages':
+      return renderGuestSupportThreadsScreen({
+        root: screenRoot,
+        backendUrl,
+        isDebug,
+        screenMode: 'messages',
+        hasTableContext,
+        tableSnapshot,
+        onBack: onNavigateSupportBack,
+        onOpenVenueStaffCall,
+        onOpenBot: onOpenSupportBot
+      })
     case 'support':
       return renderGuestSupportThreadsScreen({
         root: screenRoot,
         backendUrl,
         isDebug,
+        screenMode: 'tickets',
         hasTableContext,
         tableSnapshot,
         onBack: onNavigateSupportBack,
@@ -344,8 +368,10 @@ function formatActionLabel(
       return '🚪 Завершить визит'
     case 'account':
       return variant === 'nav' ? 'Профиль' : '👤 Профиль'
+    case 'messages':
+      return mode === 'active-table' ? '💬 Связаться с заведением' : 'Сообщения'
     case 'support':
-      return variant === 'nav' ? 'Сообщения' : '💬 Сообщения'
+      return mode === 'active-table' ? '🆘 Сообщить о проблеме' : 'Обращения'
     case 'refresh':
       return '🔄 Обновить'
     default:
@@ -365,6 +391,8 @@ function isActionActive(action: GuestActionId, route: Route, mode: GuestTableMod
       return route.name === 'order'
     case 'account':
       return route.name === 'account'
+    case 'messages':
+      return route.name === 'messages'
     case 'support':
       return route.name === 'support'
     default:
@@ -810,6 +838,9 @@ export function mountGuestApp(options: GuestAppOptions) {
         return
       case 'account':
         navigateSecondaryGuestScreen('#/account')
+        return
+      case 'messages':
+        navigateSecondaryGuestScreen('#/messages')
         return
       case 'support':
         navigateSecondaryGuestScreen('#/support')

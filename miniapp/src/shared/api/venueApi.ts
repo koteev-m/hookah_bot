@@ -73,6 +73,7 @@ import type {
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
   SupportThreadFilter,
+  SupportThreadType,
   SupportThreadListResponse
 } from './supportDtos'
 
@@ -505,7 +506,7 @@ export async function venueResolveLocation(
 
 export async function venueGetSupportThreads(
   backendUrl: string,
-  params: { venueId: number; bookingId?: number | null; filter?: SupportThreadFilter },
+  params: { venueId: number; bookingId?: number | null; filter?: SupportThreadFilter; threadType?: SupportThreadType },
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
@@ -515,6 +516,9 @@ export async function venueGetSupportThreads(
   }
   if (params.filter) {
     search.set('filter', params.filter)
+  }
+  if (params.threadType) {
+    search.set('threadType', params.threadType)
   }
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadListResponse>(

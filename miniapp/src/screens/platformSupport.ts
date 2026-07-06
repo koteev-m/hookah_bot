@@ -18,7 +18,7 @@ type PlatformSupportOptions = {
   isDebug: boolean
 }
 
-type PlatformSupportFilter = 'active' | 'resolved' | 'all'
+type PlatformSupportFilter = 'all' | 'platform' | 'new' | 'in_work' | 'closed'
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
@@ -99,15 +99,17 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
   const deps = buildApiDeps(isDebug)
   const wrapper = el('div', { className: 'venue-messages-screen' })
   const header = el('section', { className: 'card' })
-  const title = el('h2', { text: 'Поддержка' })
-  const hint = el('p', { className: 'venue-order-sub', text: 'Очередь обращений гостей и заведений.' })
+  const title = el('h2', { text: 'Обращения' })
+  const hint = el('p', { className: 'venue-order-sub', text: 'Support Center платформы: все обращения и отдельно переданные платформе.' })
   const status = el('p', { className: 'status', text: '' })
   const filters = el('div', { className: 'message-filter-tabs' })
-  const activeButton = el('button', { className: 'button-small', text: 'Активные' }) as HTMLButtonElement
-  const resolvedButton = el('button', { className: 'button-small button-secondary', text: 'Завершённые' }) as HTMLButtonElement
-  const allButton = el('button', { className: 'button-small button-secondary', text: 'Все' }) as HTMLButtonElement
+  const allButton = el('button', { className: 'button-small', text: 'Все' }) as HTMLButtonElement
+  const platformButton = el('button', { className: 'button-small button-secondary', text: 'Переданные платформе' }) as HTMLButtonElement
+  const newButton = el('button', { className: 'button-small button-secondary', text: 'Новые' }) as HTMLButtonElement
+  const inWorkButton = el('button', { className: 'button-small button-secondary', text: 'В работе' }) as HTMLButtonElement
+  const closedButton = el('button', { className: 'button-small button-secondary', text: 'Закрытые' }) as HTMLButtonElement
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
-  append(filters, activeButton, resolvedButton, allButton)
+  append(filters, allButton, platformButton, newButton, inWorkButton, closedButton)
   append(header, title, hint, status, filters, refreshButton)
   const layout = el('div', { className: 'venue-messages-layout' })
   const list = el('div', { className: 'venue-messages-list' })
@@ -118,7 +120,7 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
 
   let disposed = false
   let abortController: AbortController | null = null
-  let currentFilter: PlatformSupportFilter = 'active'
+  let currentFilter: PlatformSupportFilter = 'all'
   let selectedThreadId: number | null = null
   let threads: SupportThreadDto[] = []
   const disposables: Array<() => void> = []
@@ -129,9 +131,24 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
   }
 
   const updateFilterButtons = () => {
-    activeButton.dataset.active = String(currentFilter === 'active')
-    resolvedButton.dataset.active = String(currentFilter === 'resolved')
     allButton.dataset.active = String(currentFilter === 'all')
+    platformButton.dataset.active = String(currentFilter === 'platform')
+    newButton.dataset.active = String(currentFilter === 'new')
+    inWorkButton.dataset.active = String(currentFilter === 'in_work')
+    closedButton.dataset.active = String(currentFilter === 'closed')
+  }
+
+  const filterThreads = (items: SupportThreadDto[]) => {
+    switch (currentFilter) {
+      case 'new':
+        return items.filter((thread) => thread.status.toUpperCase() === 'NEW')
+      case 'in_work':
+        return items.filter((thread) => ['OPEN', 'IN_PROGRESS', 'WAITING_USER'].includes(thread.status.toUpperCase()))
+      case 'closed':
+        return items.filter((thread) => ['RESOLVED', 'CLOSED'].includes(thread.status.toUpperCase()))
+      default:
+        return items
+    }
   }
 
   const renderList = () => {
@@ -154,8 +171,9 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
         }),
         el('p', {
           className: 'venue-order-sub',
-          text: `${thread.venueName || 'Платформа'} · ${thread.tableLabel ?? thread.orderDisplayLabel ?? ''}`
+          text: `${thread.assigneeScope === 'PLATFORM' ? 'platform' : 'venue'} · ${thread.venueName || 'Без заведения'} · ${thread.tableLabel ?? thread.orderDisplayLabel ?? thread.category}`
         }),
+        el('p', { className: 'venue-order-sub', text: `Обновлено: ${formatDateTime(thread.updatedAt)}` }),
         el('p', { className: 'message-preview', text: thread.lastMessagePreview || 'Сообщений пока нет.' })
       )
       const openButton = el('button', { className: 'button-small', text: 'Открыть' }) as HTMLButtonElement
@@ -171,7 +189,16 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
     abortController = controller
     setLoading(true)
     updateFilterButtons()
-    const result = await platformGetSupportThreads(backendUrl, { filter: currentFilter }, deps, controller.signal)
+    const result = await platformGetSupportThreads(
+      backendUrl,
+      {
+        filter: 'all',
+        assigneeScope: currentFilter === 'platform' ? 'PLATFORM' : null,
+        threadType: 'SUPPORT_TICKET'
+      },
+      deps,
+      controller.signal
+    )
     if (disposed || abortController !== controller) return
     abortController = null
     setLoading(false)
@@ -180,10 +207,11 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
       return
     }
     status.textContent = ''
-    threads = result.data.items
+    threads = filterThreads(result.data.items)
     renderList()
-    if (threads.length && (!selectedThreadId || !threads.some((thread) => thread.threadId === selectedThreadId))) {
-      void loadThread(threads[0].threadId)
+    if (!selectedThreadId || !threads.some((thread) => thread.threadId === selectedThreadId)) {
+      selectedThreadId = null
+      detail.replaceChildren()
     }
   }
 
@@ -193,7 +221,7 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
     renderMessages(messageList, messages)
     const meta = el('p', {
       className: 'venue-order-sub',
-      text: `${thread.venueName || 'Без заведения'} · ${thread.tableLabel ?? thread.orderDisplayLabel ?? thread.category} · ${thread.assigneeScope}`
+      text: `${thread.venueName || 'Без заведения'} · ${thread.tableLabel ?? thread.orderDisplayLabel ?? thread.category} · ${statusLabel(thread)} · ${thread.assigneeScope}`
     })
     const textarea = document.createElement('textarea')
     textarea.className = 'venue-textarea'
@@ -278,10 +306,12 @@ export function renderPlatformSupportScreen(options: PlatformSupportOptions) {
     void loadThreads()
   }
 
-  disposables.push(on(refreshButton, 'click', () => void loadThreads()))
-  disposables.push(on(activeButton, 'click', () => setFilter('active')))
-  disposables.push(on(resolvedButton, 'click', () => setFilter('resolved')))
   disposables.push(on(allButton, 'click', () => setFilter('all')))
+  disposables.push(on(platformButton, 'click', () => setFilter('platform')))
+  disposables.push(on(newButton, 'click', () => setFilter('new')))
+  disposables.push(on(inWorkButton, 'click', () => setFilter('in_work')))
+  disposables.push(on(closedButton, 'click', () => setFilter('closed')))
+  disposables.push(on(refreshButton, 'click', () => void loadThreads()))
   void loadThreads()
 
   return () => {

@@ -61,7 +61,7 @@ function buildListDom(root: HTMLDivElement): ListRefs {
   const cockpitActions = el('div', { className: 'venue-inline-actions' })
   const onboardingButton = el('button', { className: 'button-small button-secondary', text: 'Подключение' }) as HTMLButtonElement
   const placementsButton = el('button', { className: 'button-small button-secondary', text: 'Размещения' }) as HTMLButtonElement
-  const supportButton = el('button', { className: 'button-small button-secondary', text: 'Поддержка' }) as HTMLButtonElement
+  const supportButton = el('button', { className: 'button-small button-secondary', text: 'Обращения' }) as HTMLButtonElement
   const analyticsButton = el('button', { className: 'button-small button-secondary', text: 'Аналитика' }) as HTMLButtonElement
   append(cockpitActions, onboardingButton, placementsButton, supportButton, analyticsButton)
   append(cockpitCard, cockpitTitle, cockpitLead, cockpitActions)

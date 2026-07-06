@@ -7,7 +7,6 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { isDebugEnabled } from '../shared/debug'
 import { parsePositiveInt } from '../shared/parse'
 import { getTelegramContext } from '../shared/telegram'
-import { openBotChat } from '../shared/telegramActions'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -25,7 +24,6 @@ import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
 import { renderVenueStaffScreen } from './venueStaff'
 import { renderVenueStatsScreen } from './venueStats'
 import { renderVenueSubscriptionScreen } from './venueSubscription'
-import { renderVenueSupportScreen } from './supportScreens'
 import { renderVenueTablesScreen } from './venueTables'
 
 export type VenueAppOptions = {
@@ -157,7 +155,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
     extensions: el('button', { className: 'nav-button', text: 'Запросы продления' }) as HTMLButtonElement,
-    messages: el('button', { className: 'nav-button', text: 'Обращения' }) as HTMLButtonElement,
+    messages: el('button', { className: 'nav-button', text: 'Сообщения' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
@@ -165,7 +163,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
     subscription: el('button', { className: 'nav-button', text: 'Подписка' }) as HTMLButtonElement,
     chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement,
-    support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
+    support: el('button', { className: 'nav-button', text: 'Обращения' }) as HTMLButtonElement
   }
 
   const navSections = [
@@ -404,6 +402,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
     refs.navButtons.messages.hidden = !hasPermission('SUPPORT_MANAGE')
+    refs.navButtons.support.hidden = !hasPermission('SUPPORT_MANAGE')
     refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.extensions.hidden = !hasPermission('SHIFT_EXTENSION_VIEW')
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
@@ -430,6 +429,8 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'bookings':
         return hasPermission('BOOKING_VIEW')
       case 'messages':
+        return hasPermission('SUPPORT_MANAGE')
+      case 'support':
         return hasPermission('SUPPORT_MANAGE')
       case 'menu':
         return hasPermission('MENU_VIEW')
@@ -513,6 +514,7 @@ export function mountVenueApp(options: VenueAppOptions) {
           isDebug,
           venueId,
           access,
+          screenMode: 'bookingMessages',
           initialThreadId: route.threadId
         })
       case 'menu':
@@ -537,22 +539,13 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'chat':
         return renderVenueChatLinkScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'support':
-        return renderVenueSupportScreen({
+        return renderVenueMessagesScreen({
           root: screenRoot,
-          onBack: () => navigate('#/dashboard'),
-          onOpenBot: () => {
-            const telegramContext = getTelegramContext()
-            const result = openBotChat(telegramContext)
-            if (result.ok) {
-              return { ok: true }
-            }
-            return {
-              ok: false,
-              message: telegramContext.botUsername
-                ? `Не удалось открыть чат автоматически. Откройте @${telegramContext.botUsername} вручную.`
-                : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
-            }
-          }
+          backendUrl,
+          isDebug,
+          venueId,
+          access,
+          screenMode: 'supportTickets'
         })
       default:
         return () => undefined

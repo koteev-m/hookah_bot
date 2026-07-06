@@ -7,6 +7,7 @@ import type {
   SupportStatusChangeRequest,
   SupportThreadDetailResponse,
   SupportThreadFilter,
+  SupportThreadType,
   SupportThreadListResponse
 } from './supportDtos'
 import type {
@@ -38,7 +39,12 @@ export async function platformGetMe(
 
 export async function platformGetSupportThreads(
   backendUrl: string,
-  params: { filter?: SupportThreadFilter | 'all'; assigneeScope?: 'VENUE' | 'PLATFORM' | null; venueId?: number | null },
+  params: {
+    filter?: SupportThreadFilter | 'all'
+    assigneeScope?: 'VENUE' | 'PLATFORM' | null
+    venueId?: number | null
+    threadType?: SupportThreadType
+  },
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
@@ -46,6 +52,7 @@ export async function platformGetSupportThreads(
   if (params.filter) search.set('filter', params.filter)
   if (params.assigneeScope) search.set('assigneeScope', params.assigneeScope)
   if (params.venueId) search.set('venueId', String(params.venueId))
+  if (params.threadType) search.set('threadType', params.threadType)
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadListResponse>(backendUrl, `/api/platform/support/threads${suffix}`, { signal }, deps)
 }

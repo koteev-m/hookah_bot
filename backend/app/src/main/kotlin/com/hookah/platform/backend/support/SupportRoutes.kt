@@ -145,7 +145,13 @@ fun Route.guestSupportRoutes(
         get {
             val userId = call.requireUserId()
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
-            val threads = supportThreadRepository.listGuestThreads(userId = userId, filter = filter)
+            val threadType = parseOptionalThreadType(call.request.queryParameters["threadType"])
+            val threads =
+                supportThreadRepository.listGuestThreads(
+                    userId = userId,
+                    filter = filter,
+                    threadType = threadType,
+                )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
 
@@ -186,18 +192,11 @@ fun Route.guestSupportRoutes(
                     ),
                 )
             supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
-            val staffChatQueued =
-                notifyStaffChatAboutGuestCreatedTicket(
-                    venueRepository = venueRepository,
-                    outboxEnqueuer = outboxEnqueuer,
-                    thread = detail.thread,
-                    text = messageText,
-                )
             call.respond(
                 SupportThreadCreateResponse(
                     thread = detail.thread.toDto(unreadCountOverride = 0),
                     message = detail.messages.last().toDto(),
-                    queued = staffChatQueued,
+                    queued = false,
                 ),
             )
         }
@@ -264,18 +263,18 @@ fun Route.guestSupportRoutes(
             supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
             val refreshedThread =
                 supportThreadRepository.getGuestThread(userId, detail.thread.id)?.thread ?: detail.thread
-            val staffChatQueued =
-                notifyStaffChatAboutGuestSupportMessage(
-                    venueRepository = venueRepository,
-                    outboxEnqueuer = outboxEnqueuer,
-                    thread = refreshedThread,
-                    text = messageText,
-                )
+            appendSupportReplyAuditBestEffort(
+                auditLogRepository = auditLogRepository,
+                actorUserId = userId,
+                oldThread = detail.thread,
+                refreshedThread = refreshedThread,
+                source = "GUEST_MINIAPP",
+            )
             call.respond(
                 SupportMessageCreateResponse(
                     thread = refreshedThread.toDto(unreadCountOverride = 0),
                     message = message.toDto(),
-                    queued = staffChatQueued,
+                    queued = false,
                 ),
             )
         }
@@ -295,12 +294,14 @@ fun Route.venueSupportRoutes(
             requireSupportManage(venueAccessRepository, userId, venueId)
             val bookingId = call.request.queryParameters["bookingId"]?.toLongOrNull()
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
+            val threadType = parseOptionalThreadType(call.request.queryParameters["threadType"])
             val threads =
                 supportThreadRepository.listVenueThreads(
                     venueId = venueId,
                     viewerUserId = userId,
                     bookingId = bookingId,
                     filter = filter,
+                    threadType = threadType,
                 )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
@@ -409,6 +410,13 @@ fun Route.venueSupportRoutes(
             supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
             val refreshedThread =
                 supportThreadRepository.getVenueThread(venueId, detail.thread.id)?.thread ?: detail.thread
+            appendSupportReplyAuditBestEffort(
+                auditLogRepository = auditLogRepository,
+                actorUserId = userId,
+                oldThread = detail.thread,
+                refreshedThread = refreshedThread,
+                source = "VENUE_MINIAPP",
+            )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = detail.thread.guestUserId,
                 text = buildSupportReplyMessageForGuest(refreshedThread, messageText, "заведения"),
@@ -442,12 +450,14 @@ fun Route.platformSupportRoutes(
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
             val assigneeScope = parseOptionalAssigneeScope(call.request.queryParameters["assigneeScope"])
             val venueId = call.request.queryParameters["venueId"]?.toLongOrNull()
+            val threadType = parseOptionalThreadType(call.request.queryParameters["threadType"])
             val threads =
                 supportThreadRepository.listPlatformThreads(
                     viewerUserId = userId,
                     filter = filter,
                     assigneeScope = assigneeScope,
                     venueId = venueId,
+                    threadType = threadType,
                 )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
@@ -478,6 +488,13 @@ fun Route.platformSupportRoutes(
             supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
             val refreshedThread =
                 supportThreadRepository.getPlatformThread(detail.thread.id)?.thread ?: detail.thread
+            appendSupportReplyAuditBestEffort(
+                auditLogRepository = auditLogRepository,
+                actorUserId = userId,
+                oldThread = detail.thread,
+                refreshedThread = refreshedThread,
+                source = "PLATFORM_MINIAPP",
+            )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = detail.thread.guestUserId,
                 text = buildSupportReplyMessageForGuest(refreshedThread, messageText, "поддержки платформы"),
@@ -721,57 +738,6 @@ fun buildVenueSupportMessageForGuest(
     messageText: String,
 ): String = buildSupportReplyMessageForGuest(thread, messageText, "заведения")
 
-private suspend fun notifyStaffChatAboutGuestCreatedTicket(
-    venueRepository: VenueRepository,
-    outboxEnqueuer: TelegramOutboxEnqueuer,
-    thread: SupportThreadRecord,
-    text: String,
-): Boolean {
-    if (thread.assigneeScope != SupportAssigneeScope.VENUE) return false
-    val venueId = thread.venueId ?: return false
-    val venue = venueRepository.findVenueById(venueId)
-    val staffChatId = venue?.staffChatId ?: return false
-    val venueName = venue.name.takeIf { it.isNotBlank() } ?: thread.venueName ?: "Заведение"
-    outboxEnqueuer.enqueueSendMessage(
-        chatId = staffChatId,
-        text =
-            buildString {
-                append("💬 Новое обращение гостя #").append(thread.id)
-                append('\n').append("Заведение: ").append(venueName)
-                thread.tableLabel?.let { append('\n').append("Стол: ").append(it) }
-                thread.orderDisplayLabel?.let { append('\n').append("Заказ: ").append(it) }
-                append('\n').append("Категория: ").append(thread.normalizedCategory().name)
-                append('\n').append("Откройте раздел «Обращения» в Mini App.")
-                append('\n').append("Текст: ").append(text)
-            },
-    )
-    return true
-}
-
-private suspend fun notifyStaffChatAboutGuestSupportMessage(
-    venueRepository: VenueRepository,
-    outboxEnqueuer: TelegramOutboxEnqueuer,
-    thread: SupportThreadRecord,
-    text: String,
-): Boolean {
-    if (thread.assigneeScope != SupportAssigneeScope.VENUE) return false
-    val venueId = thread.venueId ?: return false
-    val venue = venueRepository.findVenueById(venueId)
-    val staffChatId = venue?.staffChatId ?: return false
-    val venueName = venue.name.takeIf { it.isNotBlank() } ?: thread.venueName ?: "Заведение"
-    outboxEnqueuer.enqueueSendMessage(
-        chatId = staffChatId,
-        text =
-            buildString {
-                append("💬 Ответ гостя по ").append(thread.formatSupportThreadLabel())
-                append('\n').append("Заведение: ").append(venueName)
-                append('\n').append("Откройте раздел «Обращения» в Mini App.")
-                append('\n').append("Текст: ").append(text)
-            },
-    )
-    return true
-}
-
 private suspend fun changeThreadStatus(
     supportThreadRepository: SupportThreadRepository,
     auditLogRepository: AuditLogRepository?,
@@ -822,6 +788,34 @@ private suspend fun changeThreadScope(
         oldScope = thread.assigneeScope,
         newScope = newScope,
     )
+}
+
+private suspend fun appendSupportReplyAuditBestEffort(
+    auditLogRepository: AuditLogRepository?,
+    actorUserId: Long,
+    oldThread: SupportThreadRecord,
+    refreshedThread: SupportThreadRecord,
+    source: String,
+) {
+    if (oldThread.threadType != SupportThreadType.SUPPORT_TICKET) return
+    appendSupportAuditBestEffort(
+        auditLogRepository = auditLogRepository,
+        actorUserId = actorUserId,
+        action = SUPPORT_TICKET_MESSAGE_ADDED,
+        thread = refreshedThread,
+        source = source,
+    )
+    if (oldThread.status != refreshedThread.status) {
+        appendSupportAuditBestEffort(
+            auditLogRepository = auditLogRepository,
+            actorUserId = actorUserId,
+            action = SUPPORT_TICKET_STATUS_CHANGED,
+            thread = refreshedThread,
+            source = source,
+            oldStatus = oldThread.status,
+            newStatus = refreshedThread.status,
+        )
+    }
 }
 
 private suspend fun appendSupportAuditBestEffort(
@@ -967,6 +961,12 @@ private fun normalizeOptionalMetadata(
 private fun parseOptionalAssigneeScope(value: String?): SupportAssigneeScope? =
     value?.trim()?.takeIf { it.isNotBlank() }?.let { parseRequiredAssigneeScope(it) }
 
+private fun parseOptionalThreadType(value: String?): SupportThreadType? =
+    value?.trim()?.takeIf { it.isNotBlank() }?.uppercase()?.let { raw ->
+        runCatching { SupportThreadType.valueOf(raw) }.getOrNull()
+            ?: throw InvalidInputException("threadType must be BOOKING_THREAD or SUPPORT_TICKET")
+    }
+
 private fun parseRequiredAssigneeScope(value: String?): SupportAssigneeScope =
     value?.trim()?.uppercase()?.let { raw ->
         runCatching { SupportAssigneeScope.valueOf(raw) }.getOrNull()
@@ -993,3 +993,4 @@ private const val SUPPORT_TICKET_STATUS_CHANGED = "SUPPORT_TICKET_STATUS_CHANGED
 private const val SUPPORT_TICKET_SCOPE_CHANGED = "SUPPORT_TICKET_SCOPE_CHANGED"
 private const val SUPPORT_TICKET_ESCALATED = "SUPPORT_TICKET_ESCALATED"
 private const val SUPPORT_TICKET_ASSIGNED = "SUPPORT_TICKET_ASSIGNED"
+private const val SUPPORT_TICKET_MESSAGE_ADDED = "SUPPORT_TICKET_MESSAGE_ADDED"

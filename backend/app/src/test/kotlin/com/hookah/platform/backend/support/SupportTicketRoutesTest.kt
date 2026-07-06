@@ -20,6 +20,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
 import java.sql.Statement
+import java.sql.Timestamp
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -27,6 +29,108 @@ import kotlin.test.assertTrue
 
 class SupportTicketRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun `venue scoped support ticket creation does not notify staff chat`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-ticket-no-staff-chat")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, staffChatId = STAFF_CHAT_ID)
+            seedUser(jdbcUrl, GUEST_ID)
+            val table = seedActiveTableContext(jdbcUrl, venueId)
+            val guestToken = issueToken(config, GUEST_ID)
+
+            val response =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "category":"ORDER_SERVICE",
+                          "message":"Нужна помощь по заказу",
+                          "tableToken":"${table.token}",
+                          "tableSessionId":${table.tableSessionId}
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            val thread = body.getValue("thread").jsonObject
+            assertEquals("false", body["queued"]?.jsonPrimitive?.content ?: "false")
+            assertEquals(venueId.toString(), thread.getValue("venueId").jsonPrimitive.content)
+            assertEquals(table.tableId.toString(), thread.getValue("tableId").jsonPrimitive.content)
+            assertEquals(table.tableSessionId.toString(), thread.getValue("tableSessionId").jsonPrimitive.content)
+            assertEquals("VENUE", thread.getValue("assigneeScope").jsonPrimitive.content)
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+        }
+
+    @Test
+    fun `support ticket replies do not notify staff chat`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-ticket-reply-no-staff-chat")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, staffChatId = STAFF_CHAT_ID)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, OWNER_ID)
+            seedUser(jdbcUrl, platformOwnerId)
+            seedVenueMember(jdbcUrl, venueId, OWNER_ID, "OWNER")
+            val threadId = seedVenueSupportTicket(jdbcUrl, venueId, GUEST_ID)
+
+            val guestToken = issueToken(config, GUEST_ID)
+            val ownerToken = issueToken(config, OWNER_ID)
+            val platformToken = issueToken(config, platformOwnerId)
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+
+            val venueReplyResponse =
+                client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $ownerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Ответим гостю без staff-chat."}""")
+                }
+            assertEquals(HttpStatusCode.OK, venueReplyResponse.status)
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+
+            val guestReplyResponse =
+                client.post("/api/guest/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Спасибо, жду."}""")
+                }
+            assertEquals(HttpStatusCode.OK, guestReplyResponse.status)
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+
+            val platformReplyResponse =
+                client.post("/api/platform/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Платформа тоже отвечает без staff-chat."}""")
+                }
+            assertEquals(HttpStatusCode.OK, platformReplyResponse.status)
+            assertTrue(outboxTexts(jdbcUrl, STAFF_CHAT_ID).isEmpty())
+        }
 
     @Test
     fun `support tickets are scoped across guest venue staff and platform`() =
@@ -245,6 +349,71 @@ class SupportTicketRoutesTest {
             assertTrue("SUPPORT_TICKET_ESCALATED" in auditActions)
             assertTrue("SUPPORT_TICKET_ASSIGNED" in auditActions)
             assertTrue("SUPPORT_TICKET_STATUS_CHANGED" in auditActions)
+            assertTrue("SUPPORT_TICKET_MESSAGE_ADDED" in auditActions)
+        }
+
+    @Test
+    fun `staff and foreign venue users cannot open or reply to support tickets`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-ticket-rbac-denials")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueAId = seedVenue(jdbcUrl)
+            val venueBId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, STAFF_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedUser(jdbcUrl, platformOwnerId)
+            seedVenueMember(jdbcUrl, venueAId, STAFF_ID, "STAFF")
+            seedVenueMember(jdbcUrl, venueBId, MANAGER_ID, "MANAGER")
+            val threadId = seedVenueSupportTicket(jdbcUrl, venueAId, GUEST_ID)
+
+            val staffToken = issueToken(config, STAFF_ID)
+            val foreignManagerToken = issueToken(config, MANAGER_ID)
+            val platformToken = issueToken(config, platformOwnerId)
+
+            val staffDetailResponse =
+                client.get("/api/venue/$venueAId/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffDetailResponse.status)
+
+            val staffReplyResponse =
+                client.post("/api/venue/$venueAId/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $staffToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"staff reply must be forbidden"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffReplyResponse.status)
+
+            val foreignVenueDetailResponse =
+                client.get("/api/venue/$venueBId/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $foreignManagerToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, foreignVenueDetailResponse.status)
+
+            val foreignVenueReplyResponse =
+                client.post("/api/venue/$venueBId/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $foreignManagerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"foreign venue reply must be hidden"}""")
+                }
+            assertEquals(HttpStatusCode.NotFound, foreignVenueReplyResponse.status)
+
+            val platformDetailResponse =
+                client.get("/api/platform/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.OK, platformDetailResponse.status)
         }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -284,16 +453,24 @@ class SupportTicketRoutesTest {
         return SessionTokenService(tokenConfig).issueToken(userId).token
     }
 
-    private fun seedVenue(jdbcUrl: String): Long =
+    private fun seedVenue(
+        jdbcUrl: String,
+        staffChatId: Long? = null,
+    ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val venueId =
                 connection.prepareStatement(
                     """
-                    INSERT INTO venues (name, city, address, status)
-                    VALUES ('Support Venue', 'City', 'Address', 'PUBLISHED')
+                    INSERT INTO venues (name, city, address, status, staff_chat_id)
+                    VALUES ('Support Venue', 'City', 'Address', 'PUBLISHED', ?)
                     """.trimIndent(),
                     Statement.RETURN_GENERATED_KEYS,
                 ).use { statement ->
+                    if (staffChatId == null) {
+                        statement.setNull(1, java.sql.Types.BIGINT)
+                    } else {
+                        statement.setLong(1, staffChatId)
+                    }
                     statement.executeUpdate()
                     statement.generatedKeys.use { keys ->
                         keys.next()
@@ -310,6 +487,73 @@ class SupportTicketRoutesTest {
                 statement.executeUpdate()
             }
             venueId
+        }
+
+    private data class SeededTableContext(
+        val tableId: Long,
+        val tableSessionId: Long,
+        val token: String,
+    )
+
+    private fun seedActiveTableContext(
+        jdbcUrl: String,
+        venueId: Long,
+    ): SeededTableContext =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val tableId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_tables (venue_id, table_number, is_active)
+                    VALUES (?, 4, TRUE)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            val token = "support-table-${UUID.randomUUID()}"
+            connection.prepareStatement(
+                """
+                INSERT INTO table_tokens (token, table_id, is_active)
+                VALUES (?, ?, TRUE)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, token)
+                statement.setLong(2, tableId)
+                statement.executeUpdate()
+            }
+            val now = Instant.now()
+            val sessionId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO table_sessions (
+                        venue_id,
+                        table_id,
+                        started_at,
+                        last_activity_at,
+                        expires_at,
+                        status
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableId)
+                    statement.setTimestamp(3, Timestamp.from(now))
+                    statement.setTimestamp(4, Timestamp.from(now))
+                    statement.setTimestamp(5, Timestamp.from(now.plusSeconds(3600)))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            SeededTableContext(tableId = tableId, tableSessionId = sessionId, token = token)
         }
 
     private fun seedUser(
@@ -492,5 +736,6 @@ class SupportTicketRoutesTest {
         private const val OWNER_ID = 666666L
         private const val MANAGER_ID = 777777L
         private const val STAFF_ID = 888888L
+        private const val STAFF_CHAT_ID = -100500L
     }
 }

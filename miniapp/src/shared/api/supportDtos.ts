@@ -33,6 +33,7 @@ export type SupportThreadDto = {
 }
 
 export type SupportThreadFilter = 'active' | 'resolved'
+export type SupportThreadType = 'BOOKING_THREAD' | 'SUPPORT_TICKET'
 
 export type SupportMessageDto = {
   messageId: number

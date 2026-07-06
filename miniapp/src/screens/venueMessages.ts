@@ -9,7 +9,7 @@ import {
   venueSendSupportThreadMessage
 } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { SupportMessageDto, SupportThreadDto, SupportThreadFilter } from '../shared/api/supportDtos'
+import type { SupportMessageDto, SupportThreadDto, SupportThreadFilter, SupportThreadType } from '../shared/api/supportDtos'
 import type { VenueAccessDto } from '../shared/api/venueDtos'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
@@ -20,6 +20,7 @@ type VenueMessagesOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
+  screenMode: 'bookingMessages' | 'supportTickets'
   initialThreadId?: number | null
 }
 
@@ -30,6 +31,13 @@ type VenueMessagesRefs = {
   resolvedButton: HTMLButtonElement
   list: HTMLDivElement
   detail: HTMLDivElement
+}
+
+type VenueMessagesCopy = {
+  title: string
+  hint: string
+  emptyText: string
+  threadType: SupportThreadType
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -131,13 +139,30 @@ function guestDisplay(thread: SupportThreadDto): string {
   return thread.guestDisplayName?.trim() || 'Гость'
 }
 
-function buildDom(root: HTMLDivElement): VenueMessagesRefs {
+function screenCopy(screenMode: VenueMessagesOptions['screenMode']): VenueMessagesCopy {
+  if (screenMode === 'supportTickets') {
+    return {
+      title: 'Обращения',
+      hint: 'Очередь обращений гостей. Срочные вызовы стола остаются в разделе «Вызовы».',
+      emptyText: 'Обращений пока нет.',
+      threadType: 'SUPPORT_TICKET'
+    }
+  }
+  return {
+    title: 'Сообщения',
+    hint: 'Переписка с гостями по броням. Обращения по проблемам находятся отдельно.',
+    emptyText: 'Сообщений пока нет.',
+    threadType: 'BOOKING_THREAD'
+  }
+}
+
+function buildDom(root: HTMLDivElement, copy: VenueMessagesCopy): VenueMessagesRefs {
   const wrapper = el('div', { className: 'venue-messages-screen' })
   const header = el('section', { className: 'card' })
-  const title = el('h2', { text: 'Сообщения' })
+  const title = el('h2', { text: copy.title })
   const hint = el('p', {
     className: 'venue-order-sub',
-    text: 'Очередь обращений гостей. Срочные вызовы стола остаются в разделе «Вызовы».'
+    text: copy.hint
   })
   const status = el('p', { className: 'status', text: '' })
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
@@ -156,9 +181,10 @@ function buildDom(root: HTMLDivElement): VenueMessagesRefs {
 }
 
 export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
-  const { root, backendUrl, isDebug, venueId, access, initialThreadId } = options
+  const { root, backendUrl, isDebug, venueId, access, screenMode, initialThreadId } = options
   if (!root) return () => undefined
-  const refs = buildDom(root)
+  const copy = screenCopy(screenMode)
+  const refs = buildDom(root, copy)
   const deps = buildApiDeps(isDebug)
   const disposables: Array<() => void> = []
   let disposed = false
@@ -182,7 +208,7 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     refs.list.replaceChildren()
     if (!threads.length) {
       const empty = el('section', { className: 'card' })
-      empty.appendChild(el('p', { className: 'venue-empty', text: 'Сообщений пока нет.' }))
+      empty.appendChild(el('p', { className: 'venue-empty', text: copy.emptyText }))
       refs.list.appendChild(empty)
       return
     }
@@ -213,7 +239,12 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     abortController = controller
     setLoading(true)
     updateFilterButtons()
-    const result = await venueGetSupportThreads(backendUrl, { venueId, filter: currentFilter }, deps, controller.signal)
+    const result = await venueGetSupportThreads(
+      backendUrl,
+      { venueId, filter: currentFilter, threadType: copy.threadType },
+      deps,
+      controller.signal
+    )
     if (disposed || abortController !== controller) return
     abortController = null
     setLoading(false)
@@ -225,13 +256,13 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     threads = result.data.items
     renderThreadList()
     const selectedStillVisible = selectedThreadId && threads.some((thread) => thread.threadId === selectedThreadId)
-    if (threads.length && (!selectedStillVisible || refs.detail.childElementCount === 0)) {
-      const preferredThreadId =
-        initialThreadId && threads.some((thread) => thread.threadId === initialThreadId)
-          ? initialThreadId
-          : threads[0].threadId
-      void loadThread(preferredThreadId)
-    } else if (!threads.length) {
+    const shouldOpenInitialThread =
+      initialThreadId != null &&
+      refs.detail.childElementCount === 0 &&
+      threads.some((thread) => thread.threadId === initialThreadId)
+    if (shouldOpenInitialThread) {
+      void loadThread(initialThreadId)
+    } else if (!threads.length || !selectedStillVisible) {
       selectedThreadId = null
       refs.detail.replaceChildren()
     }
@@ -291,13 +322,27 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
     const resolveButton = el('button', { className: 'button-small button-secondary', text: 'Завершить переписку' }) as HTMLButtonElement
     const reopenButton = el('button', { className: 'button-small', text: 'Возобновить переписку' }) as HTMLButtonElement
-    const escalateButton = el('button', { className: 'button-small button-secondary', text: 'Эскалировать' }) as HTMLButtonElement
+    const escalateButton = el('button', { className: 'button-small button-secondary', text: 'Передать платформе' }) as HTMLButtonElement
+    const transferConfirm = el('div', { className: 'error-card' })
+    transferConfirm.hidden = true
+    const transferConfirmTitle = el('h3', { text: 'Передать обращение платформе?' })
+    const transferConfirmText = el('p', {
+      text:
+        'Используйте это, если проблема связана с Mini App, ботом, QR, оплатой, правами доступа или технической ошибкой. Владелец платформы увидит обращение и сможет ответить гостю.'
+    })
+    const transferConfirmActions = el('div', { className: 'error-actions' })
+    const transferConfirmButton = el('button', { className: 'button-small', text: 'Передать платформе' }) as HTMLButtonElement
+    const transferCancelButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
+    append(transferConfirmActions, transferConfirmButton, transferCancelButton)
+    append(transferConfirm, transferConfirmTitle, transferConfirmText, transferConfirmActions)
+    const canTransferToPlatform = screenMode === 'supportTickets' && thread.threadType === 'SUPPORT_TICKET'
     if (canReply && !resolved && !closed && !platformScoped) {
       append(actions, submitButton, resolveButton, escalateButton)
+      escalateButton.hidden = !canTransferToPlatform
     } else if (canReply && resolved) {
       append(actions, reopenButton)
     }
-    append(card, title, meta, messagesList, lifecycleBanner, textarea, status, actions)
+    append(card, title, meta, messagesList, lifecycleBanner, textarea, status, transferConfirm, actions)
     refs.detail.replaceChildren(card)
 
     submitButton.hidden = !canReply || resolved || closed || platformScoped
@@ -328,9 +373,17 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
 
     resolveButton.addEventListener('click', () => void applyStatusChange('resolve', resolveButton))
     reopenButton.addEventListener('click', () => void applyStatusChange('reopen', reopenButton))
-    escalateButton.addEventListener('click', async () => {
+    escalateButton.addEventListener('click', () => {
+      transferConfirm.hidden = false
+    })
+    transferCancelButton.addEventListener('click', () => {
+      transferConfirm.hidden = true
+    })
+    transferConfirmButton.addEventListener('click', async () => {
+      transferConfirmButton.disabled = true
       escalateButton.disabled = true
       const result = await venueEscalateSupportThread(backendUrl, { venueId, threadId: thread.threadId }, deps)
+      transferConfirmButton.disabled = false
       escalateButton.disabled = false
       if (!result.ok) {
         renderApiError(status, result.error, isDebug)

@@ -46,6 +46,7 @@ import type {
   SupportThreadCreateRequest,
   SupportThreadCreateResponse,
   SupportThreadFilter,
+  SupportThreadType,
   SupportThreadListResponse
 } from './supportDtos'
 import { ApiErrorCodes, type ApiResult } from './types'
@@ -264,11 +265,14 @@ export async function guestGetSupportThreads(
   backendUrl: string,
   deps: RequestDependencies,
   signal?: AbortSignal,
-  options?: { filter?: SupportThreadFilter }
+  options?: { filter?: SupportThreadFilter; threadType?: SupportThreadType }
 ): Promise<ApiResult<SupportThreadListResponse>> {
   const search = new URLSearchParams()
   if (options?.filter) {
     search.set('filter', options.filter)
+  }
+  if (options?.threadType) {
+    search.set('threadType', options.threadType)
   }
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadListResponse>(backendUrl, `/api/guest/support/threads${suffix}`, { signal }, deps)

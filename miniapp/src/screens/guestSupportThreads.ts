@@ -9,7 +9,13 @@ import {
   guestSendSupportThreadMessage
 } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { SupportMessageDto, SupportThreadCreateRequest, SupportThreadDto, SupportThreadFilter } from '../shared/api/supportDtos'
+import type {
+  SupportMessageDto,
+  SupportThreadCreateRequest,
+  SupportThreadDto,
+  SupportThreadFilter,
+  SupportThreadType
+} from '../shared/api/supportDtos'
 import type { TableContextSnapshot } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
@@ -20,6 +26,7 @@ type GuestSupportThreadsOptions = {
   root: HTMLDivElement | null
   backendUrl: string
   isDebug: boolean
+  screenMode: 'messages' | 'tickets'
   hasTableContext: boolean
   tableSnapshot: TableContextSnapshot
   onBack: () => void
@@ -38,6 +45,14 @@ type GuestSupportRefs = {
   list: HTMLDivElement
   detail: HTMLDivElement
   botMessage: HTMLParagraphElement
+}
+
+type GuestSupportScreenCopy = {
+  title: string
+  body: string
+  emptyText: string
+  showCreate: boolean
+  threadType: SupportThreadType
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -141,13 +156,30 @@ function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
   })
 }
 
-function buildDom(root: HTMLDivElement, hasTableContext: boolean): GuestSupportRefs {
+function screenCopy(screenMode: GuestSupportThreadsOptions['screenMode']): GuestSupportScreenCopy {
+  if (screenMode === 'tickets') {
+    return {
+      title: 'Обращения',
+      body: 'Здесь ваши обращения по проблемам. Чаты с заведениями по броням и другим вопросам находятся в разделе «Сообщения».',
+      emptyText: 'У вас пока нет обращений.',
+      showCreate: true,
+      threadType: 'SUPPORT_TICKET'
+    }
+  }
+  return {
+    title: 'Сообщения',
+    body: 'Здесь ваши чаты с заведениями: по броням, заказам и другим вопросам. Обращения по проблемам находятся отдельно.',
+    emptyText: 'Сообщений пока нет.',
+    showCreate: false,
+    threadType: 'BOOKING_THREAD'
+  }
+}
+
+function buildDom(root: HTMLDivElement, hasTableContext: boolean, copy: GuestSupportScreenCopy): GuestSupportRefs {
   const wrapper = el('div', { className: 'venue-settings' })
   const header = el('section', { className: 'card' })
-  const title = el('h2', { text: 'Сообщения' })
-  const body = el('p', {
-    text: 'Здесь отображается переписка с заведениями по броням. Ответы также доступны в Telegram-боте.'
-  })
+  const title = el('h2', { text: copy.title })
+  const body = el('p', { text: copy.body })
   const tableHint = el('p', {
     className: 'venue-order-sub',
     text: hasTableContext
@@ -155,6 +187,7 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean): GuestSupportR
       : 'Если вы уже за столом, откройте заведение по QR и используйте «Вызвать персонал».'
   })
   const createCard = el('section', { className: 'card' })
+  createCard.hidden = !copy.showCreate
   const createTitle = el('h3', { text: 'Сообщить о проблеме' })
   const categorySelect = document.createElement('select')
   categorySelect.className = 'venue-select'
@@ -191,9 +224,10 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean): GuestSupportR
 }
 
 export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOptions) {
-  const { root, backendUrl, isDebug, hasTableContext, tableSnapshot, onBack, onOpenBot, onOpenVenueStaffCall } = options
+  const { root, backendUrl, isDebug, screenMode, hasTableContext, tableSnapshot, onBack, onOpenBot, onOpenVenueStaffCall } = options
   if (!root) return () => undefined
-  const refs = buildDom(root, hasTableContext)
+  const copy = screenCopy(screenMode)
+  const refs = buildDom(root, hasTableContext, copy)
   const deps = buildApiDeps(isDebug)
   const disposables: Array<() => void> = []
   let disposed = false
@@ -258,8 +292,10 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     refs.list.replaceChildren()
     if (!threads.length) {
       const empty = el('section', { className: 'card' })
-      append(empty, el('p', { className: 'venue-empty', text: 'Сообщений пока нет.' }))
-      renderFallbackActions(empty)
+      append(empty, el('p', { className: 'venue-empty', text: copy.emptyText }))
+      if (screenMode === 'messages') {
+        renderFallbackActions(empty)
+      }
       refs.list.appendChild(empty)
       return
     }
@@ -291,7 +327,10 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     refs.refreshButton.disabled = true
     refs.refreshButton.textContent = 'Обновляем…'
     updateFilterButtons()
-    const result = await guestGetSupportThreads(backendUrl, deps, controller.signal, { filter: currentFilter })
+    const result = await guestGetSupportThreads(backendUrl, deps, controller.signal, {
+      filter: currentFilter,
+      threadType: copy.threadType
+    })
     if (disposed || abortController !== controller) return
     abortController = null
     refs.refreshButton.disabled = false
@@ -304,9 +343,9 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     threads = result.data.items
     renderThreadList()
     const selectedStillVisible = selectedThreadId && threads.some((thread) => thread.threadId === selectedThreadId)
-    if (threads.length && (!selectedStillVisible || refs.detail.childElementCount === 0)) {
+    if (screenMode === 'messages' && threads.length && (!selectedStillVisible || refs.detail.childElementCount === 0)) {
       void loadThread(threads[0].threadId)
-    } else if (!threads.length) {
+    } else if (!threads.length || !selectedStillVisible) {
       selectedThreadId = null
       refs.detail.replaceChildren()
     }
@@ -354,7 +393,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
         : null
     const textarea = document.createElement('textarea')
     textarea.className = 'venue-textarea'
-    textarea.placeholder = 'Напишите ответ заведению.'
+    textarea.placeholder = screenMode === 'tickets' ? 'Напишите ответ по обращению.' : 'Напишите ответ заведению.'
     textarea.maxLength = 1000
     textarea.rows = 4
     const status = el('p', { className: 'status', text: '' })
@@ -412,8 +451,8 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       currentMessages = [...currentMessages, result.data.message]
       renderMessages(messagesList, currentMessages)
       textarea.value = ''
-      status.textContent = 'Сообщение отправлено заведению.'
-      showToast('Сообщение отправлено заведению.')
+      status.textContent = screenMode === 'tickets' ? 'Сообщение добавлено к обращению.' : 'Сообщение отправлено заведению.'
+      showToast(screenMode === 'tickets' ? 'Сообщение добавлено.' : 'Сообщение отправлено заведению.')
       void loadThreads()
     })
   }

@@ -5123,7 +5123,6 @@ class TelegramBotRouter(
                             "venue_name" to contextResult.context.table.venueName,
                             "table_id" to contextResult.context.table.tableId.toString(),
                             "table_number" to contextResult.context.table.tableNumber.toString(),
-                            "staff_chat_id" to (contextResult.context.table.staffChatId?.toString() ?: ""),
                         )
                     } else {
                         emptyMap()
@@ -5190,8 +5189,6 @@ class TelegramBotRouter(
         }
         val venueId = state.payload["venue_id"]?.toLongOrNull()
         val tableId = state.payload["table_id"]?.toLongOrNull()
-        val tableNumber = state.payload["table_number"]?.toIntOrNull()
-        val staffChatId = state.payload["staff_chat_id"]?.toLongOrNull()
         val category =
             if (venueId == null) {
                 SupportThreadCategory.OTHER
@@ -5226,17 +5223,6 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (scope == SupportAssigneeScope.VENUE && staffChatId != null) {
-            enqueueGroupMessageWithoutReplyKeyboard(
-                staffChatId,
-                buildString {
-                    append("💬 Новое обращение гостя #").append(detail.thread.id)
-                    tableNumber?.let { append('\n').append("Стол: ").append(it) }
-                    append('\n').append("Откройте раздел «Обращения» в Mini App.")
-                    append('\n').append("Текст: ").append(messageText)
-                },
-            )
-        }
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Обращение #${detail.thread.id} создано. Ответ придёт в этот чат.")
     }

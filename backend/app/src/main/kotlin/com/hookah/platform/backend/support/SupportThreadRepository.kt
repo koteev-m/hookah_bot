@@ -313,27 +313,34 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         viewerUserId: Long,
         bookingId: Long? = null,
         filter: SupportInboxFilter? = null,
+        threadType: SupportThreadType? = null,
     ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val bookingFilter = if (bookingId == null) "" else "AND st.booking_id = ?"
+                val typeFilter = if (threadType == null) "" else "AND st.thread_type = ?"
                 val statusFilter = statusFilterCondition(filter)
                 connection.prepareStatement(
                     """
                     ${threadSelect(unreadCountExpression())}
                     WHERE st.venue_id = ?
                       $bookingFilter
+                      $typeFilter
                       $statusFilter
                     ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
                     LIMIT 100
                     """.trimIndent(),
                 ).use { statement ->
-                    statement.setLong(1, viewerUserId)
-                    statement.setLong(2, viewerUserId)
-                    statement.setLong(3, venueId)
+                    var index = 1
+                    statement.setLong(index++, viewerUserId)
+                    statement.setLong(index++, viewerUserId)
+                    statement.setLong(index++, venueId)
                     if (bookingId != null) {
-                        statement.setLong(4, bookingId)
+                        statement.setLong(index++, bookingId)
+                    }
+                    if (threadType != null) {
+                        statement.setString(index, threadType.name)
                     }
                     statement.executeQuery().use { rs ->
                         buildList {
@@ -352,6 +359,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         filter: SupportInboxFilter? = null,
         assigneeScope: SupportAssigneeScope? = null,
         venueId: Long? = null,
+        threadType: SupportThreadType? = null,
     ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -359,6 +367,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                 val statusFilter = statusFilterCondition(filter)
                 val scopeFilter = if (assigneeScope == null) "" else "AND st.assignee_scope = ?"
                 val venueFilter = if (venueId == null) "" else "AND st.venue_id = ?"
+                val typeFilter = if (threadType == null) "" else "AND st.thread_type = ?"
                 connection.prepareStatement(
                     """
                     ${threadSelect(unreadCountExpression())}
@@ -366,6 +375,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                       $statusFilter
                       $scopeFilter
                       $venueFilter
+                      $typeFilter
                     ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
                     LIMIT 200
                     """.trimIndent(),
@@ -377,7 +387,10 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                         statement.setString(index++, assigneeScope.name)
                     }
                     if (venueId != null) {
-                        statement.setLong(index, venueId)
+                        statement.setLong(index++, venueId)
+                    }
+                    if (threadType != null) {
+                        statement.setString(index, threadType.name)
                     }
                     statement.executeQuery().use { rs ->
                         buildList {
@@ -411,23 +424,30 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
     open suspend fun listGuestThreads(
         userId: Long,
         filter: SupportInboxFilter?,
+        threadType: SupportThreadType? = null,
     ): List<SupportThreadRecord> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val statusFilter = statusFilterCondition(filter)
+                val typeFilter = if (threadType == null) "" else "AND st.thread_type = ?"
                 connection.prepareStatement(
                     """
                     ${threadSelect(unreadCountExpression())}
                     WHERE st.guest_user_id = ?
+                      $typeFilter
                       $statusFilter
                     ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
                     LIMIT 100
                     """.trimIndent(),
                 ).use { statement ->
-                    statement.setLong(1, userId)
-                    statement.setLong(2, userId)
-                    statement.setLong(3, userId)
+                    var index = 1
+                    statement.setLong(index++, userId)
+                    statement.setLong(index++, userId)
+                    statement.setLong(index++, userId)
+                    if (threadType != null) {
+                        statement.setString(index, threadType.name)
+                    }
                     statement.executeQuery().use { rs ->
                         buildList {
                             while (rs.next()) {
