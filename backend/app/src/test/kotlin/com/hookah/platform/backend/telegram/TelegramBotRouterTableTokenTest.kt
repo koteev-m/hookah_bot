@@ -108,13 +108,18 @@ import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
 import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
+import com.hookah.platform.backend.support.SupportAssigneeScope
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageRecord
 import com.hookah.platform.backend.support.SupportMessageSource
 import com.hookah.platform.backend.support.SupportThreadCategory
+import com.hookah.platform.backend.support.SupportThreadCreatedSource
+import com.hookah.platform.backend.support.SupportThreadDetailRecord
 import com.hookah.platform.backend.support.SupportThreadRecord
 import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.support.SupportThreadStatus
+import com.hookah.platform.backend.support.SupportThreadType
+import com.hookah.platform.backend.support.SupportTicketCreateInput
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
@@ -370,7 +375,7 @@ class TelegramBotRouterTableTokenTest {
             )
         }
         coEvery {
-            supportThreadRepository.addMessage(any(), any(), any(), any(), any(), any())
+            supportThreadRepository.addMessage(any(), any(), any(), any(), any(), any(), any())
         } answers {
             SupportMessageRecord(
                 id = 9001L,
@@ -748,6 +753,157 @@ class TelegramBotRouterTableTokenTest {
         }
         coEvery { shiftExtensionRepository.findPendingRequest(any(), any()) } returns null
     }
+
+    @Test
+    fun `support command prompts and creates platform ticket from next message`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(100) } answers { states[100] ?: DialogState(DialogStateType.NONE) }
+            coEvery { dialogStateRepository.set(100, any()) } answers {
+                states[100] = invocation.args[1] as DialogState
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(100) } answers {
+                states.remove(100)
+                Unit
+            }
+            coEvery { supportThreadRepository.createTicket(any()) } answers {
+                val input = invocation.args[0] as SupportTicketCreateInput
+                SupportThreadDetailRecord(
+                    thread =
+                        SupportThreadRecord(
+                            id = 9100L,
+                            venueId = input.venueId,
+                            venueName = null,
+                            guestUserId = input.guestUserId,
+                            threadType = SupportThreadType.SUPPORT_TICKET,
+                            assigneeScope = input.assigneeScope,
+                            createdSource = input.createdSource,
+                            category = input.category,
+                            status = SupportThreadStatus.NEW,
+                            bookingId = input.bookingId,
+                            orderId = input.orderId,
+                            tableSessionId = input.tableSessionId,
+                            tableId = input.tableId,
+                            title = input.title,
+                            lastMessageAt = Instant.parse("2026-04-03T18:01:00Z"),
+                            createdAt = Instant.parse("2026-04-03T18:00:00Z"),
+                            updatedAt = Instant.parse("2026-04-03T18:01:00Z"),
+                            booking = null,
+                        ),
+                    messages =
+                        listOf(
+                            SupportMessageRecord(
+                                id = 9101L,
+                                threadId = 9100L,
+                                authorUserId = input.guestUserId,
+                                authorRole = SupportMessageAuthorRole.GUEST,
+                                source = input.messageSource,
+                                text = input.message,
+                                telegramMessageId = null,
+                                createdAt = Instant.parse("2026-04-03T18:01:00Z"),
+                            ),
+                        ),
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 301_001,
+                    message =
+                        Message(
+                            messageId = 401_001,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "/support",
+                        ),
+                ),
+            )
+
+            assertEquals(DialogStateType.GUEST_SUPPORT_WAIT_MESSAGE, states[100]?.state)
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Опишите проблему") && it.contains("/cancel") },
+                    any(),
+                )
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 301_002,
+                    message =
+                        Message(
+                            messageId = 401_002,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "Mini App не открывает заказ",
+                        ),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify {
+                supportThreadRepository.createTicket(
+                    match {
+                        it.guestUserId == 200L &&
+                            it.category == SupportThreadCategory.OTHER &&
+                            it.assigneeScope == SupportAssigneeScope.PLATFORM &&
+                            it.createdSource == SupportThreadCreatedSource.GUEST_BOT &&
+                            it.messageSource == SupportMessageSource.GUEST_BOT &&
+                            it.message == "Mini App не открывает заказ"
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("✅ Обращение #9100 создано") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `cancel clears support command state without creating ticket`() =
+        runBlocking {
+            val states =
+                mutableMapOf(
+                    100L to
+                        DialogState(
+                            DialogStateType.GUEST_SUPPORT_WAIT_MESSAGE,
+                            mapOf("guest_user_id" to "200"),
+                        ),
+                )
+            coEvery { dialogStateRepository.get(100) } answers { states[100] ?: DialogState(DialogStateType.NONE) }
+            coEvery { dialogStateRepository.clear(100) } answers {
+                states.remove(100)
+                Unit
+            }
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 301_003,
+                    message =
+                        Message(
+                            messageId = 401_003,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "/cancel",
+                        ),
+                ),
+            )
+
+            assertEquals(null, states[100])
+            coVerify(exactly = 0) { supportThreadRepository.createTicket(any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Обращение отменено.",
+                    any(),
+                )
+            }
+        }
 
     @Test
     fun `guest can open profile from main menu`() =

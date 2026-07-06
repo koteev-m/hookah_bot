@@ -1,6 +1,7 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  guestCreateSupportThread,
   guestGetSupportThread,
   guestGetSupportThreads,
   guestReopenSupportThread,
@@ -8,7 +9,8 @@ import {
   guestSendSupportThreadMessage
 } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { SupportMessageDto, SupportThreadDto, SupportThreadFilter } from '../shared/api/supportDtos'
+import type { SupportMessageDto, SupportThreadCreateRequest, SupportThreadDto, SupportThreadFilter } from '../shared/api/supportDtos'
+import type { TableContextSnapshot } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -19,6 +21,7 @@ type GuestSupportThreadsOptions = {
   backendUrl: string
   isDebug: boolean
   hasTableContext: boolean
+  tableSnapshot: TableContextSnapshot
   onBack: () => void
   onOpenBot: () => SupportOpenBotResult
   onOpenVenueStaffCall: () => void
@@ -29,6 +32,9 @@ type GuestSupportRefs = {
   refreshButton: HTMLButtonElement
   activeButton: HTMLButtonElement
   resolvedButton: HTMLButtonElement
+  categorySelect: HTMLSelectElement
+  createTextarea: HTMLTextAreaElement
+  createButton: HTMLButtonElement
   list: HTMLDivElement
   detail: HTMLDivElement
   botMessage: HTMLParagraphElement
@@ -68,6 +74,7 @@ function formatDateTime(value?: string | null): string {
 
 function threadTitle(thread: SupportThreadDto): string {
   if (thread.contextLabel) return thread.contextLabel
+  if (thread.threadType === 'BOOKING_THREAD') return thread.bookingId ? `Бронь #${thread.bookingId}` : 'Бронь'
   const displayNumber = thread.booking?.displayNumber
   if (displayNumber) return `Бронь №${displayNumber}`
   if (thread.bookingId) return `Бронь #${thread.bookingId}`
@@ -77,11 +84,12 @@ function threadTitle(thread: SupportThreadDto): string {
 function statusLabel(status: string): string {
   switch (status.toUpperCase()) {
     case 'NEW':
-      return 'Новое'
+      return 'Новый'
     case 'OPEN':
+    case 'IN_PROGRESS':
       return 'В работе'
-    case 'WAITING_GUEST':
-      return 'Ждём вас'
+    case 'WAITING_USER':
+      return 'Ждём ответа'
     case 'RESOLVED':
       return 'Решено'
     case 'CLOSED':
@@ -117,7 +125,14 @@ function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
     return
   }
   messages.forEach((message) => {
-    const author = message.authorRole === 'GUEST' ? 'Вы' : message.authorRole === 'VENUE' ? 'Заведение' : 'Система'
+    const author =
+      message.authorRole === 'GUEST'
+        ? 'Вы'
+        : message.authorRole === 'VENUE'
+          ? 'Заведение'
+          : message.authorRole === 'PLATFORM'
+            ? 'Поддержка'
+            : 'Система'
     const row = el('p', {
       className: message.authorRole === 'GUEST' ? 'venue-order-meta' : 'venue-order-sub',
       text: `${author}, ${formatDateTime(message.createdAt)}: ${message.text}`
@@ -139,6 +154,25 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean): GuestSupportR
       ? 'Срочный вопрос по текущему столу быстрее решить через «Вызвать персонал».'
       : 'Если вы уже за столом, откройте заведение по QR и используйте «Вызвать персонал».'
   })
+  const createCard = el('section', { className: 'card' })
+  const createTitle = el('h3', { text: 'Сообщить о проблеме' })
+  const categorySelect = document.createElement('select')
+  categorySelect.className = 'venue-select'
+  ;[
+    ['ORDER_SERVICE', 'Проблема с заказом/обслуживанием'],
+    ['MINIAPP_TECHNICAL', 'Mini App / техническая проблема'],
+    ['BOOKING', 'Бронь'],
+    ['OTHER', 'Другое']
+  ].forEach(([value, label]) => {
+    categorySelect.appendChild(new Option(label, value))
+  })
+  const createTextarea = document.createElement('textarea')
+  createTextarea.className = 'venue-textarea'
+  createTextarea.placeholder = 'Опишите проблему. Для срочного вопроса по столу используйте вызов персонала.'
+  createTextarea.maxLength = 1000
+  createTextarea.rows = 4
+  const createButton = el('button', { className: 'button-small', text: 'Создать обращение' }) as HTMLButtonElement
+  append(createCard, createTitle, categorySelect, createTextarea, createButton)
   const status = el('p', { className: 'status', text: '' })
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
   const filterActions = el('div', { className: 'message-filter-tabs' })
@@ -151,13 +185,13 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean): GuestSupportR
   const detail = el('div', { className: 'venue-messages-detail' })
   const botMessage = el('p', { className: 'staff-message', text: '' })
   botMessage.hidden = true
-  append(wrapper, header, list, detail, botMessage)
+  append(wrapper, header, createCard, list, detail, botMessage)
   root.replaceChildren(wrapper)
-  return { status, refreshButton, activeButton, resolvedButton, list, detail, botMessage }
+  return { status, refreshButton, activeButton, resolvedButton, categorySelect, createTextarea, createButton, list, detail, botMessage }
 }
 
 export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOptions) {
-  const { root, backendUrl, isDebug, hasTableContext, onBack, onOpenBot, onOpenVenueStaffCall } = options
+  const { root, backendUrl, isDebug, hasTableContext, tableSnapshot, onBack, onOpenBot, onOpenVenueStaffCall } = options
   if (!root) return () => undefined
   const refs = buildDom(root, hasTableContext)
   const deps = buildApiDeps(isDebug)
@@ -167,6 +201,37 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   let threads: SupportThreadDto[] = []
   let currentFilter: SupportThreadFilter = 'active'
   let selectedThreadId: number | null = null
+
+  const createTicket = async () => {
+    const text = refs.createTextarea.value.trim()
+    if (!text) {
+      refs.status.textContent = 'Введите сообщение.'
+      refs.createTextarea.focus()
+      return
+    }
+    const category = refs.categorySelect.value as SupportThreadCreateRequest['category']
+    const payload: SupportThreadCreateRequest = {
+      category,
+      message: text,
+      tableToken: tableSnapshot.status === 'resolved' && tableSnapshot.tableSessionActive ? tableSnapshot.tableToken : null,
+      tableSessionId:
+        tableSnapshot.status === 'resolved' && tableSnapshot.tableSessionActive ? tableSnapshot.tableSessionId : null
+    }
+    refs.createButton.disabled = true
+    const result = await guestCreateSupportThread(backendUrl, payload, deps)
+    refs.createButton.disabled = false
+    if (!result.ok) {
+      renderApiError(refs.status, result.error, isDebug)
+      return
+    }
+    refs.createTextarea.value = ''
+    refs.status.textContent = 'Обращение создано.'
+    showToast('Обращение создано.')
+    currentFilter = 'active'
+    selectedThreadId = result.data.thread.threadId
+    await loadThreads()
+    void loadThread(result.data.thread.threadId)
+  }
 
   const updateFilterButtons = () => {
     refs.activeButton.dataset.active = String(currentFilter === 'active')
@@ -365,6 +430,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   disposables.push(on(refs.refreshButton, 'click', () => void loadThreads()))
   disposables.push(on(refs.activeButton, 'click', () => setFilter('active')))
   disposables.push(on(refs.resolvedButton, 'click', () => setFilter('resolved')))
+  disposables.push(on(refs.createButton, 'click', () => void createTicket()))
   void loadThreads()
 
   return () => {

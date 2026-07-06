@@ -12,6 +12,7 @@ import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPrese
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { renderPlatformCockpitSectionScreen } from './platformCockpitSections'
 import { renderPlatformCreateVenueScreen } from './platformCreateVenue'
+import { renderPlatformSupportScreen } from './platformSupport'
 import { renderPlatformVenueDetailScreen } from './platformVenueDetail'
 import { renderPlatformVenuesListScreen } from './platformVenuesList'
 
@@ -236,12 +237,17 @@ export function mountPlatformApp(options: PlatformAppOptions) {
         })
       case 'onboarding':
       case 'placements':
-      case 'support':
       case 'analytics':
         return renderPlatformCockpitSectionScreen({
           root: refs.content,
           section: route.name,
           onNavigate: navigate
+        })
+      case 'support':
+        return renderPlatformSupportScreen({
+          root: refs.content,
+          backendUrl,
+          isDebug
         })
       case 'venue':
         if (!route.venueId) {

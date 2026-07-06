@@ -103,9 +103,13 @@ import com.hookah.platform.backend.promotions.PromotionRuleCartItem
 import com.hookah.platform.backend.promotions.PromotionRuleEngine
 import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
 import com.hookah.platform.backend.promotions.PromotionRulePreviewResult
+import com.hookah.platform.backend.support.SupportAssigneeScope
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageSource
+import com.hookah.platform.backend.support.SupportThreadCategory
+import com.hookah.platform.backend.support.SupportThreadCreatedSource
 import com.hookah.platform.backend.support.SupportThreadRepository
+import com.hookah.platform.backend.support.SupportTicketCreateInput
 import com.hookah.platform.backend.telegram.ai.AiTelegramHandler
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
@@ -612,6 +616,9 @@ class TelegramBotRouter(
         if (command != null && state.state == DialogStateType.BOT_MENU_CART_WAIT_COMMENT) {
             dialogStateRepository.clear(chatId)
         }
+        if (command != null && state.state == DialogStateType.GUEST_SUPPORT_WAIT_MESSAGE) {
+            dialogStateRepository.clear(chatId)
+        }
         if (
             command != null &&
             (state.state == DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT || isFeedbackReplyDialogState(state.state))
@@ -680,6 +687,8 @@ class TelegramBotRouter(
             isGroupChat(message.chat.type) -> handleGroupChatNonOperationalMessage(chatId, text)
             command?.name == "/cancel" && isBookingCommunicationDialogState(state.state) ->
                 cancelBookingCommunicationDialog(chatId)
+            command?.name == "/cancel" && state.state == DialogStateType.GUEST_SUPPORT_WAIT_MESSAGE ->
+                cancelGuestSupportDialog(chatId)
             command?.name == "/cancel" && isGuestProfileDialogState(state.state) ->
                 cancelGuestProfileDialog(chatId)
             command?.name == "/cancel" && state.state == DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT ->
@@ -698,6 +707,7 @@ class TelegramBotRouter(
             command?.name == "/menu" -> showRoleAwareMainMenu(chatId, from)
             command?.name == "/my" -> showMyOrdersAndBookings(chatId, from)
             command?.name == "/help" -> showHelp(chatId)
+            command?.name == "/support" -> promptGuestSupportTicket(chatId, from)
             isPlatformOwnerUser && text == "📨 Заявки на подключение" ->
                 showOwnerVenueConnectionRequests(chatId)
             isPlatformOwnerUser && text == "🏢 Кальянные" ->
@@ -874,6 +884,8 @@ class TelegramBotRouter(
                 sendVenueBookingGuestMessage(chatId, from, text, state)
             state.state == DialogStateType.GUEST_BOOKING_WAIT_REPLY && !text.isNullOrBlank() ->
                 sendGuestBookingReply(chatId, from, text, state)
+            state.state == DialogStateType.GUEST_SUPPORT_WAIT_MESSAGE && !text.isNullOrBlank() ->
+                createGuestSupportTicketFromBot(chatId, from, text, state)
             state.state == DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT && !text.isNullOrBlank() ->
                 saveGuestFeedbackComment(chatId, from, text, state)
             state.state == DialogStateType.STAFF_FEEDBACK_WAIT_REPLY && !text.isNullOrBlank() ->
@@ -5091,6 +5103,142 @@ class TelegramBotRouter(
         enqueueGroupMessageWithoutReplyKeyboard(staffChatId, staffText)
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Ответ отправлен заведению.")
+    }
+
+    private suspend fun promptGuestSupportTicket(
+        chatId: Long,
+        from: User?,
+    ) {
+        val userId = from?.id
+        if (userId == null) {
+            enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
+            return
+        }
+        val contextPayload =
+            when (val contextResult = loadContext(chatId)) {
+                is LoadContextResult.Loaded ->
+                    if (contextResult.context.userId == userId) {
+                        mapOf(
+                            "venue_id" to contextResult.context.table.venueId.toString(),
+                            "venue_name" to contextResult.context.table.venueName,
+                            "table_id" to contextResult.context.table.tableId.toString(),
+                            "table_number" to contextResult.context.table.tableNumber.toString(),
+                            "staff_chat_id" to (contextResult.context.table.staffChatId?.toString() ?: ""),
+                        )
+                    } else {
+                        emptyMap()
+                    }
+                LoadContextResult.DatabaseUnavailable -> {
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                    return
+                }
+                LoadContextResult.Missing -> emptyMap()
+            }
+        dialogStateRepository.set(
+            chatId,
+            DialogState(
+                DialogStateType.GUEST_SUPPORT_WAIT_MESSAGE,
+                payload =
+                    buildMap {
+                        put("guest_user_id", userId.toString())
+                        putAll(contextPayload)
+                    },
+            ),
+        )
+        enqueueMessage(
+            chatId,
+            buildString {
+                append("Опишите проблему одним сообщением. Мы создадим обращение в поддержку.")
+                if (contextPayload.isNotEmpty()) {
+                    append("\n\nЕсли вопрос срочный по текущему столу, используйте «Вызвать персонал».")
+                }
+                append("\nОтправьте /cancel, чтобы отменить.")
+            },
+        )
+    }
+
+    private suspend fun cancelGuestSupportDialog(chatId: Long) {
+        dialogStateRepository.clear(chatId)
+        enqueueMessage(chatId, "Обращение отменено.")
+    }
+
+    private suspend fun createGuestSupportTicketFromBot(
+        chatId: Long,
+        from: User?,
+        text: String,
+        state: DialogState,
+    ) {
+        val userId = from?.id
+        if (userId == null || state.payload["guest_user_id"]?.toLongOrNull() != userId) {
+            dialogStateRepository.clear(chatId)
+            enqueueMessage(chatId, "Не удалось создать обращение. Попробуйте /support ещё раз.")
+            return
+        }
+        if (text.trim() == "/cancel") {
+            cancelGuestSupportDialog(chatId)
+            return
+        }
+        val messageText = text.trim()
+        if (messageText.isBlank() || messageText.length > 1000) {
+            enqueueMessage(chatId, "Сообщение должно быть от 1 до 1000 символов.")
+            return
+        }
+        val repository = supportThreadRepository
+        if (repository == null) {
+            enqueueMessage(chatId, "Поддержка временно недоступна, попробуйте позже.")
+            return
+        }
+        val venueId = state.payload["venue_id"]?.toLongOrNull()
+        val tableId = state.payload["table_id"]?.toLongOrNull()
+        val tableNumber = state.payload["table_number"]?.toIntOrNull()
+        val staffChatId = state.payload["staff_chat_id"]?.toLongOrNull()
+        val category =
+            if (venueId == null) {
+                SupportThreadCategory.OTHER
+            } else {
+                SupportThreadCategory.ORDER_SERVICE
+            }
+        val scope =
+            if (venueId == null) {
+                SupportAssigneeScope.PLATFORM
+            } else {
+                SupportAssigneeScope.VENUE
+            }
+        val detail =
+            try {
+                repository.createTicket(
+                    SupportTicketCreateInput(
+                        guestUserId = userId,
+                        category = category,
+                        title = if (venueId == null) "Обращение из бота" else "Обращение по столу",
+                        message = messageText,
+                        venueId = venueId,
+                        tableId = tableId,
+                        tableSessionId = null,
+                        orderId = null,
+                        bookingId = null,
+                        assigneeScope = scope,
+                        createdSource = SupportThreadCreatedSource.GUEST_BOT,
+                        messageSource = SupportMessageSource.GUEST_BOT,
+                    ),
+                )
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            }
+        if (scope == SupportAssigneeScope.VENUE && staffChatId != null) {
+            enqueueGroupMessageWithoutReplyKeyboard(
+                staffChatId,
+                buildString {
+                    append("💬 Новое обращение гостя #").append(detail.thread.id)
+                    tableNumber?.let { append('\n').append("Стол: ").append(it) }
+                    append('\n').append("Откройте раздел «Обращения» в Mini App.")
+                    append('\n').append("Текст: ").append(messageText)
+                },
+            )
+        }
+        dialogStateRepository.clear(chatId)
+        enqueueMessage(chatId, "✅ Обращение #${detail.thread.id} создано. Ответ придёт в этот чат.")
     }
 
     private fun isBookingReminderCallback(data: String?): Boolean =

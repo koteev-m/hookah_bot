@@ -1133,6 +1133,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         supportThreadRepository = supportThreadRepository,
                         venueRepository = venueRepository,
                         outboxEnqueuer = telegramOutboxEnqueuer,
+                        tableTokenResolver = tableTokenResolver,
+                        tableSessionRepository = tableSessionRepository,
+                        tableSessionConfig = tableSessionConfig,
+                        guestBookingRepository = guestBookingRepository,
+                        auditLogRepository = auditLogRepository,
                     )
                     guestVisitRoutes(visitRepository = visitRepository)
                     guestStaffCallRoutes(
@@ -1223,6 +1228,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     supportThreadRepository = supportThreadRepository,
                     outboxEnqueuer = telegramOutboxEnqueuer,
+                    auditLogRepository = auditLogRepository,
                 )
                 venueStatsRoutes(
                     venueAccessRepository = venueAccessRepository,
@@ -1249,6 +1255,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     staffInviteRepository = staffInviteRepository,
                     staffInviteConfig = staffInviteConfig,
+                    supportThreadRepository = supportThreadRepository,
+                    outboxEnqueuer = telegramOutboxEnqueuer,
                     telegramBotUsername = telegramConfig.botUsername,
                 )
             }
@@ -1425,6 +1433,12 @@ private suspend fun configureTelegramCommandMenu(apiClient: TelegramApiClient) {
                 buildJsonObject {
                     put("command", "menu")
                     put("description", "🏠 Главное меню")
+                },
+            )
+            add(
+                buildJsonObject {
+                    put("command", "support")
+                    put("description", "💬 Обращение в поддержку")
                 },
             )
         }

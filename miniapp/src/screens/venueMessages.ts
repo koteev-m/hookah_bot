@@ -1,6 +1,7 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  venueEscalateSupportThread,
   venueGetSupportThread,
   venueGetSupportThreads,
   venueReopenSupportThread,
@@ -58,7 +59,7 @@ function formatDateTime(value?: string | null): string {
   })
 }
 
-function bookingTitle(thread: SupportThreadDto): string {
+function supportTitle(thread: SupportThreadDto): string {
   if (thread.contextLabel) return thread.contextLabel
   const displayNumber = thread.booking?.displayNumber
   if (displayNumber) return `Бронь №${displayNumber}`
@@ -69,11 +70,12 @@ function bookingTitle(thread: SupportThreadDto): string {
 function statusLabel(status: string): string {
   switch (status.toUpperCase()) {
     case 'NEW':
-      return 'Новое'
+      return 'Новый'
     case 'OPEN':
+    case 'IN_PROGRESS':
       return 'В работе'
-    case 'WAITING_GUEST':
-      return 'Ждём вас'
+    case 'WAITING_USER':
+      return 'Ждём ответа'
     case 'RESOLVED':
       return 'Решено'
     case 'CLOSED':
@@ -109,7 +111,14 @@ function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
     return
   }
   messages.forEach((message) => {
-    const author = message.authorRole === 'GUEST' ? 'Гость' : message.authorRole === 'VENUE' ? 'Заведение' : 'Система'
+    const author =
+      message.authorRole === 'GUEST'
+        ? 'Гость'
+        : message.authorRole === 'VENUE'
+          ? 'Заведение'
+          : message.authorRole === 'PLATFORM'
+            ? 'Платформа'
+            : 'Система'
     const row = el('p', {
       className: message.authorRole === 'GUEST' ? 'venue-order-sub' : 'venue-order-meta',
       text: `${author}, ${formatDateTime(message.createdAt)}: ${message.text}`
@@ -128,7 +137,7 @@ function buildDom(root: HTMLDivElement): VenueMessagesRefs {
   const title = el('h2', { text: 'Сообщения' })
   const hint = el('p', {
     className: 'venue-order-sub',
-    text: 'История переписки с гостями по броням. Сообщения приходят гостям в Telegram.'
+    text: 'Очередь обращений гостей. Срочные вызовы стола остаются в разделе «Вызовы».'
   })
   const status = el('p', { className: 'status', text: '' })
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
@@ -155,7 +164,7 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
   let disposed = false
   let abortController: AbortController | null = null
   let threads: SupportThreadDto[] = []
-  const canReply = access.permissions.includes('BOOKING_MANAGE')
+  const canReply = access.permissions.includes('SUPPORT_MANAGE')
   let currentFilter: SupportThreadFilter = 'active'
   let selectedThreadId: number | null = initialThreadId ?? null
 
@@ -180,11 +189,11 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     threads.forEach((thread) => {
       const card = el('section', { className: 'card venue-message-thread-card' })
       card.dataset.selected = String(thread.threadId === selectedThreadId)
-      const title = el('h3', { text: bookingTitle(thread) })
+      const title = el('h3', { text: supportTitle(thread) })
       const guest = el('p', { className: 'venue-order-sub', text: `Гость: ${guestDisplay(thread)}` })
       const meta = el('p', {
         className: 'venue-order-sub',
-        text: `${statusLabel(thread.status)} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
+        text: `${thread.threadType === 'BOOKING_THREAD' ? 'Бронь' : 'Обращение'} · ${statusLabel(thread.status)} · ${thread.assigneeScope === 'PLATFORM' ? 'Платформа' : 'Заведение'} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
       })
       const preview = el('p', { className: 'message-preview', text: previewText(thread) })
       const unread = unreadCount(thread)
@@ -252,15 +261,16 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
 
   const renderThreadDetail = (thread: SupportThreadDto, messages: SupportMessageDto[]) => {
     const card = el('section', { className: 'card' })
-    const title = el('h3', { text: bookingTitle(thread) })
+    const title = el('h3', { text: supportTitle(thread) })
     const meta = el('p', {
       className: 'venue-order-sub',
       text: thread.booking
         ? `${guestDisplay(thread)} · ${formatDateTime(thread.booking.scheduledAt)} · гостей: ${thread.booking.partySize ?? '—'} · ${thread.booking.status ?? ''}`
-        : thread.title
+        : `${guestDisplay(thread)} · ${thread.tableLabel ?? thread.orderDisplayLabel ?? thread.title} · ${thread.assigneeScope === 'PLATFORM' ? 'Передано платформе' : 'В работе заведения'}`
     })
     const resolved = isResolvedThread(thread)
     const closed = isClosedThread(thread)
+    const platformScoped = thread.assigneeScope === 'PLATFORM'
     let currentMessages = messages
     const messagesList = el('div', { className: 'venue-support-messages' })
     renderMessages(messagesList, currentMessages)
@@ -281,16 +291,20 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
     const resolveButton = el('button', { className: 'button-small button-secondary', text: 'Завершить переписку' }) as HTMLButtonElement
     const reopenButton = el('button', { className: 'button-small', text: 'Возобновить переписку' }) as HTMLButtonElement
-    if (canReply && !resolved && !closed) {
-      append(actions, submitButton, resolveButton)
+    const escalateButton = el('button', { className: 'button-small button-secondary', text: 'Эскалировать' }) as HTMLButtonElement
+    if (canReply && !resolved && !closed && !platformScoped) {
+      append(actions, submitButton, resolveButton, escalateButton)
     } else if (canReply && resolved) {
       append(actions, reopenButton)
     }
     append(card, title, meta, messagesList, lifecycleBanner, textarea, status, actions)
     refs.detail.replaceChildren(card)
 
-    submitButton.hidden = !canReply || resolved || closed
-    textarea.hidden = !canReply || resolved || closed
+    submitButton.hidden = !canReply || resolved || closed || platformScoped
+    textarea.hidden = !canReply || resolved || closed || platformScoped
+    if (platformScoped && !resolved && !closed) {
+      status.textContent = 'Обращение передано платформе. Ответы от заведения отключены.'
+    }
 
     const applyStatusChange = async (action: 'resolve' | 'reopen', button: HTMLButtonElement) => {
       button.disabled = true
@@ -314,6 +328,18 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
 
     resolveButton.addEventListener('click', () => void applyStatusChange('resolve', resolveButton))
     reopenButton.addEventListener('click', () => void applyStatusChange('reopen', reopenButton))
+    escalateButton.addEventListener('click', async () => {
+      escalateButton.disabled = true
+      const result = await venueEscalateSupportThread(backendUrl, { venueId, threadId: thread.threadId }, deps)
+      escalateButton.disabled = false
+      if (!result.ok) {
+        renderApiError(status, result.error, isDebug)
+        return
+      }
+      renderThreadDetail(result.data.thread, result.data.messages)
+      showToast('Обращение передано платформе.')
+      void loadThreads()
+    })
 
     submitButton.addEventListener('click', async () => {
       const text = textarea.value.trim()

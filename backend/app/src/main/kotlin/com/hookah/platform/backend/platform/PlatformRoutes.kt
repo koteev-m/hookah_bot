@@ -5,6 +5,9 @@ import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.miniapp.venue.requireUserId
+import com.hookah.platform.backend.support.SupportThreadRepository
+import com.hookah.platform.backend.support.platformSupportRoutes
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -53,6 +56,8 @@ fun Route.platformRoutes(
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository,
     staffInviteConfig: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig,
+    supportThreadRepository: SupportThreadRepository,
+    outboxEnqueuer: TelegramOutboxEnqueuer,
     telegramBotUsername: String? = null,
 ) {
     route("/platform") {
@@ -88,6 +93,12 @@ fun Route.platformRoutes(
         billingInvoiceRepository = billingInvoiceRepository,
         billingService = billingService,
         billingOverviewService = billingOverviewService,
+        auditLogRepository = auditLogRepository,
+    )
+    platformSupportRoutes(
+        platformConfig = platformConfig,
+        supportThreadRepository = supportThreadRepository,
+        outboxEnqueuer = outboxEnqueuer,
         auditLogRepository = auditLogRepository,
     )
 }

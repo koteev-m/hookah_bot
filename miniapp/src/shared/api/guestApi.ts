@@ -43,6 +43,8 @@ import type {
   SupportMessageCreateRequest,
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
+  SupportThreadCreateRequest,
+  SupportThreadCreateResponse,
   SupportThreadFilter,
   SupportThreadListResponse
 } from './supportDtos'
@@ -285,6 +287,25 @@ export async function guestGetSupportThread(
     backendUrl,
     `/api/guest/support/threads/${threadId}`,
     { signal },
+    deps
+  )
+}
+
+export async function guestCreateSupportThread(
+  backendUrl: string,
+  payload: SupportThreadCreateRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportThreadCreateResponse>> {
+  return requestApi<SupportThreadCreateResponse>(
+    backendUrl,
+    '/api/guest/support/threads',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
     deps
   )
 }

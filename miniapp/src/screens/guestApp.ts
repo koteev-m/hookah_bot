@@ -261,6 +261,7 @@ function renderRouteContent(
         backendUrl,
         isDebug,
         hasTableContext,
+        tableSnapshot,
         onBack: onNavigateSupportBack,
         onOpenVenueStaffCall,
         onOpenBot: onOpenSupportBot

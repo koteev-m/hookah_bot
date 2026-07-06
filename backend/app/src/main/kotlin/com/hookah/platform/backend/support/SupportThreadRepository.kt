@@ -7,11 +7,18 @@ import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
+import java.sql.Types
 import java.time.Instant
 import javax.sql.DataSource
 
 enum class SupportThreadCategory {
     BOOKING,
+    ORDER_SERVICE,
+    MINIAPP_TECHNICAL,
+    BILLING,
+    OTHER,
+
+    // Legacy values kept so old rows or fixtures do not crash before migration.
     GENERAL,
     ORDER,
     TABLE,
@@ -20,6 +27,9 @@ enum class SupportThreadCategory {
 
 enum class SupportThreadStatus {
     OPEN,
+    NEW,
+    IN_PROGRESS,
+    WAITING_USER,
     RESOLVED,
     CLOSED,
 }
@@ -40,8 +50,25 @@ enum class SupportMessageSource {
     GUEST_BOT,
     GUEST_MINIAPP,
     VENUE_MINIAPP,
+    PLATFORM_MINIAPP,
     STAFF_CHAT,
     SYSTEM,
+}
+
+enum class SupportThreadType {
+    BOOKING_THREAD,
+    SUPPORT_TICKET,
+}
+
+enum class SupportAssigneeScope {
+    VENUE,
+    PLATFORM,
+}
+
+enum class SupportThreadCreatedSource {
+    BOOKING_FLOW,
+    GUEST_MINIAPP,
+    GUEST_BOT,
 }
 
 data class SupportBookingContextRecord(
@@ -54,15 +81,23 @@ data class SupportBookingContextRecord(
 
 data class SupportThreadRecord(
     val id: Long,
-    val venueId: Long,
+    val venueId: Long?,
     val venueName: String?,
     val guestDisplayName: String? = null,
     val guestUserId: Long,
+    val threadType: SupportThreadType = SupportThreadType.BOOKING_THREAD,
+    val assigneeScope: SupportAssigneeScope = SupportAssigneeScope.VENUE,
+    val createdSource: SupportThreadCreatedSource = SupportThreadCreatedSource.BOOKING_FLOW,
     val category: SupportThreadCategory,
     val status: SupportThreadStatus,
     val bookingId: Long?,
     val orderId: Long?,
+    val orderDisplayLabel: String? = null,
+    val tableId: Long? = null,
     val tableSessionId: Long?,
+    val tableLabel: String? = null,
+    val appVersion: String? = null,
+    val correlationId: String? = null,
     val title: String,
     val lastMessagePreview: String? = null,
     val lastMessageAt: Instant?,
@@ -86,6 +121,31 @@ data class SupportMessageRecord(
 data class SupportThreadDetailRecord(
     val thread: SupportThreadRecord,
     val messages: List<SupportMessageRecord>,
+)
+
+data class SupportOrderContextRecord(
+    val orderId: Long,
+    val venueId: Long,
+    val tableId: Long?,
+    val tableSessionId: Long?,
+    val displayLabel: String?,
+)
+
+data class SupportTicketCreateInput(
+    val guestUserId: Long,
+    val category: SupportThreadCategory,
+    val title: String,
+    val message: String,
+    val venueId: Long? = null,
+    val tableId: Long? = null,
+    val tableSessionId: Long? = null,
+    val orderId: Long? = null,
+    val bookingId: Long? = null,
+    val assigneeScope: SupportAssigneeScope,
+    val createdSource: SupportThreadCreatedSource,
+    val messageSource: SupportMessageSource,
+    val appVersion: String? = null,
+    val correlationId: String? = null,
 )
 
 open class SupportThreadRepository(private val dataSource: DataSource?) {
@@ -117,57 +177,133 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         source: SupportMessageSource,
         text: String,
         telegramMessageId: Long? = null,
+        statusAfterInsert: SupportThreadStatus? = statusAfterMessage(authorRole),
     ): SupportMessageRecord {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val messageId =
-                    connection.prepareStatement(
-                        """
-                        INSERT INTO support_messages (
-                            thread_id,
-                            author_user_id,
-                            author_role,
-                            source,
-                            text,
-                            telegram_message_id
+                    insertMessage(
+                        connection = connection,
+                        threadId = threadId,
+                        authorUserId = authorUserId,
+                        authorRole = authorRole,
+                        source = source,
+                        text = text,
+                        telegramMessageId = telegramMessageId,
+                    )
+                updateThreadAfterMessage(connection, threadId, statusAfterInsert)
+                selectMessage(connection, messageId) ?: error("support message was not found after insert")
+            }
+        }
+    }
+
+    open suspend fun createTicket(input: SupportTicketCreateInput): SupportThreadDetailRecord {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val previousAutoCommit = connection.autoCommit
+                connection.autoCommit = false
+                try {
+                    val threadId =
+                        insertTicketThread(
+                            connection = connection,
+                            input = input,
                         )
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """.trimIndent(),
-                        Statement.RETURN_GENERATED_KEYS,
-                    ).use { statement ->
-                        statement.setLong(1, threadId)
-                        if (authorUserId == null) {
-                            statement.setObject(2, null)
-                        } else {
-                            statement.setLong(2, authorUserId)
-                        }
-                        statement.setString(3, authorRole.name)
-                        statement.setString(4, source.name)
-                        statement.setString(5, text)
-                        if (telegramMessageId == null) {
-                            statement.setObject(6, null)
-                        } else {
-                            statement.setLong(6, telegramMessageId)
-                        }
-                        statement.executeUpdate()
-                        statement.generatedKeys.use { keys ->
-                            if (keys.next()) keys.getLong(1) else error("support message id was not generated")
-                        }
-                    }
+                    insertMessage(
+                        connection = connection,
+                        threadId = threadId,
+                        authorUserId = input.guestUserId,
+                        authorRole = SupportMessageAuthorRole.GUEST,
+                        source = input.messageSource,
+                        text = input.message,
+                        telegramMessageId = null,
+                    )
+                    updateThreadAfterMessage(connection, threadId, SupportThreadStatus.NEW)
+                    connection.commit()
+                    val thread =
+                        selectGuestThread(connection, input.guestUserId, threadId)
+                            ?: error("support ticket was not found after insert")
+                    SupportThreadDetailRecord(thread = thread, messages = listMessages(connection, threadId))
+                } catch (e: Throwable) {
+                    connection.rollback()
+                    throw e
+                } finally {
+                    connection.autoCommit = previousAutoCommit
+                }
+            }
+        }
+    }
+
+    open suspend fun findOrderContextForGuest(
+        orderId: Long,
+        userId: Long,
+        venueId: Long? = null,
+        tableSessionId: Long? = null,
+    ): SupportOrderContextRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val venueFilter = if (venueId == null) "" else "AND o.venue_id = ?"
+                val sessionFilter = if (tableSessionId == null) "" else "AND o.table_session_id = ?"
                 connection.prepareStatement(
                     """
-                    UPDATE support_threads
-                    SET last_message_at = NOW(),
-                        updated_at = NOW(),
-                        status = 'OPEN'
-                    WHERE id = ?
+                    SELECT o.id,
+                           o.venue_id,
+                           o.table_id,
+                           o.table_session_id,
+                           o.display_number,
+                           o.display_date
+                    FROM orders o
+                    WHERE o.id = ?
+                      $venueFilter
+                      $sessionFilter
+                      AND EXISTS (
+                          SELECT 1
+                          FROM order_batches ob
+                          LEFT JOIN guest_batch_idempotency gbi
+                            ON gbi.batch_id = ob.id
+                           AND gbi.user_id = ?
+                          WHERE ob.order_id = o.id
+                            AND (
+                                ob.author_user_id = ?
+                                OR gbi.user_id IS NOT NULL
+                                OR EXISTS (
+                                    SELECT 1
+                                    FROM tab_member tm
+                                    WHERE tm.tab_id = ob.tab_id
+                                      AND tm.user_id = ?
+                                )
+                            )
+                      )
                     """.trimIndent(),
                 ).use { statement ->
-                    statement.setLong(1, threadId)
-                    statement.executeUpdate()
+                    var index = 1
+                    statement.setLong(index++, orderId)
+                    if (venueId != null) statement.setLong(index++, venueId)
+                    if (tableSessionId != null) statement.setLong(index++, tableSessionId)
+                    statement.setLong(index++, userId)
+                    statement.setLong(index++, userId)
+                    statement.setLong(index, userId)
+                    statement.executeQuery().use { rs ->
+                        if (!rs.next()) {
+                            null
+                        } else {
+                            val displayNumber = rs.getInt("display_number").takeUnless { rs.wasNull() }
+                            val displayDate = rs.getDate("display_date")?.toLocalDate()
+                            SupportOrderContextRecord(
+                                orderId = rs.getLong("id"),
+                                venueId = rs.getLong("venue_id"),
+                                tableId = rs.getNullableLong("table_id"),
+                                tableSessionId = rs.getNullableLong("table_session_id"),
+                                displayLabel =
+                                    displayNumber?.let {
+                                        if (displayDate == null) "Заказ №$it" else "Заказ №$it от $displayDate"
+                                    } ?: "Заказ #${rs.getLong("id")}",
+                            )
+                        }
+                    }
                 }
-                selectMessage(connection, messageId) ?: error("support message was not found after insert")
             }
         }
     }
@@ -198,6 +334,50 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                     statement.setLong(3, venueId)
                     if (bookingId != null) {
                         statement.setLong(4, bookingId)
+                    }
+                    statement.executeQuery().use { rs ->
+                        buildList {
+                            while (rs.next()) {
+                                add(rs.toThreadRecord())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    open suspend fun listPlatformThreads(
+        viewerUserId: Long,
+        filter: SupportInboxFilter? = null,
+        assigneeScope: SupportAssigneeScope? = null,
+        venueId: Long? = null,
+    ): List<SupportThreadRecord> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val statusFilter = statusFilterCondition(filter)
+                val scopeFilter = if (assigneeScope == null) "" else "AND st.assignee_scope = ?"
+                val venueFilter = if (venueId == null) "" else "AND st.venue_id = ?"
+                connection.prepareStatement(
+                    """
+                    ${threadSelect(unreadCountExpression())}
+                    WHERE 1 = 1
+                      $statusFilter
+                      $scopeFilter
+                      $venueFilter
+                    ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
+                    LIMIT 200
+                    """.trimIndent(),
+                ).use { statement ->
+                    var index = 1
+                    statement.setLong(index++, viewerUserId)
+                    statement.setLong(index++, viewerUserId)
+                    if (assigneeScope != null) {
+                        statement.setString(index++, assigneeScope.name)
+                    }
+                    if (venueId != null) {
+                        statement.setLong(index, venueId)
                     }
                     statement.executeQuery().use { rs ->
                         buildList {
@@ -333,6 +513,29 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         }
     }
 
+    open suspend fun updateThreadAssigneeScope(
+        threadId: Long,
+        assigneeScope: SupportAssigneeScope,
+    ) {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    UPDATE support_threads
+                    SET assignee_scope = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, assigneeScope.name)
+                    statement.setLong(2, threadId)
+                    statement.executeUpdate()
+                }
+            }
+        }
+    }
+
     open suspend fun getGuestThread(
         userId: Long,
         threadId: Long,
@@ -341,6 +544,16 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val thread = selectGuestThread(connection, userId, threadId) ?: return@withContext null
+                SupportThreadDetailRecord(thread = thread, messages = listMessages(connection, threadId))
+            }
+        }
+    }
+
+    open suspend fun getPlatformThread(threadId: Long): SupportThreadDetailRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val thread = selectThread(connection, threadId) ?: return@withContext null
                 SupportThreadDetailRecord(thread = thread, messages = listMessages(connection, threadId))
             }
         }
@@ -357,6 +570,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             WHERE st.venue_id = ?
               AND st.booking_id = ?
               AND st.category = 'BOOKING'
+              AND (st.thread_type = 'BOOKING_THREAD' OR st.thread_type IS NULL)
             ORDER BY st.id ASC
             LIMIT 1
             """.trimIndent(),
@@ -382,9 +596,12 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                     category,
                     status,
                     booking_id,
+                    thread_type,
+                    assignee_scope,
+                    created_source,
                     title
                 )
-                VALUES (?, ?, 'BOOKING', 'OPEN', ?, ?)
+                VALUES (?, ?, 'BOOKING', 'IN_PROGRESS', ?, 'BOOKING_THREAD', 'VENUE', 'BOOKING_FLOW', ?)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
@@ -417,6 +634,20 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             statement.executeQuery().use { rs -> if (rs.next()) rs.toThreadRecord() else null }
         }
 
+    private fun selectThread(
+        connection: Connection,
+        threadId: Long,
+    ): SupportThreadRecord? =
+        connection.prepareStatement(
+            """
+            ${threadSelect()}
+            WHERE st.id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.executeQuery().use { rs -> if (rs.next()) rs.toThreadRecord() else null }
+        }
+
     private fun selectGuestThread(
         connection: Connection,
         userId: Long,
@@ -433,6 +664,110 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             statement.setLong(2, threadId)
             statement.executeQuery().use { rs -> if (rs.next()) rs.toThreadRecord() else null }
         }
+
+    private fun insertTicketThread(
+        connection: Connection,
+        input: SupportTicketCreateInput,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO support_threads (
+                venue_id,
+                guest_user_id,
+                category,
+                status,
+                booking_id,
+                order_id,
+                table_id,
+                table_session_id,
+                thread_type,
+                assignee_scope,
+                created_source,
+                app_version,
+                correlation_id,
+                title
+            )
+            VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, 'SUPPORT_TICKET', ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setNullableLong(1, input.venueId)
+            statement.setLong(2, input.guestUserId)
+            statement.setString(3, input.category.name)
+            statement.setNullableLong(4, input.bookingId)
+            statement.setNullableLong(5, input.orderId)
+            statement.setNullableLong(6, input.tableId)
+            statement.setNullableLong(7, input.tableSessionId)
+            statement.setString(8, input.assigneeScope.name)
+            statement.setString(9, input.createdSource.name)
+            statement.setNullableString(10, input.appVersion)
+            statement.setNullableString(11, input.correlationId)
+            statement.setString(12, input.title)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                if (keys.next()) keys.getLong(1) else error("support ticket id was not generated")
+            }
+        }
+
+    private fun insertMessage(
+        connection: Connection,
+        threadId: Long,
+        authorUserId: Long?,
+        authorRole: SupportMessageAuthorRole,
+        source: SupportMessageSource,
+        text: String,
+        telegramMessageId: Long?,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO support_messages (
+                thread_id,
+                author_user_id,
+                author_role,
+                source,
+                text,
+                telegram_message_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.setNullableLong(2, authorUserId)
+            statement.setString(3, authorRole.name)
+            statement.setString(4, source.name)
+            statement.setString(5, text)
+            statement.setNullableLong(6, telegramMessageId)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                if (keys.next()) keys.getLong(1) else error("support message id was not generated")
+            }
+        }
+
+    private fun updateThreadAfterMessage(
+        connection: Connection,
+        threadId: Long,
+        status: SupportThreadStatus?,
+    ) {
+        val statusAssignment = if (status == null) "" else ", status = ?"
+        connection.prepareStatement(
+            """
+            UPDATE support_threads
+            SET last_message_at = NOW(),
+                updated_at = NOW()
+                $statusAssignment
+            WHERE id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            if (status == null) {
+                statement.setLong(1, threadId)
+            } else {
+                statement.setString(1, status.name)
+                statement.setLong(2, threadId)
+            }
+            statement.executeUpdate()
+        }
+    }
 
     private fun listMessages(
         connection: Connection,
@@ -493,15 +828,23 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         val bookingStatus = getString("booking_status")
         return SupportThreadRecord(
             id = getLong("thread_id"),
-            venueId = getLong("venue_id"),
+            venueId = getNullableLong("venue_id"),
             venueName = getString("venue_name"),
             guestDisplayName = buildGuestDisplayName(),
             guestUserId = getLong("guest_user_id"),
+            threadType = enumValueOrDefault(getString("thread_type"), SupportThreadType.BOOKING_THREAD),
+            assigneeScope = enumValueOrDefault(getString("assignee_scope"), SupportAssigneeScope.VENUE),
+            createdSource = enumValueOrDefault(getString("created_source"), SupportThreadCreatedSource.BOOKING_FLOW),
             category = SupportThreadCategory.valueOf(getString("category")),
             status = SupportThreadStatus.valueOf(getString("status")),
             bookingId = bookingId,
             orderId = getLong("order_id").takeUnless { wasNull() },
+            orderDisplayLabel = getString("order_display_label"),
+            tableId = getNullableLong("table_id"),
             tableSessionId = getLong("table_session_id").takeUnless { wasNull() },
+            tableLabel = getString("table_label"),
+            appVersion = getString("app_version"),
+            correlationId = getString("correlation_id"),
             title = getString("title"),
             lastMessagePreview = getString("last_message_preview"),
             lastMessageAt = getTimestamp("last_message_at")?.toInstant(),
@@ -546,7 +889,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
     private companion object {
         private fun statusFilterCondition(filter: SupportInboxFilter?): String =
             when (filter) {
-                SupportInboxFilter.ACTIVE -> "AND st.status = 'OPEN'"
+                SupportInboxFilter.ACTIVE -> "AND st.status IN ('OPEN', 'NEW', 'IN_PROGRESS', 'WAITING_USER')"
                 SupportInboxFilter.RESOLVED -> "AND st.status IN ('RESOLVED', 'CLOSED')"
                 null -> ""
             }
@@ -575,11 +918,26 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                    u.first_name AS guest_first_name,
                    u.last_name AS guest_last_name,
                    st.guest_user_id AS guest_user_id,
+                   st.thread_type AS thread_type,
+                   st.assignee_scope AS assignee_scope,
+                   st.created_source AS created_source,
                    st.category AS category,
                    st.status AS status,
                    st.booking_id AS booking_id,
                    st.order_id AS order_id,
+                   CASE
+                       WHEN o.display_number IS NULL THEN NULL
+                       WHEN o.display_date IS NULL THEN 'Заказ №' || o.display_number
+                       ELSE 'Заказ №' || o.display_number || ' от ' || o.display_date
+                   END AS order_display_label,
+                   st.table_id AS table_id,
                    st.table_session_id AS table_session_id,
+                   CASE
+                       WHEN vt.table_number IS NULL THEN NULL
+                       ELSE 'Стол №' || vt.table_number
+                   END AS table_label,
+                   st.app_version AS app_version,
+                   st.correlation_id AS correlation_id,
                    st.title AS title,
                    st.last_message_at AS last_message_at,
                    (
@@ -597,9 +955,52 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                    b.party_size AS booking_party_size,
                    b.status AS booking_status
             FROM support_threads st
-            JOIN venues v ON v.id = st.venue_id
+            LEFT JOIN venues v ON v.id = st.venue_id
             LEFT JOIN users u ON u.telegram_user_id = st.guest_user_id
             LEFT JOIN bookings b ON b.id = st.booking_id
+            LEFT JOIN orders o ON o.id = st.order_id
+            LEFT JOIN venue_tables vt ON vt.id = COALESCE(st.table_id, o.table_id)
             """
     }
 }
+
+private fun statusAfterMessage(authorRole: SupportMessageAuthorRole): SupportThreadStatus =
+    when (authorRole) {
+        SupportMessageAuthorRole.GUEST -> SupportThreadStatus.IN_PROGRESS
+        SupportMessageAuthorRole.VENUE,
+        SupportMessageAuthorRole.PLATFORM,
+        SupportMessageAuthorRole.SYSTEM,
+        -> SupportThreadStatus.WAITING_USER
+    }
+
+private fun java.sql.PreparedStatement.setNullableLong(
+    index: Int,
+    value: Long?,
+) {
+    if (value == null) {
+        setNull(index, Types.BIGINT)
+    } else {
+        setLong(index, value)
+    }
+}
+
+private fun java.sql.PreparedStatement.setNullableString(
+    index: Int,
+    value: String?,
+) {
+    if (value == null) {
+        setNull(index, Types.VARCHAR)
+    } else {
+        setString(index, value)
+    }
+}
+
+private fun ResultSet.getNullableLong(column: String): Long? {
+    val value = getLong(column)
+    return if (wasNull()) null else value
+}
+
+private inline fun <reified T : Enum<T>> enumValueOrDefault(
+    value: String?,
+    default: T,
+): T = value?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: default

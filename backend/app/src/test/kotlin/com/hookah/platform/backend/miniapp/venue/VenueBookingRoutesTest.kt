@@ -799,6 +799,24 @@ class VenueBookingRoutesTest {
                     .content,
             )
             assertEquals(
+                "BOOKING_THREAD",
+                messageResponseBody
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadType")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(
+                "VENUE",
+                messageResponseBody
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("assigneeScope")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(
                 "Бронь №1",
                 messageResponseBody
                     .getValue("thread")
@@ -1000,7 +1018,7 @@ class VenueBookingRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, venueReopenThreadResponse.status)
             assertEquals(
-                "OPEN",
+                "IN_PROGRESS",
                 json.parseToJsonElement(venueReopenThreadResponse.bodyAsText())
                     .jsonObject
                     .getValue("thread")
@@ -1055,7 +1073,7 @@ class VenueBookingRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, guestReplyToResolvedThreadResponse.status)
             assertEquals(
-                "OPEN",
+                "IN_PROGRESS",
                 json.parseToJsonElement(guestReplyToResolvedThreadResponse.bodyAsText())
                     .jsonObject
                     .getValue("thread")

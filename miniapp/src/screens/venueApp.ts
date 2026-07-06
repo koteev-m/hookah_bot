@@ -157,7 +157,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
     extensions: el('button', { className: 'nav-button', text: 'Запросы продления' }) as HTMLButtonElement,
-    messages: el('button', { className: 'nav-button', text: 'Сообщения' }) as HTMLButtonElement,
+    messages: el('button', { className: 'nav-button', text: 'Обращения' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
@@ -403,7 +403,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   const updateNavVisibility = () => {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
-    refs.navButtons.messages.hidden = !hasPermission('BOOKING_MANAGE')
+    refs.navButtons.messages.hidden = !hasPermission('SUPPORT_MANAGE')
     refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.extensions.hidden = !hasPermission('SHIFT_EXTENSION_VIEW')
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
@@ -430,7 +430,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'bookings':
         return hasPermission('BOOKING_VIEW')
       case 'messages':
-        return hasPermission('BOOKING_MANAGE')
+        return hasPermission('SUPPORT_MANAGE')
       case 'menu':
         return hasPermission('MENU_VIEW')
       case 'tables':

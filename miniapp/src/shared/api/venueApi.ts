@@ -586,6 +586,20 @@ export async function venueReopenSupportThread(
   )
 }
 
+export async function venueEscalateSupportThread(
+  backendUrl: string,
+  params: { venueId: number; threadId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/threads/${params.threadId}/escalate`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
 export async function venueCreateCategory(
   backendUrl: string,
   params: { venueId: number; body: VenueCreateCategoryRequest },

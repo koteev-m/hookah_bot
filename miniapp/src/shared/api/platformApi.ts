@@ -1,6 +1,15 @@
 import { requestApi, type RequestDependencies } from './request'
 import type { OwnerBillingOverviewResponse } from './billingDtos'
 import type {
+  SupportAssigneeScopeRequest,
+  SupportMessageCreateRequest,
+  SupportMessageCreateResponse,
+  SupportStatusChangeRequest,
+  SupportThreadDetailResponse,
+  SupportThreadFilter,
+  SupportThreadListResponse
+} from './supportDtos'
+import type {
   PlatformMeResponse,
   PlatformOwnerAssignRequest,
   PlatformOwnerAssignResponse,
@@ -25,6 +34,89 @@ export async function platformGetMe(
   signal?: AbortSignal
 ) {
   return requestApi<PlatformMeResponse>(backendUrl, '/api/platform/me', { signal }, deps)
+}
+
+export async function platformGetSupportThreads(
+  backendUrl: string,
+  params: { filter?: SupportThreadFilter | 'all'; assigneeScope?: 'VENUE' | 'PLATFORM' | null; venueId?: number | null },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams()
+  if (params.filter) search.set('filter', params.filter)
+  if (params.assigneeScope) search.set('assigneeScope', params.assigneeScope)
+  if (params.venueId) search.set('venueId', String(params.venueId))
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return requestApi<SupportThreadListResponse>(backendUrl, `/api/platform/support/threads${suffix}`, { signal }, deps)
+}
+
+export async function platformGetSupportThread(
+  backendUrl: string,
+  threadId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportThreadDetailResponse>(backendUrl, `/api/platform/support/threads/${threadId}`, { signal }, deps)
+}
+
+export async function platformSendSupportThreadMessage(
+  backendUrl: string,
+  threadId: number,
+  body: SupportMessageCreateRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportMessageCreateResponse>(
+    backendUrl,
+    `/api/platform/support/threads/${threadId}/messages`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function platformAssignSupportThread(
+  backendUrl: string,
+  threadId: number,
+  body: SupportAssigneeScopeRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/platform/support/threads/${threadId}/assign`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function platformChangeSupportThreadStatus(
+  backendUrl: string,
+  threadId: number,
+  body: SupportStatusChangeRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/platform/support/threads/${threadId}/status`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal
+    },
+    deps
+  )
 }
 
 export async function platformListVenues(
