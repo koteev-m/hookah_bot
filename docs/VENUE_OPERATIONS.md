@@ -17,6 +17,7 @@ Canonical dependencies:
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, permissions, scopes and dangerous actions.
 - `docs/ANALYTICS_EVENTS.md` for operational events, KPIs, audit/event boundaries and dashboard targets.
 - `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation commands, staging policy and operational smoke strategy.
+- `docs/DEPLOYMENT_RUNBOOK.md` for release/deploy, logs, staging smoke and incident operations.
 
 ## Venue Mode Areas
 

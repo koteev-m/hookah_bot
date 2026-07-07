@@ -38,6 +38,10 @@ Testing/QA source of truth:
 - Canonical local validation, GitHub Actions expectations, change-type test matrix, staging smoke policy, manual smoke suites and failure reporting format are tracked in `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 - Runtime changes must use area-appropriate checks; docs-only changes do not require staging deploy.
 
+Deployment/runbook source of truth:
+- Canonical release model, staging deploy command, environment inventory, migrations runbook, rollback policy, incident response and Codex/ChatGPT handoff are tracked in `docs/DEPLOYMENT_RUNBOOK.md`.
+- Exact production deploy, rollback and backup commands remain `needs verification` unless a future operations task confirms them.
+
 ## Core surfaces
 - Telegram Bot (chat): QR entrypoint, navigation, fallback ordering, booking fallback, staff-call fallback and notifications
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)

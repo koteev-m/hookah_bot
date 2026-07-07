@@ -31,6 +31,8 @@
 > Current docs correction as of 2026-07-07: Telegram fallback/staff-chat source of truth is `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Telegram bot entrypoints, QR `/start`, fallback chat order, staff-call, staff-chat link/test/unlink, notification policy, callbacks, parity, security and smoke are `SPEC UPDATED`; staff-chat is radar/shortcut only.
 >
 > Current docs correction as of 2026-07-07: Testing/QA smoke strategy source of truth is `docs/TESTING_QA_SMOKE_STRATEGY.md`. Local validation, GitHub Actions expectations, change-type decision matrix, staging policy, manual smoke suites, failure reporting and Codex handoff are `UPDATED`; docs-only changes do not require staging deploy.
+>
+> Current docs correction as of 2026-07-07: Deployment/runbook source of truth is `docs/DEPLOYMENT_RUNBOOK.md`. Release model, staging deploy command, environment inventory, migration runbook, rollback policy, troubleshooting, incident response and Codex/ChatGPT handoff are `UPDATED`; production deploy/rollback/backup commands remain partial/needs verification.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -77,6 +79,7 @@ Status: `PARTIAL`.
 - Booking lifecycle behavior must follow `docs/BOOKING_LIFECYCLE.md`: guest booking/list, Venue queue actions, Staff arrival/no-show split, hold/deadline, booking chat separation, support routing and reminder opt-in behavior stay in regression;
 - Telegram fallback/staff-chat behavior must follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: QR `/start`, fallback order, bot staff-call, staff-chat link/test/unlink, callback RBAC and notification allow/deny policy stay in regression;
 - QA/release behavior must follow `docs/TESTING_QA_SMOKE_STRATEGY.md`: validations match change type, GitHub Actions are green before release, runtime changes get staging smoke and failure reports include the real test assertion;
+- Deployment/runbook behavior must follow `docs/DEPLOYMENT_RUNBOOK.md`: runtime releases need staging deploy/smoke and rollback notes, while docs-only changes skip staging deploy;
 - guest booking/profile/history and advanced support UI parity need dedicated regression passes;
 - promotions/loyalty/growth display must be smoke-tested against backend and bot output before being called complete.
 

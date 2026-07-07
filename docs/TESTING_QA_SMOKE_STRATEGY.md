@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules.
+Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Core Rule
 
@@ -180,7 +180,7 @@ Runtime change touching backend/Mini App/Telegram:
 - deploy staging only after CI is green unless explicitly doing a debug deploy;
 - run product smoke relevant to the changed area.
 
-Current staging deploy command:
+Current staging deploy command is canonical in `docs/DEPLOYMENT_RUNBOOK.md`:
 ```bash
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.hookahtootah.club \

@@ -8,7 +8,7 @@
 
 Platform Mode is the operator cockpit for the whole marketplace. It is separate from Venue Mode: Platform Owner can manage platform-owned objects and commercial state, but does not automatically bypass venue-specific RBAC for ordinary venue operations.
 
-Ordinary venue operations such as orders, staff calls, booking queues, menu/stop-list, tables/QR, staff-chat and venue stats are defined in `docs/VENUE_OPERATIONS.md`; booking lifecycle details are defined in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat behavior is defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; QA/staging policy is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`; Platform Mode should not become the normal venue operations workspace.
+Ordinary venue operations such as orders, staff calls, booking queues, menu/stop-list, tables/QR, staff-chat and venue stats are defined in `docs/VENUE_OPERATIONS.md`; booking lifecycle details are defined in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat behavior is defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; QA/staging policy is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`; deployment/runbook operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`; Platform Mode should not become the normal venue operations workspace.
 
 | Area | Current implementation status | Product rule |
 | --- | --- | --- |

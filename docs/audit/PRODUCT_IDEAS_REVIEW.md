@@ -25,6 +25,8 @@
 > Current docs correction as of 2026-07-07: Telegram fallback/staff-chat is consolidated in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Telegram bot entrypoints, QR `/start`, table-context fallback order, bot staff-call, staff-chat link/test/unlink, notification policy, inline callbacks, parity, security and smoke are canonical. Staff-chat remains notification/radar/shortcut, not source of truth.
 >
 > Current docs correction as of 2026-07-07: Testing/QA smoke strategy is consolidated in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Local validation, GitHub Actions expectations, change-type decision matrix, staging smoke policy, failure reporting, manual smoke suites and Codex handoff rules are canonical. Do not infer release readiness from this historical audit alone.
+>
+> Current docs correction as of 2026-07-07: Deployment/runbook operations are consolidated in `docs/DEPLOYMENT_RUNBOOK.md`. Release model, staging deploy command, environment inventory, migration runbook, rollback policy, troubleshooting, incident response and Codex/ChatGPT handoff are canonical. Exact production deploy/rollback/backup commands remain needs verification.
 
 ## Executive summary
 
@@ -44,6 +46,7 @@
 - `docs/BOOKING_LIFECYCLE.md` is the current source for guest booking flow, venue queue, statuses, hold/deadline, reminders, booking chat, support routing and booking smoke decisions; do not infer current booking lifecycle status from this historical audit alone.
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` is the current source for Telegram bot entrypoints, fallback order, staff-call, staff-chat, callback and Telegram/Mini App parity decisions; do not infer current Telegram fallback/staff-chat status from this historical audit alone.
 - `docs/TESTING_QA_SMOKE_STRATEGY.md` is the current source for validation commands, CI expectations, staging policy, failure reporting and manual smoke suite decisions; do not infer QA/release strategy from this historical audit alone.
+- `docs/DEPLOYMENT_RUNBOOK.md` is the current source for release/deploy model, staging command, environment inventory, migrations, rollback, troubleshooting, incident response and Codex/ChatGPT handoff; do not infer operations readiness from this historical audit alone.
 - P1 ops: table-context exit, guest/staff bill display parity, bill request/payment method UX, staff-chat activity card, manual platform billing cockpit, renewal/courtesy, staff invite sharing, Platform cockpit documentation and support/tickets MVP are now staging/smoke-closed or docs-closed; provider payment decision is the next launch-commercial gap before broad growth.
 - P2 growth: favorites, visit/order/booking history, repeat templates, simple promotions, post-visit feedback and opt-in notifications need stable visit/order history.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.

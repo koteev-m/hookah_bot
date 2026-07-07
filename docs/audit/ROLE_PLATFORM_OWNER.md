@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Venue operations model: `docs/VENUE_OPERATIONS.md`. Booking lifecycle model: `docs/BOOKING_LIFECYCLE.md`. Telegram fallback/staff-chat model: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Menu/options/stop-list model: `docs/MENU_OPTIONS_STOPLIST.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`. Testing/QA smoke strategy: `docs/TESTING_QA_SMOKE_STRATEGY.md`.
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Venue operations model: `docs/VENUE_OPERATIONS.md`. Booking lifecycle model: `docs/BOOKING_LIFECYCLE.md`. Telegram fallback/staff-chat model: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Menu/options/stop-list model: `docs/MENU_OPTIONS_STOPLIST.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`. Testing/QA smoke strategy: `docs/TESTING_QA_SMOKE_STRATEGY.md`. Deployment/runbook operations: `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Current status
 

@@ -16,6 +16,7 @@ Canonical dependencies:
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, scopes, callback trust boundaries and dangerous actions.
 - `docs/ANALYTICS_EVENTS.md` for bot/staff-chat analytics and audit/event boundaries.
 - `docs/TESTING_QA_SMOKE_STRATEGY.md` for Telegram/staff-chat validation, staging and smoke strategy.
+- `docs/DEPLOYMENT_RUNBOOK.md` for Telegram deploy, webhook/outbox, staff-chat diagnostics and incident response.
 
 ## Canonical Telegram Bot Model
 

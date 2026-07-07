@@ -1,5 +1,7 @@
 # Migration policy (Flyway)
 
+Canonical release/deploy and rollback policy is `docs/DEPLOYMENT_RUNBOOK.md`. This file remains the Flyway migration detail policy.
+
 Документ описывает безопасный процесс валидации и применения миграций без даунтайма.
 
 ## Политика для CI

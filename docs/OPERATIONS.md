@@ -1,5 +1,7 @@
 # OPERATIONS RUNBOOK
 
+Canonical release/deploy/incident policy is `docs/DEPLOYMENT_RUNBOOK.md`. This file remains the metrics, Telegram queues and first-response detail runbook.
+
 Минимальный runbook для дежурства по backend (webhook/очереди/метрики).
 
 ## 1) Как смотреть очереди inbound/outbound

@@ -34,6 +34,7 @@ curl -s http://localhost:8080/metrics | rg "inbound_queue_depth|outbound_queue_d
 
 
 ## Runbook и migration policy
+- Канонический release/deploy/runbook: [docs/DEPLOYMENT_RUNBOOK.md](docs/DEPLOYMENT_RUNBOOK.md).
 - Минимальный эксплуатационный runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 - Политика миграций Flyway (CI validate + production rollout): [docs/MIGRATION_POLICY.md](docs/MIGRATION_POLICY.md).
 
@@ -310,6 +311,7 @@ Docker build собирает production Mini App и копирует стати
 - Если нет dev-сервера, можно собрать `npm run build` и указать `MINIAPP_STATIC_DIR=miniapp/dist`, после чего открыть `http://localhost:8080/miniapp/`.
 
 ## Staging
+Канонический deploy/release runbook: [docs/DEPLOYMENT_RUNBOOK.md](docs/DEPLOYMENT_RUNBOOK.md).
 Минимальный one-VPS staging runbook: [docs/STAGING_DEPLOYMENT.md](docs/STAGING_DEPLOYMENT.md).
 Текущий staging URL: `https://staging.hookahtootah.club`, Mini App: `https://staging.hookahtootah.club/miniapp/`.
 

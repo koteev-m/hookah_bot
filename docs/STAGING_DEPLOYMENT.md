@@ -1,5 +1,7 @@
 # Staging Deployment
 
+Canonical release/deploy policy is `docs/DEPLOYMENT_RUNBOOK.md`. This file remains the one-VPS staging implementation detail runbook.
+
 This runbook describes the minimal staging setup for the Telegram bot + Mini App on one VPS with Docker Compose, PostgreSQL on the same host, and the Mini App production build served by the backend at `/miniapp/`.
 
 ## 1. Target Architecture
