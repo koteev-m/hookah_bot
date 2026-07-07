@@ -15,6 +15,7 @@ Canonical dependencies:
 - `docs/BOOKING_LIFECYCLE.md` for booking queue, booking chat, reminders and booking staff-chat policy.
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, scopes, callback trust boundaries and dangerous actions.
 - `docs/ANALYTICS_EVENTS.md` for bot/staff-chat analytics and audit/event boundaries.
+- `docs/TESTING_QA_SMOKE_STRATEGY.md` for Telegram/staff-chat validation, staging and smoke strategy.
 
 ## Canonical Telegram Bot Model
 

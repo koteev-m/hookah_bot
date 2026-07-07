@@ -16,6 +16,7 @@ Canonical dependencies:
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` for Telegram bot entrypoints, fallback order, staff-call callbacks, staff-chat link/test/unlink, notification policy and callback security.
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, permissions, scopes and dangerous actions.
 - `docs/ANALYTICS_EVENTS.md` for operational events, KPIs, audit/event boundaries and dashboard targets.
+- `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation commands, staging policy and operational smoke strategy.
 
 ## Venue Mode Areas
 

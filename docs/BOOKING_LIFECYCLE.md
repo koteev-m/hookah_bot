@@ -16,6 +16,7 @@ Canonical dependencies:
 - `docs/GROWTH_RETENTION.md` for history, feedback, repeat, loyalty and preorder dependencies.
 - `docs/ANALYTICS_EVENTS.md` for booking analytics events and KPI formulas.
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` for Telegram booking entrypoints, staff-chat notification policy and callback security.
+- `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation, CI, staging and booking smoke strategy.
 
 ## Canonical Terms
 

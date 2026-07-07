@@ -47,6 +47,8 @@
 > Current docs checkpoint as of 2026-07-07: Booking lifecycle is consolidated in `docs/BOOKING_LIFECYCLE.md`. Status is `SPEC UPDATED`: guest booking flow, Venue booking queue, state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, support routing, analytics, RBAC and smoke are now canonical. Current bounded slices cover queue/hold/guest list/chat paths, while reminder rollout, automation, preorder and visit-history integration remain partial/future unless specific implementation evidence exists.
 >
 > Current docs checkpoint as of 2026-07-07: Telegram fallback/staff-chat is consolidated in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Status is `SPEC UPDATED`: Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, inline callbacks, parity, security and smoke are now canonical. Staff-chat is radar/shortcut only. Fallback payload, ACK/DONE and diagnostics are closed for current smoke paths, while Platform Owner guest-QR escape, platform menu parity, personal staff notifications and delivery history remain partial/future.
+>
+> Current docs checkpoint as of 2026-07-07: Testing/QA smoke strategy is consolidated in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Status is `UPDATED`: local sanity, backend targeted tests, Mini App build/e2e, GitHub Actions expectations, change-type decision matrix, staging policy, failure reporting, manual smoke suites and Codex handoff rules are canonical. CI coverage is release-critical/partial; area-specific manual smoke remains required for runtime-impacting changes.
 
 # Краткое резюме
 
@@ -133,6 +135,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 | Venue Mode operations | SPEC UPDATED / PARTIAL by full cockpit | `docs/VENUE_OPERATIONS.md`, `VenueOrderRoutes`, `VenueBookingRoutes`, `VenueMenuRoutes`, `VenueTableRoutes`, role docs | Venue Mode is source of truth; keep order queue/detail, bill/tabs, staff calls, bookings, menu/stop-list, staff-chat, settings, stats and role smoke in regression |
 | Booking lifecycle | SPEC UPDATED / PARTIAL by advanced automation | `docs/BOOKING_LIFECYCLE.md`, `VenueBookingRoutes`, `GuestBookingRepository`, `TelegramBotRouter`, `SupportRoutes` | Keep guest booking, venue queue actions, Staff arrival/no-show split, hold/deadline, reminders opt-in, booking chat separation, support routing and cross-venue denial in regression |
 | Telegram fallback/staff-chat | SPEC UPDATED / PARTIAL by broad parity | `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`, `TelegramBotRouter`, `TelegramKeyboards`, `StaffChatNotifier`, `VenueRoutes`, `TelegramOutboxWorker` | Keep QR start, fallback order, staff-call, staff-chat link/test/unlink, callback RBAC and notification allow/deny policy in regression |
+| Testing/QA smoke strategy | UPDATED / CI coverage partial by product breadth | `docs/TESTING_QA_SMOKE_STRATEGY.md`, `.github/workflows/ci.yml`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` | Match checks to change type; use focused backend tests, Mini App build/e2e, GitHub Actions and staging/manual smoke where runtime behavior changes |
 | Guest QR/table flow | DONE / staging smoke passed | `GuestTableResolveRoutes`, `TableSessionRepository`, `GuestTableResolveRoutesTest`, `guest_table_session_exits` | Keep QR/table restore, user-scoped exit, active obligation blocking and explicit QR re-entry in regression |
 | Guest menu/order/cart/comment | SPEC UPDATED / PARTIAL | `docs/MENU_OPTIONS_STOPLIST.md`, `GuestMenuRepository`, `GuestOrderRoutes`, `cart.ts` | Structured selected-option parity is smoke-closed; stale availability, snapshots and fallback contract stay in regression |
 | Order batches / дозаказы | PARTIAL | `OrdersRepository.createGuestOrderBatch`, `order_batches`, `VenueOrdersRepository` | Full DTO and session scoping |
@@ -222,7 +225,8 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 15. Venue operations regression from `docs/VENUE_OPERATIONS.md`: Owner/Manager/Staff dashboards, order queue/detail, bill/tabs, staff calls, booking queue, stop-list, tables/QR, staff invites, staff-chat, settings, stats and cross-venue denial follow the canonical model.
 16. Booking lifecycle regression from `docs/BOOKING_LIFECYCLE.md`: Guest creates/lists/cancels, Venue confirms/proposes/cancels/seats/no-shows, hold/deadline copy is correct, booking `Открыть переписку` opens `BOOKING_CHAT`, booking support uses verified context and staff-chat does not receive booking chat/support messages.
 17. Telegram fallback/staff-chat regression from `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: `/start` with/without table works, fallback order creates `bot_fallback` batch, staff-call creates `STAFF_CALL`, staff-chat receives allowed order/call notifications, forbidden support/venue-chat notifications are absent and callbacks deny unauthorized users.
-18. Owner invite from platform can be accepted end-to-end.
+18. QA/release regression from `docs/TESTING_QA_SMOKE_STRATEGY.md`: validation matches change type, CI failure reports include test/assertion details, docs-only changes skip staging deploy, runtime changes get appropriate area smoke and `scripts/dev/` is not staged accidentally.
+19. Owner invite from platform can be accepted end-to-end.
 
 # Созданные файлы отчёта
 
@@ -237,3 +241,4 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 - `docs/VENUE_OPERATIONS.md`
 - `docs/BOOKING_LIFECYCLE.md`
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`
+- `docs/TESTING_QA_SMOKE_STRATEGY.md`

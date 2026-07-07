@@ -18,6 +18,7 @@ Menu/options/stop-list product semantics are defined in `docs/MENU_OPTIONS_STOPL
 Venue Mode operational surfaces and role dashboards are defined in `docs/VENUE_OPERATIONS.md`.
 Booking lifecycle semantics for booking events, reminders and booking-to-visit conversion are defined in `docs/BOOKING_LIFECYCLE.md`.
 Telegram fallback and staff-chat event semantics are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
+Testing and smoke strategy for event implementation is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 
 Analytics events are immutable facts for reporting, funnels and diagnostics. They must not drive money, access, billing, order state or support state.
 

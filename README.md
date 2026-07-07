@@ -180,6 +180,8 @@ Booking lifecycle product status is tracked in `docs/BOOKING_LIFECYCLE.md`. Gues
 
 Telegram fallback/staff-chat product status is tracked in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity are `SPEC UPDATED`; staff-chat is radar/shortcut only, while Platform Owner guest-QR test escape, platform menu parity, personal staff notifications and delivery-history surfaces remain partial/future.
 
+Testing/QA smoke strategy is tracked in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Local validation, GitHub Actions expectations, change-type test matrix, manual smoke suites, staging deploy policy, failure reporting and Codex handoff rules are `UPDATED`; docs-only changes do not require staging deploy.
+
 Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
 
 ## Telegram payments: Stars vs external billing

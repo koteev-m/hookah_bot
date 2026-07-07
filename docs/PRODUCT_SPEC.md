@@ -34,6 +34,10 @@ Telegram fallback and staff-chat source of truth:
 - Canonical Telegram bot entrypoints, QR `/start`, fallback order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity are tracked in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 - Telegram bot and staff-chat are interaction surfaces. Backend domain tables and Mini App/Venue Mode remain source of truth; staff-chat is radar/shortcut only.
 
+Testing/QA source of truth:
+- Canonical local validation, GitHub Actions expectations, change-type test matrix, staging smoke policy, manual smoke suites and failure reporting format are tracked in `docs/TESTING_QA_SMOKE_STRATEGY.md`.
+- Runtime changes must use area-appropriate checks; docs-only changes do not require staging deploy.
+
 ## Core surfaces
 - Telegram Bot (chat): QR entrypoint, navigation, fallback ordering, booking fallback, staff-call fallback and notifications
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)

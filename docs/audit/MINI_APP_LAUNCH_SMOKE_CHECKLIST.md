@@ -46,6 +46,7 @@
 - Venue operations docs: `docs/VENUE_OPERATIONS.md` is the source of truth for Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke. Venue Mode is source of truth; staff-chat is radar/shortcut only.
 - Booking lifecycle docs: `docs/BOOKING_LIFECYCLE.md` is the source of truth for guest booking flow, Venue booking queue, statuses, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke. Current queue/hold/list/chat paths are smoke-closed by slice; reminder rollout, automation, preorder and visit-history integration remain partial/future.
 - Telegram fallback/staff-chat docs: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` is the source of truth for Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity. Staff-chat is radar/shortcut only.
+- Testing/QA smoke strategy docs: `docs/TESTING_QA_SMOKE_STRATEGY.md` is the source of truth for change-type validation, GitHub Actions expectations, staging policy, manual smoke suites, failure reporting and Codex handoff.
 - Platform Cockpit docs: current source is `docs/PLATFORM_COCKPIT.md`. Manual billing and Platform Support Center are smoke-closed; onboarding request cockpit, placements, analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
@@ -750,7 +751,20 @@ Use this checklist after Telegram bot entrypoints, table context, fallback order
 18. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
 19. Multi-venue user selects correct venue or current gap is documented.
 
-## 18. Recommended Next Test Investment
+## 18. QA Strategy / Release Gate Checklist
+
+Canonical model: `docs/TESTING_QA_SMOKE_STRATEGY.md`.
+
+1. Change type is classified before validation.
+2. `git status --short` and `git diff --check` are clean for intended files.
+3. `scripts/dev/` is not staged unless an explicit tooling task says so.
+4. Relevant backend/Mini App/Telegram validation commands were run or explicitly skipped with reason.
+5. GitHub Actions failure reports include job, test class, test name and assertion, not only Gradle tail.
+6. Runtime changes wait for green Actions before staging deploy unless doing an explicit debug deploy.
+7. Staging/manual smoke matches the changed product area.
+8. Final Codex/ChatGPT handoff includes changed files, behavior, tests, validation, manual smoke, `git status --short` and staging need.
+
+## 19. Recommended Next Test Investment
 
 1. Expand the lightweight Playwright/Vite smoke harness with fixture-driven UI tests for:
    - guest cart/order/staff call;
@@ -764,7 +778,7 @@ Use this checklist after Telegram bot entrypoints, table context, fallback order
    - Guest Bot and Guest Mini App submit the same structured selected-option shape.
 3. Extend cross-channel bill snapshots when selected option price deltas are implemented.
 
-## 19. Next Implementation Smoke Target
+## 20. Next Implementation Smoke Target
 
 Current implementation block after M9b.3: M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed, with the standard deploy command still supported and the opt-in ControlMaster helper validated as a persistent-connection workaround for unreliable fresh SSH/rsync connections. The exact SSH/network root cause remains unconfirmed and belongs to future operations hardening, not the M9a closure. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED / staging smoke passed in provider-free mode: OWNER tested country, city, manual address, save/reload, guest card reflection and route opening; visual polish remains deferred until functional blocks are complete. M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges, guest-facing reason/comment, human booking rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c, M8b-Free, M9a and M9b/M9b.1/M9b.2/M9b.3 stay in regression smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 

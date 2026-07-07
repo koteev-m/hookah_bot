@@ -23,6 +23,8 @@
 > Current docs correction as of 2026-07-07: Booking lifecycle is consolidated in `docs/BOOKING_LIFECYCLE.md`. Guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and smoke are canonical. Current bounded slices cover queue/hold/guest list/chat paths, while reminder rollout, automation, preorder and visit-history integration remain partial/future.
 >
 > Current docs correction as of 2026-07-07: Telegram fallback/staff-chat is consolidated in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Telegram bot entrypoints, QR `/start`, table-context fallback order, bot staff-call, staff-chat link/test/unlink, notification policy, inline callbacks, parity, security and smoke are canonical. Staff-chat remains notification/radar/shortcut, not source of truth.
+>
+> Current docs correction as of 2026-07-07: Testing/QA smoke strategy is consolidated in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Local validation, GitHub Actions expectations, change-type decision matrix, staging smoke policy, failure reporting, manual smoke suites and Codex handoff rules are canonical. Do not infer release readiness from this historical audit alone.
 
 ## Executive summary
 
@@ -41,6 +43,7 @@
 - `docs/VENUE_OPERATIONS.md` is the current source for Venue Mode dashboard, orders, staff calls, bookings, staff-chat, settings, stats and operational smoke decisions; do not infer current venue operations status from this historical audit alone.
 - `docs/BOOKING_LIFECYCLE.md` is the current source for guest booking flow, venue queue, statuses, hold/deadline, reminders, booking chat, support routing and booking smoke decisions; do not infer current booking lifecycle status from this historical audit alone.
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` is the current source for Telegram bot entrypoints, fallback order, staff-call, staff-chat, callback and Telegram/Mini App parity decisions; do not infer current Telegram fallback/staff-chat status from this historical audit alone.
+- `docs/TESTING_QA_SMOKE_STRATEGY.md` is the current source for validation commands, CI expectations, staging policy, failure reporting and manual smoke suite decisions; do not infer QA/release strategy from this historical audit alone.
 - P1 ops: table-context exit, guest/staff bill display parity, bill request/payment method UX, staff-chat activity card, manual platform billing cockpit, renewal/courtesy, staff invite sharing, Platform cockpit documentation and support/tickets MVP are now staging/smoke-closed or docs-closed; provider payment decision is the next launch-commercial gap before broad growth.
 - P2 growth: favorites, visit/order/booking history, repeat templates, simple promotions, post-visit feedback and opt-in notifications need stable visit/order history.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.
