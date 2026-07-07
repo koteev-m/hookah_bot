@@ -1,8 +1,8 @@
 # Guest Communication Model
 
-Дата актуализации: 2026-07-06.
+Дата актуализации: 2026-07-07.
 
-Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex.
+Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`.
 
 ## Core Rule
 
@@ -45,6 +45,7 @@ Guest communication is split into four different product scenarios. Do not merge
 
 ## RBAC
 
+- Canonical role/scope matrix: `docs/SECURITY_RBAC_MATRIX.md`.
 - Guest sees only own chats/tickets.
 - Venue Owner/Manager sees only own venue booking chats, venue chats and venue-scoped support tickets.
 - Venue users must not see `venue_id = NULL` platform-only tickets.

@@ -1,8 +1,8 @@
 # Platform Owner
 
-Дата актуализации: 2026-07-06.
+Дата актуализации: 2026-07-07.
 
-Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
 
 ## Current status
 
@@ -17,6 +17,8 @@ Platform Mode is one cockpit for:
 - Support Center / `Обращения`;
 - future promotion moderation/paid placement only after the Growth/retention and Platform billing/moderation/analytics prerequisites are implemented;
 - analytics, audit, events and operational risk/health indicators.
+
+Platform permissions, ordinary venue-chat denial, dangerous actions and audit/export safety expectations are canonical in `docs/SECURITY_RBAC_MATRIX.md`.
 
 Recent closed milestones:
 - Platform Owner Invite / ADMIN Semantics Hardening: **CLOSED / staging smoke passed**.

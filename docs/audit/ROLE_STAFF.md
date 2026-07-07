@@ -1,6 +1,6 @@
 # Staff
 
-Дата актуализации: 2026-07-03.
+Дата актуализации: 2026-07-07.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
 
@@ -8,7 +8,7 @@
 
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;

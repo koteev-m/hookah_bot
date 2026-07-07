@@ -174,7 +174,8 @@ Audit required for:
 - order force closed;
 - tab reopened;
 - support status/assignee changed;
-- billing provider config changed.
+- billing provider config changed;
+- analytics export, if implemented.
 
 Audit payload rules:
 - `actor_user_id` required;
@@ -285,6 +286,7 @@ Platform Owner:
 
 ## Privacy And Security
 
+- Security/RBAC source of truth: `docs/SECURITY_RBAC_MATRIX.md`.
 - No raw PII in analytics events.
 - Telegram user id can be an internal operational id; analytics exports should use pseudonymized user id.
 - No raw initData.
@@ -314,6 +316,7 @@ Platform Owner:
 
 - Analytics/events spec: `UPDATED`.
 - Analytics implementation: `PARTIAL / needs verification`.
+- Security/RBAC matrix: `UPDATED` in `docs/SECURITY_RBAC_MATRIX.md`; analytics exports and audit views must follow that role/scope model.
 - Platform analytics dashboard: `FUTURE/PARTIAL`.
 - Booking/support/growth events: `PARTIAL/FUTURE` unless implementation evidence exists.
 - Growth remains blocked by order/session/tab and visit history stability.

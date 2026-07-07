@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-07-03.
+Дата актуализации: 2026-07-07.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -8,7 +8,7 @@
 
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; `Акции и удержание` remain partial/future unless backend-backed and smoked.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
 
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;

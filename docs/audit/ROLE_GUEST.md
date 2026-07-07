@@ -1,6 +1,6 @@
 # Guest
 
-Дата актуализации: 2026-07-03.
+Дата актуализации: 2026-07-07.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл фиксирует текущее поведение Guest в Telegram bot и Mini App после последних parity/fix-pack'ов.
 
@@ -8,7 +8,7 @@
 
 Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call, сообщения с заведением и просмотр своего заказа/счёта.
 
-Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
+Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest permissions, table/session/tab scope and trust boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
 
 Ключевое разделение:
 - **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;

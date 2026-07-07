@@ -1,8 +1,8 @@
 # Platform Cockpit Model
 
-Дата актуализации: 2026-07-06.
+Дата актуализации: 2026-07-07.
 
-Статус: **current product reference** for Platform Mode. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
+Статус: **current product reference** for Platform Mode. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
 
 ## Scope
 
@@ -122,6 +122,7 @@ Needed Platform cockpit reporting:
 
 Safety rules:
 
+- Platform permissions, dangerous actions and audit expectations are canonical in `docs/SECURITY_RBAC_MATRIX.md`.
 - Do not expose secrets, raw Telegram payloads, provider raw payloads, `.env`, initData, callback payloads or unrelated PII in Platform dashboards, audit payloads or support cards.
 - Prefer safe aggregate metrics and opaque ids unless an operator needs a specific entity id for support.
 - Client events are lower-trust UX diagnostics and must not drive money, access, billing, order state or venue lifecycle.

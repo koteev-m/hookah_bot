@@ -1,10 +1,10 @@
 # Order / Session / Tab Core Model
 
-Дата актуализации: 2026-07-06.
+Дата актуализации: 2026-07-07.
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk is documented as closed in current audit notes, while visit history, force-close policy, some DB-level uniqueness nuances and broader analytics remain future/partial.
 
-Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`.
+Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`.
 
 ## Core Rule
 
@@ -108,6 +108,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 
 ## Security And Privacy
 
+- Canonical Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`.
 - Guest cannot read another guest's personal tab.
 - Guest cannot add a batch to a tab where they are not owner/member.
 - Venue users access only their own venue orders/sessions/tabs.

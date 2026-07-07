@@ -19,6 +19,8 @@
 > Current docs correction as of 2026-07-06: Order/session/tab core source of truth is `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-table risk is closed through `tableSessionId`/`tabId` scoping; keep the core in regression for QR session, active order, batches, tabs, bill request/paid/closed flow and privacy boundaries. Visit entity/history, force-close reason/audit, DB-level uniqueness nuances and broader analytics events remain future/partial.
 >
 > Current docs correction as of 2026-07-07: Analytics/events source of truth is `docs/ANALYTICS_EVENTS.md`. Analytics events, audit/event boundaries, KPI formulas, role dashboards and privacy rules are `SPEC UPDATED`; implementation and Platform analytics dashboards remain partial/future until event emission and payload safety are verified.
+>
+> Current docs correction as of 2026-07-07: Security/RBAC source of truth is `docs/SECURITY_RBAC_MATRIX.md`. Roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a separate product role.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -119,7 +121,7 @@ Main risks:
 
 - Telegram bot has richer money/full bill/promo/loyalty formatting than Mini App detail.
 - Backend DTOs/repositories contain fields Mini App UI does not display.
-- Bot and Mini App permissions need role-by-role smoke for OWNER/MANAGER/STAFF.
+- Bot and Mini App permissions need role-by-role smoke for OWNER/MANAGER/STAFF using `docs/SECURITY_RBAC_MATRIX.md`.
 - stale/superseded: CORS mutation methods are covered for actual Mini App PUT/PATCH/DELETE preflights.
 - Backend tests exist, but Mini App e2e/browser smoke coverage is not obvious.
 

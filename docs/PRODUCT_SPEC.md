@@ -14,6 +14,10 @@ Analytics/events source of truth:
 - Canonical analytics events, audit/event boundaries, KPI formulas, dashboards and privacy rules are tracked in `docs/ANALYTICS_EVENTS.md`.
 - Analytics events are not source of truth for operations; domain tables remain authoritative.
 
+Security/RBAC source of truth:
+- Canonical roles, scopes, permissions, surface parity, dangerous actions and current-vs-target gaps are tracked in `docs/SECURITY_RBAC_MATRIX.md`.
+- Server-side RBAC is the source of truth. UI hiding, Telegram keyboards, QR/table tokens and tab invite tokens are never authority by themselves.
+
 ## Core surfaces
 - Telegram Bot (chat): navigation, fallback ordering, booking fallback
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)
@@ -30,6 +34,9 @@ Venue:
 - ADMIN is a legacy DB compatibility alias that maps to MANAGER; it is not a separate runtime permission model or selectable Platform Mini App assignment role.
 Guest:
 - guest (end users)
+Derived responsibilities:
+- Tab Host and Tab Member are scoped tab responsibilities, not global roles.
+- Support actor is a derived responsibility for Guest, Venue Owner/Manager or Platform Owner inside a support ticket, not a separate global product role.
 
 ## Core entities (domain)
 - venue: id, name, structured public location (country/city/address/formatted address/optional coordinates), description, hours, status(lifecycle), owner_account_id legacy/primary linkage, settings
@@ -69,10 +76,13 @@ SHOULD:
 
 ## Block 2 — RBAC & permissions
 MUST:
+- Use `docs/SECURITY_RBAC_MATRIX.md` as the canonical permission model for roles, scopes, dangerous actions and current-vs-target gaps.
 - Server-side RBAC checks on every admin/staff action.
 - Venue owner can grant/revoke supported staff/manager roles inside its venue with last-owner protection.
 - Platform Owner can create venues, invite/add venue OWNER users, list active OWNER memberships and revoke a venue OWNER only when another active OWNER remains.
 - Runtime venue ownership access is based on active `venue_members` rows with role `OWNER`; membership revoke does not relink `venues.owner_account_id` or legal/billing primary owner records.
+- Staff has no support-ticket, ordinary venue-chat, billing, settings or platform permissions in the MVP.
+- Platform Owner sees support tickets but not ordinary `VENUE_CHAT` unless future product policy explicitly changes it.
 SHOULD:
 - Audit log for owner invite/revoke and role changes.
 
@@ -369,12 +379,18 @@ SHOULD:
 
 ## Block 14 — Security/anti-fraud/audit
 MUST:
+- Use `docs/SECURITY_RBAC_MATRIX.md` as the canonical security/RBAC matrix and smoke checklist.
 - Validate Telegram WebApp initData server-side.
+- Never trust `initDataUnsafe`.
 - Verify Telegram webhook secret token header.
 - Tenant isolation + RBAC enforced server-side.
+- QR/table token and tab invite token are context pointers, not authorities.
+- Table-session-scoped actions must verify table session, tab membership and venue ownership server-side.
+- Telegram callback payloads must use opaque ids/tokens and must not include raw sensitive data.
 - Idempotency keys for create-order/create-batch/payment webhooks.
 - Rate limiting for staff calls and spam orders.
 - Audit logs for critical changes (roles, prices, stop-list, lifecycle).
+- Dangerous actions such as owner changes, lifecycle changes, QR rotation, staff-chat link/unlink, order force close, tab reopen, invoice manual mark-paid, subscription override and support transfer/close require confirmation/reason/audit where implemented.
 SHOULD:
 - Abuse detection heuristics and soft-lock.
 
