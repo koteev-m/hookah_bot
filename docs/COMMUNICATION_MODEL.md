@@ -62,6 +62,7 @@ Guest communication is split into four different product scenarios. Do not merge
 - `STAFF_CALL` keeps the existing operational notification behavior.
 - Guest support ticket creation, venue chat creation and guest support/venue chat messages are rate-limited through the existing guest rate-limit infrastructure.
 - Retention/promo notifications are not covered by this communication MVP; they require `OPT_IN_NOTIFICATION`, frequency limits and unsubscribe as defined in `docs/GROWTH_RETENTION.md`.
+- Analytics events for this model are defined in `docs/ANALYTICS_EVENTS.md`: `support_ticket_created`, `support_ticket_message_created`, `support_ticket_status_changed`, `support_ticket_transferred_to_platform`, `support_ticket_closed`, `support_ticket_reopened`, `venue_chat_created`, `venue_chat_message_created` and `booking_chat_message_created`. Message text must stay in domain message tables with RBAC, not analytics events.
 
 ## Open Follow-Ups
 

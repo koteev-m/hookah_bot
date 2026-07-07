@@ -10,6 +10,10 @@ Order/session/tab source of truth:
 - Canonical `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close and visit-history foundation model is `docs/ORDER_SESSION_TAB_CORE.md`.
 - Current runtime docs say the old active-order-by-physical-table risk is closed; future work must keep current-vs-target gaps explicit.
 
+Analytics/events source of truth:
+- Canonical analytics events, audit/event boundaries, KPI formulas, dashboards and privacy rules are tracked in `docs/ANALYTICS_EVENTS.md`.
+- Analytics events are not source of truth for operations; domain tables remain authoritative.
+
 ## Core surfaces
 - Telegram Bot (chat): navigation, fallback ordering, booking fallback
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)
@@ -350,9 +354,12 @@ SHOULD:
 
 ## Block 13 — Analytics/KPI/events
 MUST:
+- Use `docs/ANALYTICS_EVENTS.md` as the canonical analytics/event model. Current status is `SPEC UPDATED`; implementation remains partial unless a specific event/dashboard is verified.
+- Keep analytics facts separate from audit logs, support audit, billing events and notification/outbox delivery state.
 - Current event/audit foundation is partial: platform venue status audit, owner invite/revoke audit, billing checkout/mark-paid/courtesy audit, support ticket status/scope/assignment/escalation audit and staff-call/order audit exist where implemented.
-- Server-side events needed for reporting include: table_session_started, batch_created, batch_status_changed, booking_status_changed, subscription_status_changed, venue_lifecycle_changed, owner_invite_created/accepted, billing_invoice_state_changed, support_ticket_status_changed and support_ticket_scope_changed.
-- Order/session/tab analytics from `docs/ORDER_SESSION_TAB_CORE.md` need: table_session_started/closed, batch_created/status_changed, tab_bill_requested/paid/closed, order_closed, booking_seated/no_show when implemented.
+- Server-side events needed for reporting include: table_session_started, order_batch_created, order_batch_status_changed, booking_status_changed, subscription_status_changed, venue_lifecycle_changed, owner_invite_created/accepted, billing_invoice_state_changed, support_ticket_status_changed and support_ticket_scope_changed.
+- Order/session/tab analytics from `docs/ORDER_SESSION_TAB_CORE.md` need: table_session_started/closed, order_batch_created/status_changed, tab_bill_requested/paid/closed, order_closed, booking_seated/no_show when implemented.
+- Event names use snake_case past-tense facts; event timestamps are UTC; venue timezone is used for reporting aggregation; payloads must not include raw PII, raw Telegram initData, message text, payment secrets or card data.
 - Correlation IDs (venue/table/session/order/batch/tab).
 - Minimal PII; pseudonymize in analytics if exported.
 SHOULD:

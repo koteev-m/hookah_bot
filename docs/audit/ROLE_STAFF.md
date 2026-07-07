@@ -8,7 +8,7 @@
 
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
@@ -106,6 +106,7 @@ STAFF Mini App behavior:
 - Manage venue settings.
 - Manage billing/subscription/platform features, including mark-paid, invoice ensure, courtesy/free-days or payment controls.
 - Treat staff chat as the source of truth for order/bill state or merge orders from different table sessions.
+- See business analytics, billing metrics, platform analytics or raw event payloads.
 
 ## Known gaps / needs smoke
 
@@ -117,6 +118,7 @@ STAFF Mini App behavior:
 - Direct API denial tests remain critical: UI hiding is not a security boundary.
 - Guest Communication UX split is CLOSED / smoke passed for STAFF boundaries: staff remains operational, support/venue-chat API access is denied, and staff-call/order behavior stays separate.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: STAFF can operate statuses according to role, but queue/detail must preserve table-session, batch and tab boundaries. Force close should require reason/audit if implemented by an allowed role.
+- Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: STAFF has operational queue/counters only and no business analytics by default.
 
 ## Smoke-critical checks
 
@@ -134,3 +136,4 @@ STAFF Mini App behavior:
 12. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.
 13. Newly invited STAFF can open Venue Mode after accepting deep link, but cannot see billing/payment controls.
 14. STAFF order detail shows batches and tabs without exposing unrelated guests' private/support data; staff chat order notification mirrors the backend order state but is not treated as source of truth.
+15. STAFF does not see Owner/Platform analytics dashboards or raw analytics/audit payloads.

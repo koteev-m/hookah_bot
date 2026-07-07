@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-06.
 
-Статус: **current product reference** for Platform Mode. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md` and `docs/COMMUNICATION_MODEL.md` before opening new Platform, billing, support or analytics tasks.
+Статус: **current product reference** for Platform Mode. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
 
 ## Scope
 
@@ -15,7 +15,7 @@ Platform Mode is the operator cockpit for the whole marketplace. It is separate 
 | Owner / access | Owner invite, accepted Telegram deep links, active OWNER membership list and last-owner-safe OWNER revoke are smoke-passed. | Runtime venue ownership is `venue_members(role=OWNER)`, not legacy owner linkage alone. |
 | Billing / subscriptions / invoices | Manual/fake billing cockpit, subscription overview, invoice ensure, manual mark-paid, next-period invoice and courtesy days are staging-smoked. | GET overviews are read-only; money/state mutations require explicit POST actions and audit. |
 | Support Center | Support Tickets MVP is smoke-passed for `SUPPORT_TICKET`, including platform-only and venue-transferred tickets. | Platform sees support tickets, not ordinary `VENUE_CHAT`. |
-| Analytics / audit | Audit rows exist for several critical operations; broad Platform analytics dashboards are future work. | Platform cockpit should show reliable operational metrics only after event semantics are stable. |
+| Analytics / audit | Audit rows exist for several critical operations; broad Platform analytics dashboards are future work. | `docs/ANALYTICS_EVENTS.md` is the source for event names/KPIs; Platform cockpit should show reliable operational metrics only after event semantics are stable. |
 | Growth / placements | Guest growth/retention is specified in `docs/GROWTH_RETENTION.md`; paid placement and promotion boosting are future. | No paid placement in the MVP; if implemented later, promoted content must be labeled and backed by billing, moderation and analytics. |
 | Risk / health | Billing state, venue availability and support queue status are partially visible. | Future cockpit should highlight blocked venues, overdue invoices, support queues and integration health without exposing secrets. |
 
@@ -98,6 +98,8 @@ Future support features:
 
 ## Analytics / Audit / Events
 
+Canonical analytics/event model: `docs/ANALYTICS_EVENTS.md`.
+
 Current audit/event foundation is partial and operational:
 
 - Venue lifecycle/status changes write platform status audit evidence.
@@ -109,17 +111,20 @@ Current audit/event foundation is partial and operational:
 
 Needed Platform cockpit reporting:
 
+- WAAV: weekly active accepted venues.
 - Venue counts by lifecycle, city, subscription state and risk state.
 - Billing metrics: active/trialing/past_due/suspended venues, MRR, paid-through risk, open invoices, overdue invoices, provider/card/Stars split after providers exist.
 - Support metrics: open tickets, platform-assigned queue, transferred tickets, TTFR, TTR, escalation rate, reopen rate, CSAT and top issue themes.
 - Future growth metrics: favorite rate, repeat visit rate, promo view/redeem, review completion, opt-in/unsubscribe and abuse/rate-limit indicators.
 - Onboarding funnel: lead/request status, approval time, activation time and owner invite acceptance.
+- Platform-wide fallback/reject/SLA metrics after event emission is reliable.
 - Operational health: webhook/outbox backlog, billing webhook failures, Telegram delivery failures, staff-chat link health and Mini App error rate.
 
 Safety rules:
 
 - Do not expose secrets, raw Telegram payloads, provider raw payloads, `.env`, initData, callback payloads or unrelated PII in Platform dashboards, audit payloads or support cards.
 - Prefer safe aggregate metrics and opaque ids unless an operator needs a specific entity id for support.
+- Client events are lower-trust UX diagnostics and must not drive money, access, billing, order state or venue lifecycle.
 
 ## Platform Smoke Checklist
 
@@ -150,6 +155,7 @@ Use this as the Platform-specific part of release smoke:
 - Placements cockpit is future/partial.
 - Paid placement/promotion boosting is future and must follow `docs/GROWTH_RETENTION.md`: visible ad labels, moderation, billing and analytics are required before launch.
 - Platform analytics dashboard is future.
+- Event/audit explorer is future/partial and must follow `docs/ANALYTICS_EVENTS.md` payload safety rules.
 - Real acquiring provider / Telegram Stars / recurring payments are future.
 - Advanced support automation, diagnostics, macros, attachments, CSAT and support analytics are future.
 - Lifecycle normalization for `onboarding`, `paused_by_owner`, `suspended_by_platform` and `deletion_requested` requires an explicit migration/product decision if needed.

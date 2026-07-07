@@ -17,6 +17,8 @@
 > Current docs correction as of 2026-07-06: Growth/retention source of truth is `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty stamps/points, referrals, paid placement/boosting, segmentation and advanced recommendations remain future.
 >
 > Current docs correction as of 2026-07-06: Order/session/tab core source of truth is `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-table risk is closed through `tableSessionId`/`tabId` scoping; keep the core in regression for QR session, active order, batches, tabs, bill request/paid/closed flow and privacy boundaries. Visit entity/history, force-close reason/audit, DB-level uniqueness nuances and broader analytics events remain future/partial.
+>
+> Current docs correction as of 2026-07-07: Analytics/events source of truth is `docs/ANALYTICS_EVENTS.md`. Analytics events, audit/event boundaries, KPI formulas, role dashboards and privacy rules are `SPEC UPDATED`; implementation and Platform analytics dashboards remain partial/future until event emission and payload safety are verified.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -381,7 +383,7 @@ Tests to add/update:
 
 Why it matters:
 
-Platform Mini App has venues/create/detail/subscription basics and a smoke-passed support-ticket center, but market launch still needs clearer analytics and placements/onboarding cockpit coverage for platform operator work.
+Platform Mini App has venues/create/detail/subscription basics and a smoke-passed support-ticket center, but market launch still needs clearer analytics and placements/onboarding cockpit coverage for platform operator work. Use `docs/ANALYTICS_EVENTS.md` before adding or claiming analytics dashboards.
 
 Affected files/modules:
 
@@ -390,6 +392,7 @@ Affected files/modules:
 - `miniapp/src/screens/platformVenueDetail.ts`
 - `miniapp/src/screens/platformSupport.ts`
 - `docs/PLATFORM_COCKPIT.md`
+- `docs/ANALYTICS_EVENTS.md`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/platform/PlatformVenueRoutes.kt`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/platform/PlatformBillingRoutes.kt`
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/support/SupportRoutes.kt`
@@ -436,7 +439,7 @@ Tests to add/update:
 7. Bookings screens if launch scope.
 8. Stop-list options parity.
 9. Keep order/session/tab core from `docs/ORDER_SESSION_TAB_CORE.md` in regression for sequential visits, shared/personal tabs, fallback order and session close/expire.
-10. Platform analytics/placements baseline; keep Platform support-ticket center in regression. Paid placement/promotion boosting stays future until billing, moderation, analytics and visible ad labels are implemented.
+10. Platform analytics/events baseline from `docs/ANALYTICS_EVENTS.md`; keep Platform support-ticket center in regression. Paid placement/promotion boosting stays future until billing, moderation, analytics and visible ad labels are implemented.
 
 ## 8. Tests To Add / Update
 

@@ -35,6 +35,8 @@
 > Current docs checkpoint as of 2026-07-06: Guest growth/retention is consolidated in `docs/GROWTH_RETENTION.md`. Status is `SPEC UPDATED / PARTIAL-FUTURE`: favorites/history baselines and promotion/loyalty foundations are not enough to call the retention product done. MVP terms are `FAVORITE_VENUE`, `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`, `REPEAT_TEMPLATE`, `POST_VISIT_FEEDBACK`, `VENUE_PROMOTION` and `OPT_IN_NOTIFICATION`; promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and advanced recommendations remain future.
 >
 > Current docs checkpoint as of 2026-07-06: Order/session/tab core is consolidated in `docs/ORDER_SESSION_TAB_CORE.md`. Status is `SPEC UPDATED`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are now the canonical model. Current runtime docs still say the old table-only active-order risk is closed; remaining gaps are visit entity/history, force-close reason/audit, DB-level uniqueness nuances and broader analytics events.
+>
+> Current docs checkpoint as of 2026-07-07: Analytics/events are consolidated in `docs/ANALYTICS_EVENTS.md`. Status is `SPEC UPDATED / implementation PARTIAL`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are now canonical. Platform analytics dashboard, growth events, broad booking/support/billing analytics and client-event ingestion remain future/partial unless specific implementation evidence exists.
 
 # Краткое резюме
 
@@ -140,7 +142,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 | Onboarding venue/application flow | PARTIAL | `venue_connection_requests`, `TelegramBotRouterVenueConnectionRequestFlowTest` | Integrate with platform UI |
 | Subscriptions/billing | DONE/PARTIAL | `SubscriptionRepository`, `SubscriptionBillingEngine`, `PlatformBillingRoutes`, `billing_adjustments` | Manual/fake billing cockpit, advance next invoice and courtesy days are staging-smoked; real acquiring, Stars, void/reissue and suspended-status distinction remain future |
 | Support/tickets | MVP / smoke passed | `SupportRoutes`, `SupportThreadRepository`, `support_threads.thread_type`, `guestSupportThreads.ts`, `venueMessages.ts`, `platformSupport.ts` | Advanced SLA/macros/attachments/CSAT/diagnostics/support analytics |
-| Analytics/events | PARTIAL | `AnalyticsEventRepository`, event writes, `AuditLogRepository` | Platform cockpit still needs venue lifecycle/subscription, billing, support TTFR/TTR/escalation/reopen/CSAT and onboarding funnel reports |
+| Analytics/events | SPEC UPDATED / PARTIAL | `docs/ANALYTICS_EVENTS.md`, `AnalyticsEventRepository`, event writes, `AuditLogRepository` where present | Verify event emission and payload safety before dashboards; Platform cockpit still needs venue lifecycle/subscription, billing, support TTFR/TTR/escalation/reopen/CSAT, onboarding funnel and growth reports |
 | Staff chat notifications | PARTIAL | `StaffChatNotifier`, bot notify methods | Mini App staff-call notification path is CLOSED / code-test verification passed; keep orders/bookings/shift-extension runtime delivery in regression |
 | Telegram commands | PARTIAL | `/start`, `/menu`, `/my`, `/help`, `/link`, `/unlink`, `/link_test` | Add support/help consistency and QR test mode |
 | Mini App env/CORS/initData | DONE/PARTIAL | `Application.kt`, `TelegramInitDataValidator`, `miniapp/src/main.ts` | CORS mutation methods are CLOSED / code-test verification passed; keep preflight/env diagnostics in regression |
@@ -200,7 +202,8 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 9. Display number resets per venue day and appears in Guest/Venue Mini App order surfaces.
 10. Guest opens `Мой заказ`, requests bill with `Картой на месте`, repeats while active to verify duplicate copy/no duplicate staff-chat notification, then repeats after DONE with `Наличными`.
 11. Order/session/tab core regression from `docs/ORDER_SESSION_TAB_CORE.md`: first batch and second batch use the same active order/session with separate batches; second guest cannot see the first guest personal tab; fallback chat order uses the same session/tab rules; stop-list change before submit blocks stale unavailable item/option.
-12. Owner invite from platform can be accepted end-to-end.
+12. Analytics/events regression from `docs/ANALYTICS_EVENTS.md`: QR scan, add-batch, batch status change, staff-call create, support/billing dangerous changes and audit payloads are emitted/recorded where implemented and contain no raw message text/initData/payment secrets/card data.
+13. Owner invite from platform can be accepted end-to-end.
 
 # Созданные файлы отчёта
 

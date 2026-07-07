@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-06.
 
-Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
 
 ## Current status
 
@@ -116,6 +116,7 @@ Current mapping caveat:
 - Manually mark invoice paid; action must write audit and preserve paid invoice history.
 - Add courtesy/free days for a venue only with a required reason; action writes `billing_adjustments` and `BILLING_COURTESY_DAYS_ADDED` audit.
 - View/list/reply/close `SUPPORT_TICKET`, including platform-only technical tickets and tickets transferred from Venue by `Передать платформе`.
+- View Platform analytics where implemented: WAAV, venue health, onboarding funnel, billing state, support load, risk indicators and platform-wide fallback/reject/SLA metrics.
 - Create a venue OWNER invite; the response includes a usable Telegram `deepLink` when bot username is configured and safe `/start staff_invite_<code>` copy text otherwise.
 - Add a venue OWNER through accepted Telegram invite for the intended venue.
 - List active `venue_members` rows with role `OWNER` as the current owner list.
@@ -153,10 +154,12 @@ Needed Platform analytics remain future/partial:
 - Platform Owner does not see ordinary `VENUE_CHAT`; only support tickets are in Platform Support Center unless future product policy explicitly changes.
 - Paid placement/promotion boosting must not be offered without billing, moderation, analytics and visible advertising labels.
 - Cashback/points/flexible loyalty must not be approved before the financial model and discount accounting are correct.
+- Analytics exports/dashboards must not expose raw Telegram payloads, initData, message text, payment secrets, card data or unrelated PII.
 
 ## Known gaps / needs smoke
 
 - Platform Mini App cockpit is still partial compared with Telegram bot for onboarding requests, placements and analytics.
+- Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`; Platform analytics dashboard and event/audit explorer remain future/partial until event emission and payload safety are verified.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`; Platform paid placements, promotion boosting, growth analytics and moderation are future/advanced, not required for MVP.
 - Advanced support features remain future work: SLA automation, auto-escalation worker, macros, attachments, CSAT, diagnostics report and broad support analytics.
 - Real acquiring provider, Telegram Stars and recurring automatic payment remain future work. `GenericHmacBillingProvider` is an integration base, not a completed provider rollout.
@@ -191,3 +194,4 @@ Needed Platform analytics remain future/partial:
 20. Open Platform Mini App `Обращения`; verify platform-only and venue-transferred support tickets are visible, ordinary `VENUE_CHAT` is not visible, and Platform Owner can reply/close support tickets.
 21. Verify Staff does not see Platform Mode or Platform Support Center.
 22. Verify lifecycle, owner, billing and support audit payloads contain safe ids/status/scope/reason fields and no secrets/raw provider payloads/raw Telegram payloads.
+23. Verify Platform analytics, if shown/exported, follows `docs/ANALYTICS_EVENTS.md` and excludes raw message text, initData, payment secrets, card data and unrelated PII.

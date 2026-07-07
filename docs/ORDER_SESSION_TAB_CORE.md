@@ -4,6 +4,8 @@
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk is documented as closed in current audit notes, while visit history, force-close policy, some DB-level uniqueness nuances and broader analytics remain future/partial.
 
+Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`.
+
 ## Core Rule
 
 The active order belongs to a verified table session/visit, not to a physical table forever. A physical table can have multiple sequential visits; a new visit must not accidentally continue an old active order, tab or bill.
@@ -127,14 +129,16 @@ Growth/retention depends on this core:
 Needed server events for analytics:
 - `table_session_started`
 - `table_session_closed`
-- `batch_created`
-- `batch_status_changed`
+- `order_batch_created`
+- `order_batch_status_changed`
 - `tab_bill_requested`
 - `tab_paid`
 - `tab_closed`
 - `order_closed`
 - `booking_seated`
 - `booking_no_show`
+
+Use the canonical event envelope, naming convention and privacy rules from `docs/ANALYTICS_EVENTS.md`; do not add raw order notes, Telegram payloads, initData or payment data to analytics events.
 
 ## Roadmap Status
 

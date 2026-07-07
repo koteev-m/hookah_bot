@@ -168,6 +168,8 @@ Platform/billing product status is tracked in `docs/PLATFORM_COCKPIT.md`. The sm
 
 Order/session/tab core product status is tracked in `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say active order scoping by `tableSessionId`/`tabId` is closed and must stay in regression; visit history/entity, force-close audit, DB-level uniqueness nuances and broader analytics events remain partial/future.
 
+Analytics/events product status is tracked in `docs/ANALYTICS_EVENTS.md`. Analytics events, audit/event boundaries, KPI formulas, role dashboards and privacy rules are `SPEC UPDATED`; implementation and Platform analytics dashboards remain partial/future unless specific event emission and payload safety are verified.
+
 Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
 
 ## Telegram payments: Stars vs external billing

@@ -11,6 +11,7 @@ Growth не должен превращать QR-меню в спам-канал
 Transactional flows remain separate:
 - `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are governed by `docs/COMMUNICATION_MODEL.md`.
 - Order/session/tab semantics for history, repeat and feedback dependencies are governed by `docs/ORDER_SESSION_TAB_CORE.md`.
+- Growth analytics events and KPI formulas are governed by `docs/ANALYTICS_EVENTS.md`.
 - Booking reminders are transactional booking operations, not growth marketing.
 - Staff-chat is operational and must not receive marketing/growth events unless a separate operational event already exists.
 
@@ -98,6 +99,16 @@ Platform may moderate growth monetization later, but it is not required for MVP:
 - Paid placement depends on Platform billing, moderation and analytics.
 - Cashback/points/flexible loyalty must not be implemented before a correct financial model and discount accounting.
 - Promo codes require limits, abuse controls, accounting and clear conflict rules with manual discounts/loyalty.
+
+Target growth events after implementation:
+- `favorite_venue_added` / `favorite_venue_removed`;
+- `visit_recorded`;
+- `repeat_template_created` / `repeat_template_applied`;
+- `feedback_requested` / `feedback_submitted`;
+- `promotion_viewed`;
+- `promo_code_copied` / `promo_code_redeemed`.
+
+These events are future/partial until the corresponding growth features are implemented and smoked.
 
 ## Privacy And Anti-Abuse
 

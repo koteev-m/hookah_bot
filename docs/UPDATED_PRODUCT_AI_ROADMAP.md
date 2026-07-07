@@ -39,6 +39,7 @@
 - Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; onboarding/placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
 - Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: favorites, history, repeat templates, post-visit feedback, simple promotions, opt-in notifications and anti-spam/privacy rules are specified as `SPEC UPDATED / PARTIAL-FUTURE`. Do not mark growth flows DONE until Bot + Mini App + backend behavior is implemented and smoked.
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping is closed; visit entity/history, force-close policy/audit, some DB-level uniqueness nuances and broader analytics remain partial/future.
+- Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
 - M5 staff calls lifecycle is CLOSED after staging smoke: Guest Mini App uses a transient staff-call modal and compact status card, Venue Mini App has a real `Вызовы` queue with accept/close, backend/staff-chat callbacks share the same lifecycle, and ACK/DONE audit hardening is CLOSED / staging smoke passed across Venue Mini App and Telegram staff-chat surfaces. Staff-chat order activity cards now hide DONE/CANCELLED generic calls from active `Оперативно`, and closing an order/bill resolves linked active BILL requests plus closed-visit staff-call leftovers. Keep notification delivery plus actor audit evidence in regression.
 - Platform Owner определяется через `PLATFORM_OWNER_TELEGRAM_ID`; legacy aliases остаются совместимостью.
 - Platform Owner config parity between Bot and API is implemented; `PLATFORM_OWNER_TELEGRAM_ID` is the canonical access source and legacy aliases remain compatibility only.
@@ -701,6 +702,7 @@ Not selected as implementation right now:
 - remaining booking regression smoke, including real two-account Guest Mini App isolation and schedule validation;
 - remaining backend-backed venue settings slices beyond booking hold, shift extension, public card/location and schedule;
 - guest growth/retention MVP from `docs/GROWTH_RETENTION.md`: favorites, history, repeat template, post-visit feedback, simple venue promotions and opt-in notifications;
+- analytics/events MVP from `docs/ANALYTICS_EVENTS.md`: verify server-side event emission, audit boundaries, privacy-safe payloads and role dashboards before broad analytics work;
 - custom date range venue stats and AI summaries;
 - platform placements cockpit parity;
 - platform support-ticket regression and advanced support follow-ups;
@@ -865,6 +867,7 @@ Keep these documents:
 
 - `docs/PLATFORM_COCKPIT.md` - Platform Mode source of truth for cockpit, lifecycle, billing, support, analytics/audit and remaining Platform gaps.
 - `docs/COMMUNICATION_MODEL.md` - Guest communication model and Support Ticket boundaries.
+- `docs/ANALYTICS_EVENTS.md` - Analytics/event names, KPI formulas, dashboard targets and audit/privacy boundaries.
 - `docs/ORDER_SESSION_TAB_CORE.md` - Order/session/tab source of truth for table context, active orders, batches, tabs, bill flow, lifecycle and privacy boundaries.
 - `docs/GROWTH_RETENTION.md` - Guest growth/retention model, MVP/future scope, dependencies, opt-in/privacy and future smoke checklist.
 - `docs/audit/MINI_APP_PRODUCTION_READINESS_AUDIT.md` - audit history and original P0/P1 findings.

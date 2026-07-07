@@ -8,7 +8,7 @@
 
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; `Акции и удержание` remain partial/future unless backend-backed and smoked.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
 
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
@@ -70,6 +70,7 @@ Manager Mini App areas:
 - Read/reply to ordinary `VENUE_CHAT` for the manager's venue.
 - Read/reply/resolve own-venue `SUPPORT_TICKET` and manually `Передать платформе` support tickets when needed.
 - View statistics.
+- View Manager analytics where implemented: shift dashboard, queue backlog, SLA timers, active staff calls and bookings waiting response.
 - Manage paid shift-extension settings and confirm requests.
 - Manage structured menu/categories/items and stop-list/availability.
 - Manage tables and QR export according to current permissions.
@@ -90,6 +91,7 @@ Manager Mini App areas:
 - Mix orders/batches from different `table_session_id` values or treat staff chat as the source of truth for order state.
 - Promise automatic discounts, cashback, points or promo-code redemption without a real promotion/loyalty engine and discount accounting.
 - Send marketing/promo notifications without guest opt-in, frequency limits and unsubscribe.
+- See billing metrics, platform analytics, another venue's analytics or raw event payloads containing message text/initData/payment secrets/card data.
 
 ## Known gaps / needs smoke
 
@@ -104,6 +106,7 @@ Manager Mini App areas:
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 - Guest Communication UX split is CLOSED / smoke passed for Manager surfaces: `Сообщения` handles booking/venue chats, `Помощь` handles support tickets, Staff is not granted access, and support/venue chats do not post to staff-chat. SLA automation, macros, attachments, CSAT and diagnostics remain future support follow-ups.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: queue may group by table, but detail must preserve batches/tabs/session boundaries; force close should require reason/audit if implemented.
+- Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
 
 ## Smoke-critical checks
