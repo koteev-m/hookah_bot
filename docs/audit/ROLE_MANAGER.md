@@ -8,7 +8,7 @@
 
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; `Акции и удержание` remain partial/future unless backend-backed and smoked.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`.
 
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
@@ -107,6 +107,7 @@ Manager Mini App areas:
 - Guest Communication UX split is CLOSED / smoke passed for Manager surfaces: `Сообщения` handles booking/venue chats, `Помощь` handles support tickets, Staff is not granted access, and support/venue chats do not post to staff-chat. SLA automation, macros, attachments, CSAT and diagnostics remain future support follow-ups.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: queue may group by table, but detail must preserve batches/tabs/session boundaries; force close should require reason/audit if implemented.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
+- Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current docs allow broad Manager menu management, but conservative target policy keeps Manager to stop-list, shift check and basic availability unless product explicitly retains broader `MENU_MANAGE`.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
 
 ## Smoke-critical checks
@@ -125,10 +126,11 @@ Manager Mini App areas:
 12. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
 13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
 14. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
+15. Manager menu permissions match the product policy from `docs/MENU_OPTIONS_STOPLIST.md`: stop-list/shift check/basic availability are allowed, while price/media/structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally retained and tested.
 
 Future Growth/retention checks:
 
-15. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
-16. Promotion is visible only during active period and hidden/suspended promotions are absent.
-17. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
-18. Staff cannot see or manage `Акции и удержание`.
+16. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
+17. Promotion is visible only during active period and hidden/suspended promotions are absent.
+18. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
+19. Staff cannot see or manage `Акции и удержание`.

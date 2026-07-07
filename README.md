@@ -172,6 +172,8 @@ Analytics/events product status is tracked in `docs/ANALYTICS_EVENTS.md`. Analyt
 
 Security/RBAC product status is tracked in `docs/SECURITY_RBAC_MATRIX.md`. Roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit remain partial unless route tests/smoke prove them.
 
+Menu/options/stop-list product status is tracked in `docs/MENU_OPTIONS_STOPLIST.md`. Structured menu, options/modifiers, snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`; selected-option parity is smoke-closed, while broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
+
 Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
 
 ## Telegram payments: Stars vs external billing

@@ -14,6 +14,10 @@ Analytics/events source of truth:
 - Canonical analytics events, audit/event boundaries, KPI formulas, dashboards and privacy rules are tracked in `docs/ANALYTICS_EVENTS.md`.
 - Analytics events are not source of truth for operations; domain tables remain authoritative.
 
+Menu/options/stop-list source of truth:
+- Canonical `MENU_CATEGORY`, `MENU_ITEM`, `OPTION_GROUP`, `OPTION_VALUE`, `STOP_LIST`, `SHIFT_CHECK`, media, featured/top-list, availability validation and menu permissions are tracked in `docs/MENU_OPTIONS_STOPLIST.md`.
+- Structured menu is the source of truth for orders; `Фото-меню` / PDF media is view-only.
+
 Security/RBAC source of truth:
 - Canonical roles, scopes, permissions, surface parity, dangerous actions and current-vs-target gaps are tracked in `docs/SECURITY_RBAC_MATRIX.md`.
 - Server-side RBAC is the source of truth. UI hiding, Telegram keyboards, QR/table tokens and tab invite tokens are never authority by themselves.
@@ -159,10 +163,13 @@ SHOULD:
 
 ## Block 8 — Menu builder + photos + stop-list + top list
 MUST:
+- Use `docs/MENU_OPTIONS_STOPLIST.md` as the canonical menu/options/stop-list model and current-vs-target status.
 - Categories, items, prices, descriptions, photos.
 - Options: flavors/strength/etc (configurable per venue).
 - Stop-list toggle per item (available true/false) with immediate effect.
 - “Top list” / featured items pinning.
+- Guest preview/submit validates item and option availability server-side; cart does not trust client prices.
+- Item and selected option snapshots preserve names/prices for bills and history.
 SHOULD:
 - Bulk edit / import; optional PDF attachment as secondary (not primary).
 - Informational `Фото-меню` can stay as one media list in simple mode, but may support optional owner-defined subsections in advanced mode. This is separate from the structured order menu.
@@ -369,6 +376,7 @@ MUST:
 - Current event/audit foundation is partial: platform venue status audit, owner invite/revoke audit, billing checkout/mark-paid/courtesy audit, support ticket status/scope/assignment/escalation audit and staff-call/order audit exist where implemented.
 - Server-side events needed for reporting include: table_session_started, order_batch_created, order_batch_status_changed, booking_status_changed, subscription_status_changed, venue_lifecycle_changed, owner_invite_created/accepted, billing_invoice_state_changed, support_ticket_status_changed and support_ticket_scope_changed.
 - Order/session/tab analytics from `docs/ORDER_SESSION_TAB_CORE.md` need: table_session_started/closed, order_batch_created/status_changed, tab_bill_requested/paid/closed, order_closed, booking_seated/no_show when implemented.
+- Menu analytics from `docs/MENU_OPTIONS_STOPLIST.md` need: menu_item_created/updated/archived, menu_price_changed, menu_item_availability_changed, menu_option_value_availability_changed, menu_media_uploaded/removed, shift_check_completed and checkout_failed_out_of_stock where implemented.
 - Event names use snake_case past-tense facts; event timestamps are UTC; venue timezone is used for reporting aggregation; payloads must not include raw PII, raw Telegram initData, message text, payment secrets or card data.
 - Correlation IDs (venue/table/session/order/batch/tab).
 - Minimal PII; pseudonymize in analytics if exported.

@@ -15,6 +15,8 @@
 > Current docs correction as of 2026-07-07: Analytics/events status is consolidated in `docs/ANALYTICS_EVENTS.md`. Analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are now the canonical target. Implementation remains partial/needs verification; client events are low-trust UX diagnostics and must not drive money, access, billing or order state.
 >
 > Current docs correction as of 2026-07-07: Security/RBAC status is consolidated in `docs/SECURITY_RBAC_MATRIX.md`. Roles, scopes, permissions, surface parity, dangerous actions, trust boundaries and security smoke are canonical. Permission parity and dangerous-action audit coverage remain partial unless a specific route/test/smoke proves them, and `ADMIN` is a legacy alias to `MANAGER`, not a separate product role.
+>
+> Current docs correction as of 2026-07-07: Menu/options/stop-list status is consolidated in `docs/MENU_OPTIONS_STOPLIST.md`. Structured menu, option values, snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are canonical. Selected-option parity is smoke-closed; broader media/top-list/shift-check/audit coverage remains partial/future.
 
 ## Executive summary
 
@@ -29,6 +31,7 @@
 - `docs/ORDER_SESSION_TAB_CORE.md` is the current source for future order/session/tab tasks; do not infer session/tab semantics from this historical audit alone.
 - `docs/ANALYTICS_EVENTS.md` is the current source for event names, KPI formulas, dashboard targets and analytics/audit/privacy boundaries; do not infer current event implementation from this historical audit alone.
 - `docs/SECURITY_RBAC_MATRIX.md` is the current source for roles, permissions, scopes, dangerous actions and trust boundaries; do not infer current permission parity from this historical audit alone.
+- `docs/MENU_OPTIONS_STOPLIST.md` is the current source for menu, option/modifier, stop-list, media, featured/top-list, shift-check and availability-validation decisions; do not infer current menu status from this historical audit alone.
 - P1 ops: table-context exit, guest/staff bill display parity, bill request/payment method UX, staff-chat activity card, manual platform billing cockpit, renewal/courtesy, staff invite sharing, Platform cockpit documentation and support/tickets MVP are now staging/smoke-closed or docs-closed; provider payment decision is the next launch-commercial gap before broad growth.
 - P2 growth: favorites, visit/order/booking history, repeat templates, simple promotions, post-visit feedback and opt-in notifications need stable visit/order history.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.

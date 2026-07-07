@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Menu/options/stop-list model: `docs/MENU_OPTIONS_STOPLIST.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
 
 ## Current status
 
@@ -155,6 +155,7 @@ Needed Platform analytics remain future/partial:
 - Runtime owner access is based on active `venue_members` OWNER membership. `venues.owner_account_id` and `venue_owner_accounts.primary_owner_user_id` are not relinked by membership revoke.
 - Platform Owner does not see ordinary `VENUE_CHAT`; only support tickets are in Platform Support Center unless future product policy explicitly changes.
 - Paid placement/promotion boosting must not be offered without billing, moderation, analytics and visible advertising labels.
+- Menu `FEATURED` / `TOP_LIST` is a venue-managed showcase, not Platform paid placement. Platform paid placement/boosting is separate future scope.
 - Cashback/points/flexible loyalty must not be approved before the financial model and discount accounting are correct.
 - Analytics exports/dashboards must not expose raw Telegram payloads, initData, message text, payment secrets, card data or unrelated PII.
 

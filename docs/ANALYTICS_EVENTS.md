@@ -14,6 +14,8 @@ Analytics is not the operational source of truth. Domain tables remain authorita
 - subscriptions, invoices and payments;
 - venue_members, venue settings and menu tables.
 
+Menu/options/stop-list product semantics are defined in `docs/MENU_OPTIONS_STOPLIST.md`.
+
 Analytics events are immutable facts for reporting, funnels and diagnostics. They must not drive money, access, billing, order state or support state.
 
 ## Event Families
@@ -113,6 +115,20 @@ Communication:
 - `venue_chat_message_created`
 - `booking_chat_message_created`
 
+Menu/options/stop-list:
+- `menu_category_created`
+- `menu_category_reordered`
+- `menu_item_created`
+- `menu_item_updated`
+- `menu_item_archived`
+- `menu_price_changed`
+- `menu_item_availability_changed`
+- `menu_option_value_availability_changed`
+- `menu_media_uploaded`
+- `menu_media_removed`
+- `shift_check_completed`
+- `checkout_failed_out_of_stock`
+
 Billing:
 - `subscription_trial_started`
 - `subscription_activated`
@@ -170,6 +186,11 @@ Audit required for:
 - invoice manually marked paid;
 - menu price changed;
 - menu availability changed;
+- menu option schema changed;
+- menu media removed;
+- mass stop-list update;
+- staff stop-list toggle where Staff availability management is allowed;
+- shift check completed where implemented;
 - table QR token rotated;
 - order force closed;
 - tab reopened;
@@ -304,6 +325,7 @@ Platform Owner:
 | Analytics events table/repository | Docs mention `AnalyticsEventRepository` and event writes, but coverage needs verification. | Unified `analytics_events` envelope for server facts and client diagnostics. | Needs implementation audit before DONE. |
 | Table/session events | Table session creation/TTL/exit behavior exists; analytics emission coverage needs verification. | Emit `table_token_resolved`, `table_session_started/touched/expired/closed`. | Required for visit history and QR funnel. |
 | Order/batch events | Order/batch routes and some order audit exist; analytics coverage needs verification. | Emit active order, batch create/status/reject/closed and fallback facts. | Needed for QR->order, TTFO, accept/deliver KPIs. |
+| Menu/options/stop-list events | Options/flavors parity is documented as smoke-closed; broader event coverage needs verification. | Emit menu create/update/archive, price, availability, media and shift-check facts with safe payloads. | Needed for stop-list pain points, out-of-stock checkout failure rate and menu operations audit. |
 | Booking events | Booking lifecycle and reminders exist in docs; event coverage needs verification. | Emit booking lifecycle events and reminder confirmation metrics where enabled. | Booking analytics remains partial/future until confirmed. |
 | Support events | Support-ticket audit exists for status/scope/assignment/escalation where implemented. | Emit support analytics events without raw message text. | CSAT and broad support analytics are future. |
 | Billing events | Billing audit exists for checkout ensure, mark-paid and courtesy days. Provider/webhook analytics needs verification. | Emit subscription, invoice and payment webhook facts. | Card/Stars metrics future until provider rollout. |

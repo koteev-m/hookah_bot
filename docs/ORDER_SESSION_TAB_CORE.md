@@ -4,7 +4,7 @@
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk is documented as closed in current audit notes, while visit history, force-close policy, some DB-level uniqueness nuances and broader analytics remain future/partial.
 
-Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`.
+Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`.
 
 ## Core Rule
 
@@ -31,7 +31,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - Venue queue may group by physical table, but order detail must preserve session, batches and tabs.
 - One physical table can have sequential visits; old visit/order state must not leak into a new visit.
 - Batch creation is idempotent by client idempotency key.
-- Item name, price, selected options/flavors and price deltas are snapshotted at order time.
+- Item name, price, selected options/flavors and price deltas are snapshotted at order time according to `docs/MENU_OPTIONS_STOPLIST.md`.
 - Stop-listed or unavailable items/options are rejected server-side at preview/submit.
 - Personal tab is default; shared tab requires invite/consent.
 - Closed/paid tabs cannot receive new batches unless an allowed role explicitly reopens them with audit.
@@ -132,6 +132,7 @@ Needed server events for analytics:
 - `table_session_closed`
 - `order_batch_created`
 - `order_batch_status_changed`
+- `checkout_failed_out_of_stock`
 - `tab_bill_requested`
 - `tab_paid`
 - `tab_closed`

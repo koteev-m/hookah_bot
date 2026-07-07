@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task.
+Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`.
 
 ## Core Rule
 
@@ -66,11 +66,11 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `order_queue.view`, `order_batch.status_update_allowed` | Own venue operations | Current. Must preserve table-session/batch/tab boundaries. |
 | Staff | `staff_call.view`, `staff_call.ack_complete` | Own venue calls | Current ACK/DONE smoke passed; CANCELLED UI/lifecycle and row-level actor columns remain future. |
 | Staff | `booking.view`, arrival/no-show where allowed | Own venue bookings | Current STAFF booking split. Confirm/cancel/change/message/settings denied. |
-| Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned; keep in regression. |
+| Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Staff | `support_ticket.none`, `venue_chat.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
 | Venue Manager | `order_queue.view`, `order_batch.status_update`, `order_batch.reject` | Own venue | Current where route permissions allow. |
 | Venue Manager | `booking.manage`, `staff_call.manage` | Own venue | Current. |
-| Venue Manager | `menu.view`, `menu.manage`, `stop_list.manage` | Own venue | Current with policy caveats by route. |
+| Venue Manager | `menu.view`, `menu.manage`, `stop_list.manage` | Own venue | Current with policy caveats by route. Conservative target keeps Manager to stop-list/shift check/basic availability unless broad `MENU_MANAGE` is explicitly retained; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Venue Manager | `table.view`, limited `table.manage` | Own venue | Current where backend permission allows; owner-only QR actions must stay denied if configured so. |
 | Venue Manager | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current support/chat MVP. Venue cannot reply when support ticket is assigned to Platform unless product policy explicitly allows it. |
 | Venue Manager | `staff_invite.create_staff_only` | Own venue | Current conservative policy where route allows; cannot create Owner/Platform access. |
@@ -112,7 +112,7 @@ These actions require server-side authorization and should require confirmation,
 | Venue published/hidden/paused/suspended/archived/deleted | Confirmation and audit with reason/status where implemented. |
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
 | Staff chat linked/unlinked/tested | Confirmation for unlink; audit/link evidence without raw secrets. |
-| Menu price changed; item archived; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. |
+| Menu price changed; item archived; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. |
 | Order force closed; tab reopened | Reason and audit; preserve session/tab boundaries. |
 | Invoice manually marked paid; subscription override changed; billing provider config changed | Platform Owner only, explicit action, reason where needed and safe audit. |
 | Support ticket transferred/closed/assignee changed | Audit status/scope/actor/source; no message text/raw Telegram payloads. |
@@ -125,7 +125,7 @@ These actions require server-side authorization and should require confirmation,
 | Core RBAC | Runtime uses venue memberships and platform owner resolver; many route tests and smokes exist. | Every endpoint verifies actor, scope and entity ownership. | Permission parity remains `PARTIAL` until every new route has direct denial tests. |
 | `ADMIN` role | Legacy DB alias maps to `MANAGER`; Platform Mini App no longer exposes it. | Remove from product model; keep only compatibility alias. | Open migration/cleanup hygiene until no docs/copy/data imply separate Admin. |
 | Guest order/tab privacy | Current docs say table-session/tab scoping is closed. | Guest reads/writes own personal tab or joined shared tab only. | Keep two-guest and shared-tab privacy smoke in regression. |
-| Staff access | Staff support/venue-chat denial and operational scope are documented/smoked for current MVP. | Staff sees operations only: orders, staff calls, allowed booking actions, menu/table read/availability. | Direct API denial tests remain critical for every new support/chat/billing/settings route. |
+| Staff access | Staff support/venue-chat denial and operational scope are documented/smoked for current MVP. Current menu docs allow Staff item/option availability. | Staff sees operations only: orders, staff calls, allowed booking actions, menu/table read and stop-list only when enabled by venue policy. | Direct API denial tests remain critical for every new support/chat/billing/settings/menu route. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat hidden. | Platform does not bypass ordinary venue RBAC by default. | Event/audit explorer and analytics exports need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
@@ -154,6 +154,6 @@ These actions require server-side authorization and should require confirmation,
 - Security/RBAC matrix: `UPDATED`.
 - Permission parity: `PARTIAL`; keep route-level denial tests and role smoke in regression.
 - `ADMIN` decision: target is removal from product model / compatibility alias only; implementation cleanup remains a migration/copy hygiene follow-up.
-- Staff stop-list parity: current docs say operational item/option availability is aligned; keep it in regression.
+- Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.
 - Dangerous action audit: `PARTIAL` until all listed dangerous actions have verified audit evidence.
 - Security smoke checklist: `UPDATED`.

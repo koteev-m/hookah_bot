@@ -39,6 +39,8 @@
 > Current docs checkpoint as of 2026-07-07: Analytics/events are consolidated in `docs/ANALYTICS_EVENTS.md`. Status is `SPEC UPDATED / implementation PARTIAL`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are now canonical. Platform analytics dashboard, growth events, broad booking/support/billing analytics and client-event ingestion remain future/partial unless specific implementation evidence exists.
 >
 > Current docs checkpoint as of 2026-07-07: Security/RBAC is consolidated in `docs/SECURITY_RBAC_MATRIX.md`. Status is `UPDATED / permission parity PARTIAL`: roles, scopes, permission matrix, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist are now canonical. `ADMIN` remains a legacy compatibility alias to `MANAGER`, not a separate product role. Dangerous-action audit coverage remains partial unless specific implementation evidence exists.
+>
+> Current docs checkpoint as of 2026-07-07: Menu/options/stop-list is consolidated in `docs/MENU_OPTIONS_STOPLIST.md`. Status is `SPEC UPDATED`: structured menu, option groups/values, order snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and role permissions are now canonical. Selected-option parity is smoke-closed; broader menu constructor, media/top-list, shift check and dangerous-action audit coverage remain partial/future unless implementation evidence exists.
 
 # Краткое резюме
 
@@ -123,7 +125,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 |---|---|---|---|
 | Order/session/tab core | SPEC UPDATED / runtime scoping closed with partial follow-ups | `docs/ORDER_SESSION_TAB_CORE.md`, `GuestOrderRoutes`, `TableSessionRepository`, `GuestTabsRoutes`, `VenueOrdersRepository` | Keep table-session/tab scoping, personal/shared tab visibility, batch idempotency, bill request and close/expire behavior in regression; visit entity/history, force-close audit and DB-level uniqueness nuances remain future/partial |
 | Guest QR/table flow | DONE / staging smoke passed | `GuestTableResolveRoutes`, `TableSessionRepository`, `GuestTableResolveRoutesTest`, `guest_table_session_exits` | Keep QR/table restore, user-scoped exit, active obligation blocking and explicit QR re-entry in regression |
-| Guest menu/order/cart/comment | PARTIAL | `GuestMenuRepository`, `GuestOrderRoutes`, `cart.ts` | Options/modifiers, fallback contract |
+| Guest menu/order/cart/comment | SPEC UPDATED / PARTIAL | `docs/MENU_OPTIONS_STOPLIST.md`, `GuestMenuRepository`, `GuestOrderRoutes`, `cart.ts` | Structured selected-option parity is smoke-closed; stale availability, snapshots and fallback contract stay in regression |
 | Order batches / дозаказы | PARTIAL | `OrdersRepository.createGuestOrderBatch`, `order_batches`, `VenueOrdersRepository` | Full DTO and session scoping |
 | Venue-side orders queue | DONE/PARTIAL | `VenueOrderRoutes`, `venueOrders.ts`, `venueOrderDetail.ts`, `guest-smoke.spec.ts` | Display number/full bill/account labels are staging-smoked; keep status/close/bill regression |
 | Full bill / счёт | DONE/PARTIAL | `TelegramBotRouter.showVenueStaffOrderFullDetails`, `VenueOrdersRepository`, `OrderBillSnapshot`, `POST /api/guest/order/bill-request` | Bill request/payment method UX and live staff-chat activity-card updates are staging-smoked; keep payment-method/dedupe/live-card regression |
@@ -131,8 +133,8 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 | Staff calls | DONE/PARTIAL | `GuestStaffCallRoutes`, `StaffCallRepository`, `guestVenue.ts`, `venueCalls.ts` | M5 lifecycle, notification parity and ACK/DONE audit hardening are CLOSED / staging smoke passed; keep Venue Mini App and Telegram staff-chat ACK/DONE audit paths in regression |
 | Staff/manager/owner roles | DONE/PARTIAL | `VenueRbac.kt`, `VenueRoleMapping.fromDb`, `TelegramBotRouter` mappings | `ADMIN` is legacy alias to `MANAGER`; Platform Mini App no longer offers it; keep role smoke in regression |
 | Staff invites | DONE/PARTIAL | `VenueStaffRoutes`, `StaffInviteRepository`, tests | Deep-link copy/share polish and Manager/Staff acceptance are staging-smoked; keep identity labels and role-denial regression |
-| Menu constructor | PARTIAL | `VenueMenuRoutes`, `venueMenu.ts` | Options/photos/top-list |
-| Stop-list including options/flavors | PARTIAL/RISKY | `TelegramBotRouter` stop-list methods, `VenueMenuRepository` | Mini App option UI and permissions |
+| Menu constructor | SPEC UPDATED / PARTIAL | `docs/MENU_OPTIONS_STOPLIST.md`, `VenueMenuRoutes`, `venueMenu.ts` | Structured options parity is smoke-closed; broader category/item/media/top-list/shift-check governance remains partial/future |
+| Stop-list including options/flavors | SPEC UPDATED / PARTIAL | `docs/MENU_OPTIONS_STOPLIST.md`, `TelegramBotRouter` stop-list methods, `VenueMenuRepository` | Current docs say Staff item/option availability parity is aligned; per-venue `staff_stoplist_enabled`, mass stop-list and shift check remain future/partial |
 | Table QR generation/fallback | PARTIAL | `VenueTableRoutes`, `TelegramBotRouter` table flow | Single CRUD and diagnostics |
 | Statistics | PARTIAL | `VenueStatsRepository`, `TelegramBotRouter.showStatsEntry` | Mini App stats |
 | Settings | PLACEHOLDER/PARTIAL | `venueSettings.ts`, `VenueSettingsRepository`, hidden Telegram handler | Make real or hide |
@@ -207,7 +209,8 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 11. Order/session/tab core regression from `docs/ORDER_SESSION_TAB_CORE.md`: first batch and second batch use the same active order/session with separate batches; second guest cannot see the first guest personal tab; fallback chat order uses the same session/tab rules; stop-list change before submit blocks stale unavailable item/option.
 12. Analytics/events regression from `docs/ANALYTICS_EVENTS.md`: QR scan, add-batch, batch status change, staff-call create, support/billing dangerous changes and audit payloads are emitted/recorded where implemented and contain no raw message text/initData/payment secrets/card data.
 13. Security/RBAC regression from `docs/SECURITY_RBAC_MATRIX.md`: Guest/Staff/Manager/Venue/Platform denials, cross-venue isolation, table/session/tab membership, Platform support-only visibility, QR token revocation and dangerous-action audit all follow the canonical matrix.
-14. Owner invite from platform can be accepted end-to-end.
+14. Menu/options/stop-list regression from `docs/MENU_OPTIONS_STOPLIST.md`: Owner creates category/item/options, stale availability is rejected, Staff/Manager permissions match policy, Staff-chat is not source of truth and snapshots preserve old order prices/names/options.
+15. Owner invite from platform can be accepted end-to-end.
 
 # Созданные файлы отчёта
 
@@ -218,3 +221,4 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 - `docs/audit/ROLE_GUEST.md`
 - `docs/audit/PRODUCT_AUDIT_SUMMARY.md`
 - `docs/SECURITY_RBAC_MATRIX.md`
+- `docs/MENU_OPTIONS_STOPLIST.md`

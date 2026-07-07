@@ -42,6 +42,7 @@
 - Order/session/tab core docs: `docs/ORDER_SESSION_TAB_CORE.md` is the source of truth for `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation. Current runtime docs say table-session/tab scoping is closed; visit entity/history, force-close reason/audit, DB-level uniqueness nuances and broader analytics remain future/partial.
 - Analytics/events docs: `docs/ANALYTICS_EVENTS.md` is the source of truth for analytics events, KPI formulas, dashboards, audit/event boundaries and payload privacy rules. Implementation remains partial/needs verification; client events must not drive money, access, billing or order state.
 - Security/RBAC docs: `docs/SECURITY_RBAC_MATRIX.md` is the source of truth for roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist. Permission parity and dangerous-action audit remain partial unless route tests/smoke prove them.
+- Menu/options/stop-list docs: `docs/MENU_OPTIONS_STOPLIST.md` is the source of truth for structured menu, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions. Selected-option parity is smoke-closed; broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
 - Platform Cockpit docs: current source is `docs/PLATFORM_COCKPIT.md`. Manual billing and Platform Support Center are smoke-closed; onboarding request cockpit, placements, analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
@@ -620,12 +621,13 @@ Use this checklist after analytics/event emission, dashboard, audit, billing, su
 4. Staff-call create emits `staff_call_created` where implemented.
 5. Booking status change emits the relevant `booking_*` event where implemented, otherwise remains marked future.
 6. Support ticket create/status/transfer emits the relevant `support_*` event where implemented, otherwise remains marked future.
-7. Subscription state change emits the relevant `subscription_*` event where implemented.
-8. Audit log exists for role/status/billing dangerous changes.
-9. Analytics payload contains no message text, raw Telegram payload, raw initData, payment secrets, card data or unrelated PII.
-10. Platform Owner can see/export relevant analytics only where implemented.
-11. Venue Owner cannot see another venue analytics.
-12. Staff does not see platform analytics.
+7. Menu availability/price/media/shift-check changes emit the relevant `menu_*` / `shift_check_completed` events where implemented, otherwise remain marked future.
+8. Subscription state change emits the relevant `subscription_*` event where implemented.
+9. Audit log exists for role/status/billing/menu dangerous changes.
+10. Analytics payload contains no message text, raw Telegram payload, raw initData, payment secrets, card data or unrelated PII.
+11. Platform Owner can see/export relevant analytics only where implemented.
+12. Venue Owner cannot see another venue analytics.
+13. Staff does not see platform analytics.
 
 ## 13. Security/RBAC Smoke Checklist
 
@@ -645,7 +647,29 @@ Use this checklist after role, navigation, auth, table/session/tab, support/chat
 12. Staff-chat button actions verify role and entity scope server-side.
 13. Analytics export, if implemented, contains no raw PII, message text, raw initData, provider payloads, payment secrets or card data.
 
-## 14. Recommended Next Test Investment
+## 14. Menu/Options/Stop-List Smoke Checklist
+
+Use this checklist after menu, option, stop-list, media, featured/top-list, shift-check, cart, checkout or role-permission changes. Canonical model: `docs/MENU_OPTIONS_STOPLIST.md`.
+
+1. Owner creates a category.
+2. Owner creates an item with price.
+3. Owner creates an option group and option values.
+4. Owner toggles item unavailable; guest cannot order it.
+5. Owner toggles option value unavailable; guest cannot select/order it.
+6. Guest has item in cart, then item becomes unavailable; submit is rejected with safe stale-availability copy.
+7. Price changes after order do not alter existing order snapshot.
+8. Archived item remains visible in old order history/bill snapshot.
+9. Manager can or cannot edit price according to the current product policy.
+10. Manager can toggle stop-list if policy allows.
+11. Staff cannot edit menu structure or price.
+12. Staff stop-list behavior is identical in Telegram Bot and Venue Mini App according to current policy.
+13. Stop-list actions write audit where implemented.
+14. Mass availability update requires confirmation/audit.
+15. Guest menu hides or greys unavailable items/options based on venue policy.
+16. Staff-chat does not become source of truth for menu edits.
+17. Telegram callback actions verify role and venue scope server-side.
+
+## 15. Recommended Next Test Investment
 
 1. Expand the lightweight Playwright/Vite smoke harness with fixture-driven UI tests for:
    - guest cart/order/staff call;
@@ -659,7 +683,7 @@ Use this checklist after role, navigation, auth, table/session/tab, support/chat
    - Guest Bot and Guest Mini App submit the same structured selected-option shape.
 3. Extend cross-channel bill snapshots when selected option price deltas are implemented.
 
-## 15. Next Implementation Smoke Target
+## 16. Next Implementation Smoke Target
 
 Current implementation block after M9b.3: M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed, with the standard deploy command still supported and the opt-in ControlMaster helper validated as a persistent-connection workaround for unreliable fresh SSH/rsync connections. The exact SSH/network root cause remains unconfirmed and belongs to future operations hardening, not the M9a closure. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED / staging smoke passed in provider-free mode: OWNER tested country, city, manual address, save/reload, guest card reflection and route opening; visual polish remains deferred until functional blocks are complete. M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges, guest-facing reason/comment, human booking rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c, M8b-Free, M9a and M9b/M9b.1/M9b.2/M9b.3 stay in regression smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 

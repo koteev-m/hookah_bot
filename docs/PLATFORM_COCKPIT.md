@@ -19,6 +19,8 @@ Platform Mode is the operator cockpit for the whole marketplace. It is separate 
 | Growth / placements | Guest growth/retention is specified in `docs/GROWTH_RETENTION.md`; paid placement and promotion boosting are future. | No paid placement in the MVP; if implemented later, promoted content must be labeled and backed by billing, moderation and analytics. |
 | Risk / health | Billing state, venue availability and support queue status are partially visible. | Future cockpit should highlight blocked venues, overdue invoices, support queues and integration health without exposing secrets. |
 
+Menu `FEATURED` / `TOP_LIST` is venue-managed menu presentation, not Platform paid placement. Menu governance is defined in `docs/MENU_OPTIONS_STOPLIST.md`; paid placement remains a separate future Platform/Growth capability.
+
 ## Venue Lifecycle
 
 Current implementation uses the `VenueStatus` enum:

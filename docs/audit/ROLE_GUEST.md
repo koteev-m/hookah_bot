@@ -8,7 +8,7 @@
 
 Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call, сообщения с заведением и просмотр своего заказа/счёта.
 
-Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest permissions, table/session/tab scope and trust boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
+Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest permissions, table/session/tab scope and trust boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Structured menu/options/stop-list behavior is governed by `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
 
 Ключевое разделение:
 - **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;
@@ -87,6 +87,7 @@ Account/bookings:
 - После QR/table context смотреть заказное меню, собирать корзину, отправлять заказ/дозаказ.
 - Добавлять batch только в свой personal tab or joined shared tab in the current table session.
 - Выбирать item-scoped option/flavor where configured and add optional line-level preparation preference in Mini App.
+- Получать безопасную ошибку при stale cart submit, если позиция или выбранный вариант стали недоступны после добавления в корзину.
 - Вызывать персонал из active table context.
 - Читать и отвечать на свои `BOOKING_CHAT`, `VENUE_CHAT` and `SUPPORT_TICKET` threads.
 - Создавать свои support tickets through `Помощь`; venue-related order/service and booking categories require verified venue/booking context.
@@ -106,6 +107,8 @@ Account/bookings:
 - Создавать order через `Повторить` без active table context/current tab/menu validation.
 - Видеть чужие bookings/orders/tabs.
 - Добавлять batch в чужой personal tab or shared tab without membership.
+- Заказывать hidden/archived/unavailable menu item or option value.
+- Доверять client-side price; итоговая цена и option deltas считаются server-side.
 - Видеть чужие chats/support tickets.
 - Завершать или скрывать чужой table context/session за тем же физическим столом.
 - Видеть operator analytics dashboards; Guest gets only profile/history-facing summaries later.
@@ -125,6 +128,7 @@ Account/bookings:
 - QR/table exit flow is CLOSED / staging smoke passed and should stay in regression: one guest exits, another guest at the same physical table remains in their own context; explicit QR scan re-enters after exit.
 - Guest bill request / payment method UX is CLOSED / staging smoke passed; payment choices are structured, active duplicate requests do not spam staff chat and no online payment provider was added.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`; Guest-facing analytics is limited to future profile/history summaries, while client events remain low-trust UX diagnostics.
+- Menu/options/stop-list model is `SPEC UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, but broader modifier/media/top-list/shift-check coverage remains partial/future.
 - Real acquiring provider, Telegram Stars and automatic recurring payments remain future work; guest bill request is still an on-site operational request, not online payment.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 
@@ -147,12 +151,13 @@ Account/bookings:
 15. Обновить active order: новые batches, скидки, исключения и closed state отображаются из backend.
 16. На active order screen нажать `Попросить счёт`, выбрать `Картой на месте` / `Наличными` / `Пока не знаю`, проверить JSON request contract, guest confirmation, duplicate active request copy and staff notification context.
 17. Verify order/session/tab core from `docs/ORDER_SESSION_TAB_CORE.md`: first and second batches stay in the same active table session/order with separate batches; second guest at the same table gets own personal tab and cannot see the first guest personal tab; joined shared tab is visible only after consent; expired session shows `Отсканируйте QR на столе заново.`
+18. Verify menu/options/stop-list core from `docs/MENU_OPTIONS_STOPLIST.md`: unavailable item/option is hidden or disabled by venue policy, stale cart submit is rejected safely, and selected option names/prices remain visible in the resulting order/bill snapshot.
 
 Future Growth/retention smoke from `docs/GROWTH_RETENTION.md`:
 
-18. Favorite and unfavorite a venue; verify it appears/disappears in favorite venues.
-19. Open history and verify visits, closed orders and bookings are shown with safe labels.
-20. Use `Повторить`; confirm it creates only a repeat template and requires the next table context before order creation.
-21. Confirm unavailable/stopped items are skipped or clearly marked during repeat template application.
-22. Confirm feedback is requested only after a confirmed visit and low ratings do not auto-open a public review link.
-23. Confirm promotions show active period/terms, hidden/suspended promotions are absent, and marketing notifications require opt-in plus unsubscribe.
+19. Favorite and unfavorite a venue; verify it appears/disappears in favorite venues.
+20. Open history and verify visits, closed orders and bookings are shown with safe labels.
+21. Use `Повторить`; confirm it creates only a repeat template and requires the next table context before order creation.
+22. Confirm unavailable/stopped items are skipped or clearly marked during repeat template application.
+23. Confirm feedback is requested only after a confirmed visit and low ratings do not auto-open a public review link.
+24. Confirm promotions show active period/terms, hidden/suspended promotions are absent, and marketing notifications require opt-in plus unsubscribe.

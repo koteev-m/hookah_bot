@@ -21,6 +21,8 @@
 > Current docs correction as of 2026-07-07: Analytics/events source of truth is `docs/ANALYTICS_EVENTS.md`. Analytics events, audit/event boundaries, KPI formulas, role dashboards and privacy rules are `SPEC UPDATED`; implementation and Platform analytics dashboards remain partial/future until event emission and payload safety are verified.
 >
 > Current docs correction as of 2026-07-07: Security/RBAC source of truth is `docs/SECURITY_RBAC_MATRIX.md`. Roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a separate product role.
+>
+> Current docs correction as of 2026-07-07: Menu/options/stop-list source of truth is `docs/MENU_OPTIONS_STOPLIST.md`. Structured menu, options/modifiers, snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`; selected-option parity is smoke-closed, while broader media/top-list/shift-check/audit coverage remains partial/future.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -62,6 +64,7 @@ Status: `PARTIAL`.
 - stale/superseded: staff call frontend payload now includes `tableSessionId` and has code-test coverage;
 - stale/superseded: fallback chat order now sends the router-supported `cmd=start_quick_order` payload and has Mini App e2e coverage;
 - active order scoping by `tableSessionId/tabId` needs launch regression coverage;
+- structured menu/option/stop-list behavior must follow `docs/MENU_OPTIONS_STOPLIST.md`: server-side availability validation, option snapshots and Staff/Manager permissions stay in regression;
 - guest booking/profile/history and advanced support UI parity need dedicated regression passes;
 - promotions/loyalty/growth display must be smoke-tested against backend and bot output before being called complete.
 
