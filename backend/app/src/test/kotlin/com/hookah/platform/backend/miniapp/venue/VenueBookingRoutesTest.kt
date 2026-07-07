@@ -1228,6 +1228,167 @@ class VenueBookingRoutesTest {
         }
 
     @Test
+    fun `arrival terminal actions require confirmed booking and control visits`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-bookings-arrival-guard-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+
+            val guestToken = issueToken(config, GUEST_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+
+            suspend fun createBooking(scheduledAt: String): Long {
+                val response =
+                    client.post("/api/guest/booking/create") {
+                        headers {
+                            append(HttpHeaders.Authorization, "Bearer $guestToken")
+                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        }
+                        setBody("""{"venueId":$venueId,"scheduledAt":"$scheduledAt","partySize":2}""")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.parseToJsonElement(response.bodyAsText())
+                    .jsonObject
+                    .getValue("bookingId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+            }
+
+            suspend fun confirmBooking(bookingId: Long) {
+                val response =
+                    client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+
+            suspend fun changeBooking(
+                bookingId: Long,
+                date: String,
+                time: String,
+            ) {
+                val response =
+                    client.post("/api/venue/bookings/$bookingId/change?venueId=$venueId") {
+                        headers {
+                            append(HttpHeaders.Authorization, "Bearer $managerToken")
+                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        }
+                        setBody("""{"scheduledLocalDate":"$date","scheduledLocalTime":"$time"}""")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+
+            suspend fun cancelBooking(bookingId: Long) {
+                val response =
+                    client.post("/api/venue/bookings/$bookingId/cancel?venueId=$venueId") {
+                        headers {
+                            append(HttpHeaders.Authorization, "Bearer $managerToken")
+                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        }
+                        setBody("""{"reasonText":"не актуально"}""")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+
+            suspend fun postArrival(
+                bookingId: Long,
+                action: String,
+            ) = client.post("/api/venue/bookings/$bookingId/$action?venueId=$venueId") {
+                headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+            }
+
+            suspend fun assertArrivalDeniedWithoutVisit(
+                bookingId: Long,
+                action: String,
+            ) {
+                val response = postArrival(bookingId, action)
+                assertEquals(HttpStatusCode.NotFound, response.status)
+                assertEquals(emptyList(), visitSourcesForBooking(jdbcUrl, bookingId))
+            }
+
+            val pendingId = createBooking("2030-01-10T18:30:00Z")
+            assertArrivalDeniedWithoutVisit(pendingId, "seat")
+            assertArrivalDeniedWithoutVisit(pendingId, "no-show")
+
+            val changedId = createBooking("2030-01-11T18:30:00Z")
+            changeBooking(changedId, "2030-01-11", "22:30")
+            assertArrivalDeniedWithoutVisit(changedId, "seat")
+            assertArrivalDeniedWithoutVisit(changedId, "no-show")
+
+            val canceledId = createBooking("2030-01-12T18:30:00Z")
+            cancelBooking(canceledId)
+            assertArrivalDeniedWithoutVisit(canceledId, "seat")
+            assertArrivalDeniedWithoutVisit(canceledId, "no-show")
+
+            val expiredId = createBooking("2030-01-13T18:30:00Z")
+            forceBookingStatus(jdbcUrl, expiredId, "EXPIRED")
+            assertArrivalDeniedWithoutVisit(expiredId, "seat")
+            assertArrivalDeniedWithoutVisit(expiredId, "no-show")
+
+            val seatedId = createBooking("2030-01-14T18:30:00Z")
+            confirmBooking(seatedId)
+            val seatResponse = postArrival(seatedId, "seat")
+            assertEquals(HttpStatusCode.OK, seatResponse.status)
+            assertEquals(
+                "seated",
+                json.parseToJsonElement(seatResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("status")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(listOf("BOOKING_SEATED"), visitSourcesForBooking(jdbcUrl, seatedId))
+
+            val repeatSeatResponse = postArrival(seatedId, "seat")
+            assertEquals(HttpStatusCode.NotFound, repeatSeatResponse.status)
+            val seatedNoShowResponse = postArrival(seatedId, "no-show")
+            assertEquals(HttpStatusCode.NotFound, seatedNoShowResponse.status)
+            assertEquals(listOf("BOOKING_SEATED"), visitSourcesForBooking(jdbcUrl, seatedId))
+
+            val noShowId = createBooking("2030-01-15T18:30:00Z")
+            confirmBooking(noShowId)
+            val noShowResponse = postArrival(noShowId, "no-show")
+            assertEquals(HttpStatusCode.OK, noShowResponse.status)
+            assertEquals(
+                "no_show",
+                json.parseToJsonElement(noShowResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("status")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(emptyList(), visitSourcesForBooking(jdbcUrl, noShowId))
+
+            val noShowSeatResponse = postArrival(noShowId, "seat")
+            assertEquals(HttpStatusCode.NotFound, noShowSeatResponse.status)
+            val repeatNoShowResponse = postArrival(noShowId, "no-show")
+            assertEquals(HttpStatusCode.NotFound, repeatNoShowResponse.status)
+            assertEquals(emptyList(), visitSourcesForBooking(jdbcUrl, noShowId))
+        }
+
+    @Test
     fun `staff can view and mark booking arrival but cannot manage booking`() =
         testApplication {
             val jdbcUrl =
@@ -1252,10 +1413,13 @@ class VenueBookingRoutesTest {
             val venueId = seedVenue(jdbcUrl)
             seedSubscription(jdbcUrl, venueId)
             seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
             seedUser(jdbcUrl, STAFF_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
             seedVenueMember(jdbcUrl, venueId, STAFF_ID, "STAFF")
 
             val guestToken = issueToken(config, GUEST_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
             val staffToken = issueToken(config, STAFF_ID)
 
             suspend fun createBooking(scheduledAt: String): Long {
@@ -1326,6 +1490,11 @@ class VenueBookingRoutesTest {
             assertEquals(HttpStatusCode.Forbidden, resolveThreadResponse.status)
 
             val seatedId = createBooking("2030-01-11T18:30:00Z")
+            val confirmSeatedResponse =
+                client.post("/api/venue/bookings/$seatedId/confirm?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, confirmSeatedResponse.status)
             val seatResponse =
                 client.post("/api/venue/bookings/$seatedId/seat?venueId=$venueId") {
                     headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
@@ -1337,6 +1506,11 @@ class VenueBookingRoutesTest {
             )
 
             val noShowId = createBooking("2030-01-12T18:30:00Z")
+            val confirmNoShowResponse =
+                client.post("/api/venue/bookings/$noShowId/confirm?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, confirmNoShowResponse.status)
             val noShowResponse =
                 client.post("/api/venue/bookings/$noShowId/no-show?venueId=$venueId") {
                     headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
@@ -1725,6 +1899,52 @@ class VenueBookingRoutesTest {
                 }
             }
         }
+
+    private fun visitSourcesForBooking(
+        jdbcUrl: String,
+        bookingId: Long,
+    ): List<String> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT source
+                FROM visits
+                WHERE booking_id = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs ->
+                    val result = mutableListOf<String>()
+                    while (rs.next()) {
+                        result.add(rs.getString("source"))
+                    }
+                    result
+                }
+            }
+        }
+
+    private fun forceBookingStatus(
+        jdbcUrl: String,
+        bookingId: Long,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE bookings
+                SET status = ?,
+                    expired_at = CASE WHEN ? = 'EXPIRED' THEN CURRENT_TIMESTAMP ELSE expired_at END
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, status)
+                statement.setString(2, status)
+                statement.setLong(3, bookingId)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun outboxTexts(
         jdbcUrl: String,

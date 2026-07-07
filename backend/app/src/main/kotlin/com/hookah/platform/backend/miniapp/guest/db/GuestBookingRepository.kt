@@ -1314,7 +1314,7 @@ class GuestBookingRepository(
                             SET status = ?,
                                 $timestampColumn = ?,
                                 updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
+                            WHERE id = ? AND venue_id = ? AND status = 'CONFIRMED'
                             """.trimIndent(),
                         ).use { statement ->
                             statement.setString(1, nextStatus.name)

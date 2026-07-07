@@ -145,7 +145,7 @@ function canChange(booking: VenueBookingDto) {
 }
 
 function canMarkArrival(booking: VenueBookingDto) {
-  return booking.status === 'pending' || booking.status === 'confirmed' || booking.status === 'changed'
+  return booking.status === 'confirmed'
 }
 
 function renderChangeForm(

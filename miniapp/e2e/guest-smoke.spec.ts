@@ -4430,6 +4430,20 @@ test('venue booking queue shows guest attendance confirmation only when present'
         arrivalDeadlineAtDisplay: '11.01.2030, 20:45',
         comment: 'без отметки',
         lastGuestConfirmationAt: null
+      }),
+      buildVenueBooking({
+        bookingId: 703,
+        displayNumber: 14,
+        status: 'pending',
+        scheduledAt: '2030-01-12T17:15:00Z',
+        scheduledAtDisplay: '12.01.2030, 20:15',
+        scheduledLocalDate: '2030-01-12',
+        scheduledLocalTime: '20:15',
+        serviceDate: '2030-01-12',
+        arrivalDeadlineAt: '2030-01-12T17:45:00Z',
+        arrivalDeadlineAtDisplay: '12.01.2030, 20:45',
+        comment: 'ожидает',
+        lastGuestConfirmationAt: null
       })
     ]
   })
@@ -4440,10 +4454,19 @@ test('venue booking queue shows guest attendance confirmation only when present'
   const confirmedCard = page.locator('.venue-booking-card').filter({ hasText: 'Бронь №12' })
   await expect(confirmedCard).toContainText('подтверждена')
   await expect(confirmedCard).toContainText('Гость подтвердил визит: 10.01.2030, 21:05')
+  await expect(confirmedCard.getByRole('button', { name: 'Гость пришёл' })).toBeVisible()
+  await expect(confirmedCard.getByRole('button', { name: 'Не пришёл' })).toBeVisible()
 
   const changedCard = page.locator('.venue-booking-card').filter({ hasText: 'Бронь №13' })
   await expect(changedCard).toContainText('перенесена')
   await expect(changedCard).not.toContainText('Гость подтвердил визит')
+  await expect(changedCard.getByRole('button', { name: 'Гость пришёл' })).toHaveCount(0)
+  await expect(changedCard.getByRole('button', { name: 'Не пришёл' })).toHaveCount(0)
+
+  const pendingCard = page.locator('.venue-booking-card').filter({ hasText: 'Бронь №14' })
+  await expect(pendingCard).toContainText('ожидает')
+  await expect(pendingCard.getByRole('button', { name: 'Гость пришёл' })).toHaveCount(0)
+  await expect(pendingCard.getByRole('button', { name: 'Не пришёл' })).toHaveCount(0)
 })
 
 test('venue manager manages bookings queue lifecycle', async ({ page }) => {
@@ -4532,7 +4555,8 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueBookingsApi(page, {
     role: 'STAFF',
-    permissions: ['BOOKING_VIEW', 'BOOKING_ARRIVAL_UPDATE']
+    permissions: ['BOOKING_VIEW', 'BOOKING_ARRIVAL_UPDATE'],
+    bookings: [buildVenueBooking({ status: 'confirmed' })]
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)

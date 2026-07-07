@@ -41,6 +41,13 @@ class VisitRepositoryTest {
                     venueZoneId = ZONE_ID,
                     serviceDate = serviceDate,
                 )
+            assertNotNull(
+                bookingRepository.updateByVenue(
+                    bookingId = booking.id,
+                    venueId = fixture.venueId,
+                    nextStatus = BookingStatus.CONFIRMED,
+                ),
+            )
 
             assertNotNull(bookingRepository.markSeated(fixture.venueId, booking.id, actorUserId = STAFF_USER))
             assertEquals(1L, visitRepository.getVisitCount(GUEST_ONE, fixture.venueId))
@@ -70,8 +77,69 @@ class VisitRepositoryTest {
                     venueZoneId = ZONE_ID,
                     serviceDate = LocalDate.of(2030, 5, 10),
                 )
+            assertNotNull(
+                bookingRepository.updateByVenue(
+                    bookingId = booking.id,
+                    venueId = fixture.venueId,
+                    nextStatus = BookingStatus.CONFIRMED,
+                ),
+            )
 
             assertNotNull(bookingRepository.markNoShow(fixture.venueId, booking.id, actorUserId = STAFF_USER))
+
+            assertEquals(0L, visitRepository.getVisitCount(GUEST_ONE, fixture.venueId))
+        }
+
+    @Test
+    fun `arrival terminal actions require confirmed booking`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("visit-booking-arrival-confirmed-only")
+            val fixture = seedBase(jdbcUrl)
+            val visitRepository = VisitRepository(dataSource(jdbcUrl))
+            val bookingRepository = GuestBookingRepository(dataSource(jdbcUrl), visitRepository)
+
+            suspend fun createBooking(scheduledAt: Instant) =
+                bookingRepository.create(
+                    venueId = fixture.venueId,
+                    userId = GUEST_ONE,
+                    scheduledAt = scheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = ZONE_ID,
+                    serviceDate = LocalDate.of(2030, 5, 10),
+                )
+
+            val pendingSeat = createBooking(Instant.parse("2030-05-10T17:00:00Z"))
+            assertNull(bookingRepository.markSeated(fixture.venueId, pendingSeat.id, actorUserId = STAFF_USER))
+
+            val pendingNoShow = createBooking(Instant.parse("2030-05-10T17:15:00Z"))
+            assertNull(bookingRepository.markNoShow(fixture.venueId, pendingNoShow.id, actorUserId = STAFF_USER))
+
+            val changedSeat = createBooking(Instant.parse("2030-05-10T17:30:00Z"))
+            assertNotNull(
+                bookingRepository.updateByVenue(
+                    bookingId = changedSeat.id,
+                    venueId = fixture.venueId,
+                    nextStatus = BookingStatus.CHANGED,
+                    scheduledAt = Instant.parse("2030-05-10T18:00:00Z"),
+                    venueZoneId = ZONE_ID,
+                    serviceDate = LocalDate.of(2030, 5, 10),
+                ),
+            )
+            assertNull(bookingRepository.markSeated(fixture.venueId, changedSeat.id, actorUserId = STAFF_USER))
+
+            val changedNoShow = createBooking(Instant.parse("2030-05-10T18:15:00Z"))
+            assertNotNull(
+                bookingRepository.updateByVenue(
+                    bookingId = changedNoShow.id,
+                    venueId = fixture.venueId,
+                    nextStatus = BookingStatus.CHANGED,
+                    scheduledAt = Instant.parse("2030-05-10T18:30:00Z"),
+                    venueZoneId = ZONE_ID,
+                    serviceDate = LocalDate.of(2030, 5, 10),
+                ),
+            )
+            assertNull(bookingRepository.markNoShow(fixture.venueId, changedNoShow.id, actorUserId = STAFF_USER))
 
             assertEquals(0L, visitRepository.getVisitCount(GUEST_ONE, fixture.venueId))
         }
@@ -394,7 +462,14 @@ class VisitRepositoryTest {
                     venueZoneId = ZONE_ID,
                     serviceDate = serviceDate,
                 )
-            bookingRepository.markSeated(fixture.venueId, booking.id, actorUserId = STAFF_USER)
+            assertNotNull(
+                bookingRepository.updateByVenue(
+                    bookingId = booking.id,
+                    venueId = fixture.venueId,
+                    nextStatus = BookingStatus.CONFIRMED,
+                ),
+            )
+            assertNotNull(bookingRepository.markSeated(fixture.venueId, booking.id, actorUserId = STAFF_USER))
             val orderFixture = seedActiveOrderWithParticipants(jdbcUrl, fixture)
             val orderRepository = VenueOrdersRepository(dataSource(jdbcUrl), visitRepository = visitRepository)
 
@@ -691,7 +766,9 @@ class VisitRepositoryTest {
                         keys.getLong(1)
                     }
                 }
-            val tab = insertTab(connection, fixture.venueId, tableSessionId, userId, "PERSONAL")
+            val tab =
+                findActivePersonalTab(connection, tableSessionId, userId)
+                    ?: insertTab(connection, fixture.venueId, tableSessionId, userId, "PERSONAL")
             val batch = insertBatch(connection, orderId, tab, null, "MINIAPP")
             insertBatchItem(connection, batch, fixture.itemId)
             insertGuestBatchIdempotency(
@@ -704,6 +781,30 @@ class VisitRepositoryTest {
                 idempotencyKey = "detail-$orderId",
             )
             orderId
+        }
+
+    private fun findActivePersonalTab(
+        connection: java.sql.Connection,
+        tableSessionId: Long,
+        userId: Long,
+    ): Long? =
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM tab
+            WHERE table_session_id = ?
+              AND owner_user_id = ?
+              AND type = 'PERSONAL'
+              AND status = 'ACTIVE'
+            ORDER BY id
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, tableSessionId)
+            statement.setLong(2, userId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) rs.getLong("id") else null
+            }
         }
 
     private fun seedBareExpiredTableSession(

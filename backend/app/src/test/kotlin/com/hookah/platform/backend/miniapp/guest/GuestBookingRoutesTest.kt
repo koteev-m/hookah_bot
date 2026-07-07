@@ -143,6 +143,7 @@ class GuestBookingRoutesTest {
             assertEquals(HttpStatusCode.OK, cancelResponse.status)
 
             val seatedId = createBooking(client, guestToken, venueId, "2030-01-12T18:30:00Z")
+            setBookingStatus(jdbcUrl, seatedId, "CONFIRMED")
             val seatResponse =
                 client.post("/api/venue/bookings/$seatedId/seat?venueId=$venueId") {
                     headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
@@ -154,6 +155,7 @@ class GuestBookingRoutesTest {
             )
 
             val noShowId = createBooking(client, guestToken, venueId, "2030-01-12T19:30:00Z")
+            setBookingStatus(jdbcUrl, noShowId, "CONFIRMED")
             val noShowResponse =
                 client.post("/api/venue/bookings/$noShowId/no-show?venueId=$venueId") {
                     headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
