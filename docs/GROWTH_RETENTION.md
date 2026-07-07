@@ -10,6 +10,7 @@ Growth не должен превращать QR-меню в спам-канал
 
 Transactional flows remain separate:
 - `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are governed by `docs/COMMUNICATION_MODEL.md`.
+- Booking lifecycle, hold/deadline, no-show/seated and reminder semantics are governed by `docs/BOOKING_LIFECYCLE.md`.
 - Order/session/tab semantics for history, repeat and feedback dependencies are governed by `docs/ORDER_SESSION_TAB_CORE.md`.
 - Growth analytics events and KPI formulas are governed by `docs/ANALYTICS_EVENTS.md`.
 - Booking reminders are transactional booking operations, not growth marketing.
@@ -19,7 +20,7 @@ Transactional flows remain separate:
 
 Current implementation is **partial**:
 - Account/history/favorites baselines are referenced in role docs, but require separate staging smoke before being marked complete.
-- Booking, order close and table-session close signals exist as foundations for visit history, but there is no canonical completed retention loop.
+- Booking seated/no-show, order close and table-session close signals exist as foundations for visit history, but there is no canonical completed retention loop.
 - Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
 - Repeat templates, post-visit feedback, promo codes, loyalty stamps/points, referrals, campaign segmentation and paid placement boosting remain future unless a later implementation summary says otherwise.
 
@@ -95,7 +96,7 @@ Platform may moderate growth monetization later, but it is not required for MVP:
 - Repeat/favorites/history depend on active order scoped by `table_session` / `tab` according to `docs/ORDER_SESSION_TAB_CORE.md`.
 - Repeat templates depend on current menu availability, stop-list and selected-option validation.
 - Feedback depends on a correct close visit/order signal.
-- Preorder depends on booking lifecycle and reliable `visit_count`.
+- Preorder depends on booking lifecycle from `docs/BOOKING_LIFECYCLE.md` and reliable `visit_count`.
 - Paid placement depends on Platform billing, moderation and analytics.
 - Cashback/points/flexible loyalty must not be implemented before a correct financial model and discount accounting.
 - Promo codes require limits, abuse controls, accounting and clear conflict rules with manual discounts/loyalty.

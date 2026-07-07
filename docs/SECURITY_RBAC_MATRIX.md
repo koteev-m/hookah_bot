@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`.
+Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`.
 
 ## Core Rule
 
@@ -26,7 +26,7 @@ Tokens and client-provided ids are context pointers, not authority:
 | `table_session` | Current visit/session at a venue table. | Required for active order, tab, batch, bill request and staff call mutations. |
 | `tab` | Personal/shared bill account inside a table session. | Guest sees only own personal tab or joined shared tabs. |
 | `support_ticket` | Status-tracked support/problem ticket. | Guest own tickets, Venue Owner/Manager own venue tickets, Platform Owner all tickets. Staff none. |
-| `booking` | Guest booking and booking conversation. | Guest own booking, Venue Owner/Manager own venue; Staff operational view only where allowed. |
+| `booking` | Guest booking, booking queue and booking conversation. | Guest own booking, Venue Owner/Manager own venue; Staff operational view/arrival/no-show only where allowed; canonical lifecycle in `docs/BOOKING_LIFECYCLE.md`. |
 | `billing` | Subscription, invoices, payments and commercial terms. | Platform Owner manages; Venue Owner views/pays where implemented; Manager/Staff none. |
 | `analytics/audit` | KPI dashboards, event facts and critical-change evidence. | Role-specific views; raw event/audit payloads are restricted and privacy-filtered. |
 
@@ -90,7 +90,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | --- | --- | --- | --- | --- | --- | --- |
 | Orders | Guest fallback/order status; venue operational shortcuts where implemented. | Primary guest QR/table order UX. | Primary venue queue/detail source of truth; see `docs/VENUE_OPERATIONS.md`. | No ordinary order workspace by default. | Order notifications/activity cards allowed. | Staff-chat is radar/shortcut, not source of truth. |
 | Staff calls | Guest table fallback/actions and staff-chat callbacks where implemented. | Guest create/status. | Venue operations queue. | No. | Allowed for operational staff calls. | Separate from support tickets. |
-| Bookings | Guest `/my`, booking actions and venue/admin flows where implemented. | Guest booking/list. | Owner/Manager booking queue/actions; Staff view/arrival/no-show only. | Platform only if future analytics/audit requires. | Booking operational notifications allowed by existing policy. | Booking chat stays `BOOKING_CHAT`, not support. |
+| Bookings | Guest `/my`, booking actions and venue/admin flows where implemented. | Guest booking/list. | Owner/Manager booking queue/actions; Staff view/arrival/no-show only. | Platform only if future analytics/audit requires. | Booking operational notifications allowed by existing policy. | Booking lifecycle follows `docs/BOOKING_LIFECYCLE.md`; booking chat stays `BOOKING_CHAT`, not support. |
 | Support tickets | `/support` fallback where implemented. | Guest `Помощь`. | Owner/Manager `Обращения` for own venue. | Platform `Обращения` / Support Center. | Never for support tickets. | Staff denied. Platform sees support, not ordinary venue chats. |
 | Venue chats | Guest bot/Mini App entry where implemented. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Never for ordinary venue chats. | Staff denied. |
 | Booking chats | Booking action `Открыть переписку`. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Notification mirror only where existing policy allows. | Must not become support queue. |

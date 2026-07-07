@@ -4,7 +4,7 @@
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk is documented as closed in current audit notes, while visit history, force-close policy, some DB-level uniqueness nuances and broader analytics remain future/partial.
 
-Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`.
+Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`. Booking seated/no-show lifecycle inputs are defined in `docs/BOOKING_LIFECYCLE.md`.
 
 ## Core Rule
 
@@ -20,7 +20,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 | `ACTIVE_TABLE_ORDER` | Order container for the current table visit/session. Target scope is `venue_id + table_id + table_session_id`, not only `table_id`. There is one active order for the current table session/visit; a closed/expired session cannot receive new batches. |
 | `ORDER_BATCH` | One cart submission / one `дозаказ`. It always belongs to an active order, has source such as `miniapp` or `bot_fallback`, is idempotent by client idempotency key and carries item/price/option snapshots. |
 | `TAB` | Bill/account inside a visit. Personal tab is default for a guest. Shared tab is explicit and visible only to participants. Each order batch belongs to a `tab_id`. |
-| `VISIT` | Product-level history/retention concept derived from `TABLE_SESSION` + closed order + booking seated/no-show signals. It does not have to be a runtime entity until a later implementation creates one. |
+| `VISIT` | Product-level history/retention concept derived from `TABLE_SESSION` + closed order + booking seated/no-show signals. Booking lifecycle source: `docs/BOOKING_LIFECYCLE.md`. It does not have to be a runtime entity until a later implementation creates one. |
 
 ## Core Invariants
 

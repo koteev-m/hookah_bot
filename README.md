@@ -176,6 +176,8 @@ Menu/options/stop-list product status is tracked in `docs/MENU_OPTIONS_STOPLIST.
 
 Venue Mode operations product status is tracked in `docs/VENUE_OPERATIONS.md`. Venue dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are `SPEC UPDATED`; Venue Mode is source of truth and staff-chat is radar/shortcut only.
 
+Booking lifecycle product status is tracked in `docs/BOOKING_LIFECYCLE.md`. Guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke are `SPEC UPDATED`; queue/hold/list/chat MVP paths are smoke-closed by slice, while reminder rollout, full automation, preorder and visit-history integration remain partial/future.
+
 Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
 
 ## Telegram payments: Stars vs external billing

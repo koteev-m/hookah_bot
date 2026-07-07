@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`.
+Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle details are governed by `docs/BOOKING_LIFECYCLE.md`.
 
 ## Core Rule
 
@@ -17,7 +17,7 @@ Guest communication is split into four different product scenarios. Do not merge
 
 ## Thread Types
 
-- `BOOKING_CHAT` is represented by booking conversation threads. It is opened from booking flows and must remain separate from support ticket queues.
+- `BOOKING_CHAT` is represented by booking conversation threads. It is opened from booking flows and must remain separate from support ticket queues. Booking statuses, hold/deadline, reminders and no-show/seated behavior are defined in `docs/BOOKING_LIFECYCLE.md`.
 - `VENUE_CHAT` is represented by a venue-scoped ordinary chat thread for one guest and one venue. If an ordinary guest+venue chat already exists, reuse it instead of creating duplicates.
 - `SUPPORT_TICKET` is represented by support-ticket threads with status, category, assignee scope and audit/status behavior.
 - `STAFF_CALL` is not a support thread. It remains a staff-call/order operational flow governed by the table/session/order boundaries in `docs/ORDER_SESSION_TAB_CORE.md`.
@@ -38,7 +38,7 @@ Guest communication is split into four different product scenarios. Do not merge
 
 - Technical/Mini App/bot/QR/access/payment platform issues may create platform-scoped support tickets without venue context.
 - Order/service support outside table requires verified venue/order/table context. If no context is verified, the API rejects the request and the UI should ask the guest to choose a venue.
-- Booking support outside table requires a verified booking or venue context.
+- Booking support outside table requires a verified booking or venue context and follows the routing rules in `docs/BOOKING_LIFECYCLE.md`.
 - Venue detail can prefill venue context for venue-related support categories.
 - Table context can attach verified `venue_id`, `table_id`, `table_session_id` and active order/batch context when available.
 - Venue can transfer a venue support ticket to Platform through `Передать платформе`.

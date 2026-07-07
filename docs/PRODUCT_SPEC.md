@@ -26,6 +26,10 @@ Venue operations source of truth:
 - Canonical Venue Mode operating model for dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings and stats is tracked in `docs/VENUE_OPERATIONS.md`.
 - Venue Mode is the source of truth for operations; staff-chat is notification/radar/shortcut only.
 
+Booking lifecycle source of truth:
+- Canonical booking flow, queue, status state machine, hold/deadline, reminders, booking chat, support routing, analytics and RBAC rules are tracked in `docs/BOOKING_LIFECYCLE.md`.
+- Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`; booking problems use `SUPPORT_TICKET` only through verified booking or venue context.
+
 ## Core surfaces
 - Telegram Bot (chat): navigation, fallback ordering, booking fallback
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)
@@ -55,7 +59,7 @@ Derived responsibilities:
 - order: one active per table_session
 - batch: dosa order inside order; statuses new/accepted/in_progress/delivered/rejected/cancelled
 - call: staff call (waiter/hookah/other), statuses new/accepted/done
-- booking: id, venue_id, user_id, date/time, party_size(optional), status pending/confirmed/changed/cancelled/expired
+- booking: id, venue_id, user_id, date/time, party_size(optional), status pending/confirmed/changed/cancelled/expired/no_show/seated; canonical lifecycle is `docs/BOOKING_LIFECYCLE.md`
 - tab: personal/shared bill context inside table_session; membership list; permissions
 - shift_extension_settings: per-venue paid extension policy, fixed duration/price, enabled flag
 - shift_extension_request: guest request to extend active table/venue service window; statuses pending/approved/rejected/cancelled
@@ -107,6 +111,7 @@ SHOULD:
 MUST:
 - List venues with address, description, hours, menu preview and pricing.
 - Booking: user selects venue + date/time; venue confirms/changes/cancels.
+- Booking lifecycle, `Держим до HH:mm`, reminders, booking chat and no-show/seated semantics must follow `docs/BOOKING_LIFECYCLE.md`.
 - Booking status notifications (within Telegram constraints).
 - Guest booking parity: Telegram Bot `/my` and Guest Mini App `Мои брони` show the same active/upcoming booking identity, venue-local time, status, party size and `Держим до HH:mm` deadline when applicable.
 - Guest table context must survive normal Telegram/Mini App refreshes during a visit, but must not trap the guest forever. Mini App and Bot expose `Завершить визит` for the current guest/table context.

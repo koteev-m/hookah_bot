@@ -12,6 +12,7 @@ Canonical dependencies:
 - `docs/ORDER_SESSION_TAB_CORE.md` for table sessions, active orders, batches, tabs and bill lifecycle.
 - `docs/MENU_OPTIONS_STOPLIST.md` for menu, option/modifier, stop-list, media and shift-check policy.
 - `docs/COMMUNICATION_MODEL.md` for `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` separation.
+- `docs/BOOKING_LIFECYCLE.md` for booking statuses, hold/deadline, reminders, booking chat and no-show/seated policy.
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, permissions, scopes and dangerous actions.
 - `docs/ANALYTICS_EVENTS.md` for operational events, KPIs, audit/event boundaries and dashboard targets.
 
@@ -171,6 +172,8 @@ Staff-chat:
 
 ## Bookings Queue
 
+Canonical booking lifecycle: `docs/BOOKING_LIFECYCLE.md`.
+
 Target booking queue is available to Owner/Manager and Staff only where final policy allows.
 
 Statuses:
@@ -195,7 +198,7 @@ Hold minutes / arrival deadline:
 
 Current vs target:
 - Venue Mini App booking queue/lifecycle, Staff arrival/no-show split and M7a hold settings are smoke-closed.
-- Broader automatic expiry/no-show, preorder and reminder rollout remain partial/future.
+- Broader automatic expiry/no-show, preorder, visit-history integration and reminder rollout remain partial/future unless explicitly enabled and smoked under `docs/BOOKING_LIFECYCLE.md`.
 
 ## Menu / Stop-List Operations
 

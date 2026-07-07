@@ -16,6 +16,7 @@ Analytics is not the operational source of truth. Domain tables remain authorita
 
 Menu/options/stop-list product semantics are defined in `docs/MENU_OPTIONS_STOPLIST.md`.
 Venue Mode operational surfaces and role dashboards are defined in `docs/VENUE_OPERATIONS.md`.
+Booking lifecycle semantics for booking events, reminders and booking-to-visit conversion are defined in `docs/BOOKING_LIFECYCLE.md`.
 
 Analytics events are immutable facts for reporting, funnels and diagnostics. They must not drive money, access, billing, order state or support state.
 
@@ -97,11 +98,17 @@ Staff call:
 Booking:
 - `booking_created`
 - `booking_confirmed`
-- `booking_changed`
-- `booking_cancelled`
+- `booking_time_proposed`
+- `booking_guest_accepted_time`
+- `booking_guest_rejected_time`
+- `booking_canceled_by_guest`
+- `booking_canceled_by_venue`
 - `booking_expired`
 - `booking_no_show`
 - `booking_seated`
+- `booking_reminder_scheduled`
+- `booking_reminder_sent`
+- `booking_reminder_action_clicked`
 
 Support:
 - `support_ticket_created`
@@ -238,10 +245,12 @@ Use `docs/VENUE_OPERATIONS.md` for which operational metrics belong to Owner, Ma
 Booking:
 - Booking submit rate = `booking_created` / booking form starts where tracked.
 - Booking confirm rate = `booking_confirmed` / `booking_created`.
+- Booking cancel rate = (`booking_canceled_by_guest` + `booking_canceled_by_venue`) / `booking_created`.
 - Booking no-show rate = `booking_no_show` / confirmed or changed bookings.
 - Booking seated rate = `booking_seated` / confirmed or changed bookings.
 - Time to confirm = `booking_confirmed` - `booking_created`.
 - Reminder confirmation rate = attendance confirmations / sent reminders. This is future/rollout-gated where reminders remain disabled by default.
+- Booking-to-visit conversion = `booking_seated` or linked completed visit / `booking_created`.
 
 Support:
 - TTFR = first non-guest support reply - `support_ticket_created`.
@@ -329,7 +338,7 @@ Platform Owner:
 | Table/session events | Table session creation/TTL/exit behavior exists; analytics emission coverage needs verification. | Emit `table_token_resolved`, `table_session_started/touched/expired/closed`. | Required for visit history and QR funnel. |
 | Order/batch events | Order/batch routes and some order audit exist; analytics coverage needs verification. | Emit active order, batch create/status/reject/closed and fallback facts. | Needed for QR->order, TTFO, accept/deliver KPIs. |
 | Menu/options/stop-list events | Options/flavors parity is documented as smoke-closed; broader event coverage needs verification. | Emit menu create/update/archive, price, availability, media and shift-check facts with safe payloads. | Needed for stop-list pain points, out-of-stock checkout failure rate and menu operations audit. |
-| Booking events | Booking lifecycle and reminders exist in docs; event coverage needs verification. | Emit booking lifecycle events and reminder confirmation metrics where enabled. | Booking analytics remains partial/future until confirmed. |
+| Booking events | Booking lifecycle and reminders exist in docs; event coverage needs verification. Canonical lifecycle is `docs/BOOKING_LIFECYCLE.md`. | Emit booking lifecycle events, reminder facts and booking-chat facts where enabled. | Booking analytics remains partial/future until confirmed. |
 | Support events | Support-ticket audit exists for status/scope/assignment/escalation where implemented. | Emit support analytics events without raw message text. | CSAT and broad support analytics are future. |
 | Billing events | Billing audit exists for checkout ensure, mark-paid and courtesy days. Provider/webhook analytics needs verification. | Emit subscription, invoice and payment webhook facts. | Card/Stars metrics future until provider rollout. |
 | Growth events | Growth product is `SPEC UPDATED / PARTIAL-FUTURE`. | Emit favorite, visit, repeat, feedback and promotion facts. | Blocked by Growth implementation and visit foundation. |
