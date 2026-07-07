@@ -3455,7 +3455,7 @@ object TelegramKeyboards {
         bookingId: Long,
         canConfirm: Boolean,
         canCancel: Boolean = true,
-        canMarkVisit: Boolean = true,
+        canMarkVisit: Boolean = false,
         canMessageGuest: Boolean = true,
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(

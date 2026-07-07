@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchItemDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
@@ -545,6 +546,7 @@ class StaffChatNotifierTest {
             assertTrue(payload.contains("Заведение: Mix"), payload)
             assertTrue(payload.contains("Гость: Мария"), payload)
             assertTrue(payload.contains("Дата и время: 03.04.2026 18:00"), payload)
+            assertTrue(payload.contains("Статус: Ожидает подтверждения"), payload)
             assertTrue(payload.contains("Гостей: 3"), payload)
             assertTrue(payload.contains("Комментарий: У окна"), payload)
             assertFalse(payload.contains("#7"), payload)
@@ -553,10 +555,107 @@ class StaffChatNotifierTest {
             assertTrue(payload.contains("\"inline_keyboard\""), payload)
             assertTrue(payload.contains("✅ Подтвердить"), payload)
             assertTrue(payload.contains("staff_booking_confirm:1:7"), payload)
+            assertFalse(payload.contains("✅ Гость пришёл"), payload)
+            assertFalse(payload.contains("staff_booking_seated_ask:1:7"), payload)
+            assertFalse(payload.contains("🚫 Не пришёл"), payload)
+            assertFalse(payload.contains("staff_booking_noshow_ask:1:7"), payload)
             assertTrue(payload.contains("✉️ Написать гостю"), payload)
             assertTrue(payload.contains("staff_booking_message:1:7"), payload)
             assertTrue(payload.contains("❌ Отменить бронь"), payload)
             assertTrue(payload.contains("staff_booking_cancel_ask:1:7"), payload)
+        }
+
+    @Test
+    fun `notifyBooking renders arrival actions only for confirmed status`() =
+        runBlocking {
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(
+                    id = 1L,
+                    name = "Mix",
+                    staffChatId = 777L,
+                )
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.tryClaimAndEnqueue(
+                    -2_000_000_000_072L,
+                    777L,
+                    "sendMessage",
+                    capture(payloadSlot),
+                )
+            } returns StaffChatNotificationClaim.CLAIMED
+
+            val result =
+                notifier.notifyBookingNow(
+                    BookingStaffNotification(
+                        venueId = 1L,
+                        bookingId = 7L,
+                        event = BookingStaffNotificationEvent.UPDATED,
+                        status = BookingStatus.CONFIRMED,
+                        scheduledAtText = "03.04.2026 18:00",
+                        partySize = 3,
+                        comment = null,
+                        displayNumber = 1,
+                        guestDisplayName = "Мария",
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("Статус: Подтверждена"), payload)
+            assertFalse(payload.contains("✅ Подтвердить"), payload)
+            assertTrue(payload.contains("✅ Гость пришёл"), payload)
+            assertTrue(payload.contains("staff_booking_seated_ask:1:7"), payload)
+            assertTrue(payload.contains("🚫 Не пришёл"), payload)
+            assertTrue(payload.contains("staff_booking_noshow_ask:1:7"), payload)
+            assertTrue(payload.contains("✉️ Написать гостю"), payload)
+            assertTrue(payload.contains("❌ Отменить бронь"), payload)
+        }
+
+    @Test
+    fun `notifyBooking hides confirm and arrival actions for changed status`() =
+        runBlocking {
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(
+                    id = 1L,
+                    name = "Mix",
+                    staffChatId = 777L,
+                )
+            val payloadSlot = slot<String>()
+            coEvery {
+                notificationRepository.tryClaimAndEnqueue(
+                    -2_000_000_000_072L,
+                    777L,
+                    "sendMessage",
+                    capture(payloadSlot),
+                )
+            } returns StaffChatNotificationClaim.CLAIMED
+
+            val result =
+                notifier.notifyBookingNow(
+                    BookingStaffNotification(
+                        venueId = 1L,
+                        bookingId = 7L,
+                        event = BookingStaffNotificationEvent.UPDATED,
+                        status = BookingStatus.CHANGED,
+                        scheduledAtText = "03.04.2026 18:00",
+                        partySize = 3,
+                        comment = null,
+                        displayNumber = 1,
+                        guestDisplayName = "Мария",
+                    ),
+                )
+
+            assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
+            val payload = payloadSlot.captured
+            assertTrue(payload.contains("Статус: Ожидаем ответ гостя по новому времени"), payload)
+            assertFalse(payload.contains("✅ Подтвердить"), payload)
+            assertFalse(payload.contains("staff_booking_confirm:1:7"), payload)
+            assertFalse(payload.contains("✅ Гость пришёл"), payload)
+            assertFalse(payload.contains("staff_booking_seated_ask:1:7"), payload)
+            assertFalse(payload.contains("🚫 Не пришёл"), payload)
+            assertFalse(payload.contains("staff_booking_noshow_ask:1:7"), payload)
+            assertTrue(payload.contains("✉️ Написать гостю"), payload)
+            assertTrue(payload.contains("❌ Отменить бронь"), payload)
         }
 
     @Test

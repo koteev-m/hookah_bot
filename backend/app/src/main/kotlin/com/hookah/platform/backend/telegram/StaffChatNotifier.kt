@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillExcludedItemSnapshot
@@ -89,6 +90,7 @@ data class BookingStaffNotification(
     val venueId: Long,
     val bookingId: Long,
     val event: BookingStaffNotificationEvent,
+    val status: BookingStatus? = null,
     val scheduledAtText: String?,
     val partySize: Int?,
     val comment: String?,
@@ -353,6 +355,7 @@ class StaffChatNotifier(
                     venueName = venue.name,
                     event = event.event,
                     displayNumber = event.displayNumber,
+                    status = bookingStaffNotificationStatus(event),
                     scheduledAtText = event.scheduledAtText,
                     partySize = event.partySize,
                     comment = event.comment,
@@ -361,17 +364,48 @@ class StaffChatNotifier(
                     guestDisplayName = event.guestDisplayName,
                 )
             },
-            replyMarkup =
-                if (event.event == BookingStaffNotificationEvent.CREATED) {
-                    TelegramKeyboards.inlineVenueStaffBookingActions(
-                        venueId = event.venueId,
-                        bookingId = event.bookingId,
-                        canConfirm = true,
-                    )
-                } else {
-                    ReplyKeyboardRemove(removeKeyboard = true)
-                },
+            replyMarkup = bookingStaffNotificationReplyMarkup(event),
         )
+
+    private fun bookingStaffNotificationReplyMarkup(event: BookingStaffNotification): ReplyMarkup =
+        when (bookingStaffNotificationStatus(event)) {
+            BookingStatus.PENDING ->
+                TelegramKeyboards.inlineVenueStaffBookingActions(
+                    venueId = event.venueId,
+                    bookingId = event.bookingId,
+                    canConfirm = true,
+                    canMarkVisit = false,
+                )
+            BookingStatus.CONFIRMED ->
+                TelegramKeyboards.inlineVenueStaffBookingActions(
+                    venueId = event.venueId,
+                    bookingId = event.bookingId,
+                    canConfirm = false,
+                    canMarkVisit = true,
+                )
+            BookingStatus.CHANGED ->
+                TelegramKeyboards.inlineVenueStaffBookingActions(
+                    venueId = event.venueId,
+                    bookingId = event.bookingId,
+                    canConfirm = false,
+                    canMarkVisit = false,
+                )
+            BookingStatus.CANCELED,
+            BookingStatus.EXPIRED,
+            BookingStatus.NO_SHOW,
+            BookingStatus.SEATED,
+            null,
+            -> ReplyKeyboardRemove(removeKeyboard = true)
+        }
+
+    private fun bookingStaffNotificationStatus(event: BookingStaffNotification): BookingStatus? =
+        event.status ?: when (event.event) {
+            BookingStaffNotificationEvent.CREATED -> BookingStatus.PENDING
+            BookingStaffNotificationEvent.CANCELLED,
+            BookingStaffNotificationEvent.VENUE_CANCELLED,
+            -> BookingStatus.CANCELED
+            BookingStaffNotificationEvent.UPDATED -> null
+        }
 
     suspend fun notifyTestMessageNow(venueId: Long): StaffChatNotificationResult =
         notifyTextWithoutClaimNow(
@@ -1522,6 +1556,7 @@ internal fun buildBookingStaffNotificationText(
     venueName: String,
     event: BookingStaffNotificationEvent,
     displayNumber: Int?,
+    status: BookingStatus? = null,
     scheduledAtText: String?,
     partySize: Int?,
     comment: String?,
@@ -1554,6 +1589,7 @@ internal fun buildBookingStaffNotificationText(
         scheduledAtText?.takeIf { it.isNotBlank() }?.let {
             append('\n').append("Дата и время: ").append(it)
         }
+        status?.let { append('\n').append("Статус: ").append(bookingStaffStatusLabel(it)) }
         partySize?.let { append('\n').append("Гостей: ").append(it) }
         comment?.takeIf { it.isNotBlank() }?.let {
             append('\n').append("Комментарий: ").append(it)
@@ -1569,5 +1605,16 @@ private fun bookingNotificationKey(
     bookingId: Long,
     event: BookingStaffNotificationEvent,
 ): Long = -2_000_000_000_000L - (bookingId * 10L) - event.dedupeCode
+
+private fun bookingStaffStatusLabel(status: BookingStatus): String =
+    when (status) {
+        BookingStatus.PENDING -> "Ожидает подтверждения"
+        BookingStatus.CONFIRMED -> "Подтверждена"
+        BookingStatus.CHANGED -> "Ожидаем ответ гостя по новому времени"
+        BookingStatus.CANCELED -> "Отменена"
+        BookingStatus.EXPIRED -> "Истекла"
+        BookingStatus.NO_SHOW -> "Гость не пришёл"
+        BookingStatus.SEATED -> "Гость пришёл"
+    }
 
 private fun guestDisplayNameOrFallback(value: String?): String = value?.trim()?.takeIf { it.isNotBlank() } ?: "Гость"

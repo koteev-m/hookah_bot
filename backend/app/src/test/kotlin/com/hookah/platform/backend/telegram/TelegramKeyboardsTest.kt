@@ -1820,14 +1820,12 @@ class TelegramKeyboardsTest {
 
         assertEquals("✅ Подтвердить", buttons[0].text)
         assertEquals("staff_booking_confirm:10:77", buttons[0].callbackData)
-        assertEquals("✅ Гость пришёл", buttons[1].text)
-        assertEquals("staff_booking_seated_ask:10:77", buttons[1].callbackData)
-        assertEquals("🚫 Не пришёл", buttons[2].text)
-        assertEquals("staff_booking_noshow_ask:10:77", buttons[2].callbackData)
-        assertEquals("✉️ Написать гостю", buttons[3].text)
-        assertEquals("staff_booking_message:10:77", buttons[3].callbackData)
-        assertEquals("❌ Отменить бронь", buttons[4].text)
-        assertEquals("staff_booking_cancel_ask:10:77", buttons[4].callbackData)
+        assertEquals("✉️ Написать гостю", buttons[1].text)
+        assertEquals("staff_booking_message:10:77", buttons[1].callbackData)
+        assertEquals("❌ Отменить бронь", buttons[2].text)
+        assertEquals("staff_booking_cancel_ask:10:77", buttons[2].callbackData)
+        assertTrue(buttons.none { it.callbackData?.startsWith("staff_booking_seated_ask:") == true })
+        assertTrue(buttons.none { it.callbackData?.startsWith("staff_booking_noshow_ask:") == true })
     }
 
     @Test

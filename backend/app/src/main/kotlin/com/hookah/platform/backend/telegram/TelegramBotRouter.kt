@@ -2912,6 +2912,7 @@ class TelegramBotRouter(
                     venueId = updatedBooking.venueId,
                     bookingId = updatedBooking.id,
                     event = BookingStaffNotificationEvent.UPDATED,
+                    status = updatedBooking.status,
                     scheduledAtText = staffVisitText,
                     partySize = partySize,
                     comment = draft.comment,
@@ -2953,6 +2954,7 @@ class TelegramBotRouter(
                 venueId = createdBooking.venueId,
                 bookingId = createdBooking.id,
                 event = BookingStaffNotificationEvent.CREATED,
+                status = createdBooking.status,
                 scheduledAtText = staffVisitText,
                 partySize = partySize,
                 comment = draft.comment,
@@ -3924,6 +3926,7 @@ class TelegramBotRouter(
                 venueId = canceled.venueId,
                 bookingId = canceled.id,
                 event = BookingStaffNotificationEvent.CANCELLED,
+                status = canceled.status,
                 scheduledAtText =
                     formatBookingInstantForStaff(
                         canceled.scheduledAt,
@@ -4086,8 +4089,8 @@ class TelegramBotRouter(
             answerBookingCallbackOrMessage(
                 chatId = chatId,
                 callbackQueryId = callbackQueryId,
-                text = "Нет доступа",
-                fallbackMessage = "Нет доступа к управлению бронями.",
+                text = "Нет прав.",
+                fallbackMessage = "Нет прав.",
                 showAlert = true,
             )
             return
@@ -4132,6 +4135,7 @@ class TelegramBotRouter(
                 venueId = venueId,
                 bookingId = displayBooking.id,
                 canConfirm = false,
+                canMarkVisit = true,
             )
         if (sourceMessageId != null) {
             enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
@@ -4169,8 +4173,8 @@ class TelegramBotRouter(
             answerBookingCallbackOrMessage(
                 chatId = chatId,
                 callbackQueryId = callbackQueryId,
-                text = "Нет доступа",
-                fallbackMessage = "Нет доступа к управлению бронями.",
+                text = "Нет прав.",
+                fallbackMessage = "Нет прав.",
                 showAlert = true,
             )
             return
@@ -4266,6 +4270,16 @@ class TelegramBotRouter(
                 prefix = prefix,
                 requiredPermission = VenuePermission.BOOKING_ARRIVAL_UPDATE,
             ) ?: return
+        if (booking.status != BookingStatus.CONFIRMED) {
+            answerStaleBookingArrivalFromStaffChat(
+                chatId = chatId,
+                sourceMessageId = sourceMessageId,
+                callbackQueryId = callbackQueryId,
+                userId = user.id,
+                booking = booking,
+            )
+            return
+        }
         val actionText =
             when (status) {
                 BookingStatus.SEATED -> "Отметить, что гость пришёл?"
@@ -4600,8 +4614,8 @@ class TelegramBotRouter(
             answerBookingCallbackOrMessage(
                 chatId = chatId,
                 callbackQueryId = callbackQueryId,
-                text = "Нет доступа",
-                fallbackMessage = "Нет доступа к управлению бронями.",
+                text = "Нет прав.",
+                fallbackMessage = "Нет прав.",
                 showAlert = true,
             )
             return
@@ -4647,6 +4661,7 @@ class TelegramBotRouter(
                 venueId = booking.venueId,
                 bookingId = booking.id,
                 event = BookingStaffNotificationEvent.VENUE_CANCELLED,
+                status = booking.status,
                 scheduledAtText =
                     formatBookingInstantForStaff(
                         booking.scheduledAt,
@@ -4711,14 +4726,22 @@ class TelegramBotRouter(
                 )
                 return
             }
-        val role = resolveVenueRoleForVenueSilently(user.id, venueId)
-        if (role == null || !role.hasPermission(VenuePermission.BOOKING_ARRIVAL_UPDATE)) {
-            answerBookingCallbackOrMessage(
+        val currentBooking =
+            loadBookingForStaffAction(
                 chatId = chatId,
                 callbackQueryId = callbackQueryId,
-                text = "Нет доступа",
-                fallbackMessage = "Нет доступа к управлению бронями.",
-                showAlert = true,
+                userId = user.id,
+                venueId = venueId,
+                bookingId = bookingId,
+                requiredPermission = VenuePermission.BOOKING_ARRIVAL_UPDATE,
+            ) ?: return
+        if (currentBooking.status != BookingStatus.CONFIRMED) {
+            answerStaleBookingArrivalFromStaffChat(
+                chatId = chatId,
+                sourceMessageId = sourceMessageId,
+                callbackQueryId = callbackQueryId,
+                userId = user.id,
+                booking = currentBooking,
             )
             return
         }
@@ -4753,8 +4776,8 @@ class TelegramBotRouter(
             answerBookingCallbackOrMessage(
                 chatId = chatId,
                 callbackQueryId = callbackQueryId,
-                text = "Бронь уже неактуальна",
-                fallbackMessage = "Не удалось изменить бронь. Возможно, она уже неактуальна.",
+                text = "Бронь уже изменилась. Откройте кабинет.",
+                fallbackMessage = "Бронь уже изменилась. Откройте кабинет.",
                 showAlert = true,
             )
             return
@@ -4784,6 +4807,32 @@ class TelegramBotRouter(
                     else -> "Готово"
                 },
             fallbackMessage = text,
+        )
+    }
+
+    private suspend fun answerStaleBookingArrivalFromStaffChat(
+        chatId: Long,
+        sourceMessageId: Long?,
+        callbackQueryId: String?,
+        userId: Long,
+        booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
+    ) {
+        val displayBooking = withEffectiveBookingDeadline(booking)
+        val role = resolveVenueRoleForVenueSilently(userId, displayBooking.venueId)
+        if (sourceMessageId != null && role != null) {
+            enqueueEditMessage(
+                chatId,
+                sourceMessageId,
+                buildVenueStaffBookingText(displayBooking, zoneId = resolveVenueZoneId(displayBooking.venueId)),
+                venueStaffBookingActionsForRole(role, displayBooking),
+            )
+        }
+        answerBookingCallbackOrMessage(
+            chatId = chatId,
+            callbackQueryId = callbackQueryId,
+            text = "Бронь уже изменилась. Откройте кабинет.",
+            fallbackMessage = "Бронь уже изменилась. Откройте кабинет.",
+            showAlert = true,
         )
     }
 
@@ -4829,8 +4878,8 @@ class TelegramBotRouter(
             answerBookingCallbackOrMessage(
                 chatId = chatId,
                 callbackQueryId = callbackQueryId,
-                text = "Нет доступа",
-                fallbackMessage = "Нет доступа к управлению бронями.",
+                text = "Нет прав.",
+                fallbackMessage = "Нет прав.",
                 showAlert = true,
             )
             return null
@@ -5076,31 +5125,6 @@ class TelegramBotRouter(
                 return
             }
         }
-        val venue =
-            runCatching { venueRepository.findVenueById(venueId) }
-                .getOrNull()
-        val staffChatId = venue?.staffChatId
-        if (staffChatId == null) {
-            dialogStateRepository.clear(chatId)
-            enqueueMessage(chatId, "✅ Ответ отправлен заведению.")
-            return
-        }
-        val venueName = venue.name.takeIf { it.isNotBlank() } ?: "Заведение"
-        val zoneId = resolveVenueZoneId(booking.venueId)
-        val serviceDate = booking.displayDate ?: LocalDateTime.ofInstant(booking.scheduledAt, zoneId).toLocalDate()
-        val guestDisplayName = loadGuestDisplayName(userId)?.takeIf { it.isNotBlank() } ?: "Гость"
-        val staffText =
-            buildString {
-                append("💬 Ответ гостя по ").append(formatBookingDisplayLabel(booking))
-                append('\n').append("Заведение: ").append(venueName)
-                append('\n').append("Гость: ").append(guestDisplayName)
-                append('\n').append("Смена: ").append(formatWeekdayFull(serviceDate.dayOfWeek))
-                append(
-                    '\n',
-                ).append("Визит: ").append(formatStaffBookingVisitText(serviceDate, booking.scheduledAt, zoneId))
-                append('\n').append("Текст: ").append(replyText)
-            }
-        enqueueGroupMessageWithoutReplyKeyboard(staffChatId, staffText)
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Ответ отправлен заведению.")
     }
@@ -5542,6 +5566,7 @@ class TelegramBotRouter(
                 venueId = canceled.venueId,
                 bookingId = canceled.id,
                 event = BookingStaffNotificationEvent.CANCELLED,
+                status = canceled.status,
                 scheduledAtText =
                     formatBookingInstantForStaff(
                         canceled.scheduledAt,
@@ -6485,7 +6510,7 @@ class TelegramBotRouter(
             bookingId = booking.id,
             canConfirm = canManageBooking && booking.status == BookingStatus.PENDING,
             canCancel = canManageBooking && isActive,
-            canMarkVisit = canUpdateArrival && isActive,
+            canMarkVisit = canUpdateArrival && booking.status == BookingStatus.CONFIRMED,
             canMessageGuest = canManageBooking && isActive,
         )
     }

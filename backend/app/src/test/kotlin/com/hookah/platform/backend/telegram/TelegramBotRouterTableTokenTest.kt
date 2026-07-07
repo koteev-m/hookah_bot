@@ -11228,13 +11228,9 @@ class TelegramBotRouterTableTokenTest {
                                 button.text == "✅ Подтвердить" &&
                                     button.callbackData == "staff_booking_confirm:10:77"
                             } &&
-                            markup.inlineKeyboard.flatten().any { button ->
-                                button.text == "✅ Гость пришёл" &&
-                                    button.callbackData == "staff_booking_seated_ask:10:77"
-                            } &&
-                            markup.inlineKeyboard.flatten().any { button ->
-                                button.text == "🚫 Не пришёл" &&
-                                    button.callbackData == "staff_booking_noshow_ask:10:77"
+                            markup.inlineKeyboard.flatten().none { button ->
+                                button.callbackData?.startsWith("staff_booking_seated_ask:") == true ||
+                                    button.callbackData?.startsWith("staff_booking_noshow_ask:") == true
                             } &&
                             markup.inlineKeyboard.flatten().any { button ->
                                 button.text == "✉️ Написать гостю" &&
@@ -11250,7 +11246,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `staff bookings screen renders only arrival actions`() =
+    fun `staff bookings screen renders only arrival actions for confirmed bookings`() =
         runBlocking {
             coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
                 listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF"))
@@ -11265,7 +11261,7 @@ class TelegramBotRouterTableTokenTest {
                         scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
                         partySize = 3,
                         comment = "У окна",
-                        status = BookingStatus.PENDING,
+                        status = BookingStatus.CONFIRMED,
                         displayNumber = 7,
                         displayDate = LocalDate.parse("2026-04-03"),
                         arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
@@ -11298,6 +11294,61 @@ class TelegramBotRouterTableTokenTest {
                                     button.callbackData?.startsWith("staff_booking_cancel_ask:") == true ||
                                     button.callbackData?.startsWith("staff_booking_message:") == true
                             }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff bookings screen hides arrival actions for pending bookings`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF"))
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { guestBookingRepository.listActiveByVenue(venueId = 10L, limit = 20) } returns
+                listOf(
+                    BookingRecord(
+                        id = 77L,
+                        venueId = 10L,
+                        userId = 555L,
+                        scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                        partySize = 3,
+                        comment = "У окна",
+                        status = BookingStatus.PENDING,
+                        displayNumber = 7,
+                        displayDate = LocalDate.parse("2026-04-03"),
+                        arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
+                        guestDisplayName = "Максим",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_202,
+                    message =
+                        Message(
+                            messageId = 20_002_202,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "📄 Брони",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Бронь №7") && it.contains("Гость: Максим") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.none { button ->
+                            button.callbackData?.startsWith("staff_booking_confirm:") == true ||
+                                button.callbackData?.startsWith("staff_booking_seated_ask:") == true ||
+                                button.callbackData?.startsWith("staff_booking_noshow_ask:") == true ||
+                                button.callbackData?.startsWith("staff_booking_cancel_ask:") == true ||
+                                button.callbackData?.startsWith("staff_booking_message:") == true
+                        }
                     },
                 )
             }
@@ -11624,7 +11675,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     -777,
                     "cb-booking-confirm-staff-chat",
-                    "Нет доступа",
+                    "Нет прав.",
                     true,
                 )
             }
@@ -11655,7 +11706,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     -777,
                     "cb-booking-confirm-denied",
-                    "Нет доступа",
+                    "Нет прав.",
                     true,
                 )
             }
@@ -11726,10 +11777,181 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `venue booking arrival ask rejects pending and changed without mutating`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
+                    guestDisplayName = "Максим",
+                )
+            coEvery { guestBookingRepository.findByVenue(bookingId = 78L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 78L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T19:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CHANGED,
+                    displayNumber = 8,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    arrivalDeadlineAt = Instant.parse("2026-04-03T19:30:00Z"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_331,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-seated-ask-pending",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_331, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_seated_ask:10:77",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_332,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-noshow-ask-changed",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_332, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_noshow_ask:10:78",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { guestBookingRepository.markSeated(any(), any(), any()) }
+            coVerify(exactly = 0) { guestBookingRepository.markNoShow(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-seated-ask-pending",
+                    "Бронь уже изменилась. Откройте кабинет.",
+                    true,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-noshow-ask-changed",
+                    "Бронь уже изменилась. Откройте кабинет.",
+                    true,
+                )
+            }
+        }
+
+    @Test
+    fun `venue booking arrival confirm rejects pending and changed without mutating`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    arrivalDeadlineAt = Instant.parse("2026-04-03T18:30:00Z"),
+                    guestDisplayName = "Максим",
+                )
+            coEvery { guestBookingRepository.findByVenue(bookingId = 78L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 78L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T19:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CHANGED,
+                    displayNumber = 8,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    arrivalDeadlineAt = Instant.parse("2026-04-03T19:30:00Z"),
+                    guestDisplayName = "Максим",
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_333,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-seated-yes-pending",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_333, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_seated_yes:10:77",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_334,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-noshow-yes-changed",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_334, chat = Chat(id = -777, type = "supergroup")),
+                            data = "staff_booking_noshow_yes:10:78",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { guestBookingRepository.markSeated(any(), any(), any()) }
+            coVerify(exactly = 0) { guestBookingRepository.markNoShow(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-seated-yes-pending",
+                    "Бронь уже изменилась. Откройте кабинет.",
+                    true,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    -777,
+                    "cb-booking-noshow-yes-changed",
+                    "Бронь уже изменилась. Откройте кабинет.",
+                    true,
+                )
+            }
+        }
+
+    @Test
     fun `venue booking seated confirm marks booking and updates message without guest notification`() =
         runBlocking {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    guestDisplayName = "Максим",
+                )
             coEvery {
                 guestBookingRepository.markSeated(venueId = 10L, bookingId = 77L, actorUserId = 200L)
             } returns
@@ -11790,6 +12012,19 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    guestDisplayName = "Максим",
+                )
             coEvery {
                 guestBookingRepository.markNoShow(venueId = 10L, bookingId = 77L, actorUserId = 200L)
             } returns
@@ -11866,7 +12101,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     -777,
                     "cb-booking-seated-denied",
-                    "Нет доступа",
+                    "Нет прав.",
                     true,
                 )
             }
@@ -11960,7 +12195,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     -777,
                     "cb-booking-message-staff",
-                    "Нет доступа",
+                    "Нет прав.",
                     true,
                 )
             }
@@ -12307,7 +12542,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `guest booking reply sends text to staff chat`() =
+    fun `guest booking reply persists booking chat without staff chat notification`() =
         runBlocking {
             coEvery { dialogStateRepository.get(555L) } returns
                 DialogState(
@@ -12356,20 +12591,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify {
-                outboxEnqueuer.enqueueSendMessage(
-                    -777L,
-                    match { text ->
-                        text.contains("💬 Ответ гостя по Бронь №7") &&
-                            text.contains("Гость: Максим") &&
-                            text.contains("Смена: пятница") &&
-                            text.contains("Визит: пятница") &&
-                            text.contains("Будем на 10 минут позже.") &&
-                            !text.contains("@guest")
-                    },
-                    match { it is ReplyKeyboardRemove },
-                )
-            }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(-777L, any(), any()) }
             coVerify {
                 supportThreadRepository.createOrFindBookingThread(
                     venueId = 10L,
@@ -12542,7 +12764,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     -777,
                     "cb-booking-cancel-staff",
-                    "Нет доступа",
+                    "Нет прав.",
                     true,
                 )
             }
@@ -12812,7 +13034,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     -777,
                     "cb-booking-cancel-denied",
-                    "Нет доступа",
+                    "Нет прав.",
                     true,
                 )
             }
