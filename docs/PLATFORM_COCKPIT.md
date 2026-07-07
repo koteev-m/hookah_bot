@@ -8,7 +8,7 @@
 
 Platform Mode is the operator cockpit for the whole marketplace. It is separate from Venue Mode: Platform Owner can manage platform-owned objects and commercial state, but does not automatically bypass venue-specific RBAC for ordinary venue operations.
 
-Ordinary venue operations such as orders, staff calls, booking queues, menu/stop-list, tables/QR, staff-chat and venue stats are defined in `docs/VENUE_OPERATIONS.md`; booking lifecycle details are defined in `docs/BOOKING_LIFECYCLE.md`; Platform Mode should not become the normal venue operations workspace.
+Ordinary venue operations such as orders, staff calls, booking queues, menu/stop-list, tables/QR, staff-chat and venue stats are defined in `docs/VENUE_OPERATIONS.md`; booking lifecycle details are defined in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat behavior is defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; Platform Mode should not become the normal venue operations workspace.
 
 | Area | Current implementation status | Product rule |
 | --- | --- | --- |
@@ -128,6 +128,7 @@ Safety rules:
 
 - Platform permissions, dangerous actions and audit expectations are canonical in `docs/SECURITY_RBAC_MATRIX.md`.
 - Do not expose secrets, raw Telegram payloads, provider raw payloads, `.env`, initData, callback payloads or unrelated PII in Platform dashboards, audit payloads or support cards.
+- Platform Owner Telegram menu parity and guest-QR test escape remain partial/needs verification unless a later smoke proves them.
 - Prefer safe aggregate metrics and opaque ids unless an operator needs a specific entity id for support.
 - Client events are lower-trust UX diagnostics and must not drive money, access, billing, order state or venue lifecycle.
 

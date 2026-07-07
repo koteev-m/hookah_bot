@@ -27,6 +27,8 @@
 > Current docs correction as of 2026-07-07: Venue Mode operations source of truth is `docs/VENUE_OPERATIONS.md`. Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are `SPEC UPDATED`; staff-chat is notification/radar/shortcut only.
 >
 > Current docs correction as of 2026-07-07: Booking lifecycle source of truth is `docs/BOOKING_LIFECYCLE.md`. Guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, support routing, analytics, RBAC and smoke are `SPEC UPDATED`; reminder rollout, automation, preorder and visit-history integration remain partial/future.
+>
+> Current docs correction as of 2026-07-07: Telegram fallback/staff-chat source of truth is `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Telegram bot entrypoints, QR `/start`, fallback chat order, staff-call, staff-chat link/test/unlink, notification policy, callbacks, parity, security and smoke are `SPEC UPDATED`; staff-chat is radar/shortcut only.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -71,6 +73,7 @@ Status: `PARTIAL`.
 - structured menu/option/stop-list behavior must follow `docs/MENU_OPTIONS_STOPLIST.md`: server-side availability validation, option snapshots and Staff/Manager permissions stay in regression;
 - Venue Mode operating behavior must follow `docs/VENUE_OPERATIONS.md`: orders, bill/tabs, staff calls, bookings, staff-chat, settings, stats and role-specific navigation/API denial stay in regression;
 - Booking lifecycle behavior must follow `docs/BOOKING_LIFECYCLE.md`: guest booking/list, Venue queue actions, Staff arrival/no-show split, hold/deadline, booking chat separation, support routing and reminder opt-in behavior stay in regression;
+- Telegram fallback/staff-chat behavior must follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: QR `/start`, fallback order, bot staff-call, staff-chat link/test/unlink, callback RBAC and notification allow/deny policy stay in regression;
 - guest booking/profile/history and advanced support UI parity need dedicated regression passes;
 - promotions/loyalty/growth display must be smoke-tested against backend and bot output before being called complete.
 

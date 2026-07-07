@@ -45,6 +45,7 @@
 - Menu/options/stop-list docs: `docs/MENU_OPTIONS_STOPLIST.md` is the source of truth for structured menu, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions. Selected-option parity is smoke-closed; broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
 - Venue operations docs: `docs/VENUE_OPERATIONS.md` is the source of truth for Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke. Venue Mode is source of truth; staff-chat is radar/shortcut only.
 - Booking lifecycle docs: `docs/BOOKING_LIFECYCLE.md` is the source of truth for guest booking flow, Venue booking queue, statuses, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke. Current queue/hold/list/chat paths are smoke-closed by slice; reminder rollout, automation, preorder and visit-history integration remain partial/future.
+- Telegram fallback/staff-chat docs: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` is the source of truth for Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity. Staff-chat is radar/shortcut only.
 - Platform Cockpit docs: current source is `docs/PLATFORM_COCKPIT.md`. Manual billing and Platform Support Center are smoke-closed; onboarding request cockpit, placements, analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
@@ -725,7 +726,31 @@ Use this checklist after booking create/list, Venue booking queue, status action
 19. Staff access matches current RBAC policy: view + seated/no-show only.
 20. Booking analytics/audit events exist where implemented and payloads contain no raw message text/initData/secrets.
 
-## 17. Recommended Next Test Investment
+## 17. Telegram Fallback / Staff-Chat Smoke Checklist
+
+Use this checklist after Telegram bot entrypoints, table context, fallback order, staff-call, staff-chat link/test/unlink, notification policy, callbacks or role-menu changes. Canonical model: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
+
+1. Guest starts bot without table and sees global menu.
+2. Guest scans table QR and sees venue/table context.
+3. Table QR menu opens Mini App.
+4. Fallback chat order creates order batch with `source=bot_fallback`.
+5. Fallback chat order appears in Venue Mode queue.
+6. Fallback chat order sends staff-chat notification if staff-chat is linked.
+7. Guest staff-call from bot creates `STAFF_CALL`.
+8. Staff-call appears in Venue Mode / operational queue.
+9. Staff-call is not mixed with support tickets.
+10. Staff-chat receives order/staff-call notifications.
+11. Staff-chat does not receive `SUPPORT_TICKET` or `VENUE_CHAT` messages.
+12. Staff-chat callback action checks role and venue scope.
+13. Unauthorized user pressing staff-chat button gets safe denial.
+14. Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not Support.
+15. Support booking issue creates `SUPPORT_TICKET` with verified booking/venue context.
+16. Staff cannot see support tickets or venue chats from Telegram.
+17. Manager cannot access billing/settings from Telegram.
+18. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
+19. Multi-venue user selects correct venue or current gap is documented.
+
+## 18. Recommended Next Test Investment
 
 1. Expand the lightweight Playwright/Vite smoke harness with fixture-driven UI tests for:
    - guest cart/order/staff call;
@@ -739,7 +764,7 @@ Use this checklist after booking create/list, Venue booking queue, status action
    - Guest Bot and Guest Mini App submit the same structured selected-option shape.
 3. Extend cross-channel bill snapshots when selected option price deltas are implemented.
 
-## 18. Next Implementation Smoke Target
+## 19. Next Implementation Smoke Target
 
 Current implementation block after M9b.3: M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed, with the standard deploy command still supported and the opt-in ControlMaster helper validated as a persistent-connection workaround for unreliable fresh SSH/rsync connections. The exact SSH/network root cause remains unconfirmed and belongs to future operations hardening, not the M9a closure. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED / staging smoke passed in provider-free mode: OWNER tested country, city, manual address, save/reload, guest card reflection and route opening; visual polish remains deferred until functional blocks are complete. M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges, guest-facing reason/comment, human booking rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c, M8b-Free, M9a and M9b/M9b.1/M9b.2/M9b.3 stay in regression smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 

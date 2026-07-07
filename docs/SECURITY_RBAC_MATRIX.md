@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`.
+Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`.
 
 ## Core Rule
 
@@ -14,6 +14,7 @@ Tokens and client-provided ids are context pointers, not authority:
 - `table_session_id` is required for in-venue guest actions that mutate orders, tabs, staff calls or bill requests.
 - Tab invite token points to a shared-tab invitation; membership and state are still verified server-side.
 - Telegram `callback_data` must use opaque ids/tokens and must not contain secrets, raw provider data, raw initData, raw message text or unrelated PII.
+- Staff-chat callbacks are shortcuts only; every callback must re-check actor role, venue scope and entity state server-side.
 - Client analytics events are low-trust diagnostics and cannot drive money, access, billing, order state or venue lifecycle.
 
 ## Scopes
@@ -89,7 +90,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Feature | Telegram bot | Guest Mini App | Venue Mini App | Platform Mini App | Staff-chat | Rule |
 | --- | --- | --- | --- | --- | --- | --- |
 | Orders | Guest fallback/order status; venue operational shortcuts where implemented. | Primary guest QR/table order UX. | Primary venue queue/detail source of truth; see `docs/VENUE_OPERATIONS.md`. | No ordinary order workspace by default. | Order notifications/activity cards allowed. | Staff-chat is radar/shortcut, not source of truth. |
-| Staff calls | Guest table fallback/actions and staff-chat callbacks where implemented. | Guest create/status. | Venue operations queue. | No. | Allowed for operational staff calls. | Separate from support tickets. |
+| Staff calls | Guest table fallback/actions and staff-chat callbacks where implemented. | Guest create/status. | Venue operations queue. | No. | Allowed for operational staff calls. | Separate from support tickets; Telegram/staff-chat rules in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. |
 | Bookings | Guest `/my`, booking actions and venue/admin flows where implemented. | Guest booking/list. | Owner/Manager booking queue/actions; Staff view/arrival/no-show only. | Platform only if future analytics/audit requires. | Booking operational notifications allowed by existing policy. | Booking lifecycle follows `docs/BOOKING_LIFECYCLE.md`; booking chat stays `BOOKING_CHAT`, not support. |
 | Support tickets | `/support` fallback where implemented. | Guest `Помощь`. | Owner/Manager `Обращения` for own venue. | Platform `Обращения` / Support Center. | Never for support tickets. | Staff denied. Platform sees support, not ordinary venue chats. |
 | Venue chats | Guest bot/Mini App entry where implemented. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Never for ordinary venue chats. | Staff denied. |
@@ -146,7 +147,7 @@ These actions require server-side authorization and should require confirmation,
 11. Platform lifecycle actions require confirmation/reason/audit where implemented.
 12. Table token does not grant admin rights.
 13. Revoked QR token does not resolve.
-14. Staff-chat button actions verify role and entity scope server-side.
+14. Staff-chat button actions verify role, venue scope and entity state server-side.
 15. Analytics export, if implemented, contains no raw PII, message text, raw initData, provider payloads, payment secrets or card data.
 
 ## Roadmap Status

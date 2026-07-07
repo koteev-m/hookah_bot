@@ -15,6 +15,7 @@ Canonical dependencies:
 - `docs/ORDER_SESSION_TAB_CORE.md` for `VISIT`, `TABLE_SESSION`, active order and seated-booking dependencies.
 - `docs/GROWTH_RETENTION.md` for history, feedback, repeat, loyalty and preorder dependencies.
 - `docs/ANALYTICS_EVENTS.md` for booking analytics events and KPI formulas.
+- `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` for Telegram booking entrypoints, staff-chat notification policy and callback security.
 
 ## Canonical Terms
 
@@ -212,7 +213,7 @@ Current vs target:
 
 ## Staff-Chat Notification Policy
 
-Staff-chat may receive operational booking notifications according to venue policy:
+Staff-chat policy is canonical in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Staff-chat may receive operational booking notifications according to venue policy:
 - new booking request;
 - confirmed/changed/canceled;
 - arrival soon / overdue when future policy enables it;

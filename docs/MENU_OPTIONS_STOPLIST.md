@@ -8,7 +8,7 @@
 
 The structured menu is the source of truth for orders. PDF/photo menu is view-only. Guest order preview and submit must validate item availability, option validity and prices server-side; the cart must never trust client-side prices or stale option state.
 
-Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode operational surfaces are governed by `docs/VENUE_OPERATIONS.md`; order/session/tab and snapshot rules are governed by `docs/ORDER_SESSION_TAB_CORE.md`; analytics/audit event names are governed by `docs/ANALYTICS_EVENTS.md`.
+Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode operational surfaces are governed by `docs/VENUE_OPERATIONS.md`; order/session/tab and snapshot rules are governed by `docs/ORDER_SESSION_TAB_CORE.md`; Telegram callback/staff-chat rules are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; analytics/audit event names are governed by `docs/ANALYTICS_EVENTS.md`.
 
 ## Terms
 
@@ -164,6 +164,7 @@ Staff-chat rules:
 - Staff-chat must not accept raw menu/price edits.
 - Stop-list callbacks from Telegram must verify actor role, venue scope and item/option ownership server-side.
 - `callback_data` uses opaque ids/tokens only.
+- Staff-chat is not a source of truth for menu or price edits; allowed Telegram shortcuts must call backend routes with RBAC checks.
 
 ## Stop-List UX
 

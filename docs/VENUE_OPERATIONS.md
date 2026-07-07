@@ -13,6 +13,7 @@ Canonical dependencies:
 - `docs/MENU_OPTIONS_STOPLIST.md` for menu, option/modifier, stop-list, media and shift-check policy.
 - `docs/COMMUNICATION_MODEL.md` for `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` separation.
 - `docs/BOOKING_LIFECYCLE.md` for booking statuses, hold/deadline, reminders, booking chat and no-show/seated policy.
+- `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` for Telegram bot entrypoints, fallback order, staff-call callbacks, staff-chat link/test/unlink, notification policy and callback security.
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, permissions, scopes and dangerous actions.
 - `docs/ANALYTICS_EVENTS.md` for operational events, KPIs, audit/event boundaries and dashboard targets.
 
@@ -258,6 +259,8 @@ Current vs target:
 - Broader staff management parity should stay in role smoke after new routes.
 
 ## Staff-Chat
+
+Canonical Telegram/staff-chat model: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 
 Target:
 - link/unlink/test from Venue Mode;

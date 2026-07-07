@@ -17,6 +17,7 @@ Analytics is not the operational source of truth. Domain tables remain authorita
 Menu/options/stop-list product semantics are defined in `docs/MENU_OPTIONS_STOPLIST.md`.
 Venue Mode operational surfaces and role dashboards are defined in `docs/VENUE_OPERATIONS.md`.
 Booking lifecycle semantics for booking events, reminders and booking-to-visit conversion are defined in `docs/BOOKING_LIFECYCLE.md`.
+Telegram fallback and staff-chat event semantics are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 
 Analytics events are immutable facts for reporting, funnels and diagnostics. They must not drive money, access, billing, order state or support state.
 
@@ -122,6 +123,24 @@ Communication:
 - `venue_chat_created`
 - `venue_chat_message_created`
 - `booking_chat_message_created`
+
+Telegram fallback / staff-chat:
+- `bot_start_received`
+- `table_token_resolved`
+- `bot_table_context_shown`
+- `fallback_order_started`
+- `fallback_order_confirmed`
+- `fallback_order_cancelled`
+- `fallback_order_batch_created`
+- `staff_call_created_from_bot`
+- `staff_chat_link_code_created`
+- `staff_chat_linked`
+- `staff_chat_unlinked`
+- `staff_chat_test_sent`
+- `staff_chat_notification_enqueued`
+- `staff_chat_notification_delivered`
+- `staff_chat_callback_action_clicked`
+- `staff_chat_callback_action_rejected`
 
 Menu/options/stop-list:
 - `menu_category_created`
@@ -340,6 +359,7 @@ Platform Owner:
 | Menu/options/stop-list events | Options/flavors parity is documented as smoke-closed; broader event coverage needs verification. | Emit menu create/update/archive, price, availability, media and shift-check facts with safe payloads. | Needed for stop-list pain points, out-of-stock checkout failure rate and menu operations audit. |
 | Booking events | Booking lifecycle and reminders exist in docs; event coverage needs verification. Canonical lifecycle is `docs/BOOKING_LIFECYCLE.md`. | Emit booking lifecycle events, reminder facts and booking-chat facts where enabled. | Booking analytics remains partial/future until confirmed. |
 | Support events | Support-ticket audit exists for status/scope/assignment/escalation where implemented. | Emit support analytics events without raw message text. | CSAT and broad support analytics are future. |
+| Telegram fallback / staff-chat events | Fallback payload, staff-call ACK/DONE and staff-chat diagnostics are closed for current smoke paths; broad event coverage needs verification. | Emit safe bot entrypoint, fallback order, staff-call, link/test, notification and callback facts. | Delivery/outbox telemetry is not business source of truth; payloads must not include message text or secrets. |
 | Billing events | Billing audit exists for checkout ensure, mark-paid and courtesy days. Provider/webhook analytics needs verification. | Emit subscription, invoice and payment webhook facts. | Card/Stars metrics future until provider rollout. |
 | Growth events | Growth product is `SPEC UPDATED / PARTIAL-FUTURE`. | Emit favorite, visit, repeat, feedback and promotion facts. | Blocked by Growth implementation and visit foundation. |
 | Dashboard UI | Venue read-only stats exist; Platform analytics dashboard is future/partial. | Role-specific dashboards from reliable events. | Advanced dashboards after event reliability. |
@@ -352,7 +372,7 @@ Platform Owner:
 - Analytics implementation: `PARTIAL / needs verification`.
 - Security/RBAC matrix: `UPDATED` in `docs/SECURITY_RBAC_MATRIX.md`; analytics exports and audit views must follow that role/scope model.
 - Platform analytics dashboard: `FUTURE/PARTIAL`.
-- Booking/support/growth events: `PARTIAL/FUTURE` unless implementation evidence exists.
+- Booking/support/Telegram fallback/staff-chat/growth events: `PARTIAL/FUTURE` unless implementation evidence exists.
 - Growth remains blocked by order/session/tab and visit history stability.
 - Advanced dashboards should wait until event emission, payload safety and aggregation semantics are reliable.
 

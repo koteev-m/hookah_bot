@@ -30,8 +30,12 @@ Booking lifecycle source of truth:
 - Canonical booking flow, queue, status state machine, hold/deadline, reminders, booking chat, support routing, analytics and RBAC rules are tracked in `docs/BOOKING_LIFECYCLE.md`.
 - Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`; booking problems use `SUPPORT_TICKET` only through verified booking or venue context.
 
+Telegram fallback and staff-chat source of truth:
+- Canonical Telegram bot entrypoints, QR `/start`, fallback order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity are tracked in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
+- Telegram bot and staff-chat are interaction surfaces. Backend domain tables and Mini App/Venue Mode remain source of truth; staff-chat is radar/shortcut only.
+
 ## Core surfaces
-- Telegram Bot (chat): navigation, fallback ordering, booking fallback
+- Telegram Bot (chat): QR entrypoint, navigation, fallback ordering, booking fallback, staff-call fallback and notifications
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)
 - Optional staff group chat per venue for operational notifications and live order activity-card shortcuts (venue creates it; platform stores chat_id and live message ids where needed)
 
@@ -70,6 +74,7 @@ Derived responsibilities:
 
 ## Key UX decisions (must)
 - Mini App is primary UX. If Mini App fails to load, show button: “Не грузится? → Оформить в чате” which triggers fallback ordering in chat.
+- Telegram fallback and staff-chat behavior must follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 - Each venue builds its own menu inside the admin UX (no platform code changes).
 - Stop-list is a 1-click toggle (checkbox) per item; unavailable items disappear from guest menu.
 - Each table has its own unique QR. QR opens bot start parameter → establishes table context → opens Mini App.

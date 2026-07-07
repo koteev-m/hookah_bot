@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle details are governed by `docs/BOOKING_LIFECYCLE.md`.
+Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle details are governed by `docs/BOOKING_LIFECYCLE.md`; Telegram fallback and staff-chat behavior is governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 
 ## Core Rule
 
@@ -21,7 +21,7 @@ Guest communication is split into four different product scenarios. Do not merge
 - `VENUE_CHAT` is represented by a venue-scoped ordinary chat thread for one guest and one venue. If an ordinary guest+venue chat already exists, reuse it instead of creating duplicates.
 - `SUPPORT_TICKET` is represented by support-ticket threads with status, category, assignee scope and audit/status behavior.
 - `STAFF_CALL` is not a support thread. It remains a staff-call/order operational flow governed by the table/session/order boundaries in `docs/ORDER_SESSION_TAB_CORE.md`.
-- Venue Mode staff-call queues and staff-chat rules are detailed in `docs/VENUE_OPERATIONS.md`.
+- Venue Mode staff-call queues and staff-chat rules are detailed in `docs/VENUE_OPERATIONS.md` and `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 
 ## Guest UX
 
@@ -62,6 +62,7 @@ Guest communication is split into four different product scenarios. Do not merge
 - `SUPPORT_TICKET` creation/replies do not enqueue staff-chat notifications.
 - Support/venue replies may notify the guest through the existing safe Telegram outbox when possible.
 - `STAFF_CALL` keeps the existing operational notification behavior.
+- Telegram fallback and staff-chat allow/deny policy is canonical in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: support tickets, venue chats and full booking-chat streams must not post to staff-chat.
 - Guest support ticket creation, venue chat creation and guest support/venue chat messages are rate-limited through the existing guest rate-limit infrastructure.
 - Retention/promo notifications are not covered by this communication MVP; they require `OPT_IN_NOTIFICATION`, frequency limits and unsubscribe as defined in `docs/GROWTH_RETENTION.md`.
 - Analytics events for this model are defined in `docs/ANALYTICS_EVENTS.md`: `support_ticket_created`, `support_ticket_message_created`, `support_ticket_status_changed`, `support_ticket_transferred_to_platform`, `support_ticket_closed`, `support_ticket_reopened`, `venue_chat_created`, `venue_chat_message_created` and `booking_chat_message_created`. Message text must stay in domain message tables with RBAC, not analytics events.
