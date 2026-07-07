@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-07.
 
-Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Menu/options/stop-list model: `docs/MENU_OPTIONS_STOPLIST.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
+Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Venue operations model: `docs/VENUE_OPERATIONS.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Menu/options/stop-list model: `docs/MENU_OPTIONS_STOPLIST.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`.
 
 ## Current status
 
@@ -143,6 +143,7 @@ Needed Platform analytics remain future/partial:
 ## Denied actions / constraints
 
 - Platform Owner role does not bypass venue-specific RBAC for ordinary venue operations unless the user also has a venue membership.
+- Ordinary Venue Mode operations are governed by `docs/VENUE_OPERATIONS.md`; Platform Mode should not become the normal order/staff-call/menu workspace.
 - `DELETED` venues should not appear in normal guest/owner/platform lists.
 - Hard delete is not part of normal flow for real venues with orders/bookings/payments/history.
 - Secrets/env values must not be exposed in bot messages/logs/docs.

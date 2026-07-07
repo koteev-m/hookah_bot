@@ -174,6 +174,8 @@ Security/RBAC product status is tracked in `docs/SECURITY_RBAC_MATRIX.md`. Roles
 
 Menu/options/stop-list product status is tracked in `docs/MENU_OPTIONS_STOPLIST.md`. Structured menu, options/modifiers, snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`; selected-option parity is smoke-closed, while broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
 
+Venue Mode operations product status is tracked in `docs/VENUE_OPERATIONS.md`. Venue dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are `SPEC UPDATED`; Venue Mode is source of truth and staff-chat is radar/shortcut only.
+
 Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
 
 ## Telegram payments: Stars vs external billing

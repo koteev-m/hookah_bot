@@ -8,7 +8,7 @@
 
 The structured menu is the source of truth for orders. PDF/photo menu is view-only. Guest order preview and submit must validate item availability, option validity and prices server-side; the cart must never trust client-side prices or stale option state.
 
-Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; order/session/tab and snapshot rules are governed by `docs/ORDER_SESSION_TAB_CORE.md`; analytics/audit event names are governed by `docs/ANALYTICS_EVENTS.md`.
+Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode operational surfaces are governed by `docs/VENUE_OPERATIONS.md`; order/session/tab and snapshot rules are governed by `docs/ORDER_SESSION_TAB_CORE.md`; analytics/audit event names are governed by `docs/ANALYTICS_EVENTS.md`.
 
 ## Terms
 

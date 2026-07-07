@@ -23,6 +23,8 @@
 > Current docs correction as of 2026-07-07: Security/RBAC source of truth is `docs/SECURITY_RBAC_MATRIX.md`. Roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a separate product role.
 >
 > Current docs correction as of 2026-07-07: Menu/options/stop-list source of truth is `docs/MENU_OPTIONS_STOPLIST.md`. Structured menu, options/modifiers, snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`; selected-option parity is smoke-closed, while broader media/top-list/shift-check/audit coverage remains partial/future.
+>
+> Current docs correction as of 2026-07-07: Venue Mode operations source of truth is `docs/VENUE_OPERATIONS.md`. Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are `SPEC UPDATED`; staff-chat is notification/radar/shortcut only.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 
@@ -65,6 +67,7 @@ Status: `PARTIAL`.
 - stale/superseded: fallback chat order now sends the router-supported `cmd=start_quick_order` payload and has Mini App e2e coverage;
 - active order scoping by `tableSessionId/tabId` needs launch regression coverage;
 - structured menu/option/stop-list behavior must follow `docs/MENU_OPTIONS_STOPLIST.md`: server-side availability validation, option snapshots and Staff/Manager permissions stay in regression;
+- Venue Mode operating behavior must follow `docs/VENUE_OPERATIONS.md`: orders, bill/tabs, staff calls, bookings, staff-chat, settings, stats and role-specific navigation/API denial stay in regression;
 - guest booking/profile/history and advanced support UI parity need dedicated regression passes;
 - promotions/loyalty/growth display must be smoke-tested against backend and bot output before being called complete.
 

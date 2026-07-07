@@ -15,6 +15,7 @@ Analytics is not the operational source of truth. Domain tables remain authorita
 - venue_members, venue settings and menu tables.
 
 Menu/options/stop-list product semantics are defined in `docs/MENU_OPTIONS_STOPLIST.md`.
+Venue Mode operational surfaces and role dashboards are defined in `docs/VENUE_OPERATIONS.md`.
 
 Analytics events are immutable facts for reporting, funnels and diagnostics. They must not drive money, access, billing, order state or support state.
 
@@ -231,6 +232,8 @@ Venue operations:
 - Out-of-stock checkout failure rate = checkout failures caused by unavailable item/option / checkout attempts.
 - Staff-call completion rate = completed staff calls / created staff calls.
 - Booking response time = first venue booking status response - `booking_created`.
+
+Use `docs/VENUE_OPERATIONS.md` for which operational metrics belong to Owner, Manager and Staff surfaces.
 
 Booking:
 - Booking submit rate = `booking_created` / booking form starts where tracked.

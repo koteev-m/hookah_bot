@@ -8,6 +8,8 @@
 
 Platform Mode is the operator cockpit for the whole marketplace. It is separate from Venue Mode: Platform Owner can manage platform-owned objects and commercial state, but does not automatically bypass venue-specific RBAC for ordinary venue operations.
 
+Ordinary venue operations such as orders, staff calls, booking queues, menu/stop-list, tables/QR, staff-chat and venue stats are defined in `docs/VENUE_OPERATIONS.md`; Platform Mode should not become the normal venue operations workspace.
+
 | Area | Current implementation status | Product rule |
 | --- | --- | --- |
 | Venues | Platform Mini App can list/open venue details and run implemented lifecycle actions. | Platform cockpit is the source of truth for marketplace-level venue state. |

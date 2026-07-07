@@ -41,6 +41,8 @@
 > Current docs checkpoint as of 2026-07-07: Security/RBAC is consolidated in `docs/SECURITY_RBAC_MATRIX.md`. Status is `UPDATED / permission parity PARTIAL`: roles, scopes, permission matrix, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist are now canonical. `ADMIN` remains a legacy compatibility alias to `MANAGER`, not a separate product role. Dangerous-action audit coverage remains partial unless specific implementation evidence exists.
 >
 > Current docs checkpoint as of 2026-07-07: Menu/options/stop-list is consolidated in `docs/MENU_OPTIONS_STOPLIST.md`. Status is `SPEC UPDATED`: structured menu, option groups/values, order snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and role permissions are now canonical. Selected-option parity is smoke-closed; broader menu constructor, media/top-list, shift check and dangerous-action audit coverage remain partial/future unless implementation evidence exists.
+>
+> Current docs checkpoint as of 2026-07-07: Venue Mode operations are consolidated in `docs/VENUE_OPERATIONS.md`. Status is `SPEC UPDATED`: Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are now canonical. Venue Mode is source of truth; staff-chat is radar/shortcut. Core operational slices are smoke-closed by milestone, while full cockpit completeness remains partial/future unless specific implementation evidence exists.
 
 # Краткое резюме
 
@@ -124,6 +126,7 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 | Блок | Статус | Evidence | Что дальше |
 |---|---|---|---|
 | Order/session/tab core | SPEC UPDATED / runtime scoping closed with partial follow-ups | `docs/ORDER_SESSION_TAB_CORE.md`, `GuestOrderRoutes`, `TableSessionRepository`, `GuestTabsRoutes`, `VenueOrdersRepository` | Keep table-session/tab scoping, personal/shared tab visibility, batch idempotency, bill request and close/expire behavior in regression; visit entity/history, force-close audit and DB-level uniqueness nuances remain future/partial |
+| Venue Mode operations | SPEC UPDATED / PARTIAL by full cockpit | `docs/VENUE_OPERATIONS.md`, `VenueOrderRoutes`, `VenueBookingRoutes`, `VenueMenuRoutes`, `VenueTableRoutes`, role docs | Venue Mode is source of truth; keep order queue/detail, bill/tabs, staff calls, bookings, menu/stop-list, staff-chat, settings, stats and role smoke in regression |
 | Guest QR/table flow | DONE / staging smoke passed | `GuestTableResolveRoutes`, `TableSessionRepository`, `GuestTableResolveRoutesTest`, `guest_table_session_exits` | Keep QR/table restore, user-scoped exit, active obligation blocking and explicit QR re-entry in regression |
 | Guest menu/order/cart/comment | SPEC UPDATED / PARTIAL | `docs/MENU_OPTIONS_STOPLIST.md`, `GuestMenuRepository`, `GuestOrderRoutes`, `cart.ts` | Structured selected-option parity is smoke-closed; stale availability, snapshots and fallback contract stay in regression |
 | Order batches / дозаказы | PARTIAL | `OrdersRepository.createGuestOrderBatch`, `order_batches`, `VenueOrdersRepository` | Full DTO and session scoping |
@@ -210,7 +213,8 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 12. Analytics/events regression from `docs/ANALYTICS_EVENTS.md`: QR scan, add-batch, batch status change, staff-call create, support/billing dangerous changes and audit payloads are emitted/recorded where implemented and contain no raw message text/initData/payment secrets/card data.
 13. Security/RBAC regression from `docs/SECURITY_RBAC_MATRIX.md`: Guest/Staff/Manager/Venue/Platform denials, cross-venue isolation, table/session/tab membership, Platform support-only visibility, QR token revocation and dangerous-action audit all follow the canonical matrix.
 14. Menu/options/stop-list regression from `docs/MENU_OPTIONS_STOPLIST.md`: Owner creates category/item/options, stale availability is rejected, Staff/Manager permissions match policy, Staff-chat is not source of truth and snapshots preserve old order prices/names/options.
-15. Owner invite from platform can be accepted end-to-end.
+15. Venue operations regression from `docs/VENUE_OPERATIONS.md`: Owner/Manager/Staff dashboards, order queue/detail, bill/tabs, staff calls, booking queue, stop-list, tables/QR, staff invites, staff-chat, settings, stats and cross-venue denial follow the canonical model.
+16. Owner invite from platform can be accepted end-to-end.
 
 # Созданные файлы отчёта
 
@@ -222,3 +226,4 @@ No confirmed production P0 was found in the 2026-07-02 checkpoint after M9a/M9b,
 - `docs/audit/PRODUCT_AUDIT_SUMMARY.md`
 - `docs/SECURITY_RBAC_MATRIX.md`
 - `docs/MENU_OPTIONS_STOPLIST.md`
+- `docs/VENUE_OPERATIONS.md`

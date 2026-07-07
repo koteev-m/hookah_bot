@@ -4,7 +4,7 @@
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk is documented as closed in current audit notes, while visit history, force-close policy, some DB-level uniqueness nuances and broader analytics remain future/partial.
 
-Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`.
+Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`.
 
 ## Core Rule
 
@@ -63,6 +63,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 
 ## Venue / Staff UX
 
+- Canonical Venue Mode operations model: `docs/VENUE_OPERATIONS.md`.
 - Venue queue may group active work by table for operations.
 - Order detail must show batches/doporders and preserve session boundaries.
 - Bill detail must show tabs/accounts and service charges.

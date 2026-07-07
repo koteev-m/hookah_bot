@@ -22,6 +22,10 @@ Security/RBAC source of truth:
 - Canonical roles, scopes, permissions, surface parity, dangerous actions and current-vs-target gaps are tracked in `docs/SECURITY_RBAC_MATRIX.md`.
 - Server-side RBAC is the source of truth. UI hiding, Telegram keyboards, QR/table tokens and tab invite tokens are never authority by themselves.
 
+Venue operations source of truth:
+- Canonical Venue Mode operating model for dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings and stats is tracked in `docs/VENUE_OPERATIONS.md`.
+- Venue Mode is the source of truth for operations; staff-chat is notification/radar/shortcut only.
+
 ## Core surfaces
 - Telegram Bot (chat): navigation, fallback ordering, booking fallback
 - Telegram Mini App (WebApp): main UI (Guest/Venue/Platform modes)
@@ -228,6 +232,7 @@ SHOULD:
 
 ## Block 10 — Shift ops + staff chat live-card behavior
 MUST:
+- Use `docs/VENUE_OPERATIONS.md` as the canonical Venue Mode operations model.
 - Staff queue view (new/accepted/in_progress/delivered).
 - Staff calls view and acknowledgements.
 - Duplicate order/call notifications to venue staff group chat if configured.

@@ -43,6 +43,7 @@
 - Analytics/events docs: `docs/ANALYTICS_EVENTS.md` is the source of truth for analytics events, KPI formulas, dashboards, audit/event boundaries and payload privacy rules. Implementation remains partial/needs verification; client events must not drive money, access, billing or order state.
 - Security/RBAC docs: `docs/SECURITY_RBAC_MATRIX.md` is the source of truth for roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist. Permission parity and dangerous-action audit remain partial unless route tests/smoke prove them.
 - Menu/options/stop-list docs: `docs/MENU_OPTIONS_STOPLIST.md` is the source of truth for structured menu, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions. Selected-option parity is smoke-closed; broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
+- Venue operations docs: `docs/VENUE_OPERATIONS.md` is the source of truth for Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke. Venue Mode is source of truth; staff-chat is radar/shortcut only.
 - Platform Cockpit docs: current source is `docs/PLATFORM_COCKPIT.md`. Manual billing and Platform Support Center are smoke-closed; onboarding request cockpit, placements, analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 - STAFF booking RBAC split local smoke via `dev.hookahtootah.club` and staging deploy/smoke both passed on 2026-06-04.
 - Pilot Smoke Fix Pack #1 staging re-smoke passed on 2026-06-04.
@@ -669,7 +670,36 @@ Use this checklist after menu, option, stop-list, media, featured/top-list, shif
 16. Staff-chat does not become source of truth for menu edits.
 17. Telegram callback actions verify role and venue scope server-side.
 
-## 15. Recommended Next Test Investment
+## 15. Venue Mode Operational Smoke Checklist
+
+Use this checklist after Venue Mode dashboard, orders, bills/tabs, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats or role-navigation changes. Canonical model: `docs/VENUE_OPERATIONS.md`.
+
+1. Owner opens Venue Mode dashboard.
+2. Manager opens Venue Mode dashboard.
+3. Staff opens Venue Mode and sees only allowed sections.
+4. Guest creates order batch from table context.
+5. Venue queue shows table/order with new batch.
+6. Venue detail shows batch, items, selected option snapshots and safe line comments where configured.
+7. Staff updates allowed batch status.
+8. Staff cannot reject/close if policy forbids.
+9. Manager can reject with reason if policy allows.
+10. Full bill/tabs are visible according to current implementation.
+11. Guest requests bill; venue sees `bill_requested`.
+12. Guest creates staff call; Venue/Staff sees it.
+13. Staff-call ACK/DONE works if implemented, otherwise the expected gap is recorded.
+14. Booking appears in queue if implemented.
+15. Venue confirms/changes/cancels booking if implemented.
+16. Owner toggles item stop-list; guest cannot order unavailable item.
+17. Staff stop-list behavior matches current policy across Telegram and Mini App.
+18. Owner downloads QR package where implemented.
+19. QR rotate requires confirmation/audit where implemented.
+20. Owner links staff-chat and sends test message.
+21. Staff-chat receives order/staff-call notifications but not support tickets or venue chats.
+22. Manager cannot access billing.
+23. Staff cannot access settings, billing, support tickets or venue chats.
+24. Venue user cannot access another venue.
+
+## 16. Recommended Next Test Investment
 
 1. Expand the lightweight Playwright/Vite smoke harness with fixture-driven UI tests for:
    - guest cart/order/staff call;
@@ -683,7 +713,7 @@ Use this checklist after menu, option, stop-list, media, featured/top-list, shif
    - Guest Bot and Guest Mini App submit the same structured selected-option shape.
 3. Extend cross-channel bill snapshots when selected option price deltas are implemented.
 
-## 16. Next Implementation Smoke Target
+## 17. Next Implementation Smoke Target
 
 Current implementation block after M9b.3: M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed, with the standard deploy command still supported and the opt-in ControlMaster helper validated as a persistent-connection workaround for unreliable fresh SSH/rsync connections. The exact SSH/network root cause remains unconfirmed and belongs to future operations hardening, not the M9a closure. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual comparison against Bot `/my` for public booking label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are code/test-backed and passed one controlled real Telegram smoke for reminder delivery, visible message edit, attendance indicators, venue-controlled status preservation and idempotent repeat handling. Staging is currently safe with `BOOKING_REMINDER_WORKER_ENABLED=false`; future rollout still requires explicit approval. M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED / staging smoke passed in provider-free mode: OWNER tested country, city, manual address, save/reload, guest card reflection and route opening; visual polish remains deferred until functional blocks are complete. M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges, guest-facing reason/comment, human booking rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, M7c, M8b-Free, M9a and M9b/M9b.1/M9b.2/M9b.3 stay in regression smoke. Paid venue/shift extension Owner/Manager Bot settings parity remains a separate P1 closure track.
 
