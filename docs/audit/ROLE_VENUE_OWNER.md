@@ -115,7 +115,7 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Mini App settings and staff management parity should be smoke-tested by role.
 - Staff chat diagnostics/unlink polish is closed after M6 staging smoke; keep real Telegram group link/test/unlink and operational notification delivery in per-venue regression.
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
-- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
+- Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. Venue active queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Menu options/photos/descriptions/top-list richness may still be partial depending on guest surface.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, while broader media/top-list/shift-check/audit coverage remains partial/future.
 - Multi-venue owner selector/entry should be smoke-tested if owner has several memberships.
@@ -132,7 +132,7 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Owner/Venue operational changes require targeted validation, role smoke and staging smoke when runtime behavior changes.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Owner dashboards should use reliable server-side events; advanced growth metrics and arbitrary analytics remain future.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
-- Staff profiles / today shift are `MVP DONE / LOCAL SMOKE-PASSED`: Owner is the approver for public visibility and profile publish/hide; Staff may edit only own linked draft fields if policy allows. Photo upload, schedule and staff tips remain future.
+- Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Owner is the approver for public visibility and profile publish/hide; Staff may edit only own linked draft fields if policy allows. Photo upload, schedule and staff tips remain future.
 - Staff tips are `SPEC DRAFT / FUTURE`: Phase 2 external staff tip link + intent only, no platform-collected money; provider/direct payout needs legal/product decision.
 
 ## Smoke-critical checks
@@ -148,7 +148,7 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 9. Owner can open `Помощь` / `Обращения`, reply to own-venue support tickets and use `Передать платформе` only for support tickets.
 10. Owner can open `Статистика`.
 11. Owner can manage staff chat link/status/test flow, copy or regenerate an active link code, and safely unlink an incorrect staff chat binding.
-12. Owner can accept/close staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
+12. Owner can accept/close active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
 13. Owner opens subscription screen and sees adjusted `Оплачено до ... включительно` / next-payment state when billing/courtesy exists.
 14. Owner sees visible open invoice/payment state where allowed, but cannot mark invoice paid or add courtesy/free days.
 15. Owner order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.

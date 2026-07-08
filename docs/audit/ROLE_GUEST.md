@@ -128,7 +128,7 @@ Account/bookings:
 - Favorites/history есть как baseline, но full growth/retention MVP remains `SPEC UPDATED / PARTIAL-FUTURE` until staging smoke proves favorite/unfavorite, visit/order/booking history, repeat template, post-visit feedback, simple promotions and opt-in notification behavior.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
 - Guest Communication UX split is CLOSED / smoke passed: global `Чаты`, global `Помощь`, catalog/venue-detail `Задать вопрос`, `VENUE_CHAT` reuse, support ticket context routing and table-context staff-call separation stay in regression. Advanced support features such as SLA automation, attachments, macros, CSAT and diagnostics reports remain future work.
-- M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Staff-chat activity-card polish also passed: DONE/CANCELLED generic calls no longer stay active in `Оперативно`, and linked closed-visit call leftovers are resolved on order/bill close.
+- M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Guest status now includes `NEW` / `ACK` / `DONE` / `CANCELLED` for the current guest and current table session, with `CANCELLED` shown as `Вызов отменён`. Staff-chat activity-card polish also passed: DONE/CANCELLED generic calls no longer stay active in `Оперативно`, and linked closed-visit call leftovers are resolved on order/bill close.
 - Fallback quick-order payload is CLOSED / code-test verification passed; real Telegram client fallback remains part of release smoke.
 - Media proxy требует ручной проверки для image/PDF и скрытых/удалённых sections.
 - QR/table order flow должен smoke-тестироваться отдельно от pre-QR catalog flow.
@@ -137,7 +137,7 @@ Account/bookings:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`; Guest-facing analytics is limited to future profile/history summaries, while client events remain low-trust UX diagnostics.
 - Menu/options/stop-list model is `SPEC UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, but broader modifier/media/top-list/shift-check coverage remains partial/future.
 - Real acquiring provider, Telegram Stars and automatic recurring payments remain future work; guest bill request is still an on-site operational request, not online payment.
-- Staff profiles / today shift are `MVP DONE / LOCAL SMOKE-PASSED` in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: Guest sees `Сегодня работают` below main venue info with only public visible fields; hidden profiles and private linked fields must stay denied in regression.
+- Staff profiles / today shift are `MVP DONE / SMOKE-PASSED` in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: Guest sees `Сегодня работают` below main venue info with only public visible fields; hidden profiles and private linked fields must stay denied in regression.
 - Staff tips are future: Phase 2 may use external staff tip link + intent, but no money touches the platform in MVP and intent is not proof of payment.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 
@@ -149,7 +149,7 @@ Account/bookings:
 4. Сканировать QR: structured order menu появляется только после table context.
 5. Добавить item в cart, отправить order/add batch.
 6. Выбрать configured flavor/option and optional preference note; confirm active order/bill preserves it.
-7. Вызвать персонал из active table; форма закрывается, status card показывает NEW/ACK/DONE.
+7. Вызвать персонал из active table; форма закрывается, status card показывает NEW/ACK/DONE/CANCELLED, and `CANCELLED` displays `Вызов отменён` only for the current guest/tableSession.
 8. Без active order/bill/staff call нажать `Завершить визит`; повторное открытие Mini App не должно restore table context, повторный QR scan должен re-enter. Request contract stays `POST /api/guest/table/session/end` with JSON `Content-Type` and `{ tableToken, tableSessionId }`.
 9. С active order/bill или active NEW/ACK staff call нажать `Завершить визит`; exit blocked with clear copy and table context remains.
 10. Нажать fallback `Оформить в чате`; payload должен быть `cmd=start_quick_order` with current `table_token`.

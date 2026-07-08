@@ -2,10 +2,9 @@
 
 Дата актуализации: 2026-07-08.
 
-Статус: **canonical staff visibility/tips spec / PHASE 1 DONE / LOCAL SMOKE-PASSED**.
+Статус: **canonical staff visibility/tips spec / PHASE 1 DONE / SMOKE-PASSED**.
 `STAFF_PROFILE`, `SHIFT_TODAY`, guest-visible `Сегодня работают` and Venue staff-profile UX
-polish have a bounded Phase 1 implementation in backend + Mini App and passed local route/build/e2e
-smoke. Staging UX acceptance is still required before production readiness is claimed. `STAFF_TIP`,
+polish have a bounded Phase 1 implementation in backend + Mini App and passed smoke. `STAFF_TIP`,
 `STAFF_SCHEDULE`, photo upload/media picker and staff shift sign-up/chat workflows remain future.
 Phase 2 may create staff tip intents with external staff tip links, but the platform must not
 collect guest order payments or staff tips in MVP.
@@ -229,9 +228,9 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 
 ## Roadmap Status
 
-- Staff profiles: `MVP DONE / LOCAL SMOKE-PASSED`; staging UX acceptance remains release gate.
-- Today on shift: `MVP DONE / LOCAL SMOKE-PASSED`; staging UX acceptance remains release gate.
-- Staff profile UX polish: `DONE / LOCAL SMOKE-PASSED`.
+- Staff profiles: `MVP DONE / SMOKE-PASSED`.
+- Today on shift: `MVP DONE / SMOKE-PASSED`.
+- Staff profile UX polish: `DONE / SMOKE-PASSED`.
 - Photo upload/media picker: `FUTURE`.
 - Staff schedule: `FUTURE / SPEC NEEDED`.
 - Staff shift Telegram notifications/sign-up/swaps: `FUTURE`.

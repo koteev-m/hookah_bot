@@ -28,7 +28,7 @@ Canonical dependencies:
 | Orders | Queue of active order batches by table/order. | Venue order queue and order detail exist; display order number and Russian labels are smoke-closed. | Queue may group by table, but detail must preserve `table_session`, batches and tabs. |
 | Order detail | Chronological batch and item workspace. | Full bill, display labels and selected options are documented as smoke-closed for current paths. | Status history/audit, force-close reason and all modifier variants need verification. |
 | Tabs / bill | Operational bill by personal/shared tabs. | Guest/Venue/Bot bill parity is smoke-closed; bill request/payment method is smoke-closed. | Tab reopen and force-close audit remain future/partial. |
-| Staff calls | Live operational requests from table context. | M5 lifecycle and ACK/DONE audit hardening are staging-smoked. | CANCELLED UI/lifecycle and row-level actor/timestamps remain future. |
+| Staff calls | Live operational requests from table context. | M5 lifecycle, ACK/DONE audit hardening and guest-visible terminal `CANCELLED` status are staging-smoked. | Manual cancel UI, quick replies and row-level actor/timestamps remain future. |
 | Bookings | Venue booking queue and lifecycle. | Booking queue/lifecycle, hold settings, confirmed-only arrival actions, state-aware staff-chat booking buttons, reminders and attendance indicators are partially/smoke-closed. | Broader lifecycle automation/preorder/reminder rollout remains partial/future. |
 | Menu | Structured order menu management. | Structured selected-option parity is smoke-closed; menu constructor broader status is partial. | Use `docs/MENU_OPTIONS_STOPLIST.md`; shift check and broad media/top-list governance remain future/partial. |
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths. | Per-venue `staff_stoplist_enabled`, mass stop-list and audit completeness are future/partial. |
@@ -168,8 +168,10 @@ Actions:
 - optional quick reply such as `Иду` / `2 минуты`.
 
 Current vs target:
-- Staff-call lifecycle and ACK/DONE audit hardening are CLOSED / staging smoke passed.
-- `cancelled`, row-level `acked_by` / `done_by` / timestamps and quick replies remain future/partial.
+- Staff-call lifecycle is CLOSED / staging smoke passed for `NEW` -> `ACK` -> `DONE` plus guest-visible terminal `CANCELLED`.
+- Guest staff-call status includes `NEW`, `ACK`, `DONE` and `CANCELLED` only for the current guest and current `tableSessionId`; `CANCELLED` uses copy `Вызов отменён`.
+- Venue active queue remains active-only `NEW` / `ACK`; `DONE` and `CANCELLED` are terminal history/status, not active work.
+- Manual cancel UI, row-level `acked_by` / `done_by` / timestamps and quick replies remain future/partial.
 
 Staff-chat:
 - staff-call notifications may go to staff-chat according to existing operational policy;
@@ -368,7 +370,7 @@ Current vs target:
 | Order queue | Exists for venue roles. | Exists and smoke-closed for core queue/detail. | Notifications/activity-card. | Venue Mode remains source of truth; SLA timers future. | Regression |
 | Order status | Exists. | Exists. | Callback shortcuts where implemented. | Callbacks must verify role/scope; status history/audit needs verification. | Regression |
 | Full bill | Staff full bill exists. | Management bill parity smoke-closed. | Bill context in activity-card. | Tab reopen/paid state machine partial. | Regression |
-| Staff calls | Bot/staff-chat callbacks exist. | M5 queue/lifecycle smoke-closed. | Notifications and ACK/DONE callbacks. | CANCELLED/quick replies/row-level actors future. | P2 |
+| Staff calls | Bot/staff-chat callbacks exist. | M5 queue/lifecycle and guest-visible `CANCELLED` smoke-closed. | Notifications and ACK/DONE callbacks. | Manual cancel UI, quick replies and row-level actors future. | Regression/P2 |
 | Bookings | Bot and venue booking flows exist. | Queue/lifecycle/hold settings smoke-closed. | Operational notifications where policy allows. | Broader automation/preorder/reminder rollout future. | Regression/P2 |
 | Menu manage | Bot owner/manager flows exist. | Options/flavors parity smoke-closed; broader constructor partial. | No source-of-truth edits. | Follow `docs/MENU_OPTIONS_STOPLIST.md`; shift check future. | P2 |
 | Stop-list | Bot paths exist. | Item/option parity documented/smoked. | Callback shortcuts only if role-checked. | Per-venue Staff stop-list flag future. | Regression/P2 |
@@ -380,7 +382,7 @@ Current vs target:
 
 ## Current Known Gaps
 
-- Staff-call ACK/DONE is smoke-closed; `cancelled`, row-level actor/timestamps and quick replies remain future.
+- Staff-call ACK/DONE and guest-visible `CANCELLED` are smoke-closed; manual cancel UI, row-level actor/timestamps and quick replies remain future.
 - Booking queue/lifecycle is smoke-closed for MVP; automatic expiry/no-show policy, preorder and broad reminder rollout remain future.
 - Full bill/display/order snapshots are smoke-closed for current paths; tab reopen, force-close reason/audit and all modifier variants need verification.
 - Settings are `PARTIAL`: closed slices are backend-backed, but broader settings/media/promotions/preview remain future/partial.
@@ -393,7 +395,7 @@ Current vs target:
 
 - Venue Mode operational spec: `UPDATED`.
 - Venue operations implementation: `PARTIAL / DONE-POLISH by slice`; core orders/bill/staff-call/bookings/staff-chat/menu-options settings slices are smoke-closed, but a complete operating cockpit still has future/partial areas.
-- Staff-call lifecycle: `CLOSED for ACK/DONE MVP`, `PARTIAL` for cancellation/quick replies/row-level actors.
+- Staff-call lifecycle: `CLOSED for NEW/ACK/DONE MVP plus guest-visible CANCELLED`, `PARTIAL` for manual cancel UI, quick replies and row-level actors.
 - Booking queue: `CLOSED for MVP`, `PARTIAL` for automation/preorder/reminder rollout.
 - Settings: `PARTIAL`, with several backend-backed slices closed.
 - Full bill/display/order snapshots: `CLOSED for current smoke paths`, `PARTIAL` for force-close/reopen/all modifier variants.
@@ -415,16 +417,18 @@ Current vs target:
 11. Full bill/tabs are visible according to current implementation.
 12. Guest requests bill; Venue sees `bill_requested` context.
 13. Guest creates staff call.
-14. Venue/Staff sees staff call.
-15. Staff-call ACK/DONE works if implemented; otherwise record as expected gap.
-16. Booking appears in queue if implemented.
-17. Venue confirms/changes/cancels booking if implemented.
-18. Owner toggles item stop-list; guest cannot order unavailable item.
-19. Staff stop-list behavior matches current policy across Telegram and Mini App.
-20. Owner downloads QR package where implemented.
-21. QR rotate requires confirmation/audit where implemented.
-22. Owner links staff-chat and sends test message.
-23. Staff-chat receives order/staff-call notifications but not support tickets or venue chats.
-24. Manager cannot access billing.
-25. Staff cannot access settings, billing, support tickets or venue chats.
-26. Venue user cannot access another venue.
+14. Venue/Staff sees `NEW` / `ACK` staff calls in the active queue.
+15. Staff-call ACK/DONE works and guest sees terminal `DONE`.
+16. Auto-cancelled/`CANCELLED` call appears to the same guest in the current table session as `Вызов отменён`.
+17. Venue active queue does not show `CANCELLED`.
+18. Booking appears in queue if implemented.
+19. Venue confirms/changes/cancels booking if implemented.
+20. Owner toggles item stop-list; guest cannot order unavailable item.
+21. Staff stop-list behavior matches current policy across Telegram and Mini App.
+22. Owner downloads QR package where implemented.
+23. QR rotate requires confirmation/audit where implemented.
+24. Owner links staff-chat and sends test message.
+25. Staff-chat receives order/staff-call notifications but not support tickets or venue chats.
+26. Manager cannot access billing.
+27. Staff cannot access settings, billing, support tickets or venue chats.
+28. Venue user cannot access another venue.

@@ -247,7 +247,13 @@ Venue operations:
 - queue sees order;
 - detail sees batches/tabs;
 - status update works;
-- staff-call queue works;
+- guest creates staff-call;
+- staff-call active queue shows only `NEW` / `ACK`;
+- staff accepts and completes staff-call;
+- guest sees terminal `DONE`;
+- auto-cancelled/`CANCELLED` staff-call appears to the same guest in the current table session as `Вызов отменён`;
+- venue active queue does not show `CANCELLED`;
+- guest does not see another guest/tableSession `CANCELLED` call;
 - booking queue works if implemented;
 - staff-chat receives order/call only.
 
@@ -279,6 +285,8 @@ Telegram/staff-chat:
 - `/start <table_token>`;
 - fallback order;
 - staff call;
+- staff-call ACK/DONE;
+- guest-visible staff-call `CANCELLED` copy `Вызов отменён`;
 - staff-chat notification;
 - callback role denial;
 - pending booking staff-chat notification has no `Гость пришёл` / `Не пришёл`;
@@ -291,7 +299,7 @@ Telegram/staff-chat:
 
 - Analytics implementation remains `PARTIAL` unless event emission/payload tests prove coverage.
 - Permission parity remains `PARTIAL` unless route tests prove each direct API denial/allow path.
-- Staff-call `cancelled`, quick replies and row-level actor/timestamp gaps remain future unless implemented.
+- Staff-call guest-visible `CANCELLED` is closed for the current guest/tableSession; manual cancel UI, quick replies and row-level actor/timestamp gaps remain future unless implemented.
 - Real Telegram fallback order smoke remains required for release confidence.
 - Platform Owner guest QR test escape remains open/needs verification.
 - Booking reminders and future no-show automation remain rollout-gated/partial.

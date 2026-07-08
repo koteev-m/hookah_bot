@@ -119,7 +119,7 @@ STAFF Mini App behavior:
 - Staff multi-venue selector needs smoke if a staff user belongs to more than one venue.
 - Staff/Manager invite acceptance and sharing polish is CLOSED / staging smoke passed; once accepted, STAFF can enter Venue Mode but still cannot access billing/payment controls.
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
-- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
+- Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. STAFF active work queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Direct API denial tests remain critical: UI hiding is not a security boundary.
 - Guest Communication UX split is CLOSED / smoke passed for STAFF boundaries: staff remains operational, support/venue-chat API access is denied, and staff-call/order behavior stays separate.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: STAFF can operate statuses according to role, but queue/detail must preserve table-session, batch and tab boundaries. Force close should require reason/audit if implemented by an allowed role.
@@ -129,7 +129,7 @@ STAFF Mini App behavior:
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Staff changes require nav/API denial smoke and staff-chat callback denial checks where affected.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: STAFF has operational queue/counters only and no business analytics by default.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current runtime docs allow STAFF item/option availability through `MENU_AVAILABILITY_MANAGE`; target policy is Staff stop-list only when venue policy enables it, with no structure, price, media, option schema or featured/top-list access.
-- Staff profiles / today shift are `MVP DONE / LOCAL SMOKE-PASSED`: Staff may edit only own linked draft fields if policy allows; Staff cannot self-publish, enable public visibility or approve future tip methods. Photo upload, schedule and staff tips remain future.
+- Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Staff may edit only own linked draft fields if policy allows; Staff cannot self-publish, enable public visibility or approve future tip methods. Photo upload, schedule and staff tips remain future.
 - Staff tips are future and must not be implemented as platform-collected payments, Telegram Stars or crypto in MVP.
 
 ## Smoke-critical checks
@@ -141,7 +141,7 @@ STAFF Mini App behavior:
 5. Direct STAFF bill-edit/menu/table/staff/settings mutations return 403.
 6. STAFF sees menu content and tables read-only, but can toggle menu item and option/flavor availability for operational stop-list.
 7. STAFF dashboard has call counters and no staff chat status row.
-8. STAFF can accept/close staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
+8. STAFF can accept/close active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
 9. STAFF sees bookings and can mark arrived/no-show only for confirmed bookings.
 10. Direct STAFF confirm/cancel/change/message/settings booking attempts are denied.
 11. STAFF does not see `Помощь` / `Обращения`, cannot open/reply support tickets, and cannot open/reply ordinary venue chats through direct API calls.

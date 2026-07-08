@@ -105,7 +105,7 @@ Manager Mini App areas:
 - Menu options/photos/descriptions/top-list parity may still be partial.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
-- Row-level `acked_by` / `done_by` / ACK-DONE timestamp columns, CANCELLED UI/lifecycle and staff-call UX polish are not implemented in this milestone. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
+- Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. Venue active queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Multi-venue manager selector/entry needs smoke if a manager belongs to several venues.
 - Guest Communication UX split is CLOSED / smoke passed for Manager surfaces: `Сообщения` handles booking/venue chats, `Помощь` handles support tickets, Staff is not granted access, and support/venue chats do not post to staff-chat. SLA automation, macros, attachments, CSAT and diagnostics remain future support follow-ups.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: queue may group by table, but detail must preserve batches/tabs/session boundaries; force close should require reason/audit if implemented.
@@ -116,7 +116,7 @@ Manager Mini App areas:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current docs allow broad Manager menu management, but conservative target policy keeps Manager to stop-list, shift check and basic availability unless product explicitly retains broader `MENU_MANAGE`.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
-- Staff profiles / today shift are `MVP DONE / LOCAL SMOKE-PASSED`: Manager may mark today's visible shift under current conservative policy, while Owner remains the default for profile publish/hide and future tip-method approval. Schedule, photo upload and staff tips remain future.
+- Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Manager may mark today's visible shift under current conservative policy, while Owner remains the default for profile publish/hide and future tip-method approval. Schedule, photo upload and staff tips remain future.
 
 ## Smoke-critical checks
 
@@ -130,7 +130,7 @@ Manager Mini App areas:
 8. Manager can manage menu/availability and tables according to permissions.
 9. Manager cannot enter platform owner mode.
 10. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
-11. Linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
+11. Manager can manage active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
 12. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
 13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
 14. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.

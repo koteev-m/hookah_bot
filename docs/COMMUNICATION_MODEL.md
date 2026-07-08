@@ -1,6 +1,6 @@
 # Guest Communication Model
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-08.
 
 Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle details are governed by `docs/BOOKING_LIFECYCLE.md`; Telegram fallback and staff-chat behavior is governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; validation strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -20,7 +20,7 @@ Guest communication is split into four different product scenarios. Do not merge
 - `BOOKING_CHAT` is represented by booking conversation threads. It is opened from booking flows and must remain separate from support ticket queues. Booking statuses, hold/deadline, reminders and no-show/seated behavior are defined in `docs/BOOKING_LIFECYCLE.md`.
 - `VENUE_CHAT` is represented by a venue-scoped ordinary chat thread for one guest and one venue. If an ordinary guest+venue chat already exists, reuse it instead of creating duplicates.
 - `SUPPORT_TICKET` is represented by support-ticket threads with status, category, assignee scope and audit/status behavior.
-- `STAFF_CALL` is not a support thread. It remains a staff-call/order operational flow governed by the table/session/order boundaries in `docs/ORDER_SESSION_TAB_CORE.md`.
+- `STAFF_CALL` is not a support thread. It remains a staff-call/order operational flow governed by the table/session/order boundaries in `docs/ORDER_SESSION_TAB_CORE.md`. Guest status for the current guest and current `tableSessionId` includes `NEW`, `ACK`, `DONE` and terminal `CANCELLED`; `CANCELLED` uses the existing guest copy `Вызов отменён`.
 - Venue Mode staff-call queues and staff-chat rules are detailed in `docs/VENUE_OPERATIONS.md` and `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 
 ## Guest UX
