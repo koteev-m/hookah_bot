@@ -1262,6 +1262,33 @@ input[type="number"] {
   gap: 0.75rem;
 }
 
+.venue-profile-field {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.field-help {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.venue-profile-photo-placeholder {
+  padding: 0.7rem 0.75rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.venue-profile-shift-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .venue-profile-row {
   align-items: start;
   flex-wrap: wrap;

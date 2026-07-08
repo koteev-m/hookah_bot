@@ -682,6 +682,7 @@ async function mockGuestApi(
     bookingCreateError?: { code: string; message: string }
     tableSessionEndResponse?: TableSessionEndResponseFixture
     activeOrder?: ActiveOrderFixtureOptions | null
+    todayStaff?: Array<Record<string, unknown>>
   } = {}
 ) {
   let structuredMenuCalls = 0
@@ -700,6 +701,7 @@ async function mockGuestApi(
       message: 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
     }
   let activeOrderOptions: ActiveOrderFixtureOptions | null = options.activeOrder === undefined ? {} : options.activeOrder
+  const todayStaff = options.todayStaff ?? []
   let createExtensionRequestCalls = 0
   let nextBookingId = 9000
   let activeOrderServiceCharges: ServiceCharge[] = []
@@ -818,6 +820,7 @@ async function mockGuestApi(
             statusLabel: 'График не указан',
             timeLabel: null
           },
+          todayStaff,
           status: 'PUBLISHED'
         }
       })
@@ -2442,6 +2445,44 @@ async function mockVenueStaffChatApi(
   let activeCodeHint: string | null = null
   let activeCodeExpiresAt: string | null = null
   const generatedCodes = ['ABC123', 'DEF456', 'GHI789']
+  type StaffProfileFixture = {
+    id: number
+    linkedUserId?: number | null
+    displayName: string
+    roleLabel?: string | null
+    subtype: string
+    photoRef?: string | null
+    bio?: string | null
+    tags: string[]
+    isGuestVisible: boolean
+    publishedAt?: string | null
+    disabledAt?: string | null
+    createdAt: string
+    updatedAt: string
+    todayShift?: Record<string, unknown> | null
+  }
+  let nextProfileId = 700
+  const profileCreateRequests: Array<Record<string, unknown>> = []
+  const profileUpdateRequests: Array<Record<string, unknown>> = []
+  const shiftRequests: Array<Record<string, unknown>> = []
+  const staffProfiles: StaffProfileFixture[] = [
+    {
+      id: 501,
+      linkedUserId: 123456789,
+      displayName: 'Алексей',
+      roleLabel: null,
+      subtype: 'hookah_master',
+      photoRef: 'internal/photo/ref',
+      bio: 'Любит крепкие миксы.',
+      tags: ['крепкие миксы'],
+      isGuestVisible: false,
+      publishedAt: null,
+      disabledAt: null,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:00:00Z',
+      todayShift: null
+    }
+  ]
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -2481,6 +2522,109 @@ async function mockVenueStaffChatApi(
 
   await page.route('**/api/venue/1/staff-calls**', async (route) => {
     await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/staff/profiles**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    const method = request.method()
+    const profileMatch = path.match(/^\/api\/venue\/1\/staff\/profiles\/(\d+)(?:\/(publish|hide|today-shift))?$/)
+
+    if (path === '/api/venue/1/staff/profiles' && method === 'GET') {
+      await route.fulfill(jsonResponse({ profiles: staffProfiles }))
+      return
+    }
+
+    if (path === '/api/venue/1/staff/profiles' && method === 'POST') {
+      const body = (await request.postDataJSON()) as Record<string, unknown>
+      profileCreateRequests.push(body)
+      const profile: StaffProfileFixture = {
+        id: nextProfileId++,
+        linkedUserId: typeof body.linkedUserId === 'number' ? body.linkedUserId : null,
+        displayName: String(body.displayName ?? ''),
+        roleLabel: typeof body.roleLabel === 'string' ? body.roleLabel : null,
+        subtype: String(body.subtype ?? 'other'),
+        photoRef: typeof body.photoRef === 'string' ? body.photoRef : null,
+        bio: typeof body.bio === 'string' ? body.bio : null,
+        tags: Array.isArray(body.tags) ? body.tags.map(String) : [],
+        isGuestVisible: body.isGuestVisible === true,
+        publishedAt: null,
+        disabledAt: null,
+        createdAt: '2030-01-10T18:05:00Z',
+        updatedAt: '2030-01-10T18:05:00Z',
+        todayShift: null
+      }
+      staffProfiles.push(profile)
+      await route.fulfill(jsonResponse(profile))
+      return
+    }
+
+    if (!profileMatch) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+
+    const profileId = Number(profileMatch[1])
+    const action = profileMatch[2] ?? null
+    const profile = staffProfiles.find((item) => item.id === profileId)
+    if (!profile) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+
+    if (method === 'PATCH' && !action) {
+      const body = (await request.postDataJSON()) as Record<string, unknown>
+      profileUpdateRequests.push(body)
+      if (typeof body.displayName === 'string') profile.displayName = body.displayName
+      if (typeof body.roleLabel === 'string' || body.roleLabel === null) profile.roleLabel = body.roleLabel
+      if (typeof body.subtype === 'string') profile.subtype = body.subtype
+      if (typeof body.linkedUserId === 'number') profile.linkedUserId = body.linkedUserId
+      if (body.unlinkUser === true) profile.linkedUserId = null
+      if (typeof body.photoRef === 'string' || body.photoRef === null) profile.photoRef = body.photoRef
+      if (typeof body.bio === 'string' || body.bio === null) profile.bio = body.bio
+      if (Array.isArray(body.tags)) profile.tags = body.tags.map(String)
+      profile.updatedAt = '2030-01-10T18:06:00Z'
+      await route.fulfill(jsonResponse(profile))
+      return
+    }
+
+    if (method === 'POST' && action === 'publish') {
+      profile.isGuestVisible = true
+      profile.publishedAt = '2030-01-10T18:07:00Z'
+      profile.disabledAt = null
+      await route.fulfill(jsonResponse(profile))
+      return
+    }
+
+    if (method === 'POST' && action === 'hide') {
+      profile.isGuestVisible = false
+      profile.disabledAt = '2030-01-10T18:08:00Z'
+      await route.fulfill(jsonResponse(profile))
+      return
+    }
+
+    if (method === 'POST' && action === 'today-shift') {
+      const body = (await request.postDataJSON()) as Record<string, unknown>
+      shiftRequests.push(body)
+      const shift = {
+        id: 900 + shiftRequests.length,
+        staffProfileId: profile.id,
+        shiftDate: '2030-01-10',
+        startsAt: null,
+        endsAt: null,
+        status: String(body.status ?? 'active'),
+        isGuestVisible: body.isGuestVisible !== false,
+        manuallyMarkedActive: body.status === 'active',
+        createdAt: '2030-01-10T18:09:00Z',
+        updatedAt: '2030-01-10T18:09:00Z'
+      }
+      profile.todayShift = shift
+      await route.fulfill(jsonResponse({ shift }))
+      return
+    }
+
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
   })
 
   await page.route('**/api/venue/1/staff', async (route) => {
@@ -2590,6 +2734,9 @@ async function mockVenueStaffChatApi(
   return {
     getGeneratedCalls: () => generated,
     getStaffInvites: () => staffInvites,
+    getProfileCreateRequests: () => profileCreateRequests,
+    getProfileUpdateRequests: () => profileUpdateRequests,
+    getShiftRequests: () => shiftRequests,
     getTestMessages: () => testMessages,
     getUnlinks: () => unlinks,
     setLinked: (next: boolean) => {
@@ -3253,6 +3400,43 @@ test('pre-QR guest card shows info/photo menu and hides structured order menu', 
   await expect(page.getByAltText('📖 Фото-меню 1')).toBeVisible()
   await expect(page.getByText('Кальянное меню')).toHaveCount(0)
   expect(api.getStructuredMenuCalls()).toBe(0)
+})
+
+test('guest venue card shows today staff without private linkage fields', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    todayStaff: [
+      {
+        id: 501,
+        displayName: 'Максим',
+        roleLabel: null,
+        subtype: 'hookah_master',
+        photoRef: null,
+        bio: 'Люблю крепкие миксы и помогаю подобрать вкус под настроение.',
+        tags: ['крепкие миксы', 'авторские вкусы'],
+        shiftId: 901,
+        shiftDate: '2030-01-10',
+        startsAt: null,
+        endsAt: null,
+        shiftStatus: 'active',
+        manuallyMarkedActive: true,
+        linkedUserId: 123456789,
+        telegramUserId: 123456789
+      }
+    ]
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+
+  const todayStaff = page.locator('.guest-today-staff')
+  await expect(todayStaff).toContainText('Сегодня работают')
+  await expect(todayStaff).toContainText('Максим')
+  await expect(todayStaff).toContainText('Кальянный мастер')
+  await expect(todayStaff).toContainText('крепкие миксы')
+  await expect(todayStaff).not.toContainText('linkedUserId')
+  await expect(todayStaff).not.toContainText('telegramUserId')
+  await expect(todayStaff).not.toContainText('123456789')
 })
 
 test('guest booking closed date shows human message and keeps selected date', async ({ page }) => {
@@ -4064,6 +4248,79 @@ test('venue owner creates manager staff invite with copyable deep link', async (
         )
     )
     .toBe(true)
+})
+
+test('venue owner staff cards use human profile labels and hide raw technical fields', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  const staffCards = page.locator('.venue-public-staff')
+  const createForm = staffCards.locator('.venue-profile-form')
+  await expect(staffCards.getByRole('heading', { name: 'Карточки сотрудников' })).toBeVisible()
+  await expect(staffCards).toContainText(
+    'Создайте карточки сотрудников, которых гости увидят в карточке заведения.'
+  )
+  await expect(staffCards).toContainText('Если отметить сотрудника «Сегодня на смене»')
+  await expect(staffCards).not.toContainText('Публичные профили')
+  await expect(createForm.getByLabel('Имя на карточке')).toBeVisible()
+  await expect(createForm.getByLabel('Тип сотрудника')).toBeVisible()
+  await expect(createForm.getByLabel('Привязать к сотруднику')).toBeVisible()
+  await expect(createForm.getByLabel('Коротко о сотруднике')).toBeVisible()
+  await expect(createForm.getByLabel('Специализация')).toBeVisible()
+  await expect(createForm.getByRole('option', { name: /#123456789/ })).toHaveCount(1)
+  await expect(createForm).toContainText('Так это имя увидят гости.')
+  await expect(createForm).toContainText('Гостям эта связь не показывается.')
+  await expect(createForm).toContainText('Можно указать через запятую.')
+  await expect(createForm).toContainText('Фото сотрудника — позже')
+  await expect(createForm.getByPlaceholder('User ID')).toHaveCount(0)
+  await expect(createForm.getByPlaceholder('Фото ref')).toHaveCount(0)
+  await expect(createForm.getByPlaceholder('Photo ref')).toHaveCount(0)
+
+  await createForm.getByLabel('Имя на карточке').fill('Максим')
+  await createForm.getByLabel('Тип сотрудника').selectOption('hookah_master')
+  await createForm.getByLabel('Привязать к сотруднику').selectOption('123456789')
+  await createForm.getByLabel('Коротко о сотруднике').fill('Люблю крепкие миксы.')
+  await createForm.getByLabel('Специализация').fill('крепкие миксы, авторские вкусы')
+  await createForm.getByRole('button', { name: 'Создать профиль' }).click()
+
+  await expect(staffCards).toContainText('Максим')
+  await expect(staffCards).toContainText('Скрыт — виден только в кабинете')
+  await expect.poll(() => api.getProfileCreateRequests().length).toBe(1)
+  const createRequest = api.getProfileCreateRequests()[0]
+  expect(createRequest).toMatchObject({
+    displayName: 'Максим',
+    subtype: 'hookah_master',
+    linkedUserId: 123456789,
+    bio: 'Люблю крепкие миксы.',
+    tags: ['крепкие миксы', 'авторские вкусы']
+  })
+  expect(createRequest).not.toHaveProperty('photoRef')
+  expect(createRequest).not.toHaveProperty('roleLabel')
+
+  const profileRow = staffCards.locator('.venue-profile-row').filter({ hasText: 'Максим' })
+  await expect(profileRow.getByPlaceholder('User ID')).toHaveCount(0)
+  await expect(profileRow.getByPlaceholder('Фото ref')).toHaveCount(0)
+  await expect(profileRow.getByLabel('Имя на карточке')).toBeVisible()
+  await expect(profileRow.getByLabel('Тип сотрудника')).toBeVisible()
+  await profileRow.getByRole('button', { name: 'Сохранить' }).click()
+  await expect.poll(() => api.getProfileUpdateRequests().length).toBe(1)
+  const updateRequest = api.getProfileUpdateRequests()[0]
+  expect(updateRequest).not.toHaveProperty('photoRef')
+  expect(updateRequest).not.toHaveProperty('roleLabel')
+
+  await profileRow.getByRole('button', { name: 'Опубликовать' }).click()
+  await expect(profileRow).toContainText('Опубликован — виден гостям')
+  await profileRow.getByRole('button', { name: 'Сегодня на смене' }).click()
+  await expect.poll(() => api.getShiftRequests().length).toBe(1)
+  await profileRow.getByRole('button', { name: 'Не на смене сегодня' }).click()
+  await expect.poll(() => api.getShiftRequests().length).toBe(2)
+  expect(api.getShiftRequests()).toEqual([
+    { status: 'active', isGuestVisible: true },
+    { status: 'canceled', isGuestVisible: false }
+  ])
 })
 
 test('expired staff chat link code is not presented as usable', async ({ page }) => {
