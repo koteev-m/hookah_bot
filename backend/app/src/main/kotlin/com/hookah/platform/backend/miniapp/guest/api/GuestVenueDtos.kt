@@ -40,7 +40,29 @@ data class VenueDto(
     val guestContact: String? = null,
     val cardDescription: String? = null,
     val todaySchedule: VenueTodayScheduleDto? = null,
+    val todayStaff: List<GuestTodayStaffDto> = emptyList(),
     val status: String,
+)
+
+@Serializable
+data class GuestTodayStaffResponse(
+    val venueId: Long,
+    val staff: List<GuestTodayStaffDto>,
+)
+
+@Serializable
+data class GuestTodayStaffDto(
+    val id: Long,
+    val displayName: String,
+    val roleLabel: String? = null,
+    val subtype: String,
+    val photoRef: String? = null,
+    val bio: String? = null,
+    val tags: List<String> = emptyList(),
+    val shiftDate: String,
+    val startsAt: String? = null,
+    val endsAt: String? = null,
+    val shiftStatus: String,
 )
 
 @Serializable

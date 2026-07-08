@@ -139,7 +139,7 @@ These actions require server-side authorization and should require confirmation,
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat hidden. | Platform does not bypass ordinary venue RBAC by default. | Event/audit explorer and analytics exports need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
-| Staff profiles / today shift | No runtime implementation yet; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only if policy allows. | Phase 1 is `SPEC READY / FUTURE-NEXT`; route-level denial tests are required before DONE. |
+| Staff profiles / today shift | Phase 1 backend + Mini App implementation exists; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Local route/privacy denial tests exist; staging smoke is still required before production readiness. |
 | Staff tips | No runtime implementation yet; canonical future boundaries are `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 external staff tip link + intent only; money does not touch platform in MVP; intent is not proof of payment. | Provider/direct payout needs legal/product decision; Telegram Stars and crypto are not MVP. |
 | Surface parity | Bot and Mini App parity is closed for several slices; some Telegram flows are still richer. | Required product surfaces are aligned or explicitly documented as exceptions. | Keep parity roadmap current before adding new management functions. |
 
@@ -168,7 +168,7 @@ These actions require server-side authorization and should require confirmation,
 
 - Security/RBAC matrix: `UPDATED`.
 - Permission parity: `PARTIAL`; keep route-level denial tests and role smoke in regression.
-- Staff profiles / today shift: `SPEC READY / FUTURE-NEXT` in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; no runtime permission parity claim until routes/tests/smoke exist.
+- Staff profiles / today shift: Phase 1 route/privacy tests exist for backend + Mini App implementation; staging smoke is still required before production readiness.
 - Staff tips: `SPEC DRAFT / FUTURE`; payment provider/direct payout requires legal/product decision, and external tip intent is not proof of payment.
 - `ADMIN` decision: target is removal from product model / compatibility alias only; implementation cleanup remains a migration/copy hygiene follow-up.
 - Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.

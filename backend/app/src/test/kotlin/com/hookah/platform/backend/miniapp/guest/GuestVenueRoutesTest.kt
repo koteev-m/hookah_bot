@@ -30,6 +30,7 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class GuestVenueRoutesTest {
@@ -425,6 +426,124 @@ class GuestVenueRoutesTest {
             assertEquals(false, venueSchedule.isClosed)
             assertEquals(false, venueSchedule.isOpenNow)
             assertEquals(null, venueSchedule.timeLabel)
+        }
+
+    @Test
+    fun `venue by id exposes only safe public today staff`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-venue-today-staff")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val today = LocalDate.now(ZoneId.of("UTC"))
+            val seeded =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val venueId =
+                        insertVenue(
+                            connection,
+                            "Mix",
+                            "Москва",
+                            "Новый Арбат, 24",
+                            VenueStatus.PUBLISHED.dbValue,
+                        )
+                    val otherVenueId =
+                        insertVenue(
+                            connection,
+                            "Other",
+                            "Москва",
+                            "Тверская, 1",
+                            VenueStatus.PUBLISHED.dbValue,
+                        )
+                    insertVenueTimezone(connection, venueId, "UTC")
+                    insertVenueTimezone(connection, otherVenueId, "UTC")
+                    seedUser(connection, 9101L)
+                    seedUser(connection, 9102L)
+                    val visibleProfile =
+                        insertStaffProfile(
+                            connection = connection,
+                            venueId = venueId,
+                            displayName = "Иван",
+                            subtype = "hookah_master",
+                            linkedUserId = 9102L,
+                            isGuestVisible = true,
+                            published = true,
+                            disabled = false,
+                            tags = """["крепко"]""",
+                        )
+                    val hiddenProfile =
+                        insertStaffProfile(
+                            connection = connection,
+                            venueId = venueId,
+                            displayName = "Скрыт",
+                            subtype = "waiter",
+                            isGuestVisible = false,
+                            published = false,
+                            disabled = false,
+                        )
+                    val canceledProfile =
+                        insertStaffProfile(
+                            connection = connection,
+                            venueId = venueId,
+                            displayName = "Завершил",
+                            subtype = "admin",
+                            isGuestVisible = true,
+                            published = true,
+                            disabled = false,
+                        )
+                    val privateShiftProfile =
+                        insertStaffProfile(
+                            connection = connection,
+                            venueId = venueId,
+                            displayName = "Приватная смена",
+                            subtype = "other",
+                            isGuestVisible = true,
+                            published = true,
+                            disabled = false,
+                        )
+                    val otherVenueProfile =
+                        insertStaffProfile(
+                            connection = connection,
+                            venueId = otherVenueId,
+                            displayName = "Чужой",
+                            subtype = "other",
+                            isGuestVisible = true,
+                            published = true,
+                            disabled = false,
+                        )
+                    insertStaffShift(connection, venueId, visibleProfile, today, "active", true)
+                    insertStaffShift(connection, venueId, hiddenProfile, today, "active", true)
+                    insertStaffShift(connection, venueId, canceledProfile, today, "canceled", true)
+                    insertStaffShift(connection, venueId, privateShiftProfile, today, "active", false)
+                    insertStaffShift(connection, otherVenueId, otherVenueProfile, today, "active", true)
+                    SeededTodayStaff(venueId = venueId)
+                }
+            val token = issueToken(config)
+
+            val response =
+                client.get("/api/guest/venue/${seeded.venueId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val responseBody = response.bodyAsText()
+            assertFalse(responseBody.contains("linkedUserId"))
+            assertFalse(responseBody.contains("telegram", ignoreCase = true))
+            val payload = json.decodeFromString(VenueResponse.serializer(), responseBody)
+            assertEquals(listOf("Иван"), payload.venue.todayStaff.map { it.displayName })
+            assertEquals("hookah_master", payload.venue.todayStaff.single().subtype)
+            assertEquals(listOf("крепко"), payload.venue.todayStaff.single().tags)
+
+            val endpointResponse =
+                client.get("/api/guest/venue/${seeded.venueId}/today-staff") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, endpointResponse.status)
+            assertFalse(endpointResponse.bodyAsText().contains("linkedUserId"))
+            assertFalse(endpointResponse.bodyAsText().contains("telegram", ignoreCase = true))
         }
 
     @Test
@@ -910,6 +1029,121 @@ class GuestVenueRoutesTest {
         }
     }
 
+    private fun seedUser(
+        connection: java.sql.Connection,
+        userId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            MERGE INTO users (telegram_user_id, username, first_name, last_name)
+            KEY (telegram_user_id)
+            VALUES (?, 'staff', 'Staff', 'User')
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun insertStaffProfile(
+        connection: java.sql.Connection,
+        venueId: Long,
+        displayName: String,
+        subtype: String,
+        isGuestVisible: Boolean,
+        published: Boolean,
+        disabled: Boolean,
+        linkedUserId: Long? = null,
+        tags: String? = null,
+    ): Long {
+        connection.prepareStatement(
+            """
+            INSERT INTO staff_profiles (
+                venue_id,
+                linked_user_id,
+                display_name,
+                subtype,
+                tags,
+                is_guest_visible,
+                created_by_user_id,
+                published_at,
+                disabled_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            if (linkedUserId == null) {
+                statement.setNull(2, java.sql.Types.BIGINT)
+            } else {
+                statement.setLong(2, linkedUserId)
+            }
+            statement.setString(3, displayName)
+            statement.setString(4, subtype)
+            statement.setString(5, tags)
+            statement.setBoolean(6, isGuestVisible)
+            statement.setLong(7, 9101L)
+            if (published) {
+                statement.setTimestamp(8, java.sql.Timestamp.from(java.time.Instant.now()))
+            } else {
+                statement.setNull(8, java.sql.Types.TIMESTAMP)
+            }
+            if (disabled) {
+                statement.setTimestamp(9, java.sql.Timestamp.from(java.time.Instant.now()))
+            } else {
+                statement.setNull(9, java.sql.Types.TIMESTAMP)
+            }
+            statement.executeUpdate()
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) {
+                    return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert staff profile")
+    }
+
+    private fun insertStaffShift(
+        connection: java.sql.Connection,
+        venueId: Long,
+        profileId: Long,
+        shiftDate: LocalDate,
+        status: String,
+        isGuestVisible: Boolean,
+    ): Long {
+        connection.prepareStatement(
+            """
+            INSERT INTO staff_shifts (
+                venue_id,
+                staff_profile_id,
+                shift_date,
+                status,
+                is_guest_visible,
+                manually_marked_active,
+                created_by_user_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, profileId)
+            statement.setDate(3, java.sql.Date.valueOf(shiftDate))
+            statement.setString(4, status)
+            statement.setBoolean(5, isGuestVisible)
+            statement.setBoolean(6, status == "active")
+            statement.setLong(7, 9101L)
+            statement.executeUpdate()
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) {
+                    return rs.getLong(1)
+                }
+            }
+        }
+        error("Failed to insert staff shift")
+    }
+
     private fun dropSubscriptionStatusCheck(jdbcUrl: String) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.createStatement().use { statement ->
@@ -945,6 +1179,10 @@ class GuestVenueRoutesTest {
         val visibleMediaId: Long,
         val hiddenSectionId: Long,
         val hiddenMediaId: Long,
+    )
+
+    private data class SeededTodayStaff(
+        val venueId: Long,
     )
 
     private companion object {

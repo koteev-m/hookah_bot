@@ -81,6 +81,7 @@ import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.stats.venueStatsRoutes
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
@@ -549,6 +550,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val venueAccessRepository = VenueAccessRepository(dataSource)
     val telegramVenueContextRepository = TelegramVenueContextRepository(dataSource)
     val venueStaffRepository = VenueStaffRepository(dataSource)
+    val venueStaffProfileRepository = VenueStaffProfileRepository(dataSource, json)
     val bookingReminderWorker =
         BookingReminderWorker(
             repository = guestBookingRepository,
@@ -1079,6 +1081,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
                         guestMenuRepository = guestMenuRepository,
+                        venueStaffProfileRepository = venueStaffProfileRepository,
                         venueInfoSectionsRepository = venueInfoSectionsRepository,
                         venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                         subscriptionRepository = subscriptionRepository,
@@ -1189,8 +1192,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueStaffRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStaffRepository = venueStaffRepository,
+                    venueStaffProfileRepository = venueStaffProfileRepository,
                     staffInviteRepository = staffInviteRepository,
                     staffInviteConfig = staffInviteConfig,
+                    venueSettingsRepository = venueSettingsRepository,
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     auditLogRepository = auditLogRepository,
                     telegramBotUsername = telegramConfig.botUsername,

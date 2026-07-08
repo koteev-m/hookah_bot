@@ -2,10 +2,11 @@
 
 Дата актуализации: 2026-07-08.
 
-Статус: **canonical staff visibility/tips spec / SPEC READY FOR PHASE 1**.
-`STAFF_PROFILE` and `SHIFT_TODAY` are ready for a bounded Phase 1 implementation. `STAFF_TIP`
-is a future domain: Phase 2 may create staff tip intents with external staff tip links, but the
-platform must not collect guest order payments or staff tips in MVP.
+Статус: **canonical staff visibility/tips spec / PHASE 1 IMPLEMENTED LOCALLY**.
+`STAFF_PROFILE` and `SHIFT_TODAY` have a bounded Phase 1 implementation in backend + Mini App
+with local route/build validation. Staging smoke is still required before production readiness is
+claimed. `STAFF_TIP` is a future domain: Phase 2 may create staff tip intents with external staff
+tip links, but the platform must not collect guest order payments or staff tips in MVP.
 
 ## Core Rule
 
@@ -20,20 +21,21 @@ orders. Staff tips, when implemented, must target a specific staff profile, not 
 
 | Domain | Purpose | MVP status |
 | --- | --- | --- |
-| `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | Phase 1 / spec ready. |
-| `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | Phase 1 / spec ready. |
+| `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | Phase 1 implemented locally; needs staging smoke. |
+| `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | Phase 1 implemented locally; needs staging smoke. |
 | `STAFF_TIP` | Future CTA and intent to thank a specific staff member. | Phase 2+ / spec draft. |
 
 ## Phase 1 MVP
 
-Phase 1 includes:
+Current Phase 1 implementation includes:
 - Owner creates and edits staff profiles.
 - Profile may be linked to a real venue member through `linked_user_id`, or may be display-only.
 - Public visibility is opt-in through `is_guest_visible`.
 - Owner publishes/hides profiles.
 - Staff may edit only their own linked draft bio/photo fields if policy allows.
 - Staff cannot self-publish.
-- Owner/Manager may mark "today on shift" if policy allows.
+- Owner/Manager may mark "today on shift"; conservative MVP allows Manager to mark
+  active/completed/canceled and keeps scheduled shifts Owner-only.
 - Guest sees `Сегодня работают` on venue detail.
 - Catalog may later show a short `Сегодня: Иван, Алина` line.
 
@@ -91,7 +93,9 @@ MVP behavior:
 
 ## Guest UX
 
-- Venue detail may show `Сегодня работают` with visible public staff profiles.
+- Venue detail shows `Сегодня работают` with visible public staff profiles when such shifts exist.
+- Guest API exposes only public profile display fields and the today-shift state; it does not expose
+  `linked_user_id`, Telegram ids, invite state or private contact fields.
 - Catalog may later show a compact line such as `Сегодня: Иван, Алина`.
 - Staff profile detail may show photo, display name, role, subtype, bio, tags and today status.
 - After bill requested/paid/closed, a future CTA may offer `Поблагодарить сотрудника`.
@@ -100,8 +104,8 @@ MVP behavior:
 ## Venue UX
 
 - Owner manages profiles, guest visibility and publish/hide state.
-- Manager may manage today's shift state only if policy allows.
-- Staff may edit only own linked draft fields if policy allows.
+- Manager may manage today's active/completed/canceled shift state.
+- Staff may edit only own linked draft fields.
 - Staff cannot publish themselves or enable guest visibility without Owner approval in MVP.
 
 ## STAFF_TIP Future
@@ -152,11 +156,12 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 
 ## Roadmap Status
 
-- Staff profiles / today shift: `SPEC READY / NEXT`.
+- Staff profiles / today shift: `PHASE 1 IMPLEMENTED LOCALLY / NEEDS STAGING SMOKE`.
 - Staff tips: `SPEC DRAFT / FUTURE`.
 - Payments for tips: `FUTURE / needs legal/payment decision`.
 - Guest order online payment: not in scope; order payment remains the offline terminal model.
 
 ## Next Implementation Step
 
-Implement Phase 1: Staff profiles + today on shift, no payments.
+Staging-smoke Phase 1 staff profiles + today on shift. Keep staff tips and all payment paths out
+of scope until a separate Phase 2 implementation decision.

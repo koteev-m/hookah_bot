@@ -1,8 +1,26 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { venueCreateInvite, venueGetStaff, venueRemoveStaff, venueUpdateRole } from '../shared/api/venueApi'
-import type { VenueAccessDto, VenueStaffMemberDto, VenueStaffInviteResponse } from '../shared/api/venueDtos'
+import {
+  venueCreateInvite,
+  venueCreateStaffProfile,
+  venueGetStaff,
+  venueGetStaffProfiles,
+  venueHideStaffProfile,
+  venuePublishStaffProfile,
+  venueRemoveStaff,
+  venueUpdateRole,
+  venueUpdateStaffProfile,
+  venueUpsertTodayStaffShift
+} from '../shared/api/venueApi'
+import type {
+  VenueAccessDto,
+  VenueStaffMemberDto,
+  VenueStaffInviteResponse,
+  VenueStaffProfileDto,
+  VenueStaffProfileSubtype,
+  VenueStaffShiftStatus
+} from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { getTelegramContext } from '../shared/telegram'
 import { append, el, on } from '../shared/ui/dom'
@@ -41,6 +59,17 @@ type StaffRefs = {
   inviteHelper: HTMLParagraphElement
   inviteCopyStatus: HTMLParagraphElement
   list: HTMLDivElement
+  profileCard: HTMLElement
+  profileName: HTMLInputElement
+  profileRole: HTMLInputElement
+  profileSubtype: HTMLSelectElement
+  profileLinkedUser: HTMLInputElement
+  profilePhoto: HTMLInputElement
+  profileBio: HTMLTextAreaElement
+  profileTags: HTMLInputElement
+  profileCreateButton: HTMLButtonElement
+  profileStatus: HTMLParagraphElement
+  profileList: HTMLDivElement
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -158,7 +187,60 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
 
   const list = el('div', { className: 'venue-staff-list' })
 
-  append(wrapper, header, status, error, list)
+  const profileCard = el('section', { className: 'card venue-public-staff' })
+  const profileTitle = el('h3', { text: 'Публичные профили' })
+  const privacyNote = el('p', {
+    className: 'venue-order-sub',
+    text: 'Гостям видны только опубликованные профили.'
+  })
+  const profileForm = el('div', { className: 'venue-profile-form' })
+  const profileName = document.createElement('input')
+  profileName.className = 'venue-input'
+  profileName.placeholder = 'Имя'
+  profileName.maxLength = 120
+  const profileRole = document.createElement('input')
+  profileRole.className = 'venue-input'
+  profileRole.placeholder = 'Роль'
+  profileRole.maxLength = 120
+  const profileSubtype = document.createElement('select')
+  profileSubtype.className = 'venue-select'
+  profileSubtype.appendChild(new Option('Кальянный мастер', 'hookah_master'))
+  profileSubtype.appendChild(new Option('Официант', 'waiter'))
+  profileSubtype.appendChild(new Option('Админ', 'admin'))
+  profileSubtype.appendChild(new Option('Другое', 'other'))
+  const profileLinkedUser = document.createElement('input')
+  profileLinkedUser.className = 'venue-input'
+  profileLinkedUser.placeholder = 'User ID'
+  profileLinkedUser.inputMode = 'numeric'
+  const profilePhoto = document.createElement('input')
+  profilePhoto.className = 'venue-input'
+  profilePhoto.placeholder = 'Фото ref'
+  profilePhoto.maxLength = 512
+  const profileBio = document.createElement('textarea')
+  profileBio.className = 'venue-textarea'
+  profileBio.placeholder = 'Коротко о сотруднике'
+  profileBio.maxLength = 1000
+  profileBio.rows = 3
+  const profileTags = document.createElement('input')
+  profileTags.className = 'venue-input'
+  profileTags.placeholder = 'Теги через запятую'
+  const profileCreateButton = el('button', { text: 'Создать профиль' }) as HTMLButtonElement
+  append(
+    profileForm,
+    profileName,
+    profileRole,
+    profileSubtype,
+    profileLinkedUser,
+    profilePhoto,
+    profileBio,
+    profileTags,
+    profileCreateButton
+  )
+  const profileStatus = el('p', { className: 'status', text: '' })
+  const profileList = el('div', { className: 'venue-staff-list venue-profile-list' })
+  append(profileCard, profileTitle, privacyNote, profileForm, profileStatus, profileList)
+
+  append(wrapper, header, profileCard, status, error, list)
   root.replaceChildren(wrapper)
 
   return {
@@ -182,7 +264,18 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     inviteExpires,
     inviteHelper,
     inviteCopyStatus,
-    list
+    list,
+    profileCard,
+    profileName,
+    profileRole,
+    profileSubtype,
+    profileLinkedUser,
+    profilePhoto,
+    profileBio,
+    profileTags,
+    profileCreateButton,
+    profileStatus,
+    profileList
   }
 }
 
@@ -261,6 +354,218 @@ function renderMemberRow(
   return row
 }
 
+function formatProfileSubtype(subtype: VenueStaffProfileSubtype): string {
+  switch (subtype) {
+    case 'hookah_master':
+      return 'Кальянный мастер'
+    case 'waiter':
+      return 'Официант'
+    case 'admin':
+      return 'Админ'
+    case 'other':
+      return 'Другое'
+    default:
+      return subtype
+  }
+}
+
+function formatShiftStatus(status: VenueStaffShiftStatus | undefined | null): string {
+  switch (status) {
+    case 'scheduled':
+      return 'Запланирована'
+    case 'active':
+      return 'На смене'
+    case 'completed':
+      return 'Завершена'
+    case 'canceled':
+      return 'Отменена'
+    default:
+      return 'Не отмечена'
+  }
+}
+
+function splitTags(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8)
+}
+
+function parseOptionalUserId(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = Number(trimmed)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : Number.NaN
+}
+
+function normalizeOptionalText(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
+}
+
+function formatShiftLine(profile: VenueStaffProfileDto): string {
+  const shift = profile.todayShift
+  if (!shift) return 'Сегодня не отмечен'
+  const time =
+    shift.startsAt || shift.endsAt
+      ? ` · ${shift.startsAt ?? '—'}-${shift.endsAt ?? '—'}`
+      : ''
+  return `${formatShiftStatus(shift.status)}${time}`
+}
+
+function renderProfileRow(
+  profile: VenueStaffProfileDto,
+  access: VenueAccessDto,
+  currentUserId: number,
+  handlers: {
+    onSave: (profile: VenueStaffProfileDto, draft: {
+      displayName?: string | null
+      roleLabel?: string | null
+      subtype?: VenueStaffProfileSubtype | null
+      linkedUserId?: number | null
+      unlinkUser?: boolean
+      photoRef?: string | null
+      bio?: string | null
+      tags?: string[] | null
+    }) => void
+    onPublish: (profile: VenueStaffProfileDto) => void
+    onHide: (profile: VenueStaffProfileDto) => void
+    onShift: (profile: VenueStaffProfileDto, status: VenueStaffShiftStatus, isGuestVisible: boolean) => void
+  }
+) {
+  const isOwner = access.role === 'OWNER'
+  const canEditOwn = access.role === 'STAFF' && profile.linkedUserId === currentUserId
+  const canEdit = isOwner || canEditOwn
+  const canManageShift = access.role === 'OWNER' || access.role === 'MANAGER'
+
+  const row = el('div', { className: 'venue-staff-row venue-profile-row' })
+  const info = el('div', { className: 'venue-staff-info' })
+  append(
+    info,
+    el('strong', { text: profile.displayName }),
+    el('p', {
+      className: 'venue-order-sub',
+      text: `${profile.roleLabel || formatProfileSubtype(profile.subtype)} · ${formatShiftLine(profile)}`
+    })
+  )
+  if (profile.tags?.length) {
+    info.appendChild(el('p', { className: 'venue-order-sub', text: profile.tags.join(', ') }))
+  }
+  if (profile.bio) {
+    info.appendChild(el('p', { className: 'venue-profile-bio', text: profile.bio }))
+  }
+  const visibility = profile.isGuestVisible && profile.publishedAt && !profile.disabledAt ? 'Опубликован' : 'Скрыт'
+  info.appendChild(el('p', { className: 'venue-order-sub', text: visibility }))
+
+  const actions = el('div', { className: 'venue-staff-actions venue-profile-actions' })
+
+  if (canEdit) {
+    const nameInput = document.createElement('input')
+    nameInput.className = 'venue-input'
+    nameInput.value = profile.displayName
+    nameInput.maxLength = 120
+    nameInput.disabled = !isOwner
+    const roleInput = document.createElement('input')
+    roleInput.className = 'venue-input'
+    roleInput.value = profile.roleLabel ?? ''
+    roleInput.maxLength = 120
+    roleInput.disabled = !isOwner
+    const subtypeSelect = document.createElement('select')
+    subtypeSelect.className = 'venue-select'
+    ;[
+      ['Кальянный мастер', 'hookah_master'],
+      ['Официант', 'waiter'],
+      ['Админ', 'admin'],
+      ['Другое', 'other']
+    ].forEach(([label, value]) => subtypeSelect.appendChild(new Option(label, value)))
+    subtypeSelect.value = profile.subtype || 'other'
+    subtypeSelect.disabled = !isOwner
+    const linkedInput = document.createElement('input')
+    linkedInput.className = 'venue-input'
+    linkedInput.placeholder = 'User ID'
+    linkedInput.inputMode = 'numeric'
+    linkedInput.value = profile.linkedUserId ? String(profile.linkedUserId) : ''
+    linkedInput.disabled = !isOwner
+    const photoInput = document.createElement('input')
+    photoInput.className = 'venue-input'
+    photoInput.placeholder = 'Фото ref'
+    photoInput.value = profile.photoRef ?? ''
+    photoInput.maxLength = 512
+    const bioInput = document.createElement('textarea')
+    bioInput.className = 'venue-textarea'
+    bioInput.value = profile.bio ?? ''
+    bioInput.rows = 3
+    bioInput.maxLength = 1000
+    const tagsInput = document.createElement('input')
+    tagsInput.className = 'venue-input'
+    tagsInput.value = profile.tags?.join(', ') ?? ''
+    const saveButton = el('button', { className: 'button-small', text: 'Сохранить' }) as HTMLButtonElement
+    saveButton.addEventListener('click', () => {
+      const linkedUserId = parseOptionalUserId(linkedInput.value)
+      if (Number.isNaN(linkedUserId)) {
+        showToast('Некорректный User ID')
+        return
+      }
+      handlers.onSave(profile, {
+        displayName: isOwner ? nameInput.value : undefined,
+        roleLabel: isOwner ? roleInput.value : undefined,
+        subtype: isOwner ? (subtypeSelect.value as VenueStaffProfileSubtype) : undefined,
+        linkedUserId: isOwner ? linkedUserId : undefined,
+        unlinkUser: isOwner ? linkedUserId === null : undefined,
+        photoRef: photoInput.value,
+        bio: bioInput.value,
+        tags: splitTags(tagsInput.value)
+      })
+    })
+    append(actions, nameInput, roleInput, subtypeSelect, linkedInput, photoInput, bioInput, tagsInput, saveButton)
+  }
+
+  if (isOwner) {
+    const visibilityButton = el('button', {
+      className: 'button-small button-secondary',
+      text: profile.isGuestVisible && profile.publishedAt && !profile.disabledAt ? 'Скрыть' : 'Опубликовать'
+    }) as HTMLButtonElement
+    visibilityButton.addEventListener('click', () => {
+      if (profile.isGuestVisible && profile.publishedAt && !profile.disabledAt) {
+        handlers.onHide(profile)
+      } else {
+        handlers.onPublish(profile)
+      }
+    })
+    actions.appendChild(visibilityButton)
+  }
+
+  if (canManageShift) {
+    const statusSelect = document.createElement('select')
+    statusSelect.className = 'venue-select'
+    if (access.role === 'OWNER') {
+      statusSelect.appendChild(new Option('Запланирована', 'scheduled'))
+    }
+    statusSelect.appendChild(new Option('На смене', 'active'))
+    statusSelect.appendChild(new Option('Завершена', 'completed'))
+    statusSelect.appendChild(new Option('Отменена', 'canceled'))
+    statusSelect.value =
+      profile.todayShift?.status && (access.role === 'OWNER' || profile.todayShift.status !== 'scheduled')
+        ? profile.todayShift.status
+        : 'active'
+    const visibleLabel = el('label', { className: 'venue-checkbox-label' })
+    const visibleCheckbox = document.createElement('input')
+    visibleCheckbox.type = 'checkbox'
+    visibleCheckbox.checked = profile.todayShift?.isGuestVisible ?? true
+    visibleLabel.appendChild(visibleCheckbox)
+    visibleLabel.appendChild(document.createTextNode('Видно гостям'))
+    const shiftButton = el('button', { className: 'button-small', text: 'Сегодня' }) as HTMLButtonElement
+    shiftButton.addEventListener('click', () =>
+      handlers.onShift(profile, statusSelect.value as VenueStaffShiftStatus, visibleCheckbox.checked)
+    )
+    append(actions, statusSelect, visibleLabel, shiftButton)
+  }
+
+  append(row, info, actions)
+  return row
+}
+
 export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const { root, backendUrl, isDebug, venueId, access, currentUserId } = options
   if (!root) return () => undefined
@@ -269,14 +574,22 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   let disposed = false
   let loadAbort: AbortController | null = null
+  let profileLoadAbort: AbortController | null = null
   let loadSeq = 0
+  let profileLoadSeq = 0
   let currentInvite: VenueStaffInviteResponse | null = null
 
   const canInvite = access.role !== 'STAFF'
   const canManageRoles = access.role === 'OWNER'
+  const canCreateProfiles = access.role === 'OWNER'
+  const canManageProfileShifts = access.role === 'OWNER' || access.role === 'MANAGER'
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
+  }
+
+  const setProfileStatus = (text: string) => {
+    refs.profileStatus.textContent = text
   }
 
   const hideError = () => {
@@ -293,10 +606,10 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     refs.errorTitle.textContent = presentation.title
     refs.errorMessage.textContent = presentation.message
     const actions: ApiErrorAction[] = presentation.actions.length
-      ? presentation.actions.map((action) =>
-          action.label === 'Повторить' ? { ...action, onClick: () => void loadStaff() } : action
+        ? presentation.actions.map((action) =>
+          action.label === 'Повторить' ? { ...action, onClick: () => void reloadAll() } : action
         )
-      : [{ label: 'Повторить', kind: 'primary' as const, onClick: () => void loadStaff() }]
+      : [{ label: 'Повторить', kind: 'primary' as const, onClick: () => void reloadAll() }]
     renderErrorActions(refs.errorActions, actions)
     renderErrorDetails(refs.errorDetails, error, { isDebug })
     refs.error.hidden = false
@@ -396,7 +709,30 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     })
   }
 
+  const renderProfiles = (profiles: VenueStaffProfileDto[]) => {
+    refs.profileList.replaceChildren()
+    if (!profiles.length) {
+      refs.profileList.appendChild(el('p', { className: 'venue-empty', text: 'Профили не найдены.' }))
+      return
+    }
+    profiles.forEach((profile) => {
+      refs.profileList.appendChild(
+        renderProfileRow(profile, access, currentUserId, {
+          onSave: (target, draft) => void saveProfile(target, draft),
+          onPublish: (target) => void publishProfile(target),
+          onHide: (target) => void hideProfile(target),
+          onShift: (target, status, isGuestVisible) => void updateTodayShift(target, status, isGuestVisible)
+        })
+      )
+    })
+  }
+
   const loadStaff = async () => {
+    if (access.role === 'STAFF') {
+      refs.list.replaceChildren(el('p', { className: 'venue-empty', text: 'Управление ролями недоступно.' }))
+      setStatus('')
+      return
+    }
     hideError()
     setStatus('Загрузка...')
     if (loadAbort) {
@@ -416,6 +752,33 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     }
     renderStaff(result.data.members, currentUserId)
     setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
+  }
+
+  const loadProfiles = async () => {
+    hideError()
+    setProfileStatus('Загрузка...')
+    if (profileLoadAbort) {
+      profileLoadAbort.abort()
+    }
+    const controller = new AbortController()
+    profileLoadAbort = controller
+    const seq = ++profileLoadSeq
+    const result = await venueGetStaffProfiles(backendUrl, venueId, deps, controller.signal)
+    if (disposed || profileLoadSeq !== seq) return
+    profileLoadAbort = null
+    if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return
+    if (!result.ok) {
+      showError(result.error)
+      setProfileStatus('')
+      return
+    }
+    renderProfiles(result.data.profiles)
+    setProfileStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
+  }
+
+  const reloadAll = () => {
+    void loadStaff()
+    void loadProfiles()
   }
 
   const createInvite = async () => {
@@ -468,8 +831,140 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     void loadStaff()
   }
 
+  const createProfile = async () => {
+    if (!canCreateProfiles) {
+      showToast('Недостаточно прав')
+      return
+    }
+    const linkedUserId = parseOptionalUserId(refs.profileLinkedUser.value)
+    if (Number.isNaN(linkedUserId)) {
+      showToast('Некорректный User ID')
+      return
+    }
+    const displayName = refs.profileName.value.trim()
+    if (!displayName) {
+      showToast('Укажите имя')
+      return
+    }
+    const result = await venueCreateStaffProfile(
+      backendUrl,
+      {
+        venueId,
+        body: {
+          displayName,
+          roleLabel: normalizeOptionalText(refs.profileRole.value),
+          subtype: refs.profileSubtype.value as VenueStaffProfileSubtype,
+          linkedUserId,
+          photoRef: normalizeOptionalText(refs.profilePhoto.value),
+          bio: normalizeOptionalText(refs.profileBio.value),
+          tags: splitTags(refs.profileTags.value)
+        }
+      },
+      deps
+    )
+    if (disposed) return
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+    refs.profileName.value = ''
+    refs.profileRole.value = ''
+    refs.profileLinkedUser.value = ''
+    refs.profilePhoto.value = ''
+    refs.profileBio.value = ''
+    refs.profileTags.value = ''
+    showToast('Профиль создан')
+    void loadProfiles()
+  }
+
+  const saveProfile = async (
+    profile: VenueStaffProfileDto,
+    draft: {
+      displayName?: string | null
+      roleLabel?: string | null
+      subtype?: VenueStaffProfileSubtype | null
+      linkedUserId?: number | null
+      unlinkUser?: boolean
+      photoRef?: string | null
+      bio?: string | null
+      tags?: string[] | null
+    }
+  ) => {
+    const result = await venueUpdateStaffProfile(
+      backendUrl,
+      {
+        venueId,
+        profileId: profile.id,
+        body: {
+          displayName: draft.displayName,
+          roleLabel: normalizeOptionalText(draft.roleLabel ?? ''),
+          subtype: draft.subtype,
+          linkedUserId: draft.linkedUserId,
+          unlinkUser: draft.unlinkUser,
+          photoRef: normalizeOptionalText(draft.photoRef ?? ''),
+          bio: normalizeOptionalText(draft.bio ?? ''),
+          tags: draft.tags ?? undefined
+        }
+      },
+      deps
+    )
+    if (disposed) return
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+    showToast('Профиль обновлён')
+    void loadProfiles()
+  }
+
+  const publishProfile = async (profile: VenueStaffProfileDto) => {
+    const result = await venuePublishStaffProfile(backendUrl, { venueId, profileId: profile.id }, deps)
+    if (disposed) return
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+    showToast('Профиль опубликован')
+    void loadProfiles()
+  }
+
+  const hideProfile = async (profile: VenueStaffProfileDto) => {
+    const result = await venueHideStaffProfile(backendUrl, { venueId, profileId: profile.id }, deps)
+    if (disposed) return
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+    showToast('Профиль скрыт')
+    void loadProfiles()
+  }
+
+  const updateTodayShift = async (
+    profile: VenueStaffProfileDto,
+    status: VenueStaffShiftStatus,
+    isGuestVisible: boolean
+  ) => {
+    if (!canManageProfileShifts) {
+      showToast('Недостаточно прав')
+      return
+    }
+    const result = await venueUpsertTodayStaffShift(
+      backendUrl,
+      { venueId, profileId: profile.id, body: { status, isGuestVisible } },
+      deps
+    )
+    if (disposed) return
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+    showToast('Смена обновлена')
+    void loadProfiles()
+  }
+
   const disposables: Array<() => void> = []
   disposables.push(on(refs.inviteButton, 'click', () => void createInvite()))
+  disposables.push(on(refs.profileCreateButton, 'click', () => void createProfile()))
   disposables.push(
     on(refs.inviteCopyLinkButton, 'click', () => {
       const link = currentInviteDeepLink()
@@ -510,6 +1005,17 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   refs.inviteButton.disabled = !canInvite
   refs.inviteButton.title = canInvite ? '' : 'Недостаточно прав'
+  refs.profileCreateButton.disabled = !canCreateProfiles
+  refs.profileCreateButton.title = canCreateProfiles ? '' : 'Недостаточно прав'
+  if (!canCreateProfiles) {
+    refs.profileName.disabled = true
+    refs.profileRole.disabled = true
+    refs.profileSubtype.disabled = true
+    refs.profileLinkedUser.disabled = true
+    refs.profilePhoto.disabled = true
+    refs.profileBio.disabled = true
+    refs.profileTags.disabled = true
+  }
   if (access.role === 'MANAGER') {
     refs.inviteRole.value = 'STAFF'
   }
@@ -523,10 +1029,12 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   }
 
   void loadStaff()
+  void loadProfiles()
 
   return () => {
     disposed = true
     loadAbort?.abort()
+    profileLoadAbort?.abort()
     disposables.forEach((dispose) => dispose())
   }
 }

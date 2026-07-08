@@ -66,6 +66,12 @@ import type {
   VenueStaffInviteRequest,
   VenueStaffInviteResponse,
   VenueStaffListResponse,
+  VenueStaffProfileCreateRequest,
+  VenueStaffProfileDto,
+  VenueStaffProfilesResponse,
+  VenueStaffProfileUpdateRequest,
+  VenueStaffShiftResponse,
+  VenueStaffShiftUpsertRequest,
   VenueStaffUpdateRoleRequest
 } from './venueDtos'
 import type {
@@ -1016,6 +1022,105 @@ export async function venueGetStaff(
     backendUrl,
     `/api/venue/${venueId}/staff`,
     { signal },
+    deps
+  )
+}
+
+export async function venueGetStaffProfiles(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffProfilesResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/staff/profiles`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueCreateStaffProfile(
+  backendUrl: string,
+  params: { venueId: number; body: VenueStaffProfileCreateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffProfileDto>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/profiles`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateStaffProfile(
+  backendUrl: string,
+  params: { venueId: number; profileId: number; body: VenueStaffProfileUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffProfileDto>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/profiles/${params.profileId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venuePublishStaffProfile(
+  backendUrl: string,
+  params: { venueId: number; profileId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffProfileDto>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/profiles/${params.profileId}/publish`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueHideStaffProfile(
+  backendUrl: string,
+  params: { venueId: number; profileId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffProfileDto>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/profiles/${params.profileId}/hide`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function venueUpsertTodayStaffShift(
+  backendUrl: string,
+  params: { venueId: number; profileId: number; body: VenueStaffShiftUpsertRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffShiftResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/profiles/${params.profileId}/today-shift`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
     deps
   )
 }

@@ -1254,6 +1254,80 @@ input[type="number"] {
   justify-items: end;
 }
 
+.venue-public-staff,
+.venue-profile-form,
+.venue-profile-list,
+.venue-profile-actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.venue-profile-row {
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.venue-profile-row .venue-staff-info,
+.venue-profile-row .venue-profile-actions {
+  min-width: min(100%, 16rem);
+  flex: 1 1 16rem;
+}
+
+.venue-profile-bio {
+  margin: 0;
+  color: #25324d;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.venue-checkbox-label {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: flex-end;
+  color: #334155;
+  font-size: 0.9rem;
+}
+
+.venue-checkbox-label input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #0f766e;
+}
+
+.guest-today-staff,
+.guest-today-staff-list,
+.guest-today-staff-body {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.guest-today-staff-item {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.guest-today-staff-avatar {
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  place-items: center;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.guest-today-staff-tags,
+.guest-today-staff-bio {
+  margin: 0;
+  color: #475569;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .venue-empty {
   margin: 0;
   color: #64748b;

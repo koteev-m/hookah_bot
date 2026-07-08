@@ -80,7 +80,7 @@ Derived responsibilities:
 - shift_extension_settings: per-venue paid extension policy, fixed duration/price, enabled flag
 - shift_extension_request: guest request to extend active table/venue service window; statuses pending/approved/rejected/cancelled
 - order_service_charge: non-menu bill charge such as approved paid extension; included in bill totals but not shown as a normal order-menu item
-- staff_profile / staff_shift: future Phase 1 staff visibility model for public opt-in staff profiles and manual "today on shift"; canonical spec is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`
+- staff_profile / staff_shift: Phase 1 staff visibility model for public opt-in staff profiles and manual "today on shift"; canonical spec is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`
 - staff_tip_method / staff_tip_intent: future staff-tip model for a specific staff member; MVP money must not touch the platform and tip intent is not proof of payment
 - subscription: venue_id, status trialing/active/past_due/suspended/canceled, price override, trial_end, paid_until, grace_end, methods enabled(card/stars)
 - support_ticket: guest/venue/platform tickets with context (venue/table/order)

@@ -9,6 +9,7 @@ import {
   guestStaffCall
 } from '../shared/api/guestApi'
 import type {
+  GuestTodayStaffDto,
   MenuCategoryDto,
   MenuItemDto,
   MenuItemOptionDto,
@@ -73,6 +74,7 @@ type VenueRefs = {
   bookingButton: HTMLButtonElement
   questionButton: HTMLButtonElement
   extensionSlot: HTMLDivElement
+  todayStaffSlot: HTMLDivElement
   menuBody: HTMLDivElement
   message: HTMLParagraphElement
   retryButton: HTMLButtonElement
@@ -175,6 +177,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
   const staffSlot = el('div', { className: 'staff-call-slot' }) as HTMLDivElement
+  const todayStaffSlot = el('div', { className: 'guest-today-staff-slot' }) as HTMLDivElement
   const staffStatusCard = el('section', { className: 'card staff-call-status' })
   const staffStatusTitle = el('h4', { text: '' })
   const staffStatusReason = el('p', { className: 'staff-call-status-reason', text: '' })
@@ -223,7 +226,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const menuBody = el('div', { className: 'menu-body' })
   const extensionSlot = el('div', { className: 'shift-extension-slot' }) as HTMLDivElement
 
-  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody, staffModalOverlay)
+  append(wrapper, header, todayStaffSlot, staffSlot, status, message, retryButton, error, menuBody, staffModalOverlay)
   root.replaceChildren(wrapper)
 
   return {
@@ -241,6 +244,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     bookingButton,
     questionButton,
     extensionSlot,
+    todayStaffSlot,
     menuBody,
     message,
     retryButton,
@@ -428,6 +432,55 @@ function formatTodaySchedule(schedule: VenueTodayScheduleDto | null | undefined)
   if (schedule.isConfigured === false) return schedule.statusLabel || 'График не указан'
   const timeLabel = schedule.timeLabel?.trim()
   return timeLabel ? `${schedule.statusLabel} · ${timeLabel}` : schedule.statusLabel
+}
+
+function formatStaffSubtype(subtype: string): string {
+  switch (subtype) {
+    case 'hookah_master':
+      return 'Кальянный мастер'
+    case 'waiter':
+      return 'Официант'
+    case 'admin':
+      return 'Админ'
+    case 'other':
+      return 'Команда'
+    default:
+      return subtype
+  }
+}
+
+function renderTodayStaff(staff: GuestTodayStaffDto[]) {
+  if (!staff.length) return null
+  const section = el('section', { className: 'card guest-today-staff' })
+  section.appendChild(el('h4', { text: 'Сегодня работают' }))
+  const list = el('div', { className: 'guest-today-staff-list' })
+  staff.forEach((person) => {
+    const item = el('article', { className: 'guest-today-staff-item' })
+    const avatar = el('div', {
+      className: 'guest-today-staff-avatar',
+      text: person.displayName.trim().charAt(0).toLocaleUpperCase('ru-RU') || '•'
+    })
+    const body = el('div', { className: 'guest-today-staff-body' })
+    body.appendChild(el('strong', { text: person.displayName }))
+    body.appendChild(
+      el('p', {
+        className: 'venue-order-sub',
+        text: person.roleLabel?.trim() || formatStaffSubtype(person.subtype)
+      })
+    )
+    const tags = person.tags?.filter(Boolean) ?? []
+    if (tags.length) {
+      body.appendChild(el('p', { className: 'guest-today-staff-tags', text: tags.join(', ') }))
+    }
+    const bio = person.bio?.trim()
+    if (bio) {
+      body.appendChild(el('p', { className: 'guest-today-staff-bio', text: bio.length > 140 ? `${bio.slice(0, 137)}...` : bio }))
+    }
+    append(item, avatar, body)
+    list.appendChild(item)
+  })
+  section.appendChild(list)
+  return section
 }
 
 function normalizeInfoMedia(section: VenueInfoSectionDto) {
@@ -926,6 +979,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       refs.routeLink.href = routeUrl
     } else {
       refs.routeLink.removeAttribute('href')
+    }
+    const todayStaff = renderTodayStaff(venue.todayStaff ?? [])
+    refs.todayStaffSlot.replaceChildren()
+    refs.todayStaffSlot.hidden = !todayStaff
+    if (todayStaff) {
+      refs.todayStaffSlot.appendChild(todayStaff)
     }
     updateQuestionAction()
   }

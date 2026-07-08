@@ -54,6 +54,82 @@ export type VenueStaffListResponse = {
   members: VenueStaffMemberDto[]
 }
 
+export type VenueStaffProfileSubtype = 'hookah_master' | 'waiter' | 'admin' | 'other' | string
+
+export type VenueStaffShiftStatus = 'scheduled' | 'active' | 'completed' | 'canceled' | string
+
+export type VenueStaffShiftDto = {
+  id: number
+  staffProfileId: number
+  shiftDate: string
+  startsAt?: string | null
+  endsAt?: string | null
+  status: VenueStaffShiftStatus
+  isGuestVisible: boolean
+  manuallyMarkedActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type VenueStaffProfileDto = {
+  id: number
+  linkedUserId?: number | null
+  displayName: string
+  roleLabel?: string | null
+  subtype: VenueStaffProfileSubtype
+  photoRef?: string | null
+  bio?: string | null
+  tags?: string[]
+  isGuestVisible: boolean
+  publishedAt?: string | null
+  disabledAt?: string | null
+  createdAt: string
+  updatedAt: string
+  todayShift?: VenueStaffShiftDto | null
+}
+
+export type VenueStaffProfilesResponse = {
+  profiles: VenueStaffProfileDto[]
+}
+
+export type VenueStaffProfileCreateRequest = {
+  displayName: string
+  roleLabel?: string | null
+  subtype?: VenueStaffProfileSubtype
+  linkedUserId?: number | null
+  photoRef?: string | null
+  bio?: string | null
+  tags?: string[]
+  isGuestVisible?: boolean
+}
+
+export type VenueStaffProfileUpdateRequest = {
+  displayName?: string | null
+  roleLabel?: string | null
+  subtype?: VenueStaffProfileSubtype | null
+  linkedUserId?: number | null
+  unlinkUser?: boolean
+  photoRef?: string | null
+  bio?: string | null
+  tags?: string[] | null
+  isGuestVisible?: boolean | null
+}
+
+export type VenueStaffShiftUpsertRequest = {
+  status?: VenueStaffShiftStatus
+  startsAt?: string | null
+  endsAt?: string | null
+  isGuestVisible?: boolean | null
+}
+
+export type VenueStaffShiftResponse = {
+  shift: VenueStaffShiftDto
+}
+
+export type VenueStaffTodayShiftsResponse = {
+  shifts: VenueStaffShiftDto[]
+}
+
 export type VenueStaffInviteRequest = {
   role: 'OWNER' | 'MANAGER' | 'STAFF'
   expiresIn?: number

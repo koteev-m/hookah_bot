@@ -606,6 +606,293 @@ class VenueStaffRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
         }
 
+    @Test
+    fun `owner can create publish hide profile and mark today shift`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-profile-owner")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 6101L
+            val staffId = 6102L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val ownerToken = issueToken(config, ownerId)
+
+            val createResponse =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(
+                                displayName = "Иван",
+                                roleLabel = "Мастер",
+                                subtype = "hookah_master",
+                                linkedUserId = staffId,
+                                bio = "Любит крепкие чаши",
+                                tags = listOf("крепко", "ягоды"),
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val created = json.decodeFromString(StaffProfileDto.serializer(), createResponse.bodyAsText())
+            assertEquals(staffId, created.linkedUserId)
+            assertEquals(false, created.isGuestVisible)
+
+            val publishResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${created.id}/publish") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, publishResponse.status)
+            val published = json.decodeFromString(StaffProfileDto.serializer(), publishResponse.bodyAsText())
+            assertEquals(true, published.isGuestVisible)
+            assertTrue(published.publishedAt?.isNotBlank() == true)
+
+            val shiftResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${created.id}/today-shift") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffShiftUpsertRequest.serializer(),
+                            StaffShiftUpsertRequest(status = "active", isGuestVisible = true),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, shiftResponse.status)
+            val shift = json.decodeFromString(StaffShiftResponse.serializer(), shiftResponse.bodyAsText()).shift
+            assertEquals("active", shift.status)
+            assertEquals(true, shift.manuallyMarkedActive)
+
+            val listResponse =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val listPayload = json.decodeFromString(StaffProfilesResponse.serializer(), listResponse.bodyAsText())
+            assertEquals("active", listPayload.profiles.single().todayShift?.status)
+
+            val hideResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${created.id}/hide") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, hideResponse.status)
+            val hidden = json.decodeFromString(StaffProfileDto.serializer(), hideResponse.bodyAsText())
+            assertEquals(false, hidden.isGuestVisible)
+            assertTrue(hidden.disabledAt?.isNotBlank() == true)
+        }
+
+    @Test
+    fun `staff can edit own linked draft fields only and cannot publish`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-profile-own-edit")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 6201L
+            val staffId = 6202L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val ownerToken = issueToken(config, ownerId)
+            val staffToken = issueToken(config, staffId)
+
+            val profile =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(
+                                displayName = "Алина",
+                                subtype = "waiter",
+                                linkedUserId = staffId,
+                            ),
+                        ),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+
+            val ownEditResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/${profile.id}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(
+                                bio = "Помогает с посадкой",
+                                photoRef = "photo-ref",
+                                tags = listOf("зал"),
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, ownEditResponse.status)
+            val ownEdit = json.decodeFromString(StaffProfileDto.serializer(), ownEditResponse.bodyAsText())
+            assertEquals("Алина", ownEdit.displayName)
+            assertEquals("Помогает с посадкой", ownEdit.bio)
+            assertEquals(listOf("зал"), ownEdit.tags)
+
+            val forbiddenNameResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/${profile.id}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(displayName = "Другое имя"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, forbiddenNameResponse.status)
+            assertApiErrorEnvelope(forbiddenNameResponse, ApiErrorCodes.FORBIDDEN)
+
+            val publishResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${profile.id}/publish") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, publishResponse.status)
+            assertApiErrorEnvelope(publishResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `manager can mark today shift but cannot publish or schedule profile`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-profile-manager-shift")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 6301L
+            val managerId = 6302L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
+            val ownerToken = issueToken(config, ownerId)
+            val managerToken = issueToken(config, managerId)
+            val profile =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(displayName = "Павел", subtype = "admin"),
+                        ),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+
+            val activeResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${profile.id}/today-shift") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffShiftUpsertRequest.serializer(),
+                            StaffShiftUpsertRequest(status = "active"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, activeResponse.status)
+
+            val scheduledResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${profile.id}/today-shift") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffShiftUpsertRequest.serializer(),
+                            StaffShiftUpsertRequest(status = "scheduled"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, scheduledResponse.status)
+            assertApiErrorEnvelope(scheduledResponse, ApiErrorCodes.FORBIDDEN)
+
+            val publishResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${profile.id}/publish") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, publishResponse.status)
+            assertApiErrorEnvelope(publishResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
+    fun `foreign venue user cannot manage profile or shift`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-profile-foreign")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 6401L
+            val foreignOwnerId = 6402L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, foreignOwnerId, "OWNER")
+            val ownerToken = issueToken(config, ownerId)
+            val foreignToken = issueToken(config, foreignOwnerId)
+            val profile =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(displayName = "Мария", subtype = "other"),
+                        ),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+
+            val updateResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/${profile.id}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $foreignToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(displayName = "Нельзя"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, updateResponse.status)
+            assertApiErrorEnvelope(updateResponse, ApiErrorCodes.FORBIDDEN)
+
+            val shiftResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${profile.id}/today-shift") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $foreignToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffShiftUpsertRequest.serializer(), StaffShiftUpsertRequest()))
+                }
+            assertEquals(HttpStatusCode.Forbidden, shiftResponse.status)
+            assertApiErrorEnvelope(shiftResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -771,5 +1058,76 @@ class VenueStaffRoutesTest {
     @Serializable
     private data class StaffUpdateRoleRequest(
         val role: String,
+    )
+
+    @Serializable
+    private data class StaffProfileCreateRequest(
+        val displayName: String,
+        val roleLabel: String? = null,
+        val subtype: String = "other",
+        val linkedUserId: Long? = null,
+        val photoRef: String? = null,
+        val bio: String? = null,
+        val tags: List<String> = emptyList(),
+        val isGuestVisible: Boolean = false,
+    )
+
+    @Serializable
+    private data class StaffProfileUpdateRequest(
+        val displayName: String? = null,
+        val roleLabel: String? = null,
+        val subtype: String? = null,
+        val linkedUserId: Long? = null,
+        val unlinkUser: Boolean = false,
+        val photoRef: String? = null,
+        val bio: String? = null,
+        val tags: List<String>? = null,
+        val isGuestVisible: Boolean? = null,
+    )
+
+    @Serializable
+    private data class StaffProfilesResponse(
+        val profiles: List<StaffProfileDto>,
+    )
+
+    @Serializable
+    private data class StaffProfileDto(
+        val id: Long,
+        val linkedUserId: Long? = null,
+        val displayName: String,
+        val roleLabel: String? = null,
+        val subtype: String,
+        val photoRef: String? = null,
+        val bio: String? = null,
+        val tags: List<String> = emptyList(),
+        val isGuestVisible: Boolean,
+        val publishedAt: String? = null,
+        val disabledAt: String? = null,
+        val todayShift: StaffShiftDto? = null,
+    )
+
+    @Serializable
+    private data class StaffShiftUpsertRequest(
+        val status: String = "active",
+        val startsAt: String? = null,
+        val endsAt: String? = null,
+        val isGuestVisible: Boolean? = null,
+    )
+
+    @Serializable
+    private data class StaffShiftResponse(
+        val shift: StaffShiftDto,
+    )
+
+    @Serializable
+    private data class StaffShiftDto(
+        val id: Long,
+        val staffProfileId: Long,
+        val shiftDate: String,
+        val startsAt: String? = null,
+        val endsAt: String? = null,
+        val status: String,
+        val isGuestVisible: Boolean,
+        val manuallyMarkedActive: Boolean,
     )
 }

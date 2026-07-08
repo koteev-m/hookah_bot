@@ -8,6 +8,8 @@ import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.CatalogVenueDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffResponse
 import com.hookah.platform.backend.miniapp.guest.api.MenuCategoryDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuItemDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuItemOptionDto
@@ -30,6 +32,8 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 import com.hookah.platform.backend.miniapp.venue.containsOpenInstant
 import com.hookah.platform.backend.miniapp.venue.formatScheduleRange
 import com.hookah.platform.backend.miniapp.venue.formatScheduleTime
+import com.hookah.platform.backend.miniapp.venue.staff.PublicVenueStaffToday
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
 import com.hookah.platform.backend.telegram.TelegramDownloadedFile
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSection
@@ -50,6 +54,7 @@ import java.time.LocalDateTime
 fun Route.guestVenueRoutes(
     guestVenueRepository: GuestVenueRepository,
     guestMenuRepository: GuestMenuRepository,
+    venueStaffProfileRepository: VenueStaffProfileRepository,
     venueInfoSectionsRepository: VenueInfoSectionsRepository,
     venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository,
     subscriptionRepository: SubscriptionRepository,
@@ -80,7 +85,26 @@ fun Route.guestVenueRoutes(
                 venueBookingHoursRepository = venueBookingHoursRepository,
                 venueSettingsRepository = venueSettingsRepository,
             )
-        call.respond(VenueResponse(venue = venue.toVenueDto(todaySchedule)))
+        val todayStaff =
+            buildGuestTodayStaff(
+                venueId = venue.id,
+                venueStaffProfileRepository = venueStaffProfileRepository,
+                venueSettingsRepository = venueSettingsRepository,
+            )
+        call.respond(VenueResponse(venue = venue.toVenueDto(todaySchedule, todayStaff)))
+    }
+
+    get("/venue/{id}/today-staff") {
+        val rawId = call.parameters["id"] ?: throw InvalidInputException("id is required")
+        val venueId = rawId.toLongOrNull() ?: throw InvalidInputException("id must be a number")
+        ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
+        val todayStaff =
+            buildGuestTodayStaff(
+                venueId = venueId,
+                venueStaffProfileRepository = venueStaffProfileRepository,
+                venueSettingsRepository = venueSettingsRepository,
+            )
+        call.respond(GuestTodayStaffResponse(venueId = venueId, staff = todayStaff))
     }
 
     get("/venue/{id}/info-sections") {
@@ -206,7 +230,10 @@ private fun VenueShort.toCatalogDto(todaySchedule: VenueTodayScheduleDto?): Cata
         todaySchedule = todaySchedule,
     )
 
-private fun VenueShort.toVenueDto(todaySchedule: VenueTodayScheduleDto?): VenueDto =
+private fun VenueShort.toVenueDto(
+    todaySchedule: VenueTodayScheduleDto?,
+    todayStaff: List<GuestTodayStaffDto> = emptyList(),
+): VenueDto =
     VenueDto(
         id = id,
         name = name,
@@ -221,6 +248,7 @@ private fun VenueShort.toVenueDto(todaySchedule: VenueTodayScheduleDto?): VenueD
         guestContact = guestContact,
         cardDescription = cardDescription,
         todaySchedule = todaySchedule,
+        todayStaff = todayStaff,
         status = status.dbValue,
     )
 
@@ -262,6 +290,31 @@ private suspend fun buildGuestInfoSections(
         }
     return VenueInfoSectionsResponse(venueId = venueId, sections = sectionDtos)
 }
+
+private suspend fun buildGuestTodayStaff(
+    venueId: Long,
+    venueStaffProfileRepository: VenueStaffProfileRepository,
+    venueSettingsRepository: VenueSettingsRepository,
+): List<GuestTodayStaffDto> {
+    val zoneId = venueSettingsRepository.resolveZoneId(venueId)
+    val today = LocalDateTime.ofInstant(Instant.now(), zoneId).toLocalDate()
+    return venueStaffProfileRepository.listPublicTodayStaff(venueId, today).map { it.toGuestDto() }
+}
+
+private fun PublicVenueStaffToday.toGuestDto(): GuestTodayStaffDto =
+    GuestTodayStaffDto(
+        id = id,
+        displayName = displayName,
+        roleLabel = roleLabel,
+        subtype = subtype,
+        photoRef = photoRef,
+        bio = bio,
+        tags = tags,
+        shiftDate = shiftDate.toString(),
+        startsAt = startsAt?.toString(),
+        endsAt = endsAt?.toString(),
+        shiftStatus = shiftStatus,
+    )
 
 private fun VenueInfoSection.toGuestInfoDto(media: List<VenueInfoSectionMediaDto>): VenueInfoSectionDto =
     VenueInfoSectionDto(

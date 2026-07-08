@@ -21,6 +21,7 @@ import type {
   GuestFavoriteItemsResponse,
   GuestFavoriteVenuesResponse,
   GuestShiftExtensionOptionsResponse,
+  GuestTodayStaffResponse,
   GuestShiftExtensionRequest,
   GuestTabResponse,
   GuestTabsResponse,
@@ -118,6 +119,15 @@ export async function guestGetVenueInfoSections(
     { signal },
     deps
   )
+}
+
+export async function guestGetTodayStaff(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestTodayStaffResponse>> {
+  return requestApi<GuestTodayStaffResponse>(backendUrl, `/api/guest/venue/${venueId}/today-staff`, { signal }, deps)
 }
 
 export async function guestCreateBooking(

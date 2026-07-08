@@ -37,7 +37,27 @@ export type VenueDto = {
   guestContact?: string | null
   cardDescription?: string | null
   todaySchedule?: VenueTodayScheduleDto | null
+  todayStaff?: GuestTodayStaffDto[]
   status: string
+}
+
+export type GuestTodayStaffResponse = {
+  venueId: number
+  staff: GuestTodayStaffDto[]
+}
+
+export type GuestTodayStaffDto = {
+  id: number
+  displayName: string
+  roleLabel?: string | null
+  subtype: 'hookah_master' | 'waiter' | 'admin' | 'other' | string
+  photoRef?: string | null
+  bio?: string | null
+  tags?: string[]
+  shiftDate: string
+  startsAt?: string | null
+  endsAt?: string | null
+  shiftStatus: string
 }
 
 export type VenueTodayScheduleDto = {
