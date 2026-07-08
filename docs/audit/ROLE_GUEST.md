@@ -8,7 +8,7 @@
 
 Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call, сообщения с заведением и просмотр своего заказа/счёта.
 
-Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest booking lifecycle, hold/deadline, reminders and booking chat behavior are governed by `docs/BOOKING_LIFECYCLE.md`. Telegram QR entrypoints, fallback order and bot staff-call behavior are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Guest permissions, table/session/tab scope and trust boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Structured menu/options/stop-list behavior is governed by `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
+Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest booking lifecycle, hold/deadline, reminders and booking chat behavior are governed by `docs/BOOKING_LIFECYCLE.md`. Telegram QR entrypoints, fallback order and bot staff-call behavior are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Guest permissions, table/session/tab scope and trust boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Structured menu/options/stop-list behavior is governed by `docs/MENU_OPTIONS_STOPLIST.md`. Public staff profiles, today's visible staff and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`. Guest growth/retention scope is tracked separately in `docs/GROWTH_RETENTION.md`; favorites/history/repeat/feedback/promotions must not be called complete without dedicated implementation evidence and smoke.
 
 Ключевое разделение:
 - **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;
@@ -40,6 +40,7 @@ Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing l
 
 Pre-QR Guest Mini App:
 - карточка заведения показывает safe guest-visible данные;
+- after Phase 1, venue detail may show `Сегодня работают` with public visible staff profiles only; catalog may later show a compact `Сегодня: Иван, Алина` line;
 - `ℹ️ Информация` отдаёт только visible + filled owner info sections;
 - `section_type=menu` отображается как `📖 Фото-меню`;
 - media из info sections открываются через backend proxy, без raw Telegram URL и без bot token во frontend;
@@ -81,6 +82,7 @@ Account/bookings:
 
 - Смотреть каталог и published guest-visible venues.
 - Открывать карточку заведения и заполненные visible info sections.
+- Смотреть public visible staff profiles and `Сегодня работают` after Phase 1.
 - Смотреть `📖 Фото-меню` как информационный media/text section.
 - Создавать и отменять свои бронирования, если booking flow доступен.
 - Задать вопрос заведению до визита через catalog card or venue detail; existing ordinary guest+venue chat is reused.
@@ -111,6 +113,8 @@ Account/bookings:
 - Доверять client-side price; итоговая цена и option deltas считаются server-side.
 - Видеть чужие chats/support tickets.
 - Завершать или скрывать чужой table context/session за тем же физическим столом.
+- Видеть `linked_user_id`, private Telegram username/id, phone/email or hidden staff profiles/shifts.
+- Считать future `staff_tip_intent` подтверждением оплаты или оплатой счёта.
 - Видеть operator analytics dashboards; Guest gets only profile/history-facing summaries later.
 
 ## Known gaps / needs smoke
@@ -133,6 +137,8 @@ Account/bookings:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`; Guest-facing analytics is limited to future profile/history summaries, while client events remain low-trust UX diagnostics.
 - Menu/options/stop-list model is `SPEC UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, but broader modifier/media/top-list/shift-check coverage remains partial/future.
 - Real acquiring provider, Telegram Stars and automatic recurring payments remain future work; guest bill request is still an on-site operational request, not online payment.
+- Staff profiles / today shift are `SPEC READY / FUTURE-NEXT` in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; runtime Guest UI/API must not be called complete until public visibility, hidden-profile denial and privacy smoke pass.
+- Staff tips are future: Phase 2 may use external staff tip link + intent, but no money touches the platform in MVP and intent is not proof of payment.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 
 ## Smoke-critical checks

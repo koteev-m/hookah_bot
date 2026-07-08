@@ -13,6 +13,7 @@ Transactional flows remain separate:
 - Booking lifecycle, hold/deadline, no-show/seated and reminder semantics are governed by `docs/BOOKING_LIFECYCLE.md`.
 - Order/session/tab semantics for history, repeat and feedback dependencies are governed by `docs/ORDER_SESSION_TAB_CORE.md`.
 - Growth analytics events and KPI formulas are governed by `docs/ANALYTICS_EVENTS.md`.
+- Staff public profiles, today shift visibility and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
 - Booking reminders are transactional booking operations, not growth marketing.
 - Staff-chat is operational and must not receive marketing/growth events unless a separate operational event already exists.
 
@@ -22,6 +23,7 @@ Current implementation is **partial**:
 - Account/history/favorites baselines are referenced in role docs, but require separate staging smoke before being marked complete.
 - Booking seated/no-show, order close and table-session close signals exist as foundations for visit history, but there is no canonical completed retention loop.
 - Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
+- Staff profiles / today on shift are a separate staff visibility module, not a growth campaign. Staff tips are future and must not be treated as guest order online payment.
 - Repeat templates, post-visit feedback, promo codes, loyalty stamps/points, referrals, campaign segmentation and paid placement boosting remain future unless a later implementation summary says otherwise.
 
 ## Terms
@@ -58,6 +60,7 @@ MVP does not include:
 - Paid placement or promotion boosting.
 - Taste quiz, advanced recommendations or AI-driven personalization.
 - Phone/email collection.
+- Staff tip payments or platform-collected staff tips.
 
 ## Target Guest UX
 
@@ -121,6 +124,7 @@ These events are future/partial until the corresponding growth features are impl
 - Low rating must not automatically push a public review link.
 - Referrals require anti-abuse, reward limits and fraud monitoring; not MVP.
 - List cards, notifications and analytics must avoid unrelated PII, raw Telegram payloads, initData, secrets and provider payloads.
+- Staff profile/today-shift public data must follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: no public phone/email by default, no raw Telegram username without explicit opt-in and no guest exposure of `linked_user_id`.
 
 ## Future Acceptance / Smoke Checklist
 

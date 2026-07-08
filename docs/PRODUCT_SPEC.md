@@ -26,6 +26,10 @@ Venue operations source of truth:
 - Canonical Venue Mode operating model for dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings and stats is tracked in `docs/VENUE_OPERATIONS.md`.
 - Venue Mode is the source of truth for operations; staff-chat is notification/radar/shortcut only.
 
+Staff profiles, today shifts and staff tips source of truth:
+- Canonical `STAFF_PROFILE`, `SHIFT_TODAY` and future `STAFF_TIP` model is tracked in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
+- Phase 1 is staff profiles + today on shift with no payments. Staff tips and any payment provider/direct payout path are future and require separate legal/product decision.
+
 Booking lifecycle source of truth:
 - Canonical booking flow, queue, status state machine, hold/deadline, reminders, booking chat, support routing, analytics and RBAC rules are tracked in `docs/BOOKING_LIFECYCLE.md`.
 - Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`; booking problems use `SUPPORT_TICKET` only through verified booking or venue context.
@@ -76,6 +80,8 @@ Derived responsibilities:
 - shift_extension_settings: per-venue paid extension policy, fixed duration/price, enabled flag
 - shift_extension_request: guest request to extend active table/venue service window; statuses pending/approved/rejected/cancelled
 - order_service_charge: non-menu bill charge such as approved paid extension; included in bill totals but not shown as a normal order-menu item
+- staff_profile / staff_shift: future Phase 1 staff visibility model for public opt-in staff profiles and manual "today on shift"; canonical spec is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`
+- staff_tip_method / staff_tip_intent: future staff-tip model for a specific staff member; MVP money must not touch the platform and tip intent is not proof of payment
 - subscription: venue_id, status trialing/active/past_due/suspended/canceled, price override, trial_end, paid_until, grace_end, methods enabled(card/stars)
 - support_ticket: guest/venue/platform tickets with context (venue/table/order)
 - visit: product-level history/retention concept derived from table session + closed order + booking seated/no-show where implemented; see `docs/ORDER_SESSION_TAB_CORE.md`

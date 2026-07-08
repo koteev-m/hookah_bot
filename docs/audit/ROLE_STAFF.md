@@ -8,7 +8,7 @@
 
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. Booking lifecycle and Staff arrival/no-show boundaries follow `docs/BOOKING_LIFECYCLE.md`. Telegram/staff-chat callback behavior follows `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. Booking lifecycle and Staff arrival/no-show boundaries follow `docs/BOOKING_LIFECYCLE.md`. Telegram/staff-chat callback behavior follows `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profile, own draft edit and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
@@ -81,6 +81,7 @@ STAFF Mini App behavior:
 - View and confirm shift-extension requests where current backend policy allows it.
 - View tables read-only.
 - Use Venue Mini App working panel.
+- Edit own linked staff-profile draft bio/photo fields only if Phase 1 policy allows and `linked_user_id` matches current user.
 
 ## Denied actions
 
@@ -100,6 +101,9 @@ STAFF Mini App behavior:
 - Rotate/export QR tokens.
 - Read full staff list or manage staff.
 - Create invites/update roles/remove members.
+- Publish/hide public staff profiles or enable guest visibility for their own profile.
+- Edit another staff profile or mark themselves/others `Сегодня на смене` unless a future explicit policy grants it.
+- Configure or approve future staff tip methods.
 - Manage staff chat link/status diagnostics.
 - See or reply to `SUPPORT_TICKET`.
 - See or reply to ordinary `VENUE_CHAT`.
@@ -107,6 +111,7 @@ STAFF Mini App behavior:
 - Manage billing/subscription/platform features, including mark-paid, invoice ensure, courtesy/free-days or payment controls.
 - Treat staff chat as the source of truth for order/bill state or merge orders from different table sessions.
 - See business analytics, billing metrics, platform analytics or raw event payloads.
+- Add payment providers, Telegram Stars, crypto or platform-collected staff tips through profile/tip flows.
 
 ## Known gaps / needs smoke
 
@@ -124,6 +129,8 @@ STAFF Mini App behavior:
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Staff changes require nav/API denial smoke and staff-chat callback denial checks where affected.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: STAFF has operational queue/counters only and no business analytics by default.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current runtime docs allow STAFF item/option availability through `MENU_AVAILABILITY_MANAGE`; target policy is Staff stop-list only when venue policy enables it, with no structure, price, media, option schema or featured/top-list access.
+- Staff profiles / today shift are `SPEC READY / FUTURE-NEXT`: Staff may edit only own linked draft fields if policy allows; Staff cannot self-publish, enable public visibility or approve future tip methods.
+- Staff tips are future and must not be implemented as platform-collected payments, Telegram Stars or crypto in MVP.
 
 ## Smoke-critical checks
 
@@ -143,3 +150,4 @@ STAFF Mini App behavior:
 14. STAFF order detail shows batches and tabs without exposing unrelated guests' private/support data; staff chat order notification mirrors the backend order state but is not treated as source of truth.
 15. STAFF does not see Owner/Platform analytics dashboards or raw analytics/audit payloads.
 16. STAFF stop-list action, where allowed, changes only item/option availability, writes audit where implemented and behaves identically in Telegram Bot and Venue Mini App.
+17. If Phase 1 allows own draft edit, STAFF can edit only own linked public-profile draft bio/photo fields and cannot publish, hide, enable visibility, edit another profile or approve tip methods.

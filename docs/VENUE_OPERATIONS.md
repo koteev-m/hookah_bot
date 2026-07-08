@@ -15,6 +15,7 @@ Canonical dependencies:
 - `docs/BOOKING_LIFECYCLE.md` for booking statuses, hold/deadline, reminders, booking chat and no-show/seated policy.
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` for Telegram bot entrypoints, fallback order, staff-call callbacks, staff-chat link/test/unlink, notification policy and callback security.
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, permissions, scopes and dangerous actions.
+- `docs/STAFF_PROFILES_SHIFTS_TIPS.md` for public staff profiles, today's visible staff and future staff-tip boundaries.
 - `docs/ANALYTICS_EVENTS.md` for operational events, KPIs, audit/event boundaries and dashboard targets.
 - `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation commands, staging policy and operational smoke strategy.
 - `docs/DEPLOYMENT_RUNBOOK.md` for release/deploy, logs, staging smoke and incident operations.
@@ -33,6 +34,7 @@ Canonical dependencies:
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths. | Per-venue `staff_stoplist_enabled`, mass stop-list and audit completeness are future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles and invite links. | Staff/Manager invite sharing and acceptance are staging-smoked; Platform Owner OWNER invite/revoke is smoke-closed. | Role parity still needs regression after new routes. |
+| Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Spec is ready in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; no runtime implementation yet. | Phase 1 candidate: profiles + today on shift, no payments. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Settings | Venue profile, schedule, booking hold, extension, staff-chat and operational settings. | Booking hold, shift extension, public profile/card and schedule/date exceptions are smoke-closed. | Broader settings/media/promotions/preview remain partial/future. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
@@ -265,6 +267,23 @@ Current vs target:
 - Staff/Manager invite sharing polish and acceptance are staging-smoked.
 - Platform Owner can invite/revoke Venue Owner with last-owner protection.
 - Broader staff management parity should stay in role smoke after new routes.
+
+## Staff Profiles / Today Shift
+
+Canonical spec: `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
+
+Phase 1 target:
+- Owner creates, edits, publishes and hides public staff profiles.
+- A profile may be linked to a venue member or display-only.
+- Staff may edit only their own linked draft bio/photo fields if policy allows and cannot self-publish.
+- Owner/Manager may mark `Сегодня на смене` only if policy allows.
+- Guest sees only public visible profiles and shifts.
+- No staff tips or payments are implemented in Phase 1.
+
+Future:
+- external staff tip link + `staff_tip_intent`, where money does not touch the platform;
+- provider/direct payout only after legal/product decision;
+- Telegram Stars and crypto are not MVP for staff tips.
 
 ## Staff-Chat
 

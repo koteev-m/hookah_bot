@@ -72,7 +72,7 @@
 | 13. Предзаказ для постоянных | MISSING | Booking comment mentions "предзаказ"; no preorder model found | Booking exists; orders exist | Preorder settings, eligibility, cutoff, staff queue | `venue_preorder_settings`, `preorders` linked to confirmed booking | Requires reliable visit_count and booking lifecycle | P3 after visit history |
 | 14. Loyalty/cashback/discounts | FUTURE BEYOND MANUAL DISCOUNTS | `V58__order_batch_item_discounts.sql`; manual bill discount flow | Manual item discount percent in bill | Promo codes, cashback, points, tier discounts, category discounts, guest-specific discounts | Start only after financial model and discount accounting are correct | Financial correctness and abuse | P3 |
 | 15. Promotion templates | MISSING | No promotion template model found | None | Template catalog for common promos | Static templates in owner UI creating `venue_promotions` | Template flexibility vs complexity | P2/P3 |
-| 16. Hookah master role/profile | MISSING | `venue_members` roles only OWNER/ADMIN/MANAGER/STAFF; no staff_profile/shift files found | Owner can add staff | Hookah master subtype/profile/shift/guest-visible today list | `staff_profiles`, subtype `HOOKAH_MASTER`, active today display name | Privacy: do not expose Telegram username | P2/P3 |
+| 16. Hookah master role/profile | SPEC READY / FUTURE | `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; runtime still has `venue_members` roles only OWNER/ADMIN/MANAGER/STAFF and no staff_profile/shift code | Owner can add staff; canonical Phase 1 spec now exists | Runtime implementation: public staff profiles, display-only or linked member profiles, today shift visibility, guest `Сегодня работают` | `staff_profiles`, subtype `hookah_master`, `staff_shifts`, active today display name; no payments in Phase 1 | Privacy: do not expose Telegram username, `linked_user_id`, phone/email; tips future | P2/NEXT |
 | 17. Booking/visit retention | PARTIAL | `TableSessionRepository.closeExpiredSessions`; `guest_table_session_exits`; `VenueOrdersRepository` close; booking statuses no seated/no_show | Technical table/order close, shared table-session TTL cleanup, user-scoped guest exit marker | Visit entity, seated status, visit_count, shared physical table-session close policy after all bills closed | Create visits from booking seated or table_session/order close | Double counting visits; one guest exit must not count as physical table-session close | P1/P2 dependency |
 | 18. Что делать не сейчас | DONE | This document roadmap | Prioritization included | N/A | Roadmap P0-P3 | Growth before core creates debt | P0-P3 |
 
@@ -983,6 +983,11 @@ Tests/smoke checks:
 
 ### 16. Hookah master / кальянщик как роль или сменный профиль
 
+Canonical update as of 2026-07-08: `docs/STAFF_PROFILES_SHIFTS_TIPS.md` now defines
+`STAFF_PROFILE`, `SHIFT_TODAY` and future `STAFF_TIP`. Runtime implementation is still future:
+Phase 1 is staff profiles + today on shift with no payments; Phase 2 may add external staff tip
+link + `staff_tip_intent`; provider/direct payout, Telegram Stars and crypto are not MVP.
+
 Продуктовая цель: show guests who is working today without exposing contacts.
 
 Текущее состояние в коде:
@@ -999,9 +1004,10 @@ Evidence:
 
 MVP дизайн:
 - Keep Telegram account optional.
-- Add `staff_profiles`: venue, user_id nullable, display_name, subtype `HOOKAH_MASTER`, is_guest_visible.
-- Add active shift for today manually: `active_today`.
-- Guest-visible list: "Сегодня работают" with display names only.
+- Add `staff_profiles`: venue, `linked_user_id` nullable, display name, subtype `hookah_master`, opt-in guest visibility and safe audit fields.
+- Add `staff_shifts` / `SHIFT_TODAY`: manual active/scheduled today state.
+- Guest-visible list: `Сегодня работают` with display names only.
+- No tips payments in Phase 1.
 
 Расширенный дизайн:
 - Shift schedule, skills, photos, internal assignment, order assignment to hookah master.
@@ -1009,10 +1015,11 @@ MVP дизайн:
 Технические изменения:
 - Staff profile repository/routes.
 - Guest venue API includes visible active profiles.
+- Staff tip method/intent routes are future and must not be mixed with guest order payment.
 
 Миграции БД:
-- `staff_profiles(id, venue_id, user_id, display_name, subtype, is_guest_visible, created_at)`.
-- `staff_shifts(id, venue_id, staff_profile_id, starts_at, ends_at, status)`.
+- `staff_profiles(id, venue_id, linked_user_id nullable, display_name, role_label, subtype, photo_ref, bio, tags, is_guest_visible, tips_enabled future, created_by_user_id, updated_by_user_id, published_at, disabled_at, audit fields)`.
+- `staff_shifts(id, venue_id, staff_profile_id, shift_date, starts_at, ends_at, status, is_guest_visible, manually_marked_active, audit fields)`.
 
 API/routes:
 - `GET/POST/PATCH /api/venue/{venueId}/staff-profiles`

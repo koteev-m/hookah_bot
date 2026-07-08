@@ -8,7 +8,7 @@
 
 Venue Owner - главный владелец конкретного заведения. Он управляет карточкой, заказным меню, столами/QR, персоналом, staff chat, бронями, сообщениями с гостями, статистикой и операционными заказами. Growth/retention scope such as `Акции и удержание`, favorites/history/repeat/feedback is governed by `docs/GROWTH_RETENTION.md` and remains partial/future until implemented and smoked.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: Owner/Manager handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; Staff does not handle support/venue chats; `STAFF_CALL` remains operational. Booking lifecycle, queue, hold/deadline, reminders and booking chat behavior follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat management and callback behavior follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Owner permissions, staff/QR/settings/billing boundaries and dangerous-action expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/options/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: Owner/Manager handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; Staff does not handle support/venue chats; `STAFF_CALL` remains operational. Booking lifecycle, queue, hold/deadline, reminders and booking chat behavior follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat management and callback behavior follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Owner permissions, staff/QR/settings/billing boundaries and dangerous-action expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profiles, today shift and future staff-tip boundaries follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/options/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Runtime Venue Owner access is granted by an active `venue_members` row with role `OWNER`. Legacy/primary owner linkages such as `venues.owner_account_id` and `venue_owner_accounts.primary_owner_user_id` do not by themselves preserve Venue Mini App or Telegram Bot venue-owner access after the OWNER membership is revoked.
 
@@ -25,6 +25,7 @@ Owner может работать в двух поверхностях:
 - `🍽 Заказное меню` как structured menu: категории, позиции, цены, availability/stop-list;
 - tables/QR;
 - staff list/invites/roles;
+- future staff public profiles and `Сегодня на смене` management per `docs/STAFF_PROFILES_SHIFTS_TIPS.md`;
 - staff chat link;
 - booking settings, включая custom hold input;
 - future `Акции и удержание`: simple venue promotions/banners with title, description, active period, terms and visibility/status; no automatic discount promise unless a real promo engine/accounting path is implemented;
@@ -53,6 +54,7 @@ Venue Owner открывает Venue Mini App через inline `web_app` entry,
 - menu/availability management;
 - tables/QR management;
 - staff management where implemented;
+- future public staff profile publish/hide and today-shift management;
 - staff chat link/status;
 - subscription/payment state screen with adjusted paid-through and next-payment dates;
 - future/partial `Акции и удержание` only when backend-backed; Staff must not manage campaigns;
@@ -72,6 +74,9 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Запускать shift check and mass availability actions where implemented, with confirmation/audit for dangerous changes.
 - Управлять tables/QR, включая rotation/export where owner permission allows.
 - Управлять staff list/invites/roles with last-owner protection.
+- Управлять public staff profiles after Phase 1: create/edit, link to venue member or keep display-only, publish/hide and control guest visibility.
+- Mark staff profiles as `Сегодня на смене` after Phase 1, with Manager participation only if policy allows.
+- Approve future external staff tip methods only after the Phase 2 spec/runtime exists.
 - Подключать staff chat.
 - Отвязывать staff chat through the owner-only Mini App flow after explicit confirmation.
 - Смотреть и вести заказы, менять allowed statuses, закрывать счёт.
@@ -100,6 +105,9 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Promise automatic discounts, cashback, points or promo-code redemption without a real promotion/loyalty engine and discount accounting.
 - Send marketing/promo notifications to guests without opt-in, frequency limits and unsubscribe.
 - See another venue's analytics or raw event payloads containing message text/initData/payment secrets/card data.
+- Use staff tips to collect guest order payments through the platform.
+- Treat future `staff_tip_intent` as proof of payment, close bill from it or mix it with venue subscription billing.
+- Add provider/direct payout, Telegram Stars or crypto staff tips before separate legal/product decision.
 
 ## Known gaps / needs smoke
 
@@ -124,6 +132,8 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Owner/Venue operational changes require targeted validation, role smoke and staging smoke when runtime behavior changes.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Owner dashboards should use reliable server-side events; advanced growth metrics and arbitrary analytics remain future.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
+- Staff profiles / today shift are `SPEC READY / FUTURE-NEXT`: Owner is the conservative approver for public visibility and profile publish/hide; Staff may edit only own linked draft fields if policy allows.
+- Staff tips are `SPEC DRAFT / FUTURE`: Phase 2 external staff tip link + intent only, no platform-collected money; provider/direct payout needs legal/product decision.
 
 ## Smoke-critical checks
 
@@ -143,10 +153,11 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 14. Owner sees visible open invoice/payment state where allowed, but cannot mark invoice paid or add courtesy/free days.
 15. Owner order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
 16. Owner menu smoke follows `docs/MENU_OPTIONS_STOPLIST.md`: create category/item/options, change availability, verify guest stale-submit rejection, and verify price/name/options snapshots in old orders.
+17. Phase 1 staff profile smoke: Owner creates display-only and linked profiles, publishes/hides public visibility, marks `Сегодня на смене`, and guest sees only public visible profiles/shifts without `linked_user_id` or private contact data.
 
 Future Growth/retention checks:
 
-17. Owner/Manager can create a simple promotion with title, description, active period, terms and visibility/status.
-18. Promotion is visible to guests only during the active period and not visible when hidden/suspended.
-19. Promotion copy does not imply automatic discount unless the promo engine is implemented.
-20. Staff cannot see or manage `Акции и удержание`.
+18. Owner/Manager can create a simple promotion with title, description, active period, terms and visibility/status.
+19. Promotion is visible to guests only during the active period and not visible when hidden/suspended.
+20. Promotion copy does not imply automatic discount unless the promo engine is implemented.
+21. Staff cannot see or manage `Акции и удержание`.

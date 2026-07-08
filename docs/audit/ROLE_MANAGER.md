@@ -8,7 +8,7 @@
 
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; `Акции и удержание` remain partial/future unless backend-backed and smoked.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Booking lifecycle and queue rules follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat and callback rules follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Booking lifecycle and queue rules follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat and callback rules follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profiles, today shift and future staff tips follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
@@ -76,6 +76,7 @@ Manager Mini App areas:
 - Manage tables and QR export according to current permissions.
 - Link/test staff chat if current role permission allows.
 - View staff list and create conservative STAFF invites if current route policy allows.
+- Mark public staff profiles as `Сегодня на смене` only if Phase 1 policy grants Manager this permission.
 - Create/manage simple `VENUE_PROMOTION` only if the growth MVP explicitly allows Manager access; terms, period and visibility/status are mandatory, and promo notifications require guest opt-in.
 
 ## Denied actions
@@ -92,6 +93,8 @@ Manager Mini App areas:
 - Promise automatic discounts, cashback, points or promo-code redemption without a real promotion/loyalty engine and discount accounting.
 - Send marketing/promo notifications without guest opt-in, frequency limits and unsubscribe.
 - See billing metrics, platform analytics, another venue's analytics or raw event payloads containing message text/initData/payment secrets/card data.
+- Publish/hide public staff profiles or approve future staff tip methods unless product policy explicitly grants it; Owner approval is the conservative default.
+- Add payment providers, Telegram Stars, crypto or platform-collected staff tips through staff/today-shift flows.
 
 ## Known gaps / needs smoke
 
@@ -113,6 +116,7 @@ Manager Mini App areas:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current docs allow broad Manager menu management, but conservative target policy keeps Manager to stop-list, shift check and basic availability unless product explicitly retains broader `MENU_MANAGE`.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
+- Staff profiles / today shift are `SPEC READY / FUTURE-NEXT`: Manager may mark today's visible shift only if policy allows, while Owner remains the conservative default for profile publish/hide and future tip-method approval.
 
 ## Smoke-critical checks
 
@@ -131,10 +135,11 @@ Manager Mini App areas:
 13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
 14. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
 15. Manager menu permissions match the product policy from `docs/MENU_OPTIONS_STOPLIST.md`: stop-list/shift check/basic availability are allowed, while price/media/structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally retained and tested.
+16. If Phase 1 grants Manager shift marking, Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
 
 Future Growth/retention checks:
 
-16. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
-17. Promotion is visible only during active period and hidden/suspended promotions are absent.
-18. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
-19. Staff cannot see or manage `Акции и удержание`.
+17. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
+18. Promotion is visible only during active period and hidden/suspended promotions are absent.
+19. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
+20. Staff cannot see or manage `Акции и удержание`.

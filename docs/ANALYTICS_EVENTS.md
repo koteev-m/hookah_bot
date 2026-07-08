@@ -18,6 +18,7 @@ Menu/options/stop-list product semantics are defined in `docs/MENU_OPTIONS_STOPL
 Venue Mode operational surfaces and role dashboards are defined in `docs/VENUE_OPERATIONS.md`.
 Booking lifecycle semantics for booking events, reminders and booking-to-visit conversion are defined in `docs/BOOKING_LIFECYCLE.md`.
 Telegram fallback and staff-chat event semantics are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
+Staff profile, today shift and future staff-tip event semantics are defined in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
 Testing and smoke strategy for event implementation is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy, logs and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Analytics events are immutable facts for reporting, funnels and diagnostics. They must not drive money, access, billing, order state or support state.
@@ -180,6 +181,14 @@ Growth:
 - `promotion_viewed`
 - `promo_code_copied`
 - `promo_code_redeemed`
+
+Staff profiles / today shift / staff tips:
+- `staff_profile_viewed`
+- `staff_shift_viewed`
+- `staff_profile_published`
+- `staff_shift_marked_active`
+- `staff_tip_intent_created` (future)
+- `staff_tip_clicked` (future)
 
 ## Client-Side Events
 
@@ -362,6 +371,7 @@ Platform Owner:
 | Support events | Support-ticket audit exists for status/scope/assignment/escalation where implemented. | Emit support analytics events without raw message text. | CSAT and broad support analytics are future. |
 | Telegram fallback / staff-chat events | Fallback payload, staff-call ACK/DONE and staff-chat diagnostics are closed for current smoke paths; broad event coverage needs verification. | Emit safe bot entrypoint, fallback order, staff-call, link/test, notification and callback facts. | Delivery/outbox telemetry is not business source of truth; payloads must not include message text or secrets. |
 | Billing events | Billing audit exists for checkout ensure, mark-paid and courtesy days. Provider/webhook analytics needs verification. | Emit subscription, invoice and payment webhook facts. | Card/Stars metrics future until provider rollout. |
+| Staff profile/shift/tip events | Canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; no runtime event implementation yet. | Emit safe profile view/publish, today-shift view/mark-active and future tip intent/click facts. | Tip intent/click must not be interpreted as payment confirmation. |
 | Growth events | Growth product is `SPEC UPDATED / PARTIAL-FUTURE`. | Emit favorite, visit, repeat, feedback and promotion facts. | Blocked by Growth implementation and visit foundation. |
 | Dashboard UI | Venue read-only stats exist; Platform analytics dashboard is future/partial. | Role-specific dashboards from reliable events. | Advanced dashboards after event reliability. |
 | Audit logs | Several critical audit rows exist where implemented. | Audit all critical state changes with actor and safe old/new fields. | Fill gaps for menu price, QR rotate, force close, tab reopen, provider config. |
@@ -391,3 +401,4 @@ Platform Owner:
 10. Platform Owner can see/export relevant analytics only where implemented.
 11. Venue Owner cannot see another venue analytics.
 12. Staff does not see platform analytics.
+13. Staff profile/shift analytics contains only public display fields or opaque ids, not `linked_user_id`, private Telegram usernames, phone/email or external payment secrets.
