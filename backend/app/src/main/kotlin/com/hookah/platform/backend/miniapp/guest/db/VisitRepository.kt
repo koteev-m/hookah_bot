@@ -82,10 +82,17 @@ data class GuestVisitPromotionDiscount(
     val ruleType: String? = null,
 )
 
+data class GuestVisitOrderItemOption(
+    val name: String,
+    val priceDeltaMinor: Long,
+)
+
 data class GuestVisitOrderItem(
     val itemId: Long,
     val itemName: String,
     val qty: Int,
+    val selectedOption: GuestVisitOrderItemOption? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long?,
     val currency: String?,
     val discountPercent: Int?,
@@ -534,7 +541,13 @@ class VisitRepository(private val dataSource: DataSource?) {
             SELECT obi.menu_item_id,
                    COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
                    SUM(obi.qty) AS qty,
-                   mi.price_minor,
+                   obiop.option_name_snapshot,
+                   obiop.price_delta_minor_snapshot,
+                   obi.preference_note,
+                   CASE
+                       WHEN mi.price_minor IS NULL THEN NULL
+                       ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                   END AS price_minor,
                    mi.currency,
                    obi.discount_percent,
                    COALESCE(SUM(promo.discount_minor), 0) AS promo_discount_minor,
@@ -542,6 +555,7 @@ class VisitRepository(private val dataSource: DataSource?) {
             FROM order_batches ob
             JOIN order_batch_items obi ON obi.order_batch_id = ob.id
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
                 SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
                 FROM order_batch_item_promotion_adjustments
@@ -552,7 +566,15 @@ class VisitRepository(private val dataSource: DataSource?) {
               AND obi.is_excluded = FALSE
               AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
               AND ${validGuestBatchPredicate("ob")}
-            GROUP BY obi.menu_item_id, mi.name, mi.price_minor, mi.currency, obi.discount_percent, opri.reward_order_batch_item_id
+            GROUP BY obi.menu_item_id,
+                     mi.name,
+                     mi.price_minor,
+                     mi.currency,
+                     obiop.option_name_snapshot,
+                     obiop.price_delta_minor_snapshot,
+                     obi.preference_note,
+                     obi.discount_percent,
+                     opri.reward_order_batch_item_id
             ORDER BY MIN(obi.id) ASC
             """.trimIndent(),
         ).use { statement ->
@@ -570,6 +592,8 @@ class VisitRepository(private val dataSource: DataSource?) {
                                 itemId = rs.getLong("menu_item_id"),
                                 itemName = rs.getString("item_name"),
                                 qty = qty,
+                                selectedOption = rs.toGuestVisitOrderItemOption(),
+                                preferenceNote = rs.getString("preference_note")?.takeIf { it.isNotBlank() },
                                 priceMinor = priceMinor,
                                 currency = rs.getString("currency"),
                                 discountPercent = discountPercent,
@@ -582,6 +606,14 @@ class VisitRepository(private val dataSource: DataSource?) {
                 }
             }
         }
+
+    private fun java.sql.ResultSet.toGuestVisitOrderItemOption(): GuestVisitOrderItemOption? {
+        val name = getString("option_name_snapshot")?.takeIf { it.isNotBlank() } ?: return null
+        return GuestVisitOrderItemOption(
+            name = name,
+            priceDeltaMinor = getLong("price_delta_minor_snapshot"),
+        )
+    }
 
     private fun loadGuestVisitPromotionDiscounts(
         connection: Connection,

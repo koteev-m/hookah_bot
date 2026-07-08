@@ -70,10 +70,18 @@ data class GuestVisitPromotionDiscountDto(
 )
 
 @Serializable
+data class GuestVisitOrderItemOptionDto(
+    val name: String,
+    val priceDeltaMinor: Long,
+)
+
+@Serializable
 data class GuestVisitOrderItemDto(
     val itemId: Long,
     val itemName: String,
     val qty: Int,
+    val selectedOption: GuestVisitOrderItemOptionDto? = null,
+    val preferenceNote: String? = null,
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,

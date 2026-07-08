@@ -9,12 +9,14 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestVisitListItemDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitListResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitOrderDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitOrderItemDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitOrderItemOptionDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitPromotionDiscountDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitBooking
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitDetail
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitHistoryItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrder
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItem
+import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItemOption
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
@@ -124,8 +126,16 @@ private fun GuestVisitOrderItem.toDto(): GuestVisitOrderItemDto =
         itemId = itemId,
         itemName = itemName,
         qty = qty,
+        selectedOption = selectedOption?.toDto(),
+        preferenceNote = preferenceNote,
         priceMinor = priceMinor,
         currency = currency,
         discountPercent = discountPercent,
         totalMinor = totalMinor,
+    )
+
+private fun GuestVisitOrderItemOption.toDto(): GuestVisitOrderItemOptionDto =
+    GuestVisitOrderItemOptionDto(
+        name = name,
+        priceDeltaMinor = priceDeltaMinor,
     )

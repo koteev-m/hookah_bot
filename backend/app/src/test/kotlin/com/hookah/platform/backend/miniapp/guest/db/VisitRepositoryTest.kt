@@ -63,31 +63,48 @@ class VisitRepositoryTest {
     @Test
     fun `non seated terminal booking does not create visit`() =
         runBlocking {
-            val jdbcUrl = migratedJdbcUrl("visit-booking-noshow")
+            val jdbcUrl = migratedJdbcUrl("visit-booking-terminal-not-seated")
             val fixture = seedBase(jdbcUrl)
             val visitRepository = VisitRepository(dataSource(jdbcUrl))
             val bookingRepository = GuestBookingRepository(dataSource(jdbcUrl), visitRepository)
-            val booking =
-                bookingRepository.create(
-                    venueId = fixture.venueId,
-                    userId = GUEST_ONE,
-                    scheduledAt = Instant.parse("2030-05-10T17:00:00Z"),
-                    partySize = 2,
-                    comment = null,
-                    venueZoneId = ZONE_ID,
-                    serviceDate = LocalDate.of(2030, 5, 10),
-                )
-            assertNotNull(
-                bookingRepository.updateByVenue(
-                    bookingId = booking.id,
-                    venueId = fixture.venueId,
-                    nextStatus = BookingStatus.CONFIRMED,
-                ),
-            )
 
-            assertNotNull(bookingRepository.markNoShow(fixture.venueId, booking.id, actorUserId = STAFF_USER))
+            suspend fun confirmedBooking(
+                scheduledAt: Instant,
+                serviceDate: LocalDate,
+            ): BookingRecord {
+                val booking =
+                    bookingRepository.create(
+                        venueId = fixture.venueId,
+                        userId = GUEST_ONE,
+                        scheduledAt = scheduledAt,
+                        partySize = 2,
+                        comment = null,
+                        venueZoneId = ZONE_ID,
+                        serviceDate = serviceDate,
+                    )
+                assertNotNull(
+                    bookingRepository.updateByVenue(
+                        bookingId = booking.id,
+                        venueId = fixture.venueId,
+                        nextStatus = BookingStatus.CONFIRMED,
+                    ),
+                )
+                return booking
+            }
+
+            val noShow = confirmedBooking(Instant.parse("2030-05-10T17:00:00Z"), LocalDate.of(2030, 5, 10))
+            assertNotNull(bookingRepository.markNoShow(fixture.venueId, noShow.id, actorUserId = STAFF_USER))
+
+            val canceled = confirmedBooking(Instant.parse("2030-05-10T18:00:00Z"), LocalDate.of(2030, 5, 10))
+            assertNotNull(bookingRepository.cancelByGuest(canceled.id, fixture.venueId, GUEST_ONE))
+
+            val expired = confirmedBooking(Instant.parse("2030-05-10T19:00:00Z"), LocalDate.of(2030, 5, 10))
+            assertEquals(1, bookingRepository.expireOverdue(Instant.parse("2030-05-11T00:00:00Z")))
 
             assertEquals(0L, visitRepository.getVisitCount(GUEST_ONE, fixture.venueId))
+            assertNull(visitRepository.recordBookingSeatedVisit(noShow.id))
+            assertNull(visitRepository.recordBookingSeatedVisit(canceled.id))
+            assertNull(visitRepository.recordBookingSeatedVisit(expired.id))
         }
 
     @Test
@@ -315,6 +332,52 @@ class VisitRepositoryTest {
         }
 
     @Test
+    fun `guest visit detail preserves selected option and preference note snapshots`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("visit-detail-option-note")
+            val fixture = seedBase(jdbcUrl)
+            val visitRepository = VisitRepository(dataSource(jdbcUrl))
+            val orderFixture = seedOrderShell(jdbcUrl, fixture)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                val guestTab =
+                    insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
+                val batch = insertBatch(connection, orderFixture.orderId, guestTab, null, "MINIAPP")
+                val batchItem =
+                    insertBatchItem(
+                        connection = connection,
+                        batchId = batch,
+                        itemId = fixture.itemId,
+                        preferenceNote = "покрепче",
+                    )
+                insertBatchItemOption(connection, batchItem, optionName = "Ягодный микс", priceDeltaMinor = 250L)
+                insertGuestBatchIdempotency(
+                    connection,
+                    fixture.venueId,
+                    orderFixture.tableSessionId,
+                    GUEST_ONE,
+                    orderFixture.orderId,
+                    batch,
+                    "option-note",
+                )
+                markOrderClosed(connection, orderFixture.orderId)
+            }
+
+            val result = visitRepository.recordOrderClosedVisits(orderFixture.orderId)
+            val visit = visitRepository.findRecentVisits(GUEST_ONE).single()
+            val detail = visitRepository.getGuestVisitDetail(GUEST_ONE, visit.id)
+
+            assertEquals(1, result.participantsCount)
+            assertNotNull(detail)
+            val item = detail.orders.single().items.single()
+            assertEquals("Ягодный микс", item.selectedOption?.name)
+            assertEquals(250L, item.selectedOption?.priceDeltaMinor)
+            assertEquals("покрепче", item.preferenceNote)
+            assertEquals(1250L, item.priceMinor)
+            assertEquals(1250L, item.totalMinor)
+            assertEquals(1250L, detail.totalMinor)
+        }
+
+    @Test
     fun `rejected and excluded only guest batches do not create visits`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("visit-invalid-batches")
@@ -442,6 +505,9 @@ class VisitRepositoryTest {
             assertEquals(1, result.participantsCount)
             assertEquals(1L, visitRepository.getVisitCount(GUEST_ONE, fixture.venueId))
             assertEquals(0L, visitRepository.getVisitCount(SHARED_ONLY_GUEST, fixture.venueId))
+            val visit = visitRepository.findRecentVisits(GUEST_ONE).single()
+            assertNotNull(visitRepository.getGuestVisitDetail(GUEST_ONE, visit.id))
+            assertNull(visitRepository.getGuestVisitDetail(SHARED_ONLY_GUEST, visit.id))
         }
 
     @Test
@@ -916,11 +982,12 @@ class VisitRepositoryTest {
         itemId: Long,
         isExcluded: Boolean = false,
         itemStatus: String = "ACTIVE",
+        preferenceNote: String? = null,
     ): Long =
         connection.prepareStatement(
             """
-            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, is_excluded, item_status)
-            VALUES (?, ?, 1, ?, ?)
+            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, is_excluded, item_status, preference_note)
+            VALUES (?, ?, 1, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -928,12 +995,37 @@ class VisitRepositoryTest {
             statement.setLong(2, itemId)
             statement.setBoolean(3, isExcluded)
             statement.setString(4, itemStatus)
+            statement.setString(5, preferenceNote)
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
                 keys.next()
                 keys.getLong(1)
             }
         }
+
+    private fun insertBatchItemOption(
+        connection: java.sql.Connection,
+        batchItemId: Long,
+        optionName: String,
+        priceDeltaMinor: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO order_batch_item_options (
+                order_batch_item_id,
+                menu_item_option_id,
+                option_name_snapshot,
+                price_delta_minor_snapshot
+            )
+            VALUES (?, NULL, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchItemId)
+            statement.setString(2, optionName)
+            statement.setLong(3, priceDeltaMinor)
+            statement.executeUpdate()
+        }
+    }
 
     private fun markOrderClosed(
         connection: java.sql.Connection,

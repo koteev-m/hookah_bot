@@ -190,9 +190,16 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
   })
   const itemList = el('div', { className: 'venue-order-items' })
   order.items.forEach((item) => {
+    const itemDetails = [
+      item.itemName,
+      item.selectedOption?.name ?? null,
+      item.preferenceNote ? `Пожелание: ${item.preferenceNote}` : null
+    ].filter((value): value is string => Boolean(value))
     const line = el('p', {
       className: 'venue-order-sub',
-      text: `${item.itemName} ×${item.qty}${formatMoney(item.totalMinor, item.currency) ? ` — ${formatMoney(item.totalMinor, item.currency)}` : ''}`
+      text: `${itemDetails.join(' · ')} ×${item.qty}${
+        formatMoney(item.totalMinor, item.currency) ? ` — ${formatMoney(item.totalMinor, item.currency)}` : ''
+      }`
     })
     append(itemList, line)
   })

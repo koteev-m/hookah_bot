@@ -83,6 +83,69 @@ class GuestVisitRoutesTest {
             assertEquals(HttpStatusCode.NotFound, forbiddenDetail.status)
         }
 
+    @Test
+    fun `guest visit detail returns only owned closed order lines`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:guest-visit-detail-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val guestOne = 2001L
+            val guestTwo = 2002L
+            val sharedMember = 2003L
+            val venueId = seedVenueAndUsers(jdbcUrl, guestOne, guestTwo, sharedMember)
+            val fixture = seedClosedOrderVisitDetails(jdbcUrl, venueId, guestOne, guestTwo, sharedMember)
+            val guestOneToken = issueToken(config, guestOne)
+
+            val detailResponse =
+                client.get("/api/guest/visits/${fixture.guestOneVisitId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestOneToken") }
+                }
+            assertEquals(HttpStatusCode.OK, detailResponse.status)
+            val body = detailResponse.bodyAsText()
+            val visit = json.parseToJsonElement(body).jsonObject.getValue("visit").jsonObject
+            val order = visit.getValue("orders").jsonArray.single().jsonObject
+            val item = order.getValue("items").jsonArray.single().jsonObject
+            val selectedOption = item.getValue("selectedOption").jsonObject
+
+            assertEquals("Owned Hookah", item.getValue("itemName").jsonPrimitive.content)
+            assertEquals("Ягодный микс", selectedOption.getValue("name").jsonPrimitive.content)
+            assertEquals(250L, selectedOption.getValue("priceDeltaMinor").jsonPrimitive.content.toLong())
+            assertEquals("покрепче", item.getValue("preferenceNote").jsonPrimitive.content)
+            assertEquals(1250L, item.getValue("priceMinor").jsonPrimitive.content.toLong())
+            assertEquals(1250L, order.getValue("totalMinor").jsonPrimitive.content.toLong())
+            assertEquals(false, body.contains("Foreign Hookah"))
+            assertEquals(false, body.contains("Shared Hookah"))
+
+            val foreignDetail =
+                client.get("/api/guest/visits/${fixture.guestTwoVisitId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestOneToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, foreignDetail.status)
+
+            val sharedMemberToken = issueToken(config, sharedMember)
+            val sharedMemberDetail =
+                client.get("/api/guest/visits/${fixture.guestOneVisitId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $sharedMemberToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, sharedMemberDetail.status)
+        }
+
     private fun seedVenueAndUsers(
         jdbcUrl: String,
         vararg userIds: Long,
@@ -142,6 +205,346 @@ class GuestVisitRoutesTest {
                 }
             }
         }
+
+    private fun seedClosedOrderVisitDetails(
+        jdbcUrl: String,
+        venueId: Long,
+        guestOne: Long,
+        guestTwo: Long,
+        sharedMember: Long,
+    ): ClosedOrderVisitFixture =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val tableId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_tables (venue_id, table_number, is_active)
+                    VALUES (?, 4, true)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            val categoryId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO menu_categories (venue_id, name, sort_order, is_active)
+                    VALUES (?, 'Hookah', 0, true)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            val ownedItem = insertMenuItem(connection, venueId, categoryId, "Owned Hookah", 1000L)
+            val foreignItem = insertMenuItem(connection, venueId, categoryId, "Foreign Hookah", 2000L)
+            val sharedItem = insertMenuItem(connection, venueId, categoryId, "Shared Hookah", 3000L)
+            val now = Instant.parse("2030-05-12T18:00:00Z")
+            val tableSessionId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO table_sessions (venue_id, table_id, started_at, last_activity_at, expires_at, status)
+                    VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableId)
+                    statement.setTimestamp(3, Timestamp.from(now.minusSeconds(3600)))
+                    statement.setTimestamp(4, Timestamp.from(now))
+                    statement.setTimestamp(5, Timestamp.from(now.plusSeconds(3600)))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            val orderId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO orders (venue_id, table_id, table_session_id, status, display_number, display_date)
+                    VALUES (?, ?, ?, 'CLOSED', 42, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, tableId)
+                    statement.setLong(3, tableSessionId)
+                    statement.setDate(4, Date.valueOf(LocalDate.of(2030, 5, 12)))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+
+            val guestOneTab = insertTab(connection, venueId, tableSessionId, guestOne, "PERSONAL")
+            val guestTwoTab = insertTab(connection, venueId, tableSessionId, guestTwo, "PERSONAL")
+            val sharedTab = insertTab(connection, venueId, tableSessionId, null, "SHARED")
+            insertTabMember(connection, sharedTab, guestOne)
+            insertTabMember(connection, sharedTab, sharedMember)
+
+            val guestOneBatch = insertBatch(connection, orderId, guestOneTab, null)
+            val guestOneBatchItem = insertBatchItem(connection, guestOneBatch, ownedItem, preferenceNote = "покрепче")
+            insertBatchItemOption(connection, guestOneBatchItem, "Ягодный микс", 250L)
+            insertGuestBatchIdempotency(
+                connection,
+                venueId,
+                tableSessionId,
+                guestOne,
+                orderId,
+                guestOneBatch,
+                "guest-one-detail",
+            )
+
+            val guestTwoBatch = insertBatch(connection, orderId, guestTwoTab, null)
+            insertBatchItem(connection, guestTwoBatch, foreignItem)
+            insertGuestBatchIdempotency(
+                connection,
+                venueId,
+                tableSessionId,
+                guestTwo,
+                orderId,
+                guestTwoBatch,
+                "guest-two-detail",
+            )
+
+            val sharedBatch = insertBatch(connection, orderId, sharedTab, guestTwo)
+            insertBatchItem(connection, sharedBatch, sharedItem)
+
+            ClosedOrderVisitFixture(
+                guestOneVisitId =
+                    seedVisit(
+                        connection = connection,
+                        venueId = venueId,
+                        userId = guestOne,
+                        source = "ORDER_CLOSED",
+                        tableSessionId = tableSessionId,
+                        orderId = orderId,
+                    ),
+                guestTwoVisitId =
+                    seedVisit(
+                        connection = connection,
+                        venueId = venueId,
+                        userId = guestTwo,
+                        source = "ORDER_CLOSED",
+                        tableSessionId = tableSessionId,
+                        orderId = orderId,
+                    ),
+            )
+        }
+
+    private fun insertMenuItem(
+        connection: java.sql.Connection,
+        venueId: Long,
+        categoryId: Long,
+        name: String,
+        priceMinor: Long,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO menu_items (venue_id, category_id, name, price_minor, currency, is_available)
+            VALUES (?, ?, ?, ?, 'RUB', true)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, categoryId)
+            statement.setString(3, name)
+            statement.setLong(4, priceMinor)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun insertTab(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        ownerUserId: Long?,
+        type: String,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
+            VALUES (?, ?, ?, ?, 'ACTIVE')
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setString(3, type)
+            if (ownerUserId == null) {
+                statement.setNull(4, java.sql.Types.BIGINT)
+            } else {
+                statement.setLong(4, ownerUserId)
+            }
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun insertTabMember(
+        connection: java.sql.Connection,
+        tabId: Long,
+        userId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO tab_member (tab_id, user_id, role)
+            VALUES (?, ?, 'MEMBER')
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, tabId)
+            statement.setLong(2, userId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun insertBatch(
+        connection: java.sql.Connection,
+        orderId: Long,
+        tabId: Long,
+        authorUserId: Long?,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment)
+            VALUES (?, ?, ?, 'MINIAPP', 'DELIVERED', NULL)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, orderId)
+            statement.setLong(2, tabId)
+            if (authorUserId == null) {
+                statement.setNull(3, java.sql.Types.BIGINT)
+            } else {
+                statement.setLong(3, authorUserId)
+            }
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun insertBatchItem(
+        connection: java.sql.Connection,
+        batchId: Long,
+        itemId: Long,
+        preferenceNote: String? = null,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, is_excluded, item_status, preference_note)
+            VALUES (?, ?, 1, false, 'ACTIVE', ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, batchId)
+            statement.setLong(2, itemId)
+            statement.setString(3, preferenceNote)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun insertBatchItemOption(
+        connection: java.sql.Connection,
+        batchItemId: Long,
+        optionName: String,
+        priceDeltaMinor: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO order_batch_item_options (
+                order_batch_item_id,
+                menu_item_option_id,
+                option_name_snapshot,
+                price_delta_minor_snapshot
+            )
+            VALUES (?, NULL, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchItemId)
+            statement.setString(2, optionName)
+            statement.setLong(3, priceDeltaMinor)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun insertGuestBatchIdempotency(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        orderId: Long,
+        batchId: Long,
+        idempotencyKey: String,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO guest_batch_idempotency (venue_id, table_session_id, user_id, idempotency_key, order_id, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, userId)
+            statement.setString(4, idempotencyKey)
+            statement.setLong(5, orderId)
+            statement.setLong(6, batchId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun seedVisit(
+        connection: java.sql.Connection,
+        venueId: Long,
+        userId: Long,
+        source: String,
+        tableSessionId: Long,
+        orderId: Long,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO visits (venue_id, user_id, table_session_id, order_id, source, occurred_at, service_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, userId)
+            statement.setLong(3, tableSessionId)
+            statement.setLong(4, orderId)
+            statement.setString(5, source)
+            statement.setTimestamp(6, Timestamp.from(Instant.parse("2030-05-12T18:30:00Z")))
+            statement.setDate(7, Date.valueOf(LocalDate.of(2030, 5, 12)))
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private data class ClosedOrderVisitFixture(
+        val guestOneVisitId: Long,
+        val guestTwoVisitId: Long,
+    )
 
     private fun issueToken(
         config: MapApplicationConfig,

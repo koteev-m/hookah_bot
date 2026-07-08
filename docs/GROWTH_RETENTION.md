@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-08.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются закрытыми, пока для них нет backend/Mini App/Bot evidence и staging smoke. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются закрытыми, пока для них нет backend/Mini App/Bot evidence и staging smoke. Guest visit/order history foundation is MVP / local-smoke-passed; broader retention loops remain partial/future. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
 
 ## Core Rule
 
@@ -20,8 +20,9 @@ Transactional flows remain separate:
 ## Current Implementation
 
 Current implementation is **partial**:
-- Account/history/favorites baselines are referenced in role docs, but require separate staging smoke before being marked complete.
-- Booking seated/no-show, order close and table-session close signals exist as foundations for visit history, but there is no canonical completed retention loop.
+- Guest visit/order history foundation is implemented and local-smoke-passed: `/api/guest/visits` and `/api/guest/visits/{visitId}` are scoped to the current user, booking `SEATED` and closed-order signals create/merge visits, non-seated booking statuses and bare table-session cleanup do not create visits, and closed-order details show only the guest's own billable batches/tabs.
+- Account favorites and broader retention loops still require separate implementation/smoke before being marked complete.
+- Booking seated/no-show, order close and table-session close signals exist as foundations for visit history; completed repeat/favorites/feedback/promotion loops are not closed.
 - Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
   campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
@@ -33,8 +34,8 @@ Current implementation is **partial**:
 | Term | Meaning | Status |
 | --- | --- | --- |
 | `FAVORITE_VENUE` | Guest saves/removes a venue and can list favorite venues. | MVP target; current baseline needs verification before DONE. |
-| `VISIT_HISTORY` | Guest-visible history of confirmed visits derived from table session, booking and closed order signals. | MVP target after visit/order model stabilizes. |
-| `ORDER_HISTORY` | Closed orders shown to the guest with safe venue/date/total/context data. | MVP dependency for repeat templates; current order data exists but product history needs verification. |
+| `VISIT_HISTORY` | Guest-visible history of confirmed visits derived from table session, booking and closed order signals. | MVP / local-smoke-passed for completed visits and booking-only seated visits. |
+| `ORDER_HISTORY` | Closed orders shown to the guest with safe venue/date/total/context data. | MVP / local-smoke-passed for closed-order visit detail; repeat templates remain future. |
 | `BOOKING_HISTORY` | Past and upcoming bookings shown in account/history context. | Partial foundation; keep booking MVP in regression. |
 | `REPEAT_TEMPLATE` | A saved template from a past order/visit that can be applied on the next table context. | MVP target; must not create an order outside table context. |
 | `POST_VISIT_FEEDBACK` | 1-5 rating, tags and optional comment requested only after confirmed visit. | MVP target/future implementation. |
@@ -146,9 +147,10 @@ These events are future/partial until the corresponding growth features are impl
 ## Status Summary
 
 - Growth/retention: `SPEC UPDATED / PARTIAL-FUTURE`.
-- Favorites/history/repeat: `FUTURE/PARTIAL FOUNDATION` until implementation smoke proves the end-to-end flows.
+- Visit/order history foundation: `MVP / LOCAL-SMOKE-PASSED`; staging smoke still required before production readiness.
+- Favorites/repeat: `FUTURE/PARTIAL FOUNDATION` until implementation smoke proves the end-to-end flows.
 - Promotions: `PLACEHOLDER/PARTIAL FOUNDATION` unless backend + Guest/Venue surfaces are verified for the simple promotion MVP.
 - Reviews/post-visit feedback: `FUTURE`.
 - Loyalty/referrals: `FUTURE`.
 - Paid placement/promotion boosting: `FUTURE`.
-- Visit history foundation: depends on order/session/booking lifecycle.
+- Visit history foundation: implemented on top of order/session/booking lifecycle; keep privacy, dedup and terminal-status tests in regression.

@@ -93,6 +93,11 @@ type ActiveOrderFixtureOptions = {
   itemPromoDiscountMinor?: number
 }
 
+type GuestVisitHistoryFixture = {
+  items: Array<Record<string, unknown>>
+  details: Record<number, Record<string, unknown>>
+}
+
 type ShiftExtensionSettings = {
   venueId: number
   enabled: boolean
@@ -683,6 +688,7 @@ async function mockGuestApi(
     tableSessionEndResponse?: TableSessionEndResponseFixture
     activeOrder?: ActiveOrderFixtureOptions | null
     todayStaff?: Array<Record<string, unknown>>
+    visitHistory?: GuestVisitHistoryFixture
   } = {}
 ) {
   let structuredMenuCalls = 0
@@ -702,6 +708,7 @@ async function mockGuestApi(
     }
   let activeOrderOptions: ActiveOrderFixtureOptions | null = options.activeOrder === undefined ? {} : options.activeOrder
   const todayStaff = options.todayStaff ?? []
+  const visitHistory = options.visitHistory ?? { items: [], details: {} }
   let createExtensionRequestCalls = 0
   let nextBookingId = 9000
   let activeOrderServiceCharges: ServiceCharge[] = []
@@ -970,6 +977,33 @@ async function mockGuestApi(
       }
       booking.lastGuestConfirmationAt = '10.01.2030, 21:05'
       await route.fulfill(jsonResponse(booking))
+      return
+    }
+
+    await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+  })
+
+  await page.route('**/api/guest/visits**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/guest/visits' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ items: visitHistory.items }))
+      return
+    }
+
+    const detailMatch = path.match(/^\/api\/guest\/visits\/(\d+)$/)
+    if (detailMatch && request.method() === 'GET') {
+      const visitId = Number(detailMatch[1])
+      const detail = visitHistory.details[visitId]
+      if (detail) {
+        await route.fulfill(jsonResponse({ visit: detail }))
+      } else {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Visit not found' } })
+        })
+      }
       return
     }
 
@@ -3572,6 +3606,131 @@ test('guest opens my bookings from profile and manages booking actions', async (
   await rows.filter({ hasText: 'Микс' }).getByRole('button', { name: 'Отменить бронь' }).click()
   expect(api.getBookingCancelRequests()).toEqual([{ venueId: 1, bookingId: 501 }])
   await expect(rows.filter({ hasText: 'Микс' })).toHaveCount(0)
+})
+
+test('guest history empty state is shown from profile', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    visitHistory: {
+      items: [],
+      details: {}
+    }
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await page.getByRole('button', { name: '🕘 История' }).click()
+
+  await expect(page.getByRole('heading', { name: 'История' })).toBeVisible()
+  await expect(page.getByText('История пока пустая.')).toBeVisible()
+})
+
+test('guest history shows completed visits and safe closed order detail', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    visitHistory: {
+      items: [
+        {
+          visitId: 10,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-10T18:00:00Z',
+          serviceDate: '2030-01-10',
+          source: 'booking_seated',
+          totalMinor: null,
+          currency: null,
+          hasBooking: true,
+          orderLabels: []
+        },
+        {
+          visitId: 11,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-11T18:30:00Z',
+          serviceDate: '2030-01-11',
+          source: 'order_closed',
+          totalMinor: 125000,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№42']
+        }
+      ],
+      details: {
+        10: {
+          visitId: 10,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-10T18:00:00Z',
+          serviceDate: '2030-01-10',
+          source: 'booking_seated',
+          booking: {
+            bookingId: 501,
+            displayNumber: 1,
+            partySize: 2,
+            status: 'seated'
+          },
+          orders: [],
+          totalMinor: null,
+          currency: null
+        },
+        11: {
+          visitId: 11,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-11T18:30:00Z',
+          serviceDate: '2030-01-11',
+          source: 'order_closed',
+          booking: null,
+          orders: [
+            {
+              orderId: 900,
+              displayNumber: 42,
+              displayDate: '2030-01-11',
+              totalMinor: 125000,
+              currency: 'RUB',
+              promotionDiscounts: [],
+              items: [
+                {
+                  itemId: 200,
+                  itemName: 'Double Apple',
+                  qty: 1,
+                  selectedOption: {
+                    name: 'Ягодный микс',
+                    priceDeltaMinor: 25000
+                  },
+                  preferenceNote: 'покрепче',
+                  priceMinor: 125000,
+                  currency: 'RUB',
+                  totalMinor: 125000
+                }
+              ]
+            }
+          ],
+          totalMinor: 125000,
+          currency: 'RUB'
+        }
+      }
+    }
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await page.getByRole('button', { name: '🕘 История' }).click()
+
+  const bookingOnlyVisit = page.locator('article.card').filter({ hasText: 'Было бронирование' })
+  const closedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №42' })
+  await expect(bookingOnlyVisit).toContainText('Микс')
+  await expect(closedOrderVisit).toContainText(/Итого: 1[\s\u00a0]250/)
+
+  await closedOrderVisit.getByRole('button', { name: 'Подробнее' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Заказ №42' })).toBeVisible()
+  await expect(page.getByText('Double Apple · Ягодный микс · Пожелание: покрепче ×1')).toBeVisible()
+  await expect(page.getByText('Foreign Hookah')).toHaveCount(0)
 })
 
 test('table context with active order opens category-first order menu and hides pre-visit actions', async ({ page }) => {

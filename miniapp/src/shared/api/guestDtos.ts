@@ -538,10 +538,17 @@ export type GuestVisitOrderItemDto = {
   itemId: number
   itemName: string
   qty: number
+  selectedOption?: GuestVisitOrderItemOptionDto | null
+  preferenceNote?: string | null
   priceMinor?: number | null
   currency?: string | null
   discountPercent?: number | null
   totalMinor?: number | null
+}
+
+export type GuestVisitOrderItemOptionDto = {
+  name: string
+  priceDeltaMinor: number
 }
 
 export type GuestVisitPromotionDiscountDto = {
