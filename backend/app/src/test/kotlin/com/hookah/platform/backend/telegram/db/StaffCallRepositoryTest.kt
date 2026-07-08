@@ -92,11 +92,41 @@ class StaffCallRepositoryTest {
         }
 
     @Test
-    fun `listByGuestTableSession returns current guest call statuses only`() =
+    fun `listByGuestTableSession returns terminal current guest call statuses only`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("staff-call-guest-status")
             val fixture = seedStaffCall(jdbcUrl, status = "DONE")
             val repository = StaffCallRepository(dataSource(jdbcUrl))
+            val cancelledCallId =
+                seedContextStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    tableSessionId = fixture.tableSessionId,
+                    orderId = null,
+                    reason = StaffCallReason.COME,
+                    status = "CANCELLED",
+                )
+            val otherSessionId = seedTableSession(jdbcUrl, fixture)
+            val otherSessionCallId =
+                seedContextStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    tableSessionId = otherSessionId,
+                    orderId = null,
+                    reason = StaffCallReason.COME,
+                    status = "CANCELLED",
+                )
+            seedUser(jdbcUrl, OTHER_GUEST_USER_ID, "Олег")
+            val otherUserCallId =
+                seedContextStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    fixture = fixture,
+                    tableSessionId = fixture.tableSessionId,
+                    orderId = null,
+                    reason = StaffCallReason.COME,
+                    status = "CANCELLED",
+                    userId = OTHER_GUEST_USER_ID,
+                )
 
             val calls =
                 repository.listByGuestTableSession(
@@ -107,10 +137,12 @@ class StaffCallRepositoryTest {
                     limit = 20,
                 )
 
-            assertEquals(1, calls.size)
-            assertEquals(fixture.staffCallId, calls.single().id)
-            assertEquals("DONE", calls.single().status)
-            assertEquals(fixture.tableId, calls.single().tableId)
+            assertEquals(setOf(fixture.staffCallId, cancelledCallId), calls.map { it.id }.toSet())
+            assertEquals(setOf("DONE", "CANCELLED"), calls.map { it.status }.toSet())
+            assertTrue(calls.all { it.tableId == fixture.tableId })
+            assertTrue(otherSessionCallId !in calls.map { it.id })
+            assertTrue(otherUserCallId !in calls.map { it.id })
+            assertEquals(emptyList(), repository.listActiveByVenue(fixture.venueId, limit = 20).map { it.id })
         }
 
     @Test
@@ -435,6 +467,7 @@ class StaffCallRepositoryTest {
         orderId: Long?,
         reason: StaffCallReason,
         status: String,
+        userId: Long = GUEST_USER_ID,
     ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -450,7 +483,7 @@ class StaffCallRepositoryTest {
                 statement.setLong(1, fixture.venueId)
                 statement.setLong(2, fixture.tableId)
                 statement.setLong(3, tableSessionId)
-                statement.setLong(4, GUEST_USER_ID)
+                statement.setLong(4, userId)
                 statement.setString(5, reason.name)
                 statement.setString(6, "Комментарий")
                 statement.setString(7, status)
@@ -471,6 +504,26 @@ class StaffCallRepositoryTest {
                 }
             }
         }
+
+    private fun seedUser(
+        jdbcUrl: String,
+        userId: Long,
+        guestDisplayName: String?,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                MERGE INTO users (telegram_user_id, username, first_name, last_name, guest_display_name)
+                KEY (telegram_user_id)
+                VALUES (?, NULL, 'Guest', 'User', ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.setString(2, guestDisplayName)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun seedTableSession(
         jdbcUrl: String,
@@ -540,5 +593,6 @@ class StaffCallRepositoryTest {
     private companion object {
         const val STAFF_USER_ID = 42L
         const val GUEST_USER_ID = 200L
+        const val OTHER_GUEST_USER_ID = 201L
     }
 }

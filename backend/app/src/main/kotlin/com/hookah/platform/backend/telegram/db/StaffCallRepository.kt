@@ -108,7 +108,7 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                           AND sc.table_id = ?
                           AND sc.table_session_id = ?
                           AND sc.created_by_user_id = ?
-                          AND sc.status IN ('NEW', 'ACK', 'DONE')
+                          AND sc.status IN ('NEW', 'ACK', 'DONE', 'CANCELLED')
                           AND sc.created_at >= ?
                         ORDER BY sc.created_at DESC, sc.id DESC
                         LIMIT ?

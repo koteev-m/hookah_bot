@@ -229,6 +229,72 @@ class GuestStaffCallRoutesTest {
         }
 
     @Test
+    fun `staff call status returns cancelled own call only for current table session`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-staff-call-cancelled-status")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 11)
+            seedTableToken(jdbcUrl, tableId, "cancelled-status-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val otherTableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            seedUser(jdbcUrl, OTHER_TELEGRAM_USER_ID)
+            val ownCancelledCallId =
+                seedStaffCall(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    tableId = tableId,
+                    tableSessionId = tableSessionId,
+                    userId = TELEGRAM_USER_ID,
+                    status = "CANCELLED",
+                )
+            seedStaffCall(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                tableId = tableId,
+                tableSessionId = tableSessionId,
+                userId = OTHER_TELEGRAM_USER_ID,
+                status = "CANCELLED",
+            )
+            seedStaffCall(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                tableId = tableId,
+                tableSessionId = otherTableSessionId,
+                userId = TELEGRAM_USER_ID,
+                status = "CANCELLED",
+            )
+            val token = issueToken(config)
+
+            val staffCallStatusPath =
+                "/api/guest/staff-call/status?tableToken=cancelled-status-token&tableSessionId=$tableSessionId"
+            val response =
+                client.get(staffCallStatusPath) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val item =
+                json.parseToJsonElement(response.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            assertEquals(ownCancelledCallId.toString(), item.getValue("staffCallId").jsonPrimitive.content)
+            assertEquals("CANCELLED", item.getValue("status").jsonPrimitive.content)
+            assertEquals("Вызов отменён", item.getValue("statusLabel").jsonPrimitive.content)
+        }
+
+    @Test
     fun `api staff call notification includes table session id in staff chat event`() =
         testApplication {
             val config =
@@ -926,6 +992,59 @@ class GuestStaffCallRoutesTest {
         }
     }
 
+    private fun seedUser(
+        jdbcUrl: String,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                MERGE INTO users (telegram_user_id)
+                KEY (telegram_user_id)
+                VALUES (?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedStaffCall(
+        jdbcUrl: String,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        status: String,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO staff_calls (
+                    venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, created_at
+                )
+                VALUES (?, ?, ?, ?, 'COME', 'Комментарий', ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableId)
+                statement.setLong(3, tableSessionId)
+                statement.setLong(4, userId)
+                statement.setString(5, status)
+                statement.setTimestamp(6, Timestamp.from(Instant.now()))
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) {
+                        return rs.getLong(1)
+                    }
+                }
+            }
+        }
+        error("Failed to insert staff call")
+    }
+
     private fun fetchStaffCall(
         jdbcUrl: String,
         staffCallId: Long,
@@ -977,5 +1096,6 @@ class GuestStaffCallRoutesTest {
 
     private companion object {
         const val TELEGRAM_USER_ID: Long = 456L
+        const val OTHER_TELEGRAM_USER_ID: Long = 789L
     }
 }
