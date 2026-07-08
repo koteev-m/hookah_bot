@@ -1,6 +1,6 @@
 # Guest Growth And Retention Model
 
-Дата актуализации: 2026-07-06.
+Дата актуализации: 2026-07-08.
 
 Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются закрытыми, пока для них нет backend/Mini App/Bot evidence и staging smoke. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
 
@@ -23,7 +23,9 @@ Current implementation is **partial**:
 - Account/history/favorites baselines are referenced in role docs, but require separate staging smoke before being marked complete.
 - Booking seated/no-show, order close and table-session close signals exist as foundations for visit history, but there is no canonical completed retention loop.
 - Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
-- Staff profiles / today on shift are a separate staff visibility module, not a growth campaign. Staff tips are future and must not be treated as guest order online payment.
+- Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
+  campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
+  are future and must not be treated as guest order online payment.
 - Repeat templates, post-visit feedback, promo codes, loyalty stamps/points, referrals, campaign segmentation and paid placement boosting remain future unless a later implementation summary says otherwise.
 
 ## Terms

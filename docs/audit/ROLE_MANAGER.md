@@ -76,7 +76,7 @@ Manager Mini App areas:
 - Manage tables and QR export according to current permissions.
 - Link/test staff chat if current role permission allows.
 - View staff list and create conservative STAFF invites if current route policy allows.
-- Mark public staff profiles as `Сегодня на смене` only if Phase 1 policy grants Manager this permission.
+- Mark public staff profiles as `Сегодня на смене` under the current conservative Phase 1 policy.
 - Create/manage simple `VENUE_PROMOTION` only if the growth MVP explicitly allows Manager access; terms, period and visibility/status are mandatory, and promo notifications require guest opt-in.
 
 ## Denied actions
@@ -116,7 +116,7 @@ Manager Mini App areas:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current docs allow broad Manager menu management, but conservative target policy keeps Manager to stop-list, shift check and basic availability unless product explicitly retains broader `MENU_MANAGE`.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
-- Staff profiles / today shift are `SPEC READY / FUTURE-NEXT`: Manager may mark today's visible shift only if policy allows, while Owner remains the conservative default for profile publish/hide and future tip-method approval.
+- Staff profiles / today shift are `MVP DONE / LOCAL SMOKE-PASSED`: Manager may mark today's visible shift under current conservative policy, while Owner remains the default for profile publish/hide and future tip-method approval. Schedule, photo upload and staff tips remain future.
 
 ## Smoke-critical checks
 
@@ -135,7 +135,7 @@ Manager Mini App areas:
 13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
 14. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
 15. Manager menu permissions match the product policy from `docs/MENU_OPTIONS_STOPLIST.md`: stop-list/shift check/basic availability are allowed, while price/media/structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally retained and tested.
-16. If Phase 1 grants Manager shift marking, Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
+16. Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
 
 Future Growth/retention checks:
 

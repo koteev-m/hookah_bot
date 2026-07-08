@@ -923,6 +923,23 @@ Manual M7c staging regression or rollout smoke, do not execute without approval:
 15. Verify reminder `Перенести` and `Отменить` reuse existing guest flows and cancel/avoid duplicate unsent reminders.
 16. Disable the worker immediately if any acceptance check fails, and return staging to `BOOKING_REMINDER_WORKER_ENABLED=false` after the smoke.
 
+Manual Staff Profiles Phase 1 regression smoke:
+
+1. OWNER opens Venue Mini App `Персонал`.
+2. Section `Карточки сотрудников` is visible and explains that guests see only published cards.
+3. Create form is collapsed by default; existing employee cards are compact.
+4. OWNER clicks `Добавить карточку сотрудника` and sees profile fields without raw User ID or raw Photo ref inputs.
+5. Selecting `Другое` shows required `Название роли` with guest-facing helper copy; saving without it is blocked.
+6. OWNER creates a display-only profile and a linked profile, then publishes and hides visibility.
+7. OWNER marks a published profile `Сегодня на смене`.
+8. MANAGER, where current policy allows, can mark today-shift state but cannot publish/hide profiles or approve future tip methods.
+9. STAFF cannot publish/hide profiles and can edit only own linked draft fields where policy allows.
+10. Guest venue detail shows `Сегодня работают` below main venue information/actions.
+11. Guest sees public display name, role/custom role, bio/tags and safe placeholder/photo only.
+12. Hidden profile is not visible to guest.
+13. Guest UI/API exposes no `linked_user_id`, Telegram id, invite state, private contact fields, raw User ID or raw Photo ref.
+14. Photo upload/media picker, staff tips/payments, full schedule/calendar and shift sign-up/chat swaps are not expected in current smoke.
+
 Manual Guest Communication / Support Tickets regression smoke after deployment:
 
 1. Open Guest Mini App outside table context and confirm global nav shows `Чаты` and `Помощь`.

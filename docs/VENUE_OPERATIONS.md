@@ -34,7 +34,7 @@ Canonical dependencies:
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths. | Per-venue `staff_stoplist_enabled`, mass stop-list and audit completeness are future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles and invite links. | Staff/Manager invite sharing and acceptance are staging-smoked; Platform Owner OWNER invite/revoke is smoke-closed. | Role parity still needs regression after new routes. |
-| Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists with local route/build validation. | Needs staging smoke before production readiness; catalog preview remains future. |
+| Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists and local smoke passed. | Needs staging UX acceptance before production readiness; catalog preview remains future. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Settings | Venue profile, schedule, booking hold, extension, staff-chat and operational settings. | Booking hold, shift extension, public profile/card and schedule/date exceptions are smoke-closed. | Broader settings/media/promotions/preview remain partial/future. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
@@ -275,12 +275,22 @@ Canonical spec: `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
 Phase 1 implementation:
 - Owner creates, edits, publishes and hides public staff profiles.
 - A profile may be linked to a venue member or display-only.
-- Staff may edit only their own linked draft bio/photo/tags fields and cannot self-publish.
+- Staff may edit only their own linked draft fields where policy allows and cannot self-publish;
+  Mini App photo upload remains future.
 - Owner/Manager may mark `Сегодня на смене`; Manager is limited to active/completed/canceled.
 - Guest sees only public visible profiles and shifts.
+- Venue Mode section is `Карточки сотрудников`: profiles are optional, create form is collapsed by
+  default, existing cards are compact, `Другое` requires `Название роли`, raw User ID / Photo ref
+  are not manual owner inputs, and photo upload remains future.
+- Guest `Сегодня работают` appears below main venue information/actions and shows public display
+  name, role/custom role, bio/tags and safe placeholder/photo only.
 - No staff tips or payments are implemented in Phase 1.
 
 Future:
+- `STAFF_SCHEDULE` full future-date shift calendar, staff availability, shift swaps and reminders;
+- personal Telegram shift confirmations/sign-up, with Venue Mode schedule as source of truth;
+- photo upload/media picker with consent, moderation and safe storage;
+- separate staff communication chat/forum topics only after an explicit product decision;
 - external staff tip link + `staff_tip_intent`, where money does not touch the platform;
 - provider/direct payout only after legal/product decision;
 - Telegram Stars and crypto are not MVP for staff tips.

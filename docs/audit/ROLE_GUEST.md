@@ -40,7 +40,7 @@ Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing l
 
 Pre-QR Guest Mini App:
 - карточка заведения показывает safe guest-visible данные;
-- after Phase 1, venue detail may show `Сегодня работают` with public visible staff profiles only; catalog may later show a compact `Сегодня: Иван, Алина` line;
+- venue detail shows `Сегодня работают` with public visible staff profiles only, below main venue information/actions; catalog may later show a compact `Сегодня: Иван, Алина` line;
 - `ℹ️ Информация` отдаёт только visible + filled owner info sections;
 - `section_type=menu` отображается как `📖 Фото-меню`;
 - media из info sections открываются через backend proxy, без raw Telegram URL и без bot token во frontend;
@@ -82,7 +82,7 @@ Account/bookings:
 
 - Смотреть каталог и published guest-visible venues.
 - Открывать карточку заведения и заполненные visible info sections.
-- Смотреть public visible staff profiles and `Сегодня работают` after Phase 1.
+- Смотреть public visible staff profiles and `Сегодня работают`.
 - Смотреть `📖 Фото-меню` как информационный media/text section.
 - Создавать и отменять свои бронирования, если booking flow доступен.
 - Задать вопрос заведению до визита через catalog card or venue detail; existing ordinary guest+venue chat is reused.
@@ -137,7 +137,7 @@ Account/bookings:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`; Guest-facing analytics is limited to future profile/history summaries, while client events remain low-trust UX diagnostics.
 - Menu/options/stop-list model is `SPEC UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, but broader modifier/media/top-list/shift-check coverage remains partial/future.
 - Real acquiring provider, Telegram Stars and automatic recurring payments remain future work; guest bill request is still an on-site operational request, not online payment.
-- Staff profiles / today shift are `SPEC READY / FUTURE-NEXT` in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; runtime Guest UI/API must not be called complete until public visibility, hidden-profile denial and privacy smoke pass.
+- Staff profiles / today shift are `MVP DONE / LOCAL SMOKE-PASSED` in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: Guest sees `Сегодня работают` below main venue info with only public visible fields; hidden profiles and private linked fields must stay denied in regression.
 - Staff tips are future: Phase 2 may use external staff tip link + intent, but no money touches the platform in MVP and intent is not proof of payment.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 

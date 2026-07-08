@@ -130,6 +130,13 @@ Staff-chat must not accept raw menu price edits, settings changes, billing actio
 Current vs target:
 - Staff-chat link/test/unlink diagnostics are documented as M6 closed / staging smoke passed.
 - Personal staff notifications, delivery-history UI and Telegram forum-topic routing remain future.
+- Staff profile/today-shift Phase 1 is implemented in Venue/Guest Mini App, but staff-chat does not
+  manage schedules or public profile state. Future shift confirmations, shift sign-up or swaps may
+  use personal bot notifications/buttons; Venue Mode schedule must remain the source of truth.
+- Separate staff communication chat/forum topics are an open future decision. Current recommendation:
+  do not add a second group yet; consider one staff-chat with forum topics, personal bot
+  notifications, or a dedicated staff communication group only for larger venues after
+  `STAFF_SCHEDULE` is specified.
 
 ## Staff-Chat Notification Policy
 

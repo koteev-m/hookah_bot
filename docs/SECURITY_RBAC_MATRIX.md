@@ -59,7 +59,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | --- | --- | --- | --- |
 | Guest | `catalog.view`, `venue.view` | Published guest-visible venues | Current. |
 | Guest | `venue_chat.create_own`, `venue_chat.reply_own` | Own guest+venue chat | Current support/chat split says Staff/Platform do not see ordinary venue chats. |
-| Guest | `staff_profile.view_public`, `staff_shift.view_public` | Published venue public staff data | Target Phase 1. Guest sees only public visible profiles/shifts and never `linked_user_id`, Telegram ids or private contacts. |
+| Guest | `staff_profile.view_public`, `staff_shift.view_public` | Published venue public staff data | Current Phase 1. Guest sees only public visible profiles/shifts and never `linked_user_id`, Telegram ids or private contacts. |
 | Guest | `staff_tip.intent_create` | Visible/tips-enabled staff profile | Future Phase 2. Creates intent/clickout only; no platform payment and no proof of payment. |
 | Guest | `support_ticket.create_own`, `support_ticket.view_own`, `support_ticket.reply_own` | Own support tickets | Current MVP. Venue/order/booking context must be server-verified. |
 | Guest | `booking.create_own`, `booking.view_own` | Own bookings | Current. Status/action availability depends on booking lifecycle. |
@@ -73,7 +73,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `staff_call.view`, `staff_call.ack_complete` | Own venue calls | Current ACK/DONE smoke passed; CANCELLED UI/lifecycle and row-level actor columns remain future. |
 | Staff | `booking.view`, arrival/no-show where allowed | Own venue bookings | Current STAFF booking split. Confirm/cancel/change/message/settings denied. |
 | Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
-| Staff | `staff_profile.edit_own_draft` | Own linked profile only | Target Phase 1 where policy allows. Staff may edit own draft bio/photo fields only, cannot self-publish or enable guest visibility. |
+| Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own draft fields only, cannot self-publish or enable guest visibility. Photo upload remains future. |
 | Staff | `support_ticket.none`, `venue_chat.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
 | Venue Manager | `order_queue.view`, `order_batch.status_update`, `order_batch.reject` | Own venue | Current where route permissions allow. |
 | Venue Manager | `booking.manage`, `staff_call.manage` | Own venue | Current. |
@@ -81,11 +81,11 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Manager | `table.view`, limited `table.manage` | Own venue | Current where backend permission allows; owner-only QR actions must stay denied if configured so. |
 | Venue Manager | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current support/chat MVP. Venue cannot reply when support ticket is assigned to Platform unless product policy explicitly allows it. |
 | Venue Manager | `staff_invite.create_staff_only` | Own venue | Current conservative policy where route allows; cannot create Owner/Platform access. |
-| Venue Manager | `staff_shift.manage_today` | Own venue | Target Phase 1 only if policy allows. Manager marks today shift state, but does not approve public profiles or future tip methods by default. |
+| Venue Manager | `staff_shift.manage_today` | Own venue | Current conservative Phase 1. Manager marks today shift state, but does not approve public profiles or future tip methods by default. |
 | Venue Manager | `billing.none`, dangerous lifecycle none | Billing/platform/lifecycle | Current product rule. |
 | Venue Owner | All venue operations inside own venue | Own venue | Current via active `venue_members(role=OWNER)`. |
 | Venue Owner | `staff.manage`, `staff_invite.create`, `menu.manage`, `stop_list.manage`, `table_qr.manage/rotate/export`, `settings.manage`, `staff_chat.link/unlink/test` | Own venue | Current where implemented; dangerous actions need confirmation/audit. |
-| Venue Owner | `staff_profile.manage`, `staff_profile.publish`, `staff_shift.manage_today`, `staff_tip_method.approve` | Own venue | Target/future. Phase 1 covers profiles + today shift only; tip method approval is future. |
+| Venue Owner | `staff_profile.manage`, `staff_profile.publish`, `staff_shift.manage_today`, `staff_tip_method.approve` | Own venue | Current for Phase 1 profiles + today shift; future for tip method approval. |
 | Venue Owner | `billing.view/pay` | Own venue subscription/payment state | Current manual billing MVP for view/pay surfaces; Platform-only mark-paid/courtesy remain denied. |
 | Venue Owner | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current. Can transfer support tickets to Platform. |
 | Venue Owner | `venue.lifecycle.request_pause/archive/delete` | Own venue | Target only if product implements owner-requested lifecycle; Platform lifecycle remains Platform Owner. |
@@ -139,7 +139,7 @@ These actions require server-side authorization and should require confirmation,
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat hidden. | Platform does not bypass ordinary venue RBAC by default. | Event/audit explorer and analytics exports need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
-| Staff profiles / today shift | Phase 1 backend + Mini App implementation exists; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Local route/privacy denial tests exist; staging smoke is still required before production readiness. |
+| Staff profiles / today shift | Phase 1 backend + Mini App implementation exists and local smoke passed; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Keep role/privacy smoke in regression; staging UX acceptance is still required before production readiness. |
 | Staff tips | No runtime implementation yet; canonical future boundaries are `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 external staff tip link + intent only; money does not touch platform in MVP; intent is not proof of payment. | Provider/direct payout needs legal/product decision; Telegram Stars and crypto are not MVP. |
 | Surface parity | Bot and Mini App parity is closed for several slices; some Telegram flows are still richer. | Required product surfaces are aligned or explicitly documented as exceptions. | Keep parity roadmap current before adding new management functions. |
 
@@ -168,7 +168,7 @@ These actions require server-side authorization and should require confirmation,
 
 - Security/RBAC matrix: `UPDATED`.
 - Permission parity: `PARTIAL`; keep route-level denial tests and role smoke in regression.
-- Staff profiles / today shift: Phase 1 route/privacy tests exist for backend + Mini App implementation; staging smoke is still required before production readiness.
+- Staff profiles / today shift: Phase 1 backend + Mini App implementation is done/local-smoke-passed; staging UX acceptance is still required before production readiness.
 - Staff tips: `SPEC DRAFT / FUTURE`; payment provider/direct payout requires legal/product decision, and external tip intent is not proof of payment.
 - `ADMIN` decision: target is removal from product model / compatibility alias only; implementation cleanup remains a migration/copy hygiene follow-up.
 - Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.

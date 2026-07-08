@@ -72,7 +72,7 @@
 | 13. Предзаказ для постоянных | MISSING | Booking comment mentions "предзаказ"; no preorder model found | Booking exists; orders exist | Preorder settings, eligibility, cutoff, staff queue | `venue_preorder_settings`, `preorders` linked to confirmed booking | Requires reliable visit_count and booking lifecycle | P3 after visit history |
 | 14. Loyalty/cashback/discounts | FUTURE BEYOND MANUAL DISCOUNTS | `V58__order_batch_item_discounts.sql`; manual bill discount flow | Manual item discount percent in bill | Promo codes, cashback, points, tier discounts, category discounts, guest-specific discounts | Start only after financial model and discount accounting are correct | Financial correctness and abuse | P3 |
 | 15. Promotion templates | MISSING | No promotion template model found | None | Template catalog for common promos | Static templates in owner UI creating `venue_promotions` | Template flexibility vs complexity | P2/P3 |
-| 16. Hookah master role/profile | SPEC READY / FUTURE | `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; runtime still has `venue_members` roles only OWNER/ADMIN/MANAGER/STAFF and no staff_profile/shift code | Owner can add staff; canonical Phase 1 spec now exists | Runtime implementation: public staff profiles, display-only or linked member profiles, today shift visibility, guest `Сегодня работают` | `staff_profiles`, subtype `hookah_master`, `staff_shifts`, active today display name; no payments in Phase 1 | Privacy: do not expose Telegram username, `linked_user_id`, phone/email; tips future | P2/NEXT |
+| 16. Hookah master role/profile | P1 DONE / LOCAL SMOKE-PASSED | `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; Phase 1 backend + Mini App implementation exists for staff profiles, display-only/linked profiles, today-shift visibility and guest `Сегодня работают` | Owner can add staff profile cards and mark today staff without payments | Keep Phase 1 in regression and finish staging UX acceptance | Future: `STAFF_SCHEDULE`, photo upload/media picker, external staff tip link + intent, Telegram shift notifications/sign-up | Privacy: do not expose Telegram username, `linked_user_id`, phone/email; tips future | Regression / then spec next |
 | 17. Booking/visit retention | PARTIAL | `TableSessionRepository.closeExpiredSessions`; `guest_table_session_exits`; `VenueOrdersRepository` close; booking statuses no seated/no_show | Technical table/order close, shared table-session TTL cleanup, user-scoped guest exit marker | Visit entity, seated status, visit_count, shared physical table-session close policy after all bills closed | Create visits from booking seated or table_session/order close | Double counting visits; one guest exit must not count as physical table-session close | P1/P2 dependency |
 | 18. Что делать не сейчас | DONE | This document roadmap | Prioritization included | N/A | Roadmap P0-P3 | Growth before core creates debt | P0-P3 |
 
@@ -983,46 +983,54 @@ Tests/smoke checks:
 
 ### 16. Hookah master / кальянщик как роль или сменный профиль
 
-Canonical update as of 2026-07-08: `docs/STAFF_PROFILES_SHIFTS_TIPS.md` now defines
-`STAFF_PROFILE`, `SHIFT_TODAY` and future `STAFF_TIP`. Runtime implementation is still future:
-Phase 1 is staff profiles + today on shift with no payments; Phase 2 may add external staff tip
-link + `staff_tip_intent`; provider/direct payout, Telegram Stars and crypto are not MVP.
+Canonical update as of 2026-07-08: `docs/STAFF_PROFILES_SHIFTS_TIPS.md` defines
+`STAFF_PROFILE`, `SHIFT_TODAY`, future `STAFF_SCHEDULE` and future `STAFF_TIP`. Phase 1
+staff profiles + today on shift is implemented and local-smoke-passed with no payments. Phase 2 may
+add external staff tip link + `staff_tip_intent`; provider/direct payout, Telegram Stars and crypto
+are not MVP.
 
 Продуктовая цель: show guests who is working today without exposing contacts.
 
 Текущее состояние в коде:
 - Roles: `OWNER`, `ADMIN`, `MANAGER`, `STAFF`; current runtime maps `ADMIN` as a legacy alias to `MANAGER`, not a separate Venue Admin model.
-- Spec allows `staff_waiter`, `staff_hookah` or generic staff, but code uses generic staff.
-- No `staff_profile`, `subrole`, `shift` tables/files found.
-- Owner can add hookah master as `STAFF`, but cannot distinguish/display them as hookah master.
+- Staff profiles support display-only or linked staff cards with subtype/custom role label.
+- Owner can publish/hide public staff profiles and mark `Сегодня на смене`; Manager may mark today
+  shift state under current conservative policy.
+- Guest venue card shows `Сегодня работают` below main venue info with public fields only.
+- Venue UX polish is complete locally: `Карточки сотрудников`, collapsed create form, compact
+  cards, `Другое` requires `Название роли`, and raw User ID / Photo ref are not exposed.
 
 Evidence:
-- `V11__venue_members.sql`, `V17__venue_staff_invites.sql`
-- `VenueStaffRepository`, `VenueStaffRoutes`
+- `V117__staff_profiles_today_shifts.sql`, `V118__staff_profiles_today_shifts.sql`
+- `VenueStaffProfileRepository`, `VenueStaffRoutes`, `GuestVenueRoutes`
 - `VenueRbac.kt`
-- `ROLE_STAFF.md` notes no staff specialization.
+- `VenueStaffRoutesTest`, `GuestVenueRoutesTest`, Mini App smoke coverage.
 
 MVP дизайн:
 - Keep Telegram account optional.
-- Add `staff_profiles`: venue, `linked_user_id` nullable, display name, subtype `hookah_master`, opt-in guest visibility and safe audit fields.
-- Add `staff_shifts` / `SHIFT_TODAY`: manual active/scheduled today state.
-- Guest-visible list: `Сегодня работают` with display names only.
+- Use `staff_profiles`: venue, `linked_user_id` nullable, display name, role label, subtype,
+  opt-in guest visibility and safe audit fields.
+- Use `staff_shifts` / `SHIFT_TODAY`: manual active/scheduled today state.
+- Guest-visible list: `Сегодня работают` with public display name, role/custom role, bio/tags and
+  safe placeholder/photo only.
 - No tips payments in Phase 1.
 
 Расширенный дизайн:
-- Shift schedule, skills, photos, internal assignment, order assignment to hookah master.
+- Shift schedule, shift sign-up/swaps via Telegram, skills, profile photo upload/media picker,
+  internal assignment, order assignment to hookah master and dedicated staff communication chat/forum
+  topics remain future.
 
 Технические изменения:
-- Staff profile repository/routes.
-- Guest venue API includes visible active profiles.
-- Staff tip method/intent routes are future and must not be mixed with guest order payment.
+- Phase 1 staff profile/today-shift repository/routes and guest visible active profiles exist.
+- Staff schedule, staff tip method/intent routes, photo upload and staff communication workflows are
+  future and must not be mixed with guest order payment.
 
 Миграции БД:
 - `staff_profiles(id, venue_id, linked_user_id nullable, display_name, role_label, subtype, photo_ref, bio, tags, is_guest_visible, tips_enabled future, created_by_user_id, updated_by_user_id, published_at, disabled_at, audit fields)`.
 - `staff_shifts(id, venue_id, staff_profile_id, shift_date, starts_at, ends_at, status, is_guest_visible, manually_marked_active, audit fields)`.
 
 API/routes:
-- `GET/POST/PATCH /api/venue/{venueId}/staff-profiles`
+- `GET/POST/PATCH /api/venue/{venueId}/staff/profiles`
 - `GET /api/guest/venue/{id}/today-staff`
 
 Telegram bot changes:
@@ -1034,10 +1042,13 @@ Mini App changes:
 Tests/smoke checks:
 - Hidden profiles not returned.
 - Username/contact not exposed.
+- `Другое` requires custom role label.
+- Guest `Сегодня работают` appears below main venue info.
 
 Риски:
 - Privacy and employee consent.
 - Confusing account member vs display-only profile.
+- Treating future tip intent as payment proof.
 
 Рекомендованный приоритет: **P2/P3**.
 
