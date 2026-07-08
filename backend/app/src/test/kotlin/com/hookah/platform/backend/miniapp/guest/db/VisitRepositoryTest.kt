@@ -108,6 +108,57 @@ class VisitRepositoryTest {
         }
 
     @Test
+    fun `legacy non seated booking visits are excluded from guest history`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("visit-history-filters-legacy-bookings")
+            val fixture = seedBase(jdbcUrl)
+            val visitRepository = VisitRepository(dataSource(jdbcUrl))
+            val filteredVisitIds = mutableListOf<Long>()
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                listOf("CANCELED", "NO_SHOW", "EXPIRED", "PENDING", "CHANGED").forEachIndexed { index, status ->
+                    val bookingId =
+                        insertBooking(
+                            connection = connection,
+                            venueId = fixture.venueId,
+                            userId = GUEST_ONE,
+                            status = status,
+                            displayNumber = index + 1,
+                        )
+                    filteredVisitIds.add(
+                        insertBookingVisit(
+                            connection = connection,
+                            venueId = fixture.venueId,
+                            userId = GUEST_ONE,
+                            bookingId = bookingId,
+                        ),
+                    )
+                }
+                val seatedBookingId =
+                    insertBooking(
+                        connection = connection,
+                        venueId = fixture.venueId,
+                        userId = GUEST_ONE,
+                        status = "SEATED",
+                        displayNumber = 10,
+                    )
+                insertBookingVisit(
+                    connection = connection,
+                    venueId = fixture.venueId,
+                    userId = GUEST_ONE,
+                    bookingId = seatedBookingId,
+                )
+            }
+
+            val history = visitRepository.listGuestVisitHistory(GUEST_ONE)
+
+            assertEquals(1, history.size)
+            assertEquals(VisitSource.BOOKING_SEATED, history.single().source)
+            filteredVisitIds.forEach { visitId ->
+                assertNull(visitRepository.getGuestVisitDetail(GUEST_ONE, visitId))
+            }
+        }
+
+    @Test
     fun `arrival terminal actions require confirmed booking`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("visit-booking-arrival-confirmed-only")
@@ -894,6 +945,66 @@ class VisitRepositoryTest {
             }
         }
     }
+
+    private fun insertBooking(
+        connection: java.sql.Connection,
+        venueId: Long,
+        userId: Long,
+        status: String,
+        displayNumber: Int,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO bookings (
+                venue_id,
+                user_id,
+                scheduled_at,
+                party_size,
+                status,
+                display_date,
+                display_number
+            )
+            VALUES (?, ?, ?, 2, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, userId)
+            statement.setTimestamp(3, Timestamp.from(Instant.parse("2030-05-10T17:00:00Z")))
+            statement.setString(4, status)
+            statement.setDate(5, java.sql.Date.valueOf(LocalDate.of(2030, 5, 10)))
+            statement.setInt(6, displayNumber)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun insertBookingVisit(
+        connection: java.sql.Connection,
+        venueId: Long,
+        userId: Long,
+        bookingId: Long,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO visits (venue_id, user_id, booking_id, source, occurred_at, service_date)
+            VALUES (?, ?, ?, 'BOOKING_SEATED', ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, userId)
+            statement.setLong(3, bookingId)
+            statement.setTimestamp(4, Timestamp.from(Instant.parse("2030-05-10T18:00:00Z")))
+            statement.setDate(5, java.sql.Date.valueOf(LocalDate.of(2030, 5, 10)))
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
 
     private fun insertTab(
         connection: java.sql.Connection,

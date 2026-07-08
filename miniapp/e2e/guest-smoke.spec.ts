@@ -3655,6 +3655,19 @@ test('guest history shows completed visits and safe closed order detail', async 
           currency: 'RUB',
           hasBooking: false,
           orderLabels: ['№42']
+        },
+        {
+          visitId: 12,
+          venueId: 1,
+          venueName: 'Недоступный визит',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-12T18:30:00Z',
+          serviceDate: '2030-01-12',
+          source: 'order_closed',
+          totalMinor: null,
+          currency: null,
+          hasBooking: false,
+          orderLabels: ['№404']
         }
       ],
       details: {
@@ -3723,14 +3736,34 @@ test('guest history shows completed visits and safe closed order detail', async 
 
   const bookingOnlyVisit = page.locator('article.card').filter({ hasText: 'Было бронирование' })
   const closedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №42' })
+  const missingDetailVisit = page.locator('article.card').filter({ hasText: 'Заказы: №404' })
   await expect(bookingOnlyVisit).toContainText('Микс')
   await expect(closedOrderVisit).toContainText(/Итого: 1[\s\u00a0]250/)
+  await expect(page.getByText('Отменённая бронь')).toHaveCount(0)
+
+  await bookingOnlyVisit.getByRole('button', { name: 'Подробнее' }).click()
+  await expect(page.getByText('Посещение по брони. Заказов в этом визите нет.')).toBeVisible()
+  await expect
+    .poll(async () => page.evaluate(() => Boolean((window as TestTelegramWindow).__e2eTelegramBackButtonVisible)))
+    .toBe(true)
+  await clickTelegramBackButton(page)
+  await expect(closedOrderVisit).toBeVisible()
 
   await closedOrderVisit.getByRole('button', { name: 'Подробнее' }).click()
 
   await expect(page.getByRole('heading', { name: 'Заказ №42' })).toBeVisible()
+  await expect(page.getByText('Загружаем данные...')).toHaveCount(0)
   await expect(page.getByText('Double Apple · Ягодный микс · Пожелание: покрепче ×1')).toBeVisible()
+  await expect(page.getByRole('button', { name: '← Назад к истории' })).toBeVisible()
   await expect(page.getByText('Foreign Hookah')).toHaveCount(0)
+  await page.getByRole('button', { name: '← Назад к истории' }).click()
+  await expect(closedOrderVisit).toBeVisible()
+
+  await missingDetailVisit.getByRole('button', { name: 'Подробнее' }).click()
+  await expect(page.getByText('Не удалось загрузить детали истории.')).toBeVisible()
+  await expect(page.getByText('Загружаем данные...')).toHaveCount(0)
+  await page.getByRole('button', { name: '← Назад к истории' }).click()
+  await expect(missingDetailVisit).toBeVisible()
 })
 
 test('table context with active order opens category-first order menu and hides pre-visit actions', async ({ page }) => {

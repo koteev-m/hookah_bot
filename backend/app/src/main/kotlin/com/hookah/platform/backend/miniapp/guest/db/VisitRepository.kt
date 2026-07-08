@@ -405,7 +405,9 @@ class VisitRepository(private val dataSource: DataSource?) {
                    v.service_date
             FROM visits v
             JOIN venues venue ON venue.id = v.venue_id
+            LEFT JOIN bookings b ON b.id = v.booking_id
             WHERE v.user_id = ?
+              AND (v.booking_id IS NULL OR b.status = 'SEATED')
               $cursorCondition
             ORDER BY v.occurred_at DESC, v.id DESC
             LIMIT ?
@@ -442,8 +444,10 @@ class VisitRepository(private val dataSource: DataSource?) {
                    v.service_date
             FROM visits v
             JOIN venues venue ON venue.id = v.venue_id
+            LEFT JOIN bookings b ON b.id = v.booking_id
             WHERE v.user_id = ?
               AND v.id = ?
+              AND (v.booking_id IS NULL OR b.status = 'SEATED')
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, userId)

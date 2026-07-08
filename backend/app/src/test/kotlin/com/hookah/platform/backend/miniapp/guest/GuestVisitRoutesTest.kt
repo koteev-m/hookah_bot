@@ -55,6 +55,7 @@ class GuestVisitRoutesTest {
             val venueId = seedVenueAndUsers(jdbcUrl, guestOne, guestTwo)
             val guestOneVisit = seedVisit(jdbcUrl, venueId, guestOne, "BOOKING_SEATED")
             val guestTwoVisit = seedVisit(jdbcUrl, venueId, guestTwo, "BOOKING_SEATED")
+            val canceledVisit = seedBookingVisit(jdbcUrl, venueId, guestOne, "CANCELED")
             val token = issueToken(config, guestOne)
 
             val listResponse =
@@ -81,6 +82,12 @@ class GuestVisitRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             assertEquals(HttpStatusCode.NotFound, forbiddenDetail.status)
+
+            val filteredDetail =
+                client.get("/api/guest/visits/$canceledVisit") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.NotFound, filteredDetail.status)
         }
 
     @Test
@@ -197,6 +204,60 @@ class GuestVisitRoutesTest {
                 statement.setLong(2, userId)
                 statement.setString(3, source)
                 statement.setTimestamp(4, Timestamp.from(Instant.parse("2030-05-12T18:00:00Z")))
+                statement.setDate(5, Date.valueOf(LocalDate.of(2030, 5, 12)))
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    keys.next()
+                    keys.getLong(1)
+                }
+            }
+        }
+
+    private fun seedBookingVisit(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        bookingStatus: String,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val bookingId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO bookings (
+                        venue_id,
+                        user_id,
+                        scheduled_at,
+                        party_size,
+                        status,
+                        display_date,
+                        display_number
+                    )
+                    VALUES (?, ?, ?, 2, ?, ?, 1)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, userId)
+                    statement.setTimestamp(3, Timestamp.from(Instant.parse("2030-05-12T18:00:00Z")))
+                    statement.setString(4, bookingStatus)
+                    statement.setDate(5, Date.valueOf(LocalDate.of(2030, 5, 12)))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO visits (venue_id, user_id, booking_id, source, occurred_at, service_date)
+                VALUES (?, ?, ?, 'BOOKING_SEATED', ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, userId)
+                statement.setLong(3, bookingId)
+                statement.setTimestamp(4, Timestamp.from(Instant.parse("2030-05-12T18:10:00Z")))
                 statement.setDate(5, Date.valueOf(LocalDate.of(2030, 5, 12)))
                 statement.executeUpdate()
                 statement.generatedKeys.use { keys ->

@@ -31,6 +31,7 @@ export type GuestAccountScreenOptions = {
   onOpenBookings: () => void
   onOpenVenue: (venueId: number) => void
   onOpenBot: () => OpenBotResult
+  onInternalBackStateChange?: (handler: (() => void) | null) => void
 }
 
 function requestDeps(isDebug: boolean) {
@@ -78,6 +79,17 @@ function renderErrorSection(root: HTMLElement, title: string, body: string, onBa
   const heading = el('h2', { text: title })
   const text = el('p', { text: body })
   const backButton = el('button', { text: 'К профилю' }) as HTMLButtonElement
+  append(section, heading, text, backButton)
+  root.replaceChildren(section)
+  const dispose = on(backButton, 'click', onBack)
+  return () => dispose()
+}
+
+function renderHistoryDetailError(root: HTMLElement, onBack: () => void) {
+  const section = el('section', { className: 'card' })
+  const heading = el('h2', { text: 'История' })
+  const text = el('p', { text: 'Не удалось загрузить детали истории.' })
+  const backButton = el('button', { text: '← Назад к истории' }) as HTMLButtonElement
   append(section, heading, text, backButton)
   root.replaceChildren(section)
   const dispose = on(backButton, 'click', onBack)
@@ -228,25 +240,35 @@ function renderVisitDetail(root: HTMLElement, visit: GuestVisitDetailDto, onBack
       .filter((value): value is string => Boolean(value))
       .join(' · ')
   })
-  const backButton = el('button', { text: 'К истории' }) as HTMLButtonElement
+  const backButton = el('button', { text: '← Назад к истории' }) as HTMLButtonElement
   append(header, heading, meta, backButton)
   append(wrapper, header)
   visit.orders.forEach((order) => append(wrapper, renderVisitOrder(order)))
   if (visit.orders.length === 0) {
-    append(wrapper, el('section', { className: 'card', text: 'В этом визите нет заказов для отображения.' }))
+    const emptyText = visit.booking
+      ? 'Посещение по брони. Заказов в этом визите нет.'
+      : 'В этом визите нет заказов для отображения.'
+    append(wrapper, el('section', { className: 'card', text: emptyText }))
   }
   root.replaceChildren(wrapper)
   const dispose = on(backButton, 'click', onBack)
   return () => dispose()
 }
 
-function renderHistorySection(root: HTMLElement, backendUrl: string, isDebug: boolean, onBack: () => void) {
+function renderHistorySection(
+  root: HTMLElement,
+  backendUrl: string,
+  isDebug: boolean,
+  onBack: () => void,
+  onInternalBackStateChange?: (handler: (() => void) | null) => void
+) {
   const controller = new AbortController()
   let nestedDispose: (() => void) | null = null
   renderLoading(root, 'История')
   const deps = requestDeps(isDebug)
 
   const loadList = async () => {
+    onInternalBackStateChange?.(onBack)
     nestedDispose?.()
     nestedDispose = null
     const result = await guestGetVisits(backendUrl, { limit: 20 }, deps, controller.signal)
@@ -281,20 +303,29 @@ function renderHistorySection(root: HTMLElement, backendUrl: string, isDebug: bo
   }
 
   const loadDetail = async (visitId: number) => {
-    nestedDispose?.()
-    nestedDispose = null
-    const loading = renderLoading(root, 'История')
-    const result = await guestGetVisitDetail(backendUrl, visitId, deps, controller.signal)
-    if (!result.ok) {
-      if (result.error.code === REQUEST_ABORTED_CODE) return
-      nestedDispose = renderErrorSection(root, 'История', errorText(result.error), () => {
-        void loadList()
-      })
-      return
-    }
-    nestedDispose = renderVisitDetail(root, result.data.visit, () => {
+    onInternalBackStateChange?.(() => {
       void loadList()
     })
+    nestedDispose?.()
+    nestedDispose = null
+    renderLoading(root, 'История')
+    try {
+      const result = await guestGetVisitDetail(backendUrl, visitId, deps, controller.signal)
+      if (!result.ok) {
+        if (result.error.code === REQUEST_ABORTED_CODE) return
+        nestedDispose = renderHistoryDetailError(root, () => {
+          void loadList()
+        })
+        return
+      }
+      nestedDispose = renderVisitDetail(root, result.data.visit, () => {
+        void loadList()
+      })
+    } catch {
+      nestedDispose = renderHistoryDetailError(root, () => {
+        void loadList()
+      })
+    }
   }
 
   void loadList()
@@ -302,6 +333,7 @@ function renderHistorySection(root: HTMLElement, backendUrl: string, isDebug: bo
   return () => {
     controller.abort()
     nestedDispose?.()
+    onInternalBackStateChange?.(null)
   }
 }
 
@@ -404,7 +436,18 @@ function renderFavoritesSection(
 }
 
 export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
-  const { root, backendUrl, isDebug, currentVenueId, hasTableContext, onBack, onOpenBookings, onOpenVenue, onOpenBot } = options
+  const {
+    root,
+    backendUrl,
+    isDebug,
+    currentVenueId,
+    hasTableContext,
+    onBack,
+    onOpenBookings,
+    onOpenVenue,
+    onOpenBot,
+    onInternalBackStateChange
+  } = options
   if (!root) return () => undefined
 
   let currentDispose: (() => void) | null = null
@@ -414,6 +457,7 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
     const goHome = () => renderSection('home')
     switch (section) {
       case 'profile':
+        onInternalBackStateChange?.(goHome)
         currentDispose = renderBotOnlySection(
           root,
           'Профиль',
@@ -423,12 +467,14 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
         )
         break
       case 'history':
-        currentDispose = renderHistorySection(root, backendUrl, isDebug, goHome)
+        currentDispose = renderHistorySection(root, backendUrl, isDebug, goHome, onInternalBackStateChange)
         break
       case 'favorites':
+        onInternalBackStateChange?.(goHome)
         currentDispose = renderFavoritesSection(root, backendUrl, isDebug, currentVenueId, goHome, onOpenVenue)
         break
       case 'promotions':
+        onInternalBackStateChange?.(goHome)
         currentDispose = renderBotOnlySection(
           root,
           'Акции',
@@ -440,6 +486,7 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
         )
         break
       case 'loyalty':
+        onInternalBackStateChange?.(goHome)
         currentDispose = renderBotOnlySection(
           root,
           'Лояльность',
@@ -450,6 +497,7 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
         break
       case 'home':
       default:
+        onInternalBackStateChange?.(null)
         currentDispose = renderAccountHome(root, renderSection, onBack, onOpenBookings)
         break
     }
@@ -459,5 +507,6 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
 
   return () => {
     currentDispose?.()
+    onInternalBackStateChange?.(null)
   }
 }

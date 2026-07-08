@@ -222,6 +222,7 @@ function renderRouteContent(
   onNavigateSupportBack: () => void,
   onOpenVenueStaffCall: () => void,
   onOpenSupportBot: () => { ok: true } | { ok: false; message: string },
+  onInternalBackStateChange: (handler: (() => void) | null) => void,
   tableSnapshot: ReturnType<typeof getTableContext>,
   hasTableContext: boolean
 ): () => void {
@@ -270,7 +271,8 @@ function renderRouteContent(
           window.location.hash = '#/bookings'
         },
         onOpenVenue,
-        onOpenBot: onOpenSupportBot
+        onOpenBot: onOpenSupportBot,
+        onInternalBackStateChange
       })
     case 'messages':
       return renderGuestSupportThreadsScreen({
@@ -671,6 +673,11 @@ export function mountGuestApp(options: GuestAppOptions) {
   const notifyRouteChange = () => {
     routeListeners.forEach((listener) => listener())
   }
+  let internalBackHandler: (() => void) | null = null
+  const setInternalBackHandler = (handler: (() => void) | null) => {
+    internalBackHandler = handler
+    notifyRouteChange()
+  }
 
   const updateHistory = (hash: string) => {
     if (!hash || hash === '#') {
@@ -892,6 +899,10 @@ export function mountGuestApp(options: GuestAppOptions) {
     getRouteName: () => currentRoute.name,
     navigate,
     back: () => {
+      if (internalBackHandler) {
+        internalBackHandler()
+        return
+      }
       if (historyStack.length > 1) {
         historyStack.pop()
         const targetHash = historyStack[historyStack.length - 1]
@@ -906,7 +917,7 @@ export function mountGuestApp(options: GuestAppOptions) {
       }
       getTelegramContext().webApp?.close?.()
     },
-    canGoBack: () => historyStack.length > 1 || !isCurrentGuestRoot(),
+    canGoBack: () => internalBackHandler !== null || historyStack.length > 1 || !isCurrentGuestRoot(),
     subscribe: (handler: () => void) => {
       routeListeners.add(handler)
       return () => routeListeners.delete(handler)
@@ -994,6 +1005,7 @@ export function mountGuestApp(options: GuestAppOptions) {
             : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
         }
       },
+      setInternalBackHandler,
       tableSnapshot,
       resolveTableMode(tableSnapshot) === 'active-table'
     )
