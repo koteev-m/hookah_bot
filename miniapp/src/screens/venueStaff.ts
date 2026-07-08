@@ -61,12 +61,17 @@ type StaffRefs = {
   inviteCopyStatus: HTMLParagraphElement
   list: HTMLDivElement
   profileCard: HTMLElement
+  profileAddButton: HTMLButtonElement
+  profileForm: HTMLDivElement
   profileName: HTMLInputElement
   profileSubtype: HTMLSelectElement
+  profileRoleLabelField: HTMLElement
+  profileRoleLabel: HTMLInputElement
   profileLinkedUser: HTMLSelectElement
   profileBio: HTMLTextAreaElement
   profileTags: HTMLInputElement
   profileCreateButton: HTMLButtonElement
+  profileCancelButton: HTMLButtonElement
   profileStatus: HTMLParagraphElement
   profileList: HTMLDivElement
 }
@@ -209,13 +214,16 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
   const profileTitle = el('h3', { text: 'Карточки сотрудников' })
   const profileDescription = el('p', {
     className: 'venue-order-sub',
-    text: 'Создайте карточки сотрудников, которых гости увидят в карточке заведения. Например: кальянщики, официанты или администраторы. Гости видят только опубликованные профили.'
+    text: 'Создайте карточки сотрудников, которых гости увидят в карточке заведения. Например: кальянщики, официанты или администраторы.'
   })
+  const privacyNote = el('p', { className: 'venue-order-sub', text: 'Гости видят только опубликованные карточки.' })
   const shiftNote = el('p', {
     className: 'venue-order-sub',
-    text: 'Если отметить сотрудника «Сегодня на смене», он появится в блоке «Сегодня работают».'
+    text: 'Отметьте сотрудника «Сегодня на смене», чтобы он появился у гостей в блоке «Сегодня работают».'
   })
+  const profileAddButton = el('button', { className: 'button-small', text: 'Добавить карточку сотрудника' }) as HTMLButtonElement
   const profileForm = el('div', { className: 'venue-profile-form' })
+  profileForm.hidden = true
   const profileName = document.createElement('input')
   profileName.className = 'venue-input'
   profileName.placeholder = 'Например: Максим'
@@ -226,6 +234,12 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
   profileSubtype.appendChild(new Option('Официант', 'waiter'))
   profileSubtype.appendChild(new Option('Администратор', 'admin'))
   profileSubtype.appendChild(new Option('Другое', 'other'))
+  const profileRoleLabel = document.createElement('input')
+  profileRoleLabel.className = 'venue-input'
+  profileRoleLabel.placeholder = 'Например: Бармен, Старший смены, Мастер миксов'
+  profileRoleLabel.maxLength = 120
+  const profileRoleLabelField = renderProfileField('Название роли', profileRoleLabel, 'Так роль будет показана гостям.')
+  profileRoleLabelField.hidden = true
   const profileLinkedUser = document.createElement('select')
   profileLinkedUser.className = 'venue-select'
   const profileBio = document.createElement('textarea')
@@ -241,10 +255,14 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     text: 'Фото сотрудника — позже'
   })
   const profileCreateButton = el('button', { text: 'Создать профиль' }) as HTMLButtonElement
+  const profileCancelButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
+  const profileFormActions = el('div', { className: 'venue-profile-form-actions' })
+  append(profileFormActions, profileCreateButton, profileCancelButton)
   append(
     profileForm,
     renderProfileField('Имя на карточке', profileName, 'Так это имя увидят гости.'),
     renderProfileField('Тип сотрудника', profileSubtype),
+    profileRoleLabelField,
     renderProfileField(
       'Привязать к сотруднику',
       profileLinkedUser,
@@ -257,11 +275,11 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
       profileTags,
       'Можно указать через запятую. Это поможет гостям понять стиль сотрудника.'
     ),
-    profileCreateButton
+    profileFormActions
   )
   const profileStatus = el('p', { className: 'status', text: '' })
   const profileList = el('div', { className: 'venue-staff-list venue-profile-list' })
-  append(profileCard, profileTitle, profileDescription, shiftNote, profileForm, profileStatus, profileList)
+  append(profileCard, profileTitle, profileDescription, privacyNote, shiftNote, profileAddButton, profileForm, profileStatus, profileList)
 
   append(wrapper, header, profileCard, status, error, list)
   root.replaceChildren(wrapper)
@@ -289,12 +307,17 @@ function buildStaffDom(root: HTMLDivElement): StaffRefs {
     inviteCopyStatus,
     list,
     profileCard,
+    profileAddButton,
+    profileForm,
     profileName,
     profileSubtype,
+    profileRoleLabelField,
+    profileRoleLabel,
     profileLinkedUser,
     profileBio,
     profileTags,
     profileCreateButton,
+    profileCancelButton,
     profileStatus,
     profileList
   }
@@ -384,10 +407,30 @@ function formatProfileSubtype(subtype: VenueStaffProfileSubtype): string {
     case 'admin':
       return 'Администратор'
     case 'other':
-      return 'Другое'
+      return 'Сотрудник'
     default:
       return subtype
   }
+}
+
+function isOtherProfileSubtype(subtype: VenueStaffProfileSubtype | null | undefined): boolean {
+  return subtype === 'other'
+}
+
+function formatProfileRole(profile: VenueStaffProfileDto): string {
+  const customRole = profile.roleLabel?.trim()
+  if (customRole) return customRole
+  return formatProfileSubtype(profile.subtype)
+}
+
+function updateRoleLabelField(
+  field: HTMLElement,
+  input: HTMLInputElement,
+  subtype: VenueStaffProfileSubtype | null | undefined
+) {
+  const visible = isOtherProfileSubtype(subtype)
+  field.hidden = !visible
+  input.required = visible
 }
 
 function formatShiftStatus(status: VenueStaffShiftStatus | undefined | null): string {
@@ -459,15 +502,19 @@ function renderProfileRow(
   access: VenueAccessDto,
   currentUserId: number,
   staffMembers: VenueStaffMemberDto[],
+  isEditing: boolean,
   handlers: {
     onSave: (profile: VenueStaffProfileDto, draft: {
       displayName?: string | null
+      roleLabel?: string | null
       subtype?: VenueStaffProfileSubtype | null
       linkedUserId?: number | null
       unlinkUser?: boolean
       bio?: string | null
       tags?: string[] | null
     }) => void
+    onEdit: (profile: VenueStaffProfileDto) => void
+    onCancelEdit: () => void
     onPublish: (profile: VenueStaffProfileDto) => void
     onHide: (profile: VenueStaffProfileDto) => void
     onShift: (profile: VenueStaffProfileDto, status: VenueStaffShiftStatus, isGuestVisible: boolean) => void
@@ -485,7 +532,7 @@ function renderProfileRow(
     el('strong', { text: profile.displayName }),
     el('p', {
       className: 'venue-order-sub',
-      text: `${profile.roleLabel || formatProfileSubtype(profile.subtype)} · ${formatShiftLine(profile)}`
+      text: `${formatProfileRole(profile)} · ${formatShiftLine(profile)}`
     })
   )
   if (profile.tags?.length) {
@@ -502,7 +549,7 @@ function renderProfileRow(
 
   const actions = el('div', { className: 'venue-staff-actions venue-profile-actions' })
 
-  if (canEdit) {
+  if (canEdit && isEditing) {
     const nameInput = document.createElement('input')
     nameInput.className = 'venue-input'
     nameInput.value = profile.displayName
@@ -517,6 +564,16 @@ function renderProfileRow(
       ['Другое', 'other']
     ].forEach(([label, value]) => subtypeSelect.appendChild(new Option(label, value)))
     subtypeSelect.value = profile.subtype || 'other'
+    const roleLabelInput = document.createElement('input')
+    roleLabelInput.className = 'venue-input'
+    roleLabelInput.value = profile.roleLabel ?? ''
+    roleLabelInput.placeholder = 'Например: Бармен, Старший смены, Мастер миксов'
+    roleLabelInput.maxLength = 120
+    const roleLabelField = renderProfileField('Название роли', roleLabelInput, 'Так роль будет показана гостям.')
+    updateRoleLabelField(roleLabelField, roleLabelInput, subtypeSelect.value as VenueStaffProfileSubtype)
+    subtypeSelect.addEventListener('change', () =>
+      updateRoleLabelField(roleLabelField, roleLabelInput, subtypeSelect.value as VenueStaffProfileSubtype)
+    )
     const linkedSelect = document.createElement('select')
     linkedSelect.className = 'venue-select'
     populateLinkedUserSelect(linkedSelect, staffMembers, currentUserId, profile.linkedUserId)
@@ -531,15 +588,24 @@ function renderProfileRow(
     tagsInput.value = profile.tags?.join(', ') ?? ''
     tagsInput.placeholder = 'Например: крепкие миксы, фруктовые чаши, авторские вкусы'
     const saveButton = el('button', { className: 'button-small', text: 'Сохранить' }) as HTMLButtonElement
+    const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
     saveButton.addEventListener('click', () => {
       const linkedUserId = parseLinkedUserValue(linkedSelect.value)
       if (Number.isNaN(linkedUserId)) {
         showToast('Некорректная привязка сотрудника')
         return
       }
+      const nextSubtype = subtypeSelect.value as VenueStaffProfileSubtype
+      const nextRoleLabel = normalizeOptionalText(roleLabelInput.value)
+      if (isOwner && isOtherProfileSubtype(nextSubtype) && !nextRoleLabel) {
+        showToast('Укажите название роли')
+        roleLabelInput.focus()
+        return
+      }
       handlers.onSave(profile, {
         displayName: isOwner ? nameInput.value : undefined,
-        subtype: isOwner ? (subtypeSelect.value as VenueStaffProfileSubtype) : undefined,
+        roleLabel: isOwner ? (isOtherProfileSubtype(nextSubtype) ? nextRoleLabel : null) : undefined,
+        subtype: isOwner ? nextSubtype : undefined,
         linkedUserId: isOwner ? linkedUserId : undefined,
         unlinkUser: isOwner ? linkedUserId === null : undefined,
         bio: bioInput.value,
@@ -551,6 +617,7 @@ function renderProfileRow(
         actions,
         renderProfileField('Имя на карточке', nameInput, 'Так это имя увидят гости.'),
         renderProfileField('Тип сотрудника', subtypeSelect),
+        roleLabelField,
         renderProfileField(
           'Привязать к сотруднику',
           linkedSelect,
@@ -566,8 +633,18 @@ function renderProfileRow(
         tagsInput,
         'Можно указать через запятую. Это поможет гостям понять стиль сотрудника.'
       ),
-      saveButton
+      saveButton,
+      cancelButton
     )
+    cancelButton.addEventListener('click', handlers.onCancelEdit)
+    append(row, info, actions)
+    return row
+  }
+
+  if (canEdit) {
+    const editButton = el('button', { className: 'button-small button-secondary', text: 'Редактировать' }) as HTMLButtonElement
+    editButton.addEventListener('click', () => handlers.onEdit(profile))
+    actions.appendChild(editButton)
   }
 
   if (isOwner) {
@@ -617,6 +694,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   let currentInvite: VenueStaffInviteResponse | null = null
   let staffMembers: VenueStaffMemberDto[] = []
   let currentProfiles: VenueStaffProfileDto[] = []
+  let isCreateFormOpen = false
+  let editingProfileId: number | null = null
 
   const canInvite = access.role !== 'STAFF'
   const canManageRoles = access.role === 'OWNER'
@@ -629,6 +708,27 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const setProfileStatus = (text: string) => {
     refs.profileStatus.textContent = text
+  }
+
+  const syncCreateFormVisibility = () => {
+    refs.profileForm.hidden = !isCreateFormOpen || !canCreateProfiles
+    refs.profileAddButton.hidden = isCreateFormOpen || !canCreateProfiles
+    updateRoleLabelField(
+      refs.profileRoleLabelField,
+      refs.profileRoleLabel,
+      refs.profileSubtype.value as VenueStaffProfileSubtype
+    )
+  }
+
+  const resetCreateForm = () => {
+    refs.profileName.value = ''
+    refs.profileSubtype.value = 'hookah_master'
+    refs.profileRoleLabel.value = ''
+    refs.profileLinkedUser.value = ''
+    refs.profileBio.value = ''
+    refs.profileTags.value = ''
+    isCreateFormOpen = false
+    syncCreateFormVisibility()
   }
 
   const hideError = () => {
@@ -761,8 +861,18 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     }
     profiles.forEach((profile) => {
       refs.profileList.appendChild(
-        renderProfileRow(profile, access, currentUserId, staffMembers, {
+        renderProfileRow(profile, access, currentUserId, staffMembers, editingProfileId === profile.id, {
           onSave: (target, draft) => void saveProfile(target, draft),
+          onEdit: (target) => {
+            editingProfileId = target.id
+            isCreateFormOpen = false
+            syncCreateFormVisibility()
+            renderProfiles(currentProfiles)
+          },
+          onCancelEdit: () => {
+            editingProfileId = null
+            renderProfiles(currentProfiles)
+          },
           onPublish: (target) => void publishProfile(target),
           onHide: (target) => void hideProfile(target),
           onShift: (target, status, isGuestVisible) => void updateTodayShift(target, status, isGuestVisible)
@@ -893,13 +1003,21 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       showToast('Укажите имя')
       return
     }
+    const subtype = refs.profileSubtype.value as VenueStaffProfileSubtype
+    const roleLabel = normalizeOptionalText(refs.profileRoleLabel.value)
+    if (isOtherProfileSubtype(subtype) && !roleLabel) {
+      showToast('Укажите название роли')
+      refs.profileRoleLabel.focus()
+      return
+    }
     const result = await venueCreateStaffProfile(
       backendUrl,
       {
         venueId,
         body: {
           displayName,
-          subtype: refs.profileSubtype.value as VenueStaffProfileSubtype,
+          roleLabel: isOtherProfileSubtype(subtype) ? roleLabel : null,
+          subtype,
           linkedUserId,
           bio: normalizeOptionalText(refs.profileBio.value),
           tags: splitTags(refs.profileTags.value)
@@ -912,10 +1030,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       showError(result.error)
       return
     }
-    refs.profileName.value = ''
-    refs.profileLinkedUser.value = ''
-    refs.profileBio.value = ''
-    refs.profileTags.value = ''
+    resetCreateForm()
     showToast('Профиль создан')
     void loadProfiles()
   }
@@ -924,6 +1039,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     profile: VenueStaffProfileDto,
     draft: {
       displayName?: string | null
+      roleLabel?: string | null
       subtype?: VenueStaffProfileSubtype | null
       linkedUserId?: number | null
       unlinkUser?: boolean
@@ -933,6 +1049,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   ) => {
     const body: VenueStaffProfileUpdateRequest = {
       displayName: draft.displayName,
+      roleLabel: draft.roleLabel === undefined ? undefined : draft.roleLabel === null ? null : normalizeOptionalText(draft.roleLabel),
       subtype: draft.subtype,
       linkedUserId: draft.linkedUserId,
       unlinkUser: draft.unlinkUser,
@@ -954,10 +1071,19 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     showToast('Профиль обновлён')
+    editingProfileId = null
     void loadProfiles()
   }
 
   const publishProfile = async (profile: VenueStaffProfileDto) => {
+    if (isOtherProfileSubtype(profile.subtype) && !profile.roleLabel?.trim()) {
+      editingProfileId = profile.id
+      isCreateFormOpen = false
+      syncCreateFormVisibility()
+      renderProfiles(currentProfiles)
+      showToast('Укажите название роли')
+      return
+    }
     const result = await venuePublishStaffProfile(backendUrl, { venueId, profileId: profile.id }, deps)
     if (disposed) return
     if (!result.ok) {
@@ -1004,7 +1130,22 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const disposables: Array<() => void> = []
   disposables.push(on(refs.inviteButton, 'click', () => void createInvite()))
+  disposables.push(on(refs.profileAddButton, 'click', () => {
+    isCreateFormOpen = true
+    editingProfileId = null
+    syncCreateFormVisibility()
+    renderProfiles(currentProfiles)
+    refs.profileName.focus()
+  }))
   disposables.push(on(refs.profileCreateButton, 'click', () => void createProfile()))
+  disposables.push(on(refs.profileCancelButton, 'click', resetCreateForm))
+  disposables.push(on(refs.profileSubtype, 'change', () =>
+    updateRoleLabelField(
+      refs.profileRoleLabelField,
+      refs.profileRoleLabel,
+      refs.profileSubtype.value as VenueStaffProfileSubtype
+    )
+  ))
   disposables.push(
     on(refs.inviteCopyLinkButton, 'click', () => {
       const link = currentInviteDeepLink()
@@ -1048,9 +1189,11 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   refs.profileCreateButton.disabled = !canCreateProfiles
   refs.profileCreateButton.title = canCreateProfiles ? '' : 'Недостаточно прав'
   populateLinkedUserSelect(refs.profileLinkedUser, staffMembers, currentUserId, null)
+  syncCreateFormVisibility()
   if (!canCreateProfiles) {
     refs.profileName.disabled = true
     refs.profileSubtype.disabled = true
+    refs.profileRoleLabel.disabled = true
     refs.profileLinkedUser.disabled = true
     refs.profileBio.disabled = true
     refs.profileTags.disabled = true

@@ -3409,8 +3409,8 @@ test('guest venue card shows today staff without private linkage fields', async 
       {
         id: 501,
         displayName: 'Максим',
-        roleLabel: null,
-        subtype: 'hookah_master',
+        roleLabel: 'Мастер миксов',
+        subtype: 'other',
         photoRef: null,
         bio: 'Люблю крепкие миксы и помогаю подобрать вкус под настроение.',
         tags: ['крепкие миксы', 'авторские вкусы'],
@@ -3432,11 +3432,20 @@ test('guest venue card shows today staff without private linkage fields', async 
   const todayStaff = page.locator('.guest-today-staff')
   await expect(todayStaff).toContainText('Сегодня работают')
   await expect(todayStaff).toContainText('Максим')
-  await expect(todayStaff).toContainText('Кальянный мастер')
+  await expect(todayStaff).toContainText('Мастер миксов')
+  await expect(todayStaff).not.toContainText('Другое')
   await expect(todayStaff).toContainText('крепкие миксы')
+  await expect(todayStaff).not.toContainText('Алексей')
   await expect(todayStaff).not.toContainText('linkedUserId')
   await expect(todayStaff).not.toContainText('telegramUserId')
   await expect(todayStaff).not.toContainText('123456789')
+  await expect(page.locator('.venue-info-section').first()).toBeVisible()
+  const todayStaffAfterInfo = await page.evaluate(() => {
+    const info = document.querySelector('.venue-info-section')
+    const today = document.querySelector('.guest-today-staff')
+    return Boolean(info && today && (info.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING))
+  })
+  expect(todayStaffAfterInfo).toBe(true)
 })
 
 test('guest booking closed date shows human message and keeps selected date', async ({ page }) => {
@@ -4263,8 +4272,21 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   await expect(staffCards).toContainText(
     'Создайте карточки сотрудников, которых гости увидят в карточке заведения.'
   )
-  await expect(staffCards).toContainText('Если отметить сотрудника «Сегодня на смене»')
+  await expect(staffCards).toContainText('Гости видят только опубликованные карточки.')
+  await expect(staffCards).toContainText(
+    'Отметьте сотрудника «Сегодня на смене», чтобы он появился у гостей в блоке «Сегодня работают».'
+  )
   await expect(staffCards).not.toContainText('Публичные профили')
+  await expect(createForm).toBeHidden()
+  await expect(staffCards.getByRole('button', { name: 'Добавить карточку сотрудника' })).toBeVisible()
+
+  const existingRow = staffCards.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
+  await expect(existingRow).toContainText('Кальянный мастер')
+  await expect(existingRow).toContainText('Скрыт — виден только в кабинете')
+  await expect(existingRow.getByLabel('Имя на карточке')).toHaveCount(0)
+  await expect(existingRow.getByLabel('Тип сотрудника')).toHaveCount(0)
+
+  await staffCards.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   await expect(createForm.getByLabel('Имя на карточке')).toBeVisible()
   await expect(createForm.getByLabel('Тип сотрудника')).toBeVisible()
   await expect(createForm.getByLabel('Привязать к сотруднику')).toBeVisible()
@@ -4280,36 +4302,60 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   await expect(createForm.getByPlaceholder('Photo ref')).toHaveCount(0)
 
   await createForm.getByLabel('Имя на карточке').fill('Максим')
-  await createForm.getByLabel('Тип сотрудника').selectOption('hookah_master')
+  await createForm.getByLabel('Тип сотрудника').selectOption('other')
+  await expect(createForm.getByLabel('Название роли')).toBeVisible()
+  await expect(createForm.getByLabel('Название роли')).toHaveAttribute(
+    'placeholder',
+    'Например: Бармен, Старший смены, Мастер миксов'
+  )
+  await expect(createForm).toContainText('Так роль будет показана гостям.')
   await createForm.getByLabel('Привязать к сотруднику').selectOption('123456789')
   await createForm.getByLabel('Коротко о сотруднике').fill('Люблю крепкие миксы.')
   await createForm.getByLabel('Специализация').fill('крепкие миксы, авторские вкусы')
   await createForm.getByRole('button', { name: 'Создать профиль' }).click()
+  await expect.poll(() => api.getProfileCreateRequests().length).toBe(0)
+  await createForm.getByLabel('Название роли').fill('Мастер миксов')
+  await createForm.getByRole('button', { name: 'Создать профиль' }).click()
+  await expect(createForm).toBeHidden()
+  await expect(staffCards.getByRole('button', { name: 'Добавить карточку сотрудника' })).toBeVisible()
 
   await expect(staffCards).toContainText('Максим')
+  await expect(staffCards).toContainText('Мастер миксов')
   await expect(staffCards).toContainText('Скрыт — виден только в кабинете')
   await expect.poll(() => api.getProfileCreateRequests().length).toBe(1)
   const createRequest = api.getProfileCreateRequests()[0]
   expect(createRequest).toMatchObject({
     displayName: 'Максим',
-    subtype: 'hookah_master',
+    roleLabel: 'Мастер миксов',
+    subtype: 'other',
     linkedUserId: 123456789,
     bio: 'Люблю крепкие миксы.',
     tags: ['крепкие миксы', 'авторские вкусы']
   })
   expect(createRequest).not.toHaveProperty('photoRef')
-  expect(createRequest).not.toHaveProperty('roleLabel')
 
   const profileRow = staffCards.locator('.venue-profile-row').filter({ hasText: 'Максим' })
+  await expect(profileRow).not.toContainText('Другое')
   await expect(profileRow.getByPlaceholder('User ID')).toHaveCount(0)
   await expect(profileRow.getByPlaceholder('Фото ref')).toHaveCount(0)
+  await expect(profileRow.getByLabel('Имя на карточке')).toHaveCount(0)
+  await expect(profileRow.getByLabel('Тип сотрудника')).toHaveCount(0)
+  await profileRow.getByRole('button', { name: 'Редактировать' }).click()
   await expect(profileRow.getByLabel('Имя на карточке')).toBeVisible()
   await expect(profileRow.getByLabel('Тип сотрудника')).toBeVisible()
+  await expect(profileRow.getByLabel('Название роли')).toBeVisible()
   await profileRow.getByRole('button', { name: 'Сохранить' }).click()
   await expect.poll(() => api.getProfileUpdateRequests().length).toBe(1)
   const updateRequest = api.getProfileUpdateRequests()[0]
+  expect(updateRequest).toMatchObject({
+    displayName: 'Максим',
+    roleLabel: 'Мастер миксов',
+    subtype: 'other',
+    linkedUserId: 123456789,
+    bio: 'Люблю крепкие миксы.',
+    tags: ['крепкие миксы', 'авторские вкусы']
+  })
   expect(updateRequest).not.toHaveProperty('photoRef')
-  expect(updateRequest).not.toHaveProperty('roleLabel')
 
   await profileRow.getByRole('button', { name: 'Опубликовать' }).click()
   await expect(profileRow).toContainText('Опубликован — виден гостям')

@@ -226,7 +226,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const menuBody = el('div', { className: 'menu-body' })
   const extensionSlot = el('div', { className: 'shift-extension-slot' }) as HTMLDivElement
 
-  append(wrapper, header, todayStaffSlot, staffSlot, status, message, retryButton, error, menuBody, staffModalOverlay)
+  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody, todayStaffSlot, staffModalOverlay)
   root.replaceChildren(wrapper)
 
   return {
@@ -441,9 +441,9 @@ function formatStaffSubtype(subtype: string): string {
     case 'waiter':
       return 'Официант'
     case 'admin':
-      return 'Админ'
+      return 'Администратор'
     case 'other':
-      return 'Команда'
+      return 'Сотрудник'
     default:
       return subtype
   }
