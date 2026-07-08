@@ -1,6 +1,6 @@
 # Staff
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-08.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
 
@@ -57,7 +57,7 @@ STAFF Mini App behavior:
 - accept/deliver allowed statuses;
 - close bill/order;
 - staff calls view/accept/close;
-- bookings view and arrival/no-show marking;
+- bookings view and confirmed-only arrival/no-show marking;
 - shift-extension requests view/confirm where backend allows;
 - menu content read-only, with operational item/option availability toggles;
 - tables read-only;
@@ -73,8 +73,8 @@ STAFF Mini App behavior:
 - View active staff calls.
 - Accept/close staff calls.
 - View active bookings.
-- Mark booking guest as arrived (`SEATED`).
-- Mark booking guest as no-show (`NO_SHOW`).
+- Mark confirmed booking guest as arrived (`SEATED`).
+- Mark confirmed booking guest as no-show (`NO_SHOW`).
 - View menu content without edit controls.
 - Put menu item into stop-list and return it from stop-list.
 - Put item option/flavor into stop-list and return it from stop-list.
@@ -119,8 +119,8 @@ STAFF Mini App behavior:
 - Guest Communication UX split is CLOSED / smoke passed for STAFF boundaries: staff remains operational, support/venue-chat API access is denied, and staff-call/order behavior stays separate.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: STAFF can operate statuses according to role, but queue/detail must preserve table-session, batch and tab boundaries. Force close should require reason/audit if implemented by an allowed role.
 - Venue operations spec is `UPDATED` in `docs/VENUE_OPERATIONS.md`: STAFF remains operational-only, sees allowed queue/call/booking/availability surfaces and must not see settings/billing/support/venue-chat workspaces.
-- Booking lifecycle spec is `UPDATED` in `docs/BOOKING_LIFECYCLE.md`: Staff booking scope is operational view plus `SEATED` / `NO_SHOW` only under current policy; Staff must not confirm, cancel, change/propose time, message guest or change booking settings.
-- Telegram fallback/staff-chat spec is `UPDATED` in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Staff remains operational-only; staff-chat callbacks are shortcuts with server-side role/scope checks and do not grant support, venue-chat, settings, billing or platform access.
+- Booking lifecycle spec is `UPDATED` in `docs/BOOKING_LIFECYCLE.md`: Staff booking scope is operational view plus `SEATED` / `NO_SHOW` only for confirmed bookings under current policy; Staff must not confirm, cancel, change/propose time, message guest or change booking settings.
+- Telegram fallback/staff-chat spec is `UPDATED` in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Staff remains operational-only; staff-chat booking callbacks are state-aware shortcuts with server-side role/scope/state checks and do not grant support, venue-chat, settings, billing or platform access.
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Staff changes require nav/API denial smoke and staff-chat callback denial checks where affected.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: STAFF has operational queue/counters only and no business analytics by default.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current runtime docs allow STAFF item/option availability through `MENU_AVAILABILITY_MANAGE`; target policy is Staff stop-list only when venue policy enables it, with no structure, price, media, option schema or featured/top-list access.
@@ -135,7 +135,7 @@ STAFF Mini App behavior:
 6. STAFF sees menu content and tables read-only, but can toggle menu item and option/flavor availability for operational stop-list.
 7. STAFF dashboard has call counters and no staff chat status row.
 8. STAFF can accept/close staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke.
-9. STAFF sees bookings and can mark arrived/no-show only.
+9. STAFF sees bookings and can mark arrived/no-show only for confirmed bookings.
 10. Direct STAFF confirm/cancel/change/message/settings booking attempts are denied.
 11. STAFF does not see `Помощь` / `Обращения`, cannot open/reply support tickets, and cannot open/reply ordinary venue chats through direct API calls.
 12. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.

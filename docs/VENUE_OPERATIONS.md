@@ -1,8 +1,8 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-08.
 
-Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, staff-chat, menu options and settings slices. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, shift check, arbitrary stats, all dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
+Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, shift check, arbitrary stats, all dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
 ## Core Rule
 
@@ -28,12 +28,12 @@ Canonical dependencies:
 | Order detail | Chronological batch and item workspace. | Full bill, display labels and selected options are documented as smoke-closed for current paths. | Status history/audit, force-close reason and all modifier variants need verification. |
 | Tabs / bill | Operational bill by personal/shared tabs. | Guest/Venue/Bot bill parity is smoke-closed; bill request/payment method is smoke-closed. | Tab reopen and force-close audit remain future/partial. |
 | Staff calls | Live operational requests from table context. | M5 lifecycle and ACK/DONE audit hardening are staging-smoked. | CANCELLED UI/lifecycle and row-level actor/timestamps remain future. |
-| Bookings | Venue booking queue and lifecycle. | Booking queue/lifecycle, hold settings, reminders and attendance indicators are partially/smoke-closed. | Broader lifecycle automation/preorder/reminder rollout remains partial/future. |
+| Bookings | Venue booking queue and lifecycle. | Booking queue/lifecycle, hold settings, confirmed-only arrival actions, state-aware staff-chat booking buttons, reminders and attendance indicators are partially/smoke-closed. | Broader lifecycle automation/preorder/reminder rollout remains partial/future. |
 | Menu | Structured order menu management. | Structured selected-option parity is smoke-closed; menu constructor broader status is partial. | Use `docs/MENU_OPTIONS_STOPLIST.md`; shift check and broad media/top-list governance remain future/partial. |
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths. | Per-venue `staff_stoplist_enabled`, mass stop-list and audit completeness are future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles and invite links. | Staff/Manager invite sharing and acceptance are staging-smoked; Platform Owner OWNER invite/revoke is smoke-closed. | Role parity still needs regression after new routes. |
-| Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink and live order activity-card behavior are smoke-closed. | Personal staff notifications and unified event policy remain future. |
+| Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Settings | Venue profile, schedule, booking hold, extension, staff-chat and operational settings. | Booking hold, shift extension, public profile/card and schedule/date exceptions are smoke-closed. | Broader settings/media/promotions/preview remain partial/future. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
 
@@ -195,12 +195,18 @@ Actions:
 - mark seated;
 - mark no-show.
 
+Action availability:
+- `pending`: confirm/propose/cancel/message where role allows; no arrival buttons.
+- `confirmed`: `Гость пришёл` / `Не пришёл`, cancel and message where role allows.
+- `changed` / `proposed_time`: cancel/message only; no arrival buttons until explicit confirmation.
+- terminal statuses: no dangerous lifecycle buttons.
+
 Hold minutes / arrival deadline:
 - booking hold settings and `arrival_deadline_at` are documented as implemented/smoked in current roadmap notes;
 - reminders remain opt-in disabled by default unless rollout is explicitly enabled.
 
 Current vs target:
-- Venue Mini App booking queue/lifecycle, Staff arrival/no-show split and M7a hold settings are smoke-closed.
+- Venue Mini App booking queue/lifecycle, Staff arrival/no-show split, confirmed-only arrival guard, state-aware staff-chat booking buttons and M7a hold settings are smoke-closed.
 - Broader automatic expiry/no-show, preorder, visit-history integration and reminder rollout remain partial/future unless explicitly enabled and smoked under `docs/BOOKING_LIFECYCLE.md`.
 
 ## Menu / Stop-List Operations

@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-08.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -65,7 +65,7 @@ Manager Mini App areas:
 - Apply/change/remove manual item discount.
 - Exclude/restore bill item.
 - View and manage staff calls.
-- Manage bookings: confirm, cancel, change/propose time, message guest, mark arrived/no-show and booking settings.
+- Manage bookings: confirm, cancel, change/propose time, message guest, mark confirmed bookings arrived/no-show and booking settings.
 - Read/reply/resolve booking conversation threads where `BOOKING_MANAGE` allows it.
 - Read/reply to ordinary `VENUE_CHAT` for the manager's venue.
 - Read/reply/resolve own-venue `SUPPORT_TICKET` and manually `Передать платформе` support tickets when needed.
@@ -107,8 +107,8 @@ Manager Mini App areas:
 - Guest Communication UX split is CLOSED / smoke passed for Manager surfaces: `Сообщения` handles booking/venue chats, `Помощь` handles support tickets, Staff is not granted access, and support/venue chats do not post to staff-chat. SLA automation, macros, attachments, CSAT and diagnostics remain future support follow-ups.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: queue may group by table, but detail must preserve batches/tabs/session boundaries; force close should require reason/audit if implemented.
 - Venue operations spec is `UPDATED` in `docs/VENUE_OPERATIONS.md`: Manager dashboard, queues, bookings, stop-list, staff-chat source-of-truth policy and operational smoke are canonical.
-- Booking lifecycle spec is `UPDATED` in `docs/BOOKING_LIFECYCLE.md`: Manager booking confirm/change/cancel/message actions, hold/deadline display, booking chat separation and support routing stay canonical and in regression.
-- Telegram fallback/staff-chat spec is `UPDATED` in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Manager bot operations, staff-chat link/test permissions, callback RBAC and notification policy stay canonical and in regression.
+- Booking lifecycle spec is `UPDATED` in `docs/BOOKING_LIFECYCLE.md`: Manager booking confirm/change/cancel/message actions, confirmed-only arrival actions, hold/deadline display, booking chat separation and support routing stay canonical and in regression.
+- Telegram fallback/staff-chat spec is `UPDATED` in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Manager bot operations, staff-chat link/test permissions, state-aware booking callbacks, callback RBAC and notification policy stay canonical and in regression.
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Manager/Venue changes require role smoke and direct denial checks according to change type.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current docs allow broad Manager menu management, but conservative target policy keeps Manager to stop-list, shift check and basic availability unless product explicitly retains broader `MENU_MANAGE`.

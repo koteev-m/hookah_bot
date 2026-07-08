@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-07.
+Дата: 2026-07-08.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -16,14 +16,15 @@
 - info-section images/PDFs are loaded through backend media proxy.
 - Venue Owner/Manager/Staff Mini App entry must be opened through inline `web_app` buttons.
 - STAFF can close bill/order and manage operational stop-list for menu items/options, but cannot edit discounts, exclusions, menu content/structure, tables, staff, settings or staff chat link.
-- STAFF booking actions are operational only: view bookings and mark `Гость пришёл` / `Не пришёл`; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
-- Booking guest communication has an M4A persisted thread layer and passed staging smoke after UX polish: `Написать гостю`, Guest Bot replies, Guest Mini App replies and Venue Mini App replies share one booking thread; staff chat is a notification mirror.
+- STAFF booking actions are operational only: view bookings and mark `Гость пришёл` / `Не пришёл` only for `confirmed`; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
+- Booking guest communication has an M4A persisted thread layer and passed staging smoke after UX polish: `Написать гостю`, Guest Bot replies, Guest Mini App replies and Venue Mini App replies share one booking thread; staff chat is a notification/radar mirror, not the chat stream.
 - M4B/M4C message inbox lifecycle is CLOSED after staging smoke: Guest and Venue Mini App show thread cards, context labels, unread state, active/resolved filters and resolve/reopen actions.
 - M5 staff calls lifecycle is CLOSED after staging smoke: Guest Mini App uses a transient compose modal and compact NEW/ACK/DONE status, Venue Mini App `Вызовы` supports accept/close, and backend/staff-chat callbacks share the lifecycle.
 - M6 staff chat diagnostics/unlink polish is CLOSED after staging smoke: Venue Mini App shows linked/unlinked state, masked chat id, link-code command, copy-first active-code card, regenerate confirmation, outbox-backed test-message result, OWNER-only unlink and relink flow.
 - M7b Guest Mini App `Мои брони` passed staging visual parity for the same booking's public label, venue-local time and `Держим до` against Bot `/my`; real two-account Telegram runtime isolation remains unverified.
 - M7c adaptive transactional reminders passed one controlled real Telegram staging smoke: one M7C reminder was created and delivered, `Да, буду` visibly updated the reminder message, `Да, буду` disappeared, transfer/cancel remained, Guest/Venue Mini App attendance indicators appeared, booking status stayed venue-controlled, repeat confirmation was idempotent and staff notification was deduplicated. The worker was returned to `BOOKING_REMINDER_WORKER_ENABLED=false`, and `/health` plus `/db/health` returned ok.
 - M7c latest enriched staff-chat attendance copy is code/test-backed but was not manually re-smoked with a new booking.
+- Booking arrival guard and staff-chat booking lifecycle buttons are CLOSED / staging smoke passed: Venue Mini App and staff-chat show `Гость пришёл` / `Не пришёл` only for confirmed bookings; pending/changed/terminal statuses have no arrival buttons; stale staff-chat arrival callbacks do not mutate booking; `BOOKING_CHAT`, `VENUE_CHAT` and `SUPPORT_TICKET` messages do not post to staff-chat.
 - M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED after provider-free staging smoke: OWNER/MANAGER can edit guest-facing country/city/address, public contact and short card description without a runtime geodata provider; country/city suggestions are local, missing cities and addresses remain manually enterable, STAFF is hidden/forbidden, and guest public venue card/catalog read models plus route links reflect saved fields. Existing coordinates remain supported for coordinate-first route links, but manually entered addresses are not verified coordinates. Yandex adapters remain optional/commercial-only and disabled by default.
 - M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper opened one authenticated persistent connection after a bounded retry, reused that connection for rsync/plain SSH through the existing deployment script, completed image build/upload and backend recreate, and passed local/public health, DB health and Mini App static checks. The normal `./scripts/deploy-staging.sh hookah-staging` path remains supported and unchanged. The exact fresh SSH connection failure cause remains unconfirmed.
 - M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges/rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing is CLOSED / staging smoke passed: OWNER/MANAGER can manage weekly hours, inclusive closed/special-hours exception ranges and optional guest-facing reasons/comments in Venue Mini App; successful exception saves close/reset the form and reveal the saved row in the compact list; existing closed and changed-hours exceptions can be edited to a new inclusive date range; STAFF is hidden/forbidden; guest catalog/card read models expose safe today schedule/open state; and direct Guest Mini App booking create/update validates configured venue hours with human schedule errors. Missing schedule setup shows `График не указан` / `Заведение пока не настроило график бронирования.`, not `Закрыто`.
@@ -44,7 +45,7 @@
 - Security/RBAC docs: `docs/SECURITY_RBAC_MATRIX.md` is the source of truth for roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist. Permission parity and dangerous-action audit remain partial unless route tests/smoke prove them.
 - Menu/options/stop-list docs: `docs/MENU_OPTIONS_STOPLIST.md` is the source of truth for structured menu, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions. Selected-option parity is smoke-closed; broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
 - Venue operations docs: `docs/VENUE_OPERATIONS.md` is the source of truth for Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke. Venue Mode is source of truth; staff-chat is radar/shortcut only.
-- Booking lifecycle docs: `docs/BOOKING_LIFECYCLE.md` is the source of truth for guest booking flow, Venue booking queue, statuses, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke. Current queue/hold/list/chat paths are smoke-closed by slice; reminder rollout, automation, preorder and visit-history integration remain partial/future.
+- Booking lifecycle docs: `docs/BOOKING_LIFECYCLE.md` is the source of truth for guest booking flow, Venue booking queue, statuses, hold minutes, `arrival_deadline`, confirmed-only arrival actions, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke. Current queue/hold/list/chat/arrival-guard paths are smoke-closed by slice; reminder rollout, automation, preorder and visit-history integration remain partial/future.
 - Telegram fallback/staff-chat docs: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` is the source of truth for Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity. Staff-chat is radar/shortcut only.
 - Testing/QA smoke strategy docs: `docs/TESTING_QA_SMOKE_STRATEGY.md` is the source of truth for change-type validation, GitHub Actions expectations, staging policy, manual smoke suites, failure reporting and Codex handoff.
 - Deployment/runbook docs: `docs/DEPLOYMENT_RUNBOOK.md` is the source of truth for release model, staging deploy command, environment inventory, migration runbook, rollback policy, troubleshooting and incident response.
@@ -364,7 +365,7 @@ Steps:
 16. As STAFF, confirm bill edit controls are hidden.
 17. As STAFF, close delivered bill/order.
 18. Open `Вызовы`, accept and close a staff call. M5 staging smoke passed for Guest Mini App create/status and Venue Mini App accept/close; per-venue regression must still confirm the linked Telegram staff group receives the new-call notification.
-19. Open `Брони`: as STAFF, verify only `Гость пришёл` / `Не пришёл`; as MANAGER/OWNER, confirm/change/cancel and `Написать гостю` as allowed.
+19. Open `Брони`: as STAFF, verify `Гость пришёл` / `Не пришёл` only for confirmed bookings and no arrival buttons for pending/changed; as MANAGER/OWNER, confirm/change/cancel and `Написать гостю` as allowed.
 20. As MANAGER/OWNER, click `Написать гостю`, confirm there are no template buttons, send a message, and confirm the modal closes with `Сообщение отправлено гостю.`
 21. Open `Сообщения` and confirm the same booking thread is listed.
 22. Open `Помощь` / `Обращения` as MANAGER/OWNER.
@@ -403,7 +404,7 @@ Local dev via `dev.hookahtootah.club` - PASSED on 2026-06-04:
 3. Open Venue Mini App as STAFF through Telegram inline `web_app`.
 4. Open `Брони`.
 5. Confirm STAFF sees booking list/details.
-6. Confirm STAFF sees only `Гость пришёл` and `Не пришёл`.
+6. Confirm STAFF sees only `Гость пришёл` and `Не пришёл` on confirmed bookings, and no arrival buttons on pending/changed bookings.
 7. Confirm STAFF does not see `Подтвердить`, `Отменить`, `Предложить другое время` or `Написать гостю`.
 8. Open as MANAGER/OWNER, click `Написать гостю`, send a short text and confirm the guest receives a Telegram message without staff contacts.
 9. Call direct STAFF backend/API attempts for confirm/cancel/change endpoints and the message-guest path.
@@ -424,7 +425,7 @@ Expected:
 - promo/loyalty labels match readable breakdown;
 - canceled/rejected/excluded items do not affect payable total.
 - STAFF can close bill/order and mutate only menu item/option availability for operational stop-list; STAFF cannot mutate bill discounts/exclusions, menu content/structure, tables, staff, settings or staff chat link.
-- STAFF booking management paths are denied while arrival/no-show remains allowed.
+- STAFF booking management paths are denied while confirmed-only arrival/no-show remains allowed.
 - MANAGER/OWNER booking management remains unchanged.
 - venue `Сообщения` is a real M4B/M4C venue-scoped inbox with context/status/unread cards and resolve/reopen lifecycle. Staging multi-venue smoke must keep verifying tenant scoping before broader support/ticket UX. Venue `Поддержка` remains a launch-safe informational path, not a half-working ticket UI.
 
@@ -717,16 +718,21 @@ Use this checklist after booking create/list, Venue booking queue, status action
 8. Guest cancels booking while allowed.
 9. Venue cancels booking with reason.
 10. Confirmed booking remains active until `arrival_deadline`.
-11. Venue marks guest seated.
-12. Venue marks no-show after deadline.
-13. No-show does not create visit/history success.
-14. Seated booking can link to visit if visit foundation exists.
-15. Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not Support.
-16. Booking support issue requires verified booking or venue context.
-17. Booking chat/support messages do not post to staff-chat.
-18. Venue users cannot access another venue booking.
-19. Staff access matches current RBAC policy: view + seated/no-show only.
-20. Booking analytics/audit events exist where implemented and payloads contain no raw message text/initData/secrets.
+11. Pending booking Venue/Mini App card and staff-chat message have no `Гость пришёл` / `Не пришёл`.
+12. Confirmed booking Venue/Mini App card and staff-chat message have arrival buttons.
+13. Changed/proposed-time booking has no arrival buttons.
+14. Stale staff-chat arrival callback answers safely and does not change booking state.
+15. Venue marks confirmed guest seated.
+16. Venue marks confirmed booking no-show after deadline/manual policy.
+17. No-show does not create visit/history success.
+18. Seated booking can link to exactly one `BOOKING_SEATED` visit if visit foundation exists.
+19. Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not Support.
+20. Booking support issue requires verified booking or venue context.
+21. Booking chat messages do not post to staff-chat.
+22. Support/venue chat messages still do not post to staff-chat.
+23. Venue users cannot access another venue booking.
+24. Staff access matches current RBAC policy: view + confirmed-only seated/no-show.
+25. Booking analytics/audit events exist where implemented and payloads contain no raw message text/initData/secrets.
 
 ## 17. Telegram Fallback / Staff-Chat Smoke Checklist
 
@@ -746,11 +752,17 @@ Use this checklist after Telegram bot entrypoints, table context, fallback order
 12. Staff-chat callback action checks role and venue scope.
 13. Unauthorized user pressing staff-chat button gets safe denial.
 14. Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not Support.
-15. Support booking issue creates `SUPPORT_TICKET` with verified booking/venue context.
-16. Staff cannot see support tickets or venue chats from Telegram.
-17. Manager cannot access billing/settings from Telegram.
-18. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
-19. Multi-venue user selects correct venue or current gap is documented.
+15. Pending booking staff-chat message has no `Гость пришёл` / `Не пришёл`.
+16. Confirmed booking staff-chat message has arrival buttons.
+17. Changed/proposed-time booking staff-chat message has no arrival buttons.
+18. Terminal booking statuses have no dangerous action buttons.
+19. Stale booking callback answers `Бронь уже изменилась. Откройте кабинет.` and does not change booking.
+20. Booking chat message does not appear in staff-chat.
+21. Support booking issue creates `SUPPORT_TICKET` with verified booking/venue context.
+22. Staff cannot see support tickets or venue chats from Telegram.
+23. Manager cannot access billing/settings from Telegram.
+24. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
+25. Multi-venue user selects correct venue or current gap is documented.
 
 ## 18. QA Strategy / Release Gate Checklist
 

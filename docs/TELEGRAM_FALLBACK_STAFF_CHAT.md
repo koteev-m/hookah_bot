@@ -1,8 +1,8 @@
 # Telegram Fallback And Staff-Chat Model
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-08.
 
-Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, staff-chat link/test/unlink and support/venue-chat staff-chat denial are closed for current smoke paths. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, Platform Owner guest-QR test escape, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
+Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, Platform Owner guest-QR test escape, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
 
 ## Core Rule
 
@@ -140,6 +140,12 @@ Allowed events:
 - booking operational notifications where venue policy allows;
 - staff-chat link/test diagnostics.
 
+Booking notification buttons are state-aware:
+- `PENDING`: confirm, cancel, message; no `Гость пришёл` / `Не пришёл`.
+- `CONFIRMED`: `Гость пришёл`, `Не пришёл`, cancel, message.
+- `CHANGED`: cancel and message only; no confirm and no arrival buttons.
+- Terminal booking statuses: no dangerous lifecycle action buttons.
+
 Forbidden events:
 - `SUPPORT_TICKET` create/reply;
 - `VENUE_CHAT` create/reply;
@@ -153,6 +159,9 @@ Clarifications:
 - Staff-chat is notification/radar/shortcut.
 - Venue Mode and backend domain tables are source of truth.
 - Callback actions must verify role and venue scope server-side.
+- Booking arrival callbacks must re-load the booking and require `CONFIRMED`; stale callbacks answer `Бронь уже изменилась. Откройте кабинет.`
+- No-permission callbacks answer `Нет прав.`
+- Guest booking replies persist to `BOOKING_CHAT` and do not post into staff-chat.
 - Staff-chat messages should include minimum operational context and avoid unrelated PII.
 
 ## Inline Callback Actions
@@ -169,8 +178,8 @@ Rules:
 - Answer messages should be short and safe:
   - `Принято`;
   - `Уже обработано`;
-  - `Нет прав`;
-  - `Устарело, откройте кабинет`.
+  - `Нет прав.`;
+  - `Бронь уже изменилась. Откройте кабинет.` for stale booking lifecycle callbacks.
 - Editing the staff-chat message after action should reflect the latest state to reduce duplicate work and stale callbacks.
 
 Current vs target:
@@ -187,7 +196,7 @@ Current vs target:
 | Staff call | Bot table context/staff-chat callbacks exist. | Guest create/status smoke-closed. | Queue ACK/DONE smoke-closed. | No. | Notifications and ACK/DONE callbacks. | Cancel/quick replies future. | Regression/P2 |
 | Active order view | Bot order/bill paths exist. | Active order/bill smoke-closed. | Detail/bill smoke-closed. | No ordinary order workspace. | Activity-card shortcut. | Venue Mode remains source of truth. | Regression |
 | Bill/request bill | Bot/staff bill surfaces exist. | Request bill/payment note smoke-closed. | Bill/request context visible. | No. | Activity-card can show bill context. | Online payment is separate future work. | Regression |
-| Booking list/actions | Bot `/my` and booking actions exist. | `Мои брони` parity documented. | Queue/lifecycle smoke-closed. | No ordinary booking ops. | Operational notifications allowed. | M7c rollout disabled by default; two-account smoke unverified. | Regression |
+| Booking list/actions | Bot `/my` and booking actions exist. | `Мои брони` parity documented. | Queue/lifecycle smoke-closed. | No ordinary booking ops. | State-aware operational notifications; no full chat stream. | M7c rollout disabled by default; two-account smoke unverified. | Regression |
 | Booking chat | Guest bot replies supported. | `Чаты` includes booking threads. | `Сообщения` includes booking threads. | No ordinary booking chat. | Not full chat stream. | Must not mutate booking lifecycle. | Regression |
 | Venue chat | Bot support depends on current implementation. | Catalog/detail `Задать вопрос` -> `VENUE_CHAT`. | Owner/Manager can reply. | No ordinary venue chat. | Forbidden. | Bot venue-chat entry is target/needs verification if not implemented. | P2 |
 | Support ticket | `/support` fallback where implemented. | `Помощь`. | Own-venue `Обращения`. | Support Center. | Forbidden. | Staff denied; no staff-chat spam. | Regression |
@@ -211,7 +220,7 @@ Guest:
 - no venue/admin/platform controls.
 
 Staff:
-- operational order/call/booking arrival/no-show actions only;
+- operational order/call/booking arrival/no-show actions only, with booking arrival actions limited to `CONFIRMED`;
 - no support tickets;
 - no ordinary `VENUE_CHAT`;
 - no billing/settings/platform;
@@ -312,8 +321,14 @@ Rules:
 12. Staff-chat callback action checks role and venue scope.
 13. Unauthorized user pressing staff-chat button gets safe denial.
 14. Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not Support.
-15. Support booking issue creates `SUPPORT_TICKET` with verified booking/venue context.
-16. Staff cannot see support tickets or venue chats from Telegram.
-17. Manager cannot access billing/settings from Telegram.
-18. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
-19. Multi-venue user selects correct venue or current gap is documented.
+15. Pending booking staff-chat message has no `Гость пришёл` / `Не пришёл`.
+16. Confirmed booking staff-chat message has arrival buttons.
+17. Changed/proposed-time booking staff-chat message has no arrival buttons.
+18. Terminal booking staff-chat messages have no dangerous lifecycle buttons.
+19. Stale booking callback answers safely and does not change booking.
+20. Booking chat message does not appear in staff-chat.
+21. Support booking issue creates `SUPPORT_TICKET` with verified booking/venue context.
+22. Staff cannot see support tickets or venue chats from Telegram.
+23. Manager cannot access billing/settings from Telegram.
+24. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
+25. Multi-venue user selects correct venue or current gap is documented.

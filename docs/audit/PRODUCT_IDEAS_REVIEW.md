@@ -6,6 +6,8 @@
 
 > Current correction as of 2026-07-06: Guest Communication UX / Support Tickets MVP is now CLOSED / smoke passed. The current model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Staff is denied support/venue chats, Platform sees support tickets but not ordinary venue chats, and support/venue chats do not post to staff-chat. Advanced support features such as SLA automation, macros, CSAT, attachments and diagnostics reports remain later.
 >
+> Current correction as of 2026-07-08: Booking arrival guard and staff-chat booking lifecycle buttons are DONE/MVP / staging smoke passed. Seat/no-show actions are shown and accepted only for `CONFIRMED`; `PENDING`, `CHANGED` and terminal statuses do not expose dangerous arrival actions; staff-chat booking notifications are state-aware; stale/no-permission callbacks answer safely; `BOOKING_CHAT` messages do not post to staff-chat. Reminder rollout, automatic no-show, preorder and broader visit-history/feedback integration remain partial/future.
+>
 > Current docs correction as of 2026-07-06: Platform cockpit status is consolidated in `docs/PLATFORM_COCKPIT.md`. Manual billing and support-ticket center are closed as MVPs; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle state normalization remain future/partial.
 >
 > Current docs correction as of 2026-07-06: Guest growth/retention status is consolidated in `docs/GROWTH_RETENTION.md`. MVP scope is favorite venues, visit/order/booking history after the visit/order model stabilizes, repeat as a template for the next table context, post-visit feedback after confirmed visit, simple venue promotions/banners and opt-in notifications. Promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and recommendations remain future.
@@ -55,7 +57,7 @@
 
 | Идея | Статус | Evidence из кода | Что уже есть | Чего нет | MVP реализация | Риски | Приоритет |
 |---|---|---|---|---|---|---|---|
-| 1. Брони гостя и жизненный цикл | PARTIAL | `V32__bookings.sql`; `GuestBookingRepository.BookingStatus`; `GuestBookingRoutes`; `VenueBookingRoutes`; `VenueSettingsRepository`; `TelegramBotRouter.showMyOrdersAndBookings`; `guestBookings.ts`; `venueBookings.ts` | Create/update/cancel/list, venue confirm/change/cancel/arrival/no-show, Telegram `/my`, Guest Mini App `Мои брони`, Venue Mini App queue, persisted `arrival_deadline_at`, hold setting, M7c reminder anchors and attendance intent | Preorder, broader automatic expiry/no-show policy, broader rollout of opt-in reminders, real two-account M7b isolation evidence | Keep M3/M7a/M7b/M7c in regression | Label/timezone drift across Bot/Mini App if DTO parity regresses | P1 |
+| 1. Брони гостя и жизненный цикл | PARTIAL | `V32__bookings.sql`; `GuestBookingRepository.BookingStatus`; `GuestBookingRoutes`; `VenueBookingRoutes`; `VenueSettingsRepository`; `TelegramBotRouter.showMyOrdersAndBookings`; `guestBookings.ts`; `venueBookings.ts` | Create/update/cancel/list, venue confirm/change/cancel/confirmed-only arrival/no-show, state-aware staff-chat booking buttons, Telegram `/my`, Guest Mini App `Мои брони`, Venue Mini App queue, persisted `arrival_deadline_at`, hold setting, M7c reminder anchors and attendance intent | Preorder, broader automatic expiry/no-show policy, broader rollout of opt-in reminders, real two-account M7b isolation evidence | Keep M3/M7a/M7b/M7c and arrival/staff-chat button guards in regression | Label/timezone drift across Bot/Mini App if DTO parity regresses | P1 |
 | 2. Напоминания о бронях | M7c IMPLEMENTED / CORE SMOKE PASSED | `BookingReminderWorker`, `booking_reminders`, `GuestBookingRepository.scheduleRemindersForBooking`, `BookingReminderWorkerConfig`; `V109__m7c_booking_reminders.sql`; Mini App booking screens | Immediate messages on booking create/update/cancel/venue status; M7c adaptive scheduler; policy-version legacy isolation; outbox dedupe; final callbacks; Guest/Venue attendance indicators; disabled-by-default worker; one controlled real Telegram smoke passed | Broader rollout approval and regression smoke before enabling beyond controlled test | M7c: one adaptive transactional reminder for confirmed/changed bookings using outbox and venue-local quiet window | Спам, timezone/quiet hours, duplicate sends, legacy rows sent under old policy if feature flag/query regress | P1 |
 | 3. Поствизитный feedback и отзывы | FUTURE | `VenueOrdersRepository` can close orders; `TableSessionRepository` can end sessions; no complete feedback flow verified | Technical close signals exist | Review/rating routes/screens, post-visit trigger, public review handoff policy | `POST_VISIT_FEEDBACK`: 1-5, tags, optional comment only after confirmed visit | Wrong timing, ночные сообщения, privacy, low rating must not auto-open public review link | P2 |
 | 4. Owner venue description sections | PARTIAL | `VenueInfoSectionsRepository.defaultSections`; `V46__venue_info_sections.sql`; `V48__venue_info_section_media.sql`; Telegram owner description callbacks | Default: about/rules/cork_fee/faq/menu; custom sections; image/pdf media in Telegram | Default hall plan/interior; guest Mini App display | Add templates `hall_plan`, `interior`, expose sections in guest venue API | Media storage uses Telegram file_id, Mini App rendering needs file access strategy | P1/P2 |
@@ -652,7 +654,7 @@ Evidence:
 - Idempotency replay suppresses repeat notification in `GuestOrderRoutes`.
 - Outbox failed/retrying or staff chat bot lacks access.
 - Mini App staff call payload/lifecycle and staff-chat notification path were fixed in later M5 work; keep linked staff-chat runtime in per-venue regression.
-- Booking notifications are direct staff chat messages, not unified notifier/dedupe.
+- Booking notifications are direct staff chat messages, now with state-aware lifecycle buttons; they are not a unified notifier/dedupe pipeline.
 
 MVP дизайн:
 - Make staff chat notification for order/reorder always-on by default.
@@ -1041,14 +1043,14 @@ Tests/smoke checks:
 Текущее состояние в коде:
 - Table sessions have ACTIVE/ENDED and cleanup worker.
 - Orders can close.
-- Bookings cannot become seated/no_show.
-- No visit entity or visit_count.
+- Bookings can become `SEATED` / `NO_SHOW` only from `CONFIRMED`; denied pending/changed/terminal arrival transitions must not create visits.
+- `BOOKING_SEATED` visit creation exists for confirmed seated bookings; full visit timeline and `visit_count` product coverage remain partial/future.
 
 Evidence:
 - `TableSessionRepository`, `TableSessionCleanupWorker`
 - `VenueOrdersRepository` close handling
 - `GuestBookingRepository.BookingStatus`
-- No `visits` migration/files found.
+- Booking seated/no-show and visit repository evidence is tracked in the canonical booking lifecycle docs; this historical section should not be used to reopen old seated/no-show claims.
 
 Расхождение с концепцией:
 - Spec has table_session and booking, but not explicit visit entity; Block 15 needs history/retention.

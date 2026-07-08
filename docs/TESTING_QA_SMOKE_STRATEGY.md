@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-08.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -263,7 +263,9 @@ Booking:
 - Venue proposes time;
 - Guest accepts where implemented;
 - Guest/Venue cancels where allowed;
-- seated/no-show works where implemented;
+- seated/no-show works only for confirmed bookings;
+- pending and changed booking cards have no arrival buttons;
+- stale staff-chat booking arrival callback does not change booking state;
 - booking chat stays `BOOKING_CHAT`.
 
 Platform/support:
@@ -279,6 +281,10 @@ Telegram/staff-chat:
 - staff call;
 - staff-chat notification;
 - callback role denial;
+- pending booking staff-chat notification has no `Гость пришёл` / `Не пришёл`;
+- confirmed booking staff-chat notification has arrival buttons;
+- changed booking staff-chat notification has no arrival buttons;
+- booking chat message does not appear in staff-chat;
 - no support/venue-chat spam.
 
 ## Coverage Gaps / Known Risks
