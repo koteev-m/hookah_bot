@@ -177,6 +177,38 @@ button:disabled {
   background-color: #e2e8f0;
 }
 
+.feedback-rating-button,
+.feedback-tag-button {
+  border: 1px solid #cbd5e1;
+}
+
+.feedback-rating-button[data-active="true"],
+.feedback-tag-button[data-active="true"] {
+  background-color: #312e81;
+  border-color: #312e81;
+  box-shadow: 0 0 0 3px rgba(49, 46, 129, 0.18);
+  color: #ffffff;
+}
+
+.feedback-rating-button[data-active="true"]:hover,
+.feedback-tag-button[data-active="true"]:hover {
+  background-color: #3730a3;
+}
+
+.feedback-helper {
+  border-left: 3px solid #f59e0b;
+  padding-left: 0.75rem;
+}
+
+.feedback-public-review-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  text-decoration: none;
+}
+
 .button-tertiary {
   background: transparent;
   color: #475569;

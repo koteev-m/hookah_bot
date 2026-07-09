@@ -50,6 +50,7 @@ data class GuestVisitFeedbackDto(
     val rating: Int? = null,
     val tags: List<String> = emptyList(),
     val comment: String? = null,
+    val publicReviewUrl: String? = null,
 )
 
 @Serializable

@@ -119,6 +119,7 @@ class GuestVisitRoutesTest {
             val guestOne = 1101L
             val guestTwo = 1102L
             val venueId = seedVenueAndUsers(jdbcUrl, guestOne, guestTwo)
+            setPublicReviewUrl(jdbcUrl, venueId, "https://yandex.ru/maps/org/mix/reviews")
             val ownVisit = seedVisit(jdbcUrl, venueId, guestOne, "ORDER_CLOSED")
             val foreignVisit = seedVisit(jdbcUrl, venueId, guestTwo, "ORDER_CLOSED")
             val canceledVisit = seedBookingVisit(jdbcUrl, venueId, guestOne, "CANCELED")
@@ -157,6 +158,10 @@ class GuestVisitRoutesTest {
             assertEquals("5", feedback.getValue("rating").jsonPrimitive.content)
             assertEquals(2, feedback.getValue("tags").jsonArray.size)
             assertEquals("Спасибо", feedback.getValue("comment").jsonPrimitive.content)
+            assertEquals(
+                "https://yandex.ru/maps/org/mix/reviews",
+                feedback.getValue("publicReviewUrl").jsonPrimitive.content,
+            )
 
             val duplicate =
                 client.post("/api/guest/visits/$ownVisit/feedback") {
@@ -173,6 +178,10 @@ class GuestVisitRoutesTest {
                     .jsonObject
             assertEquals("5", duplicateFeedback.getValue("rating").jsonPrimitive.content)
             assertEquals("Спасибо", duplicateFeedback.getValue("comment").jsonPrimitive.content)
+            assertEquals(
+                "https://yandex.ru/maps/org/mix/reviews",
+                duplicateFeedback.getValue("publicReviewUrl").jsonPrimitive.content,
+            )
 
             val invalidRating =
                 client.post("/api/guest/visits/$ownVisit/feedback") {
@@ -279,6 +288,32 @@ class GuestVisitRoutesTest {
                 }
             assertEquals(HttpStatusCode.NotFound, sharedMemberDetail.status)
         }
+
+    private fun setPublicReviewUrl(
+        jdbcUrl: String,
+        venueId: Long,
+        publicReviewUrl: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_settings (
+                    venue_id,
+                    notify_orders_enabled,
+                    notify_staff_calls_enabled,
+                    notify_cancellations_enabled,
+                    timezone,
+                    public_review_url
+                )
+                VALUES (?, TRUE, TRUE, TRUE, 'Europe/Moscow', ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, publicReviewUrl)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun seedVenueAndUsers(
         jdbcUrl: String,

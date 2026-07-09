@@ -249,17 +249,30 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
 function renderSubmittedFeedback(section: HTMLElement, feedback: GuestVisitFeedbackDto, successText?: string) {
   section.replaceChildren()
   const title = el('h3', { text: 'Отзыв' })
-  if (successText) {
-    append(section, el('p', { className: 'status', text: successText }))
-  }
-  append(
-    section,
+  const nodes: Node[] = [
     title,
     el('p', {
       className: 'venue-order-sub',
       text: feedback.rating ? `Вы оценили визит: ${feedback.rating}/5.` : 'Отзыв сохранён.'
     })
-  )
+  ]
+  if (successText) {
+    nodes.splice(1, 0, el('p', { className: 'status', text: successText }))
+  }
+  if (feedback.rating === 5 && feedback.publicReviewUrl) {
+    const reviewLink = el('a', {
+      className: 'button-secondary feedback-public-review-link',
+      text: 'Оставить отзыв на Яндекс.Картах'
+    }) as HTMLAnchorElement
+    reviewLink.href = feedback.publicReviewUrl
+    reviewLink.target = '_blank'
+    reviewLink.rel = 'noopener noreferrer'
+    nodes.push(
+      el('p', { className: 'venue-order-sub', text: 'Ссылка откроется во внешнем окне.' }),
+      reviewLink
+    )
+  }
+  append(section, ...nodes)
 }
 
 function renderVisitFeedbackBlock(
@@ -287,25 +300,46 @@ function renderVisitFeedbackBlock(
   const renderForm = () => {
     let selectedRating = 0
     const selectedTags = new Set<string>()
-    const ratingRow = el('div', { className: 'button-row' })
-    const tagRow = el('div', { className: 'button-row' })
+    const ratingRow = el('div', { className: 'button-row feedback-rating-row' })
+    const tagRow = el('div', { className: 'button-row feedback-tag-row' })
+    const helper = el('p', { className: 'venue-order-sub feedback-helper', text: '' })
     const comment = document.createElement('textarea')
     comment.className = 'venue-textarea'
     comment.maxLength = 1000
     comment.placeholder = 'Комментарий'
     const submitButton = el('button', { text: 'Сохранить отзыв' }) as HTMLButtonElement
+    submitButton.disabled = true
     const cancelButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
     const actions = el('div', { className: 'venue-inline-actions' })
     const message = el('p', { className: 'status', text: '' })
+    let ratingButtons: HTMLButtonElement[] = []
 
-    const ratingButtons = [1, 2, 3, 4, 5].map((rating) => {
-      const button = el('button', { className: 'button-secondary', text: String(rating) }) as HTMLButtonElement
+    const updateRatingState = () => {
+      submitButton.disabled = selectedRating === 0
+      helper.textContent =
+        selectedRating > 0 && selectedRating <= 3
+          ? 'Жаль, что визит прошёл не идеально. Расскажите, что было не так — заведение сможет разобраться.'
+          : ''
+      helper.hidden = helper.textContent === ''
+      comment.placeholder = selectedRating > 0 && selectedRating <= 3 ? 'Что было не так?' : 'Комментарий'
+      ratingButtons.forEach((item, index) => {
+        const active = index + 1 === selectedRating
+        item.dataset.active = String(active)
+        item.setAttribute('aria-pressed', String(active))
+      })
+    }
+
+    ratingButtons = [1, 2, 3, 4, 5].map((rating) => {
+      const button = el('button', {
+        className: 'button-secondary feedback-rating-button',
+        text: String(rating)
+      }) as HTMLButtonElement
+      button.dataset.active = 'false'
+      button.setAttribute('aria-pressed', 'false')
       disposables.push(
         on(button, 'click', () => {
           selectedRating = rating
-          ratingButtons.forEach((item, index) => {
-            item.dataset.active = String(index + 1 === selectedRating)
-          })
+          updateRatingState()
           message.textContent = ''
         })
       )
@@ -314,12 +348,18 @@ function renderVisitFeedbackBlock(
     })
 
     FEEDBACK_TAGS.forEach((tag) => {
-      const button = el('button', { className: 'button-secondary', text: tag.label }) as HTMLButtonElement
+      const button = el('button', {
+        className: 'button-secondary feedback-tag-button',
+        text: tag.label
+      }) as HTMLButtonElement
+      button.dataset.active = 'false'
+      button.setAttribute('aria-pressed', 'false')
       disposables.push(
         on(button, 'click', () => {
           if (selectedTags.has(tag.slug)) {
             selectedTags.delete(tag.slug)
             button.dataset.active = 'false'
+            button.setAttribute('aria-pressed', 'false')
             message.textContent = ''
             return
           }
@@ -329,11 +369,13 @@ function renderVisitFeedbackBlock(
           }
           selectedTags.add(tag.slug)
           button.dataset.active = 'true'
+          button.setAttribute('aria-pressed', 'true')
           message.textContent = ''
         })
       )
       append(tagRow, button)
     })
+    helper.hidden = true
 
     disposables.push(
       on(cancelButton, 'click', () => {
@@ -364,7 +406,14 @@ function renderVisitFeedbackBlock(
           return
         }
         visit.feedback = result.data.feedback
-        renderSubmittedFeedback(section, result.data.feedback, 'Спасибо, отзыв сохранён.')
+        const submittedRating = result.data.feedback.rating ?? selectedRating
+        const successText =
+          submittedRating <= 3
+            ? 'Спасибо, отзыв сохранён. Мы передали его заведению.'
+            : submittedRating === 5
+              ? 'Спасибо за высокую оценку!'
+              : 'Спасибо, отзыв сохранён.'
+        renderSubmittedFeedback(section, result.data.feedback, successText)
       })
     )
 
@@ -374,6 +423,7 @@ function renderVisitFeedbackBlock(
       el('p', { className: 'venue-order-sub', text: 'Оценка обязательна, теги и комментарий — по желанию.' }),
       ratingRow,
       tagRow,
+      helper,
       comment,
       actions,
       message

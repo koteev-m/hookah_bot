@@ -474,6 +474,7 @@ export type GuestVisitFeedbackDto = {
   rating?: number | null
   tags?: string[]
   comment?: string | null
+  publicReviewUrl?: string | null
 }
 
 export type GuestVisitFeedbackSubmitRequest = {

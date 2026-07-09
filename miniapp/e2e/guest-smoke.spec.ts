@@ -1040,12 +1040,15 @@ async function mockGuestApi(
         tags?: string[]
         comment?: string | null
       }
+      const submittedRating = body.rating ?? 5
       const feedback = {
         eligible: true,
         submitted: true,
-        rating: body.rating ?? 5,
+        rating: submittedRating,
         tags: body.tags ?? [],
-        comment: body.comment ?? null
+        comment: body.comment ?? null,
+        publicReviewUrl:
+          submittedRating === 5 && typeof detail.publicReviewUrl === 'string' ? detail.publicReviewUrl : null
       }
       detail.feedback = feedback
       await route.fulfill(jsonResponse({ feedback }))
@@ -3758,6 +3761,32 @@ test('guest history shows completed visits and safe closed order detail', async 
           orderLabels: ['№7']
         },
         {
+          visitId: 14,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-08T18:30:00Z',
+          serviceDate: '2030-01-08',
+          source: 'order_closed',
+          totalMinor: 70000,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№8']
+        },
+        {
+          visitId: 15,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-07T18:30:00Z',
+          serviceDate: '2030-01-07',
+          source: 'order_closed',
+          totalMinor: 80000,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№9']
+        },
+        {
           visitId: 12,
           venueId: 1,
           venueName: 'Недоступный визит',
@@ -3795,7 +3824,8 @@ test('guest history shows completed visits and safe closed order detail', async 
             rating: null,
             tags: [],
             comment: null
-          }
+          },
+          publicReviewUrl: 'https://yandex.ru/maps/org/mix/reviews'
         },
         11: {
           visitId: 11,
@@ -3878,6 +3908,84 @@ test('guest history shows completed visits and safe closed order detail', async 
             tags: [],
             comment: null
           }
+        },
+        14: {
+          visitId: 14,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-08T18:30:00Z',
+          serviceDate: '2030-01-08',
+          source: 'order_closed',
+          booking: null,
+          orders: [
+            {
+              orderId: 902,
+              displayNumber: 8,
+              displayDate: '2030-01-08',
+              totalMinor: 70000,
+              currency: 'RUB',
+              promotionDiscounts: [],
+              items: [
+                {
+                  itemId: 202,
+                  itemName: 'Mint Hookah',
+                  qty: 1,
+                  priceMinor: 70000,
+                  currency: 'RUB',
+                  totalMinor: 70000
+                }
+              ]
+            }
+          ],
+          totalMinor: 70000,
+          currency: 'RUB',
+          feedback: {
+            eligible: true,
+            submitted: false,
+            rating: null,
+            tags: [],
+            comment: null
+          }
+        },
+        15: {
+          visitId: 15,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-07T18:30:00Z',
+          serviceDate: '2030-01-07',
+          source: 'order_closed',
+          booking: null,
+          orders: [
+            {
+              orderId: 903,
+              displayNumber: 9,
+              displayDate: '2030-01-07',
+              totalMinor: 80000,
+              currency: 'RUB',
+              promotionDiscounts: [],
+              items: [
+                {
+                  itemId: 203,
+                  itemName: 'Berry Hookah',
+                  qty: 1,
+                  priceMinor: 80000,
+                  currency: 'RUB',
+                  totalMinor: 80000
+                }
+              ]
+            }
+          ],
+          totalMinor: 80000,
+          currency: 'RUB',
+          feedback: {
+            eligible: true,
+            submitted: false,
+            rating: null,
+            tags: [],
+            comment: null
+          }
         }
       }
     }
@@ -3890,21 +3998,43 @@ test('guest history shows completed visits and safe closed order detail', async 
   const bookingOnlyVisit = page.locator('article.card').filter({ hasText: 'Было бронирование' })
   const closedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №42' })
   const legacyClosedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №7' })
+  const noReviewLinkVisit = page.locator('article.card').filter({ hasText: 'Заказы: №8' })
+  const lowRatingVisit = page.locator('article.card').filter({ hasText: 'Заказы: №9' })
   const missingDetailVisit = page.locator('article.card').filter({ hasText: 'Заказы: №404' })
   await expect(bookingOnlyVisit).toContainText('Микс')
   await expect(closedOrderVisit).toContainText(/Итого: 1[\s\u00a0]250/)
   await expect(legacyClosedOrderVisit).toContainText(/Итого: 500/)
+  await expect(noReviewLinkVisit).toContainText(/Итого: 700/)
+  await expect(lowRatingVisit).toContainText(/Итого: 800/)
   await expect(page.getByText('Отменённая бронь')).toHaveCount(0)
 
   await bookingOnlyVisit.getByRole('button', { name: 'Подробнее' }).click()
   await expect(page.getByText('Посещение по брони. Заказов в этом визите нет.')).toBeVisible()
   await page.getByRole('button', { name: 'Оценить визит' }).click()
-  await page.getByRole('button', { name: '5', exact: true }).click()
-  await page.getByRole('button', { name: 'Бронь' }).click()
+  const bookingFeedbackSubmit = page.getByRole('button', { name: 'Сохранить отзыв' })
+  await expect(bookingFeedbackSubmit).toBeDisabled()
+  const ratingFive = page.getByRole('button', { name: '5', exact: true })
+  await ratingFive.click()
+  await expect(ratingFive).toHaveAttribute('data-active', 'true')
+  await expect(ratingFive).toHaveAttribute('aria-pressed', 'true')
+  await expect(bookingFeedbackSubmit).toBeEnabled()
+  const bookingTag = page.getByRole('button', { name: 'Бронь' })
+  await bookingTag.click()
+  await expect(bookingTag).toHaveAttribute('data-active', 'true')
+  await expect(bookingTag).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Сервис' }).click()
+  await page.getByRole('button', { name: 'Вкус' }).click()
+  await page.getByRole('button', { name: 'Скорость' }).click()
+  await page.getByRole('button', { name: 'Атмосфера' }).click()
+  await page.getByRole('button', { name: 'Чистота' }).click()
+  await expect(page.getByText('Можно выбрать до 5 тегов.')).toBeVisible()
   await page.getByPlaceholder('Комментарий').fill('Все было вовремя')
-  await page.getByRole('button', { name: 'Сохранить отзыв' }).click()
-  await expect(page.getByText('Спасибо, отзыв сохранён.')).toBeVisible()
+  await bookingFeedbackSubmit.click()
+  await expect(page.getByText('Спасибо за высокую оценку!')).toBeVisible()
   await expect(page.getByText('Вы оценили визит: 5/5.')).toBeVisible()
+  const publicReviewLink = page.getByRole('link', { name: 'Оставить отзыв на Яндекс.Картах' })
+  await expect(publicReviewLink).toBeVisible()
+  await expect(publicReviewLink).toHaveAttribute('href', 'https://yandex.ru/maps/org/mix/reviews')
   await expect
     .poll(async () => page.evaluate(() => Boolean((window as TestTelegramWindow).__e2eTelegramBackButtonVisible)))
     .toBe(true)
@@ -3912,6 +4042,20 @@ test('guest history shows completed visits and safe closed order detail', async 
   await expect(closedOrderVisit).toBeVisible()
 
   await closedOrderVisit.getByRole('button', { name: 'Подробнее' }).click()
+  await page.getByRole('button', { name: 'Оценить визит' }).click()
+  const closedFeedbackSubmit = page.getByRole('button', { name: 'Сохранить отзыв' })
+  await expect(closedFeedbackSubmit).toBeDisabled()
+  await page.getByRole('button', { name: '2', exact: true }).click()
+  await expect(
+    page.getByText('Жаль, что визит прошёл не идеально. Расскажите, что было не так — заведение сможет разобраться.')
+  ).toBeVisible()
+  await page.getByRole('button', { name: '4', exact: true }).click()
+  await expect(closedFeedbackSubmit).toBeEnabled()
+  await page.getByPlaceholder('Комментарий').fill('Хорошо')
+  await closedFeedbackSubmit.click()
+  await expect(page.getByText('Спасибо, отзыв сохранён.')).toBeVisible()
+  await expect(page.getByText('Вы оценили визит: 4/5.')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Оставить отзыв на Яндекс.Картах' })).toHaveCount(0)
 
   await expect(page.getByRole('heading', { name: 'Заказ №42' })).toBeVisible()
   await expect(page.getByText('Загружаем данные...')).toHaveCount(0)
@@ -3920,6 +4064,27 @@ test('guest history shows completed visits and safe closed order detail', async 
   await expect(page.getByText('Foreign Hookah')).toHaveCount(0)
   await page.getByRole('button', { name: '← Назад к истории' }).click()
   await expect(closedOrderVisit).toBeVisible()
+
+  await noReviewLinkVisit.getByRole('button', { name: 'Подробнее' }).click()
+  await page.getByRole('button', { name: 'Оценить визит' }).click()
+  await page.getByRole('button', { name: '5', exact: true }).click()
+  await page.getByRole('button', { name: 'Сохранить отзыв' }).click()
+  await expect(page.getByText('Спасибо за высокую оценку!')).toBeVisible()
+  await expect(page.getByText('Вы оценили визит: 5/5.')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Оставить отзыв на Яндекс.Картах' })).toHaveCount(0)
+  await page.getByRole('button', { name: '← Назад к истории' }).click()
+  await expect(noReviewLinkVisit).toBeVisible()
+
+  await lowRatingVisit.getByRole('button', { name: 'Подробнее' }).click()
+  await page.getByRole('button', { name: 'Оценить визит' }).click()
+  await page.getByRole('button', { name: '2', exact: true }).click()
+  await page.getByPlaceholder('Что было не так?').fill('Долго ждали')
+  await page.getByRole('button', { name: 'Сохранить отзыв' }).click()
+  await expect(page.getByText('Спасибо, отзыв сохранён. Мы передали его заведению.')).toBeVisible()
+  await expect(page.getByText('Вы оценили визит: 2/5.')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Оставить отзыв на Яндекс.Картах' })).toHaveCount(0)
+  await page.getByRole('button', { name: '← Назад к истории' }).click()
+  await expect(lowRatingVisit).toBeVisible()
 
   await legacyClosedOrderVisit.getByRole('button', { name: 'Подробнее' }).click()
   await expect(page.getByRole('heading', { name: 'Заказ №7' })).toBeVisible()

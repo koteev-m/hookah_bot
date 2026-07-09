@@ -1127,6 +1127,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         visitRepository = visitRepository,
                         visitFeedbackRepository = visitFeedbackRepository,
                         analyticsEventRepository = analyticsEventRepository,
+                        venueSettingsRepository = venueSettingsRepository,
                     )
                     guestStaffCallRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,

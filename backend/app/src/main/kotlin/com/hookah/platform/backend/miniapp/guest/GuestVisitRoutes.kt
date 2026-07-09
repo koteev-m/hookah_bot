@@ -28,6 +28,7 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackStatus
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
+import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -45,6 +46,7 @@ fun Route.guestVisitRoutes(
     visitRepository: VisitRepository,
     visitFeedbackRepository: VisitFeedbackRepository,
     analyticsEventRepository: AnalyticsEventRepository? = null,
+    venueSettingsRepository: VenueSettingsRepository? = null,
 ) {
     route("/visits") {
         get {
@@ -64,7 +66,8 @@ fun Route.guestVisitRoutes(
                 visitRepository.getGuestVisitDetail(userId = userId, visitId = visitId)
                     ?: throw NotFoundException()
             val feedback = visitFeedbackRepository.findGuestFeedback(visitId = visitId, userId = userId)
-            call.respond(GuestVisitDetailResponse(visit = visit.toDto(feedback.toGuestFeedbackDto())))
+            val publicReviewUrl = venueSettingsRepository.publicReviewUrlForRatingFive(feedback)
+            call.respond(GuestVisitDetailResponse(visit = visit.toDto(feedback.toGuestFeedbackDto(publicReviewUrl))))
         }
 
         post("/{visitId}/feedback") {
@@ -88,9 +91,10 @@ fun Route.guestVisitRoutes(
                     throw InvalidInputException(e.message ?: "Invalid feedback")
                 } ?: throw NotFoundException()
             analyticsEventRepository.emitFeedbackSubmitted(feedback)
+            val publicReviewUrl = venueSettingsRepository.publicReviewUrlForRatingFive(feedback)
             call.respond(
                 GuestVisitFeedbackSubmitResponse(
-                    feedback = feedback.toGuestFeedbackDto(),
+                    feedback = feedback.toGuestFeedbackDto(publicReviewUrl),
                 ),
             )
         }
@@ -142,13 +146,19 @@ private fun GuestVisitDetail.toDto(feedback: GuestVisitFeedbackDto? = null): Gue
         feedback = feedback,
     )
 
-private fun VisitFeedbackRecord?.toGuestFeedbackDto(): GuestVisitFeedbackDto =
+private suspend fun VenueSettingsRepository?.publicReviewUrlForRatingFive(feedback: VisitFeedbackRecord?): String? {
+    if (this == null || feedback?.status != VisitFeedbackStatus.SUBMITTED || feedback.rating != 5) return null
+    return getPublicReviewUrl(feedback.venueId)
+}
+
+private fun VisitFeedbackRecord?.toGuestFeedbackDto(publicReviewUrl: String? = null): GuestVisitFeedbackDto =
     GuestVisitFeedbackDto(
         eligible = true,
         submitted = this?.status == VisitFeedbackStatus.SUBMITTED,
         rating = this?.takeIf { it.status == VisitFeedbackStatus.SUBMITTED }?.rating,
         tags = this?.takeIf { it.status == VisitFeedbackStatus.SUBMITTED }?.tags ?: emptyList(),
         comment = this?.takeIf { it.status == VisitFeedbackStatus.SUBMITTED }?.comment,
+        publicReviewUrl = publicReviewUrl,
     )
 
 private suspend fun AnalyticsEventRepository?.emitFeedbackSubmitted(feedback: VisitFeedbackRecord) {
