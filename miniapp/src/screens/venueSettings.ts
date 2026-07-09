@@ -223,7 +223,17 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   const reviewLinkCard = el('section', { className: 'card' })
   const reviewLinkTitle = el('h3', { text: 'Ссылка для отзывов' })
   const reviewLinkDescription = el('p', {
-    text: 'Покажем эту кнопку гостю только после оценки 5/5. Гость сам решает, переходить ли по ссылке.'
+    text: 'Эту кнопку покажем гостю только после оценки 5/5. Гость сам решает, переходить ли на Яндекс.Карты.'
+  })
+  const reviewLinkHelper = el('p', {
+    className: 'venue-order-sub',
+    text:
+      'Где взять ссылку: откройте карточку заведения в Яндекс.Картах, нажмите «Поделиться» и скопируйте ссылку. Если у вас есть доступ к Яндекс Бизнесу, лучше взять ссылку на форму отзывов в разделе «О компании» → «Промоматериалы».'
+  })
+  const reviewLinkEthics = el('p', {
+    className: 'venue-order-sub',
+    text:
+      'Не обещайте скидки или бонусы за отзыв и не просите поставить конкретную оценку. Просто предложите гостю поделиться впечатлением.'
   })
   const reviewLinkCurrent = el('p', { className: 'venue-order-sub', text: '' })
   const reviewLinkForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
@@ -240,7 +250,7 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   reviewLinkClearButton.disabled = true
   append(reviewLinkActions, reviewLinkSaveButton, reviewLinkClearButton)
   append(reviewLinkForm, reviewLinkLabel, reviewLinkInput, reviewLinkActions)
-  append(reviewLinkCard, reviewLinkTitle, reviewLinkDescription, reviewLinkCurrent, reviewLinkForm)
+  append(reviewLinkCard, reviewLinkTitle, reviewLinkDescription, reviewLinkHelper, reviewLinkEthics, reviewLinkCurrent, reviewLinkForm)
 
   const scheduleCard = el('section', { className: 'card' })
   const scheduleTitle = el('h3', { text: 'Часы работы' })

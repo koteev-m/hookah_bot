@@ -2054,6 +2054,14 @@ async function mockVenueStatsApi(
     updatedAt: '2030-01-12T19:05:00Z',
     booking: null
   }
+  const followUpContextMessage: SupportMessageFixture = {
+    messageId: 701,
+    threadId: followUpThread.threadId,
+    authorRole: 'SYSTEM',
+    source: 'SYSTEM',
+    text: 'Отзыв после визита\nОценка: 2/5\nТеги: скорость\nКомментарий: Долго ждали\nДата визита: 2030-01-12',
+    createdAt: '2030-01-12T19:05:00Z'
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -2120,7 +2128,7 @@ async function mockVenueStatsApi(
     const url = new URL(route.request().url())
     const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)$/)
     if (threadMatch) {
-      await route.fulfill(jsonResponse({ thread: followUpThread, messages: [] }))
+      await route.fulfill(jsonResponse({ thread: followUpThread, messages: followUpCalls > 0 ? [followUpContextMessage] : [] }))
       return
     }
     await route.fulfill(jsonResponse({ items: followUpCalls > 0 ? [followUpThread] : [] }))
@@ -5083,7 +5091,9 @@ test('venue owner configures public review link settings', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
   const reviewCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Ссылка для отзывов' }) })
-  await expect(reviewCard).toContainText('Покажем эту кнопку гостю только после оценки 5/5')
+  await expect(reviewCard).toContainText('Эту кнопку покажем гостю только после оценки 5/5')
+  await expect(reviewCard).toContainText('Где взять ссылку: откройте карточку заведения в Яндекс.Картах')
+  await expect(reviewCard).toContainText('Не обещайте скидки или бонусы за отзыв')
   await expect(reviewCard.getByText('Ссылка пока не задана.')).toBeVisible()
   await expect(reviewCard.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
 
@@ -6333,7 +6343,10 @@ test('venue owner sees feedback section and staff does not', async ({ page }) =>
   await page.getByRole('button', { name: 'Связаться с гостем' }).click()
   await expect.poll(() => api.getFollowUpCalls()).toBe(1)
   await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
-  await expect(page.getByText('Отзыв после визита')).toBeVisible()
+  const messageDetail = page.locator('.venue-messages-detail')
+  await expect(messageDetail).toContainText('Отзыв после визита')
+  await expect(messageDetail).toContainText('Оценка: 2/5')
+  await expect(messageDetail).toContainText('Комментарий: Долго ждали')
 })
 
 test('venue staff does not see statistics section', async ({ page }) => {

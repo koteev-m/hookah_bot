@@ -5,12 +5,15 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueAggregate
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.support.SupportMessageAuthorRole
+import com.hookah.platform.backend.support.SupportMessageSource
 import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.call
@@ -103,16 +106,36 @@ fun Route.venueFeedbackRoutes(
             val feedback =
                 visitFeedbackRepository.getVenueFeedbackDetail(venueId, feedbackId)
                     ?: throw NotFoundException()
+            if (!feedback.guestExists) {
+                throw NotFoundException()
+            }
             val rating = feedback.rating ?: throw InvalidInputException("Only low feedback can be followed up")
             if (rating !in 1..3) {
                 throw InvalidInputException("Only low feedback can be followed up")
             }
+            val feedbackContext = feedback.toFollowUpContextMessage()
             val thread =
                 supportThreadRepository.createOrFindVenueChat(
                     venueId = venueId,
                     guestUserId = feedback.guestUserId,
                     title = "Отзыв после визита",
                 )
+            if (
+                thread.messages.none {
+                    it.authorRole == SupportMessageAuthorRole.SYSTEM &&
+                        it.source == SupportMessageSource.SYSTEM &&
+                        it.text == feedbackContext
+                }
+            ) {
+                supportThreadRepository.addMessage(
+                    threadId = thread.thread.id,
+                    authorUserId = null,
+                    authorRole = SupportMessageAuthorRole.SYSTEM,
+                    source = SupportMessageSource.SYSTEM,
+                    text = feedbackContext,
+                    statusAfterInsert = null,
+                )
+            }
             call.respond(
                 VenueFeedbackFollowUpResponse(
                     threadId = thread.thread.id,
@@ -170,3 +193,30 @@ private fun VisitFeedbackVenueSummary.toDto(): VenueFeedbackItemDto =
         guestLabel = guestDisplayName?.takeIf { it.isNotBlank() } ?: "Гость #$guestUserId",
         createdAt = createdAt?.toString(),
     )
+
+private fun VisitFeedbackVenueDetail.toFollowUpContextMessage(): String {
+    val lines =
+        buildList {
+            add("Отзыв после визита")
+            rating?.let { add("Оценка: $it/5") }
+            if (tags.isNotEmpty()) {
+                add("Теги: ${tags.joinToString(", ") { tag -> tag.feedbackTagLabel() }}")
+            }
+            comment?.trim()?.takeIf { it.isNotEmpty() }?.let { add("Комментарий: $it") }
+            add("Дата визита: ${serviceDate?.toString() ?: occurredAt.toString()}")
+        }
+    return lines.joinToString("\n")
+}
+
+private fun String.feedbackTagLabel(): String =
+    when (this) {
+        "service" -> "сервис"
+        "hookah_quality" -> "кальян"
+        "taste" -> "вкус"
+        "speed" -> "скорость"
+        "atmosphere" -> "атмосфера"
+        "cleanliness" -> "чистота"
+        "booking" -> "бронь"
+        "price" -> "цена"
+        else -> this
+    }

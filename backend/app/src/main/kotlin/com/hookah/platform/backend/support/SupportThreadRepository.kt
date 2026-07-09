@@ -658,7 +658,8 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
               AND st.guest_user_id = ?
               AND st.booking_id IS NULL
               AND st.thread_type = 'VENUE_CHAT'
-            ORDER BY st.id ASC
+              AND st.status IN ('OPEN', 'NEW', 'IN_PROGRESS', 'WAITING_USER')
+            ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
             LIMIT 1
             """.trimIndent(),
         ).use { statement ->

@@ -211,7 +211,7 @@ export function renderVenueFeedbackScreen(options: VenueFeedbackOptions) {
       return
     }
     refs.status.textContent = result.data.message || 'Чат с гостем открыт.'
-    window.location.hash = '#/messages'
+    window.location.hash = `#/messages?threadId=${encodeURIComponent(String(result.data.threadId))}`
   }
 
   const callbacks: FeedbackCallbacks = {

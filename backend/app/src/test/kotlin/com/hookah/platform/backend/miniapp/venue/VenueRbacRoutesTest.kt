@@ -340,7 +340,16 @@ class VenueRbacRoutesTest {
             val ownerBody = json.parseToJsonElement(ownerResponse.bodyAsText()).jsonObject
             assertEquals("VENUE_CHAT", ownerBody.getValue("threadType").jsonPrimitive.content)
             assertEquals(1, countRows(jdbcUrl, "support_threads"))
-            assertEquals(0, countRows(jdbcUrl, "support_messages"))
+            val threadId = ownerBody.getValue("threadId").jsonPrimitive.content.toLong()
+            assertEquals(1, countRows(jdbcUrl, "support_messages"))
+            assertEquals(0, countSupportThreadsByType(jdbcUrl, "SUPPORT_TICKET"))
+            assertEquals(0, countRows(jdbcUrl, "telegram_outbox"))
+            val context = supportMessageTexts(jdbcUrl, threadId).single()
+            assertTrue(context.contains("Отзыв после визита"))
+            assertTrue(context.contains("Оценка: 2/5"))
+            assertTrue(context.contains("Теги: сервис"))
+            assertTrue(context.contains("Комментарий: Все отлично"))
+            assertTrue(context.contains("Дата визита: 2030-05-12"))
 
             updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "MANAGER")
             val managerResponse =
@@ -349,6 +358,7 @@ class VenueRbacRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, managerResponse.status)
             assertEquals(1, countRows(jdbcUrl, "support_threads"))
+            assertEquals(1, countRows(jdbcUrl, "support_messages"))
 
             updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "STAFF")
             val staffResponse =
@@ -363,6 +373,67 @@ class VenueRbacRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
                 }
             assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
+        }
+
+    @Test
+    fun `follow-up reuses active venue chat and creates new one when old chat is closed`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-feedback-follow-up-active")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val feedbackId = seedSubmittedFeedback(jdbcUrl, venueId, guestUserId = 9040L, rating = 1)
+            val activeThreadId = seedVenueChat(jdbcUrl, venueId, guestUserId = 9040L, status = "IN_PROGRESS")
+            val token = issueToken(config)
+
+            val activeResponse =
+                client.post("/api/venue/$venueId/feedback/$feedbackId/follow-up") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, activeResponse.status)
+            val activeBody = json.parseToJsonElement(activeResponse.bodyAsText()).jsonObject
+            assertEquals(activeThreadId, activeBody.getValue("threadId").jsonPrimitive.content.toLong())
+            assertEquals(1, countRows(jdbcUrl, "support_threads"))
+            assertEquals(1, supportMessageTexts(jdbcUrl, activeThreadId).count { it.contains("Отзыв после визита") })
+
+            markSupportThreadStatus(jdbcUrl, activeThreadId, "CLOSED")
+            val secondFeedbackId = seedSubmittedFeedback(jdbcUrl, venueId, guestUserId = 9040L, rating = 3)
+            val closedResponse =
+                client.post("/api/venue/$venueId/feedback/$secondFeedbackId/follow-up") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, closedResponse.status)
+            val closedBody = json.parseToJsonElement(closedResponse.bodyAsText()).jsonObject
+            val newThreadId = closedBody.getValue("threadId").jsonPrimitive.content.toLong()
+            assertTrue(newThreadId != activeThreadId)
+            assertEquals(2, countRows(jdbcUrl, "support_threads"))
+            assertEquals(1, supportMessageTexts(jdbcUrl, newThreadId).count { it.contains("Оценка: 3/5") })
+        }
+
+    @Test
+    fun `follow-up rejects non-low feedback`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-feedback-follow-up-rating")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val feedbackId = seedSubmittedFeedback(jdbcUrl, venueId, guestUserId = 9050L, rating = 4)
+            val token = issueToken(config)
+
+            val response =
+                client.post("/api/venue/$venueId/feedback/$feedbackId/follow-up") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertEquals(0, countRows(jdbcUrl, "support_threads"))
         }
 
     @Test
@@ -1580,6 +1651,106 @@ class VenueRbacRoutesTest {
                 statement.executeQuery("SELECT COUNT(*) FROM $tableName").use { rs ->
                     rs.next()
                     return rs.getInt(1)
+                }
+            }
+        }
+    }
+
+    private fun countSupportThreadsByType(
+        jdbcUrl: String,
+        threadType: String,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM support_threads
+                WHERE thread_type = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, threadType)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    return rs.getInt(1)
+                }
+            }
+        }
+    }
+
+    private fun seedVenueChat(
+        jdbcUrl: String,
+        venueId: Long,
+        guestUserId: Long,
+        status: String,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            return connection.prepareStatement(
+                """
+                INSERT INTO support_threads (
+                    venue_id,
+                    guest_user_id,
+                    category,
+                    status,
+                    thread_type,
+                    assignee_scope,
+                    created_source,
+                    title
+                )
+                VALUES (?, ?, 'OTHER', ?, 'VENUE_CHAT', 'VENUE', 'GUEST_MINIAPP', 'Старый чат')
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, guestUserId)
+                statement.setString(3, status)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert support thread")
+                }
+            }
+        }
+    }
+
+    private fun markSupportThreadStatus(
+        jdbcUrl: String,
+        threadId: Long,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE support_threads
+                SET status = ?
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, status)
+                statement.setLong(2, threadId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun supportMessageTexts(
+        jdbcUrl: String,
+        threadId: Long,
+    ): List<String> {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT text
+                FROM support_messages
+                WHERE thread_id = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeQuery().use { rs ->
+                    val messages = mutableListOf<String>()
+                    while (rs.next()) {
+                        messages += rs.getString("text")
+                    }
+                    return messages
                 }
             }
         }
