@@ -3657,6 +3657,19 @@ test('guest history shows completed visits and safe closed order detail', async 
           orderLabels: ['№42']
         },
         {
+          visitId: 13,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-09T18:30:00Z',
+          serviceDate: '2030-01-09',
+          source: 'order_closed',
+          totalMinor: 50000,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№7']
+        },
+        {
           visitId: 12,
           venueId: 1,
           venueName: 'Недоступный визит',
@@ -3725,6 +3738,37 @@ test('guest history shows completed visits and safe closed order detail', async 
           ],
           totalMinor: 125000,
           currency: 'RUB'
+        },
+        13: {
+          visitId: 13,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-09T18:30:00Z',
+          serviceDate: '2030-01-09',
+          source: 'order_closed',
+          booking: null,
+          orders: [
+            {
+              orderId: 901,
+              displayNumber: 7,
+              displayDate: '2030-01-09',
+              totalMinor: 50000,
+              currency: 'RUB',
+              items: [
+                {
+                  itemId: 201,
+                  itemName: 'Classic Hookah',
+                  qty: 1,
+                  priceMinor: 50000,
+                  currency: 'RUB',
+                  totalMinor: 50000
+                }
+              ]
+            }
+          ],
+          totalMinor: 50000,
+          currency: 'RUB'
         }
       }
     }
@@ -3736,9 +3780,11 @@ test('guest history shows completed visits and safe closed order detail', async 
 
   const bookingOnlyVisit = page.locator('article.card').filter({ hasText: 'Было бронирование' })
   const closedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №42' })
+  const legacyClosedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №7' })
   const missingDetailVisit = page.locator('article.card').filter({ hasText: 'Заказы: №404' })
   await expect(bookingOnlyVisit).toContainText('Микс')
   await expect(closedOrderVisit).toContainText(/Итого: 1[\s\u00a0]250/)
+  await expect(legacyClosedOrderVisit).toContainText(/Итого: 500/)
   await expect(page.getByText('Отменённая бронь')).toHaveCount(0)
 
   await bookingOnlyVisit.getByRole('button', { name: 'Подробнее' }).click()
@@ -3758,6 +3804,13 @@ test('guest history shows completed visits and safe closed order detail', async 
   await expect(page.getByText('Foreign Hookah')).toHaveCount(0)
   await page.getByRole('button', { name: '← Назад к истории' }).click()
   await expect(closedOrderVisit).toBeVisible()
+
+  await legacyClosedOrderVisit.getByRole('button', { name: 'Подробнее' }).click()
+  await expect(page.getByRole('heading', { name: 'Заказ №7' })).toBeVisible()
+  await expect(page.getByText('Classic Hookah ×1')).toBeVisible()
+  await expect(page.getByText('Не удалось загрузить детали истории.')).toHaveCount(0)
+  await page.getByRole('button', { name: '← Назад к истории' }).click()
+  await expect(legacyClosedOrderVisit).toBeVisible()
 
   await missingDetailVisit.getByRole('button', { name: 'Подробнее' }).click()
   await expect(page.getByText('Не удалось загрузить детали истории.')).toBeVisible()

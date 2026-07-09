@@ -334,12 +334,19 @@ class VisitRepositoryTest {
             )
 
             val visit = visitRepository.findRecentVisits(GUEST_ONE).single()
+            val history = visitRepository.listGuestVisitHistory(GUEST_ONE)
             val detail = visitRepository.getGuestVisitDetail(GUEST_ONE, visit.id)
 
+            assertEquals(listOf(visit.id), history.map { it.visitId })
+            assertEquals(listOf("№1", "№2"), history.single().orderLabels)
             assertNotNull(detail)
             assertEquals(2, detail.orders.size)
             assertEquals(listOf(1, 2), detail.orders.map { it.displayNumber })
             assertEquals(3, detail.orders.flatMap { it.items }.sumOf { it.qty })
+            detail.orders.flatMap { it.items }.forEach { item ->
+                assertNull(item.selectedOption)
+                assertNull(item.preferenceNote)
+            }
             assertEquals(3000L, detail.totalMinor)
             assertEquals("RUB", detail.currency)
             assertNull(visitRepository.getGuestVisitDetail(SHARED_ONLY_GUEST, visit.id))

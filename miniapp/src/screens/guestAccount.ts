@@ -201,22 +201,26 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
       .join(' · ') || 'Состав заказа'
   })
   const itemList = el('div', { className: 'venue-order-items' })
-  order.items.forEach((item) => {
+  const orderItems = order.items ?? []
+  orderItems.forEach((item) => {
+    const itemName = item.itemName?.trim() || (item.itemId ? `Позиция #${item.itemId}` : 'Позиция')
+    const qty = item.qty ?? 0
     const itemDetails = [
-      item.itemName,
+      itemName,
       item.selectedOption?.name ?? null,
       item.preferenceNote ? `Пожелание: ${item.preferenceNote}` : null
     ].filter((value): value is string => Boolean(value))
     const line = el('p', {
       className: 'venue-order-sub',
-      text: `${itemDetails.join(' · ')} ×${item.qty}${
+      text: `${itemDetails.join(' · ')} ×${qty}${
         formatMoney(item.totalMinor, item.currency) ? ` — ${formatMoney(item.totalMinor, item.currency)}` : ''
       }`
     })
     append(itemList, line)
   })
   const discountList = el('div', { className: 'venue-order-items' })
-  order.promotionDiscounts.forEach((discount) => {
+  const promotionDiscounts = order.promotionDiscounts ?? []
+  promotionDiscounts.forEach((discount) => {
     append(
       discountList,
       el('p', {

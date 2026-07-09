@@ -128,6 +128,7 @@ class GuestVisitRoutesTest {
             val visit = json.parseToJsonElement(body).jsonObject.getValue("visit").jsonObject
             val order = visit.getValue("orders").jsonArray.single().jsonObject
             val item = order.getValue("items").jsonArray.single().jsonObject
+            val promotionDiscounts = order.getValue("promotionDiscounts").jsonArray
             val selectedOption = item.getValue("selectedOption").jsonObject
 
             assertEquals("Owned Hookah", item.getValue("itemName").jsonPrimitive.content)
@@ -136,6 +137,7 @@ class GuestVisitRoutesTest {
             assertEquals("покрепче", item.getValue("preferenceNote").jsonPrimitive.content)
             assertEquals(1250L, item.getValue("priceMinor").jsonPrimitive.content.toLong())
             assertEquals(1250L, order.getValue("totalMinor").jsonPrimitive.content.toLong())
+            assertEquals(0, promotionDiscounts.size)
             assertEquals(false, body.contains("Foreign Hookah"))
             assertEquals(false, body.contains("Shared Hookah"))
 

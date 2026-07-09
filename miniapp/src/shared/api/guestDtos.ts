@@ -530,14 +530,14 @@ export type GuestVisitOrderDto = {
   displayDate?: string | null
   totalMinor?: number | null
   currency?: string | null
-  items: GuestVisitOrderItemDto[]
-  promotionDiscounts: GuestVisitPromotionDiscountDto[]
+  items?: GuestVisitOrderItemDto[] | null
+  promotionDiscounts?: GuestVisitPromotionDiscountDto[] | null
 }
 
 export type GuestVisitOrderItemDto = {
-  itemId: number
-  itemName: string
-  qty: number
+  itemId?: number | null
+  itemName?: string | null
+  qty?: number | null
   selectedOption?: GuestVisitOrderItemOptionDto | null
   preferenceNote?: string | null
   priceMinor?: number | null

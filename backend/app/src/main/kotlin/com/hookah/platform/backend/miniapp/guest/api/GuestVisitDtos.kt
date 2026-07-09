@@ -58,7 +58,7 @@ data class GuestVisitOrderDto(
     val items: List<GuestVisitOrderItemDto>,
     val totalMinor: Long? = null,
     val currency: String? = null,
-    val promotionDiscounts: List<GuestVisitPromotionDiscountDto> = emptyList(),
+    val promotionDiscounts: List<GuestVisitPromotionDiscountDto>,
 )
 
 @Serializable
