@@ -35,6 +35,33 @@ export type VenueStatsResponse = {
   topItems: VenueStatsTopItemDto[]
 }
 
+export type VenueFeedbackFilter = 'all' | 'low'
+
+export type VenueFeedbackResponse = {
+  venueId: number
+  filter: VenueFeedbackFilter
+  summary: VenueFeedbackSummaryDto
+  items: VenueFeedbackItemDto[]
+}
+
+export type VenueFeedbackSummaryDto = {
+  count: number
+  averageRating?: number | null
+  lowCount: number
+}
+
+export type VenueFeedbackItemDto = {
+  feedbackId: number
+  visitId: number
+  occurredAt: string
+  serviceDate?: string | null
+  rating?: number | null
+  tags?: string[]
+  comment?: string | null
+  guestLabel: string
+  createdAt?: string | null
+}
+
 export type StaffChatLinkCodeResponse = {
   code: string
   expiresAt: string

@@ -5,9 +5,13 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
@@ -88,6 +92,127 @@ class GuestVisitRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             assertEquals(HttpStatusCode.NotFound, filteredDetail.status)
+        }
+
+    @Test
+    fun `guest can submit feedback only for own visible completed visit`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:guest-visit-feedback-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val guestOne = 1101L
+            val guestTwo = 1102L
+            val venueId = seedVenueAndUsers(jdbcUrl, guestOne, guestTwo)
+            val ownVisit = seedVisit(jdbcUrl, venueId, guestOne, "ORDER_CLOSED")
+            val foreignVisit = seedVisit(jdbcUrl, venueId, guestTwo, "ORDER_CLOSED")
+            val canceledVisit = seedBookingVisit(jdbcUrl, venueId, guestOne, "CANCELED")
+            val token = issueToken(config, guestOne)
+
+            val detailBefore =
+                client.get("/api/guest/visits/$ownVisit") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, detailBefore.status)
+            val feedbackBefore =
+                json
+                    .parseToJsonElement(detailBefore.bodyAsText())
+                    .jsonObject
+                    .getValue("visit")
+                    .jsonObject
+                    .getValue("feedback")
+                    .jsonObject
+            assertEquals("true", feedbackBefore.getValue("eligible").jsonPrimitive.content)
+            assertEquals("false", feedbackBefore.getValue("submitted").jsonPrimitive.content)
+
+            val submit =
+                client.post("/api/guest/visits/$ownVisit/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":5,"tags":["service","taste"],"comment":"Спасибо"}""")
+                }
+            assertEquals(HttpStatusCode.OK, submit.status)
+            val feedback =
+                json
+                    .parseToJsonElement(submit.bodyAsText())
+                    .jsonObject
+                    .getValue("feedback")
+                    .jsonObject
+            assertEquals("true", feedback.getValue("submitted").jsonPrimitive.content)
+            assertEquals("5", feedback.getValue("rating").jsonPrimitive.content)
+            assertEquals(2, feedback.getValue("tags").jsonArray.size)
+            assertEquals("Спасибо", feedback.getValue("comment").jsonPrimitive.content)
+
+            val duplicate =
+                client.post("/api/guest/visits/$ownVisit/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":1,"tags":["price"],"comment":"overwrite"}""")
+                }
+            assertEquals(HttpStatusCode.OK, duplicate.status)
+            val duplicateFeedback =
+                json
+                    .parseToJsonElement(duplicate.bodyAsText())
+                    .jsonObject
+                    .getValue("feedback")
+                    .jsonObject
+            assertEquals("5", duplicateFeedback.getValue("rating").jsonPrimitive.content)
+            assertEquals("Спасибо", duplicateFeedback.getValue("comment").jsonPrimitive.content)
+
+            val invalidRating =
+                client.post("/api/guest/visits/$ownVisit/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":0}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, invalidRating.status)
+
+            val invalidTag =
+                client.post("/api/guest/visits/$ownVisit/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":4,"tags":["unknown"]}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, invalidTag.status)
+
+            val tooManyTags =
+                client.post("/api/guest/visits/$ownVisit/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":4,"tags":["service","hookah_quality","taste","speed","atmosphere","price"]}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, tooManyTags.status)
+
+            val foreignSubmit =
+                client.post("/api/guest/visits/$foreignVisit/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":5}""")
+                }
+            assertEquals(HttpStatusCode.NotFound, foreignSubmit.status)
+
+            val filteredSubmit =
+                client.post("/api/guest/visits/$canceledVisit/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":5}""")
+                }
+            assertEquals(HttpStatusCode.NotFound, filteredSubmit.status)
         }
 
     @Test

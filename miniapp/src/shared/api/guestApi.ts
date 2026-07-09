@@ -23,6 +23,8 @@ import type {
   GuestShiftExtensionOptionsResponse,
   GuestTodayStaffResponse,
   GuestShiftExtensionRequest,
+  GuestVisitFeedbackSubmitRequest,
+  GuestVisitFeedbackSubmitResponse,
   GuestTabResponse,
   GuestTabsResponse,
   GuestVisitDetailResponse,
@@ -812,6 +814,29 @@ export async function guestGetVisitDetail(
     backendUrl,
     `/api/guest/visits/${encodeURIComponent(String(visitId))}`,
     { signal },
+    deps
+  )
+}
+
+export async function guestSubmitVisitFeedback(
+  backendUrl: string,
+  visitId: number,
+  payload: GuestVisitFeedbackSubmitRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestVisitFeedbackSubmitResponse>> {
+  if (!Number.isFinite(visitId) || !Number.isInteger(visitId) || visitId <= 0) {
+    return invalidPositiveIdResult('visitId')
+  }
+  return requestApi<GuestVisitFeedbackSubmitResponse>(
+    backendUrl,
+    `/api/guest/visits/${encodeURIComponent(String(visitId))}/feedback`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
     deps
   )
 }

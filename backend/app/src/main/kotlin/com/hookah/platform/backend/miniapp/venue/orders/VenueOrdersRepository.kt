@@ -925,15 +925,8 @@ class VenueOrdersRepository(
                         var changedBatchId: Long? = null
                         if (nextStatus == OrderWorkflowStatus.CLOSED) {
                             updateOrderStatusOnly(connection, orderId)
-                            val visits = visitRepository?.recordOrderClosedVisits(connection, orderId, now.toInstant())
+                            visitRepository?.recordOrderClosedVisits(connection, orderId, now.toInstant())
                             loyaltyRepository?.accrueForClosedOrder(connection, orderId)
-                            visits?.visitIds.orEmpty().forEach { visitId ->
-                                visitFeedbackRepository?.scheduleFeedbackRequestForVisit(
-                                    connection,
-                                    visitId,
-                                    now.toInstant(),
-                                )
-                            }
                         } else {
                             val batchStatus =
                                 OrderBatchStatus.fromWorkflow(nextStatus)

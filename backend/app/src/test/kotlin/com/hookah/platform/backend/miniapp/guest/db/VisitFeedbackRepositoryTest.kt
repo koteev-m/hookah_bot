@@ -131,6 +131,69 @@ class VisitFeedbackRepositoryTest {
         }
 
     @Test
+    fun `post visit feedback accepts completed visits and preserves duplicate submission`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("visit-feedback-post-submit")
+            val fixture = seedBase(jdbcUrl)
+            val orderVisitId = seedClosedOrderVisit(jdbcUrl, fixture, GUEST_USER)
+            val bookingVisitId = seedBookingBackedVisit(jdbcUrl, fixture, GUEST_USER, "SEATED", "BOOKING_SEATED", 1)
+            val mergedVisitId = seedBookingBackedVisit(jdbcUrl, fixture, GUEST_USER, "SEATED", "MERGED", 2)
+            val canceledVisitId = seedBookingBackedVisit(jdbcUrl, fixture, GUEST_USER, "CANCELED", "BOOKING_SEATED", 3)
+            val repository = VisitFeedbackRepository(dataSource(jdbcUrl))
+
+            val submitted =
+                repository.submitFeedback(
+                    visitId = orderVisitId,
+                    userId = GUEST_USER,
+                    rating = 5,
+                    tags = listOf("service", "taste"),
+                    comment = "Все отлично",
+                )
+            assertNotNull(submitted)
+            assertEquals(5, submitted.rating)
+            assertEquals(listOf("service", "taste"), submitted.tags)
+            assertEquals("Все отлично", submitted.comment)
+
+            val duplicate =
+                repository.submitFeedback(
+                    visitId = orderVisitId,
+                    userId = GUEST_USER,
+                    rating = 1,
+                    tags = listOf("price"),
+                    comment = "Не перезаписывать",
+                )
+            assertNotNull(duplicate)
+            assertEquals(submitted.id, duplicate.id)
+            assertEquals(5, duplicate.rating)
+            assertEquals(listOf("service", "taste"), duplicate.tags)
+            assertEquals("Все отлично", duplicate.comment)
+
+            assertNotNull(repository.submitFeedback(bookingVisitId, GUEST_USER, 4, listOf("booking"), null))
+            assertNotNull(repository.submitFeedback(mergedVisitId, GUEST_USER, 4, listOf("atmosphere"), null))
+            assertNull(repository.submitFeedback(canceledVisitId, GUEST_USER, 4))
+            assertNull(repository.submitFeedback(orderVisitId, OTHER_GUEST, 4))
+            assertFailsWith<IllegalArgumentException> { repository.submitFeedback(orderVisitId, GUEST_USER, 0) }
+            assertFailsWith<IllegalArgumentException> {
+                repository.submitFeedback(orderVisitId, GUEST_USER, 4, listOf("unknown"))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                repository.submitFeedback(
+                    orderVisitId,
+                    GUEST_USER,
+                    4,
+                    listOf("service", "hookah_quality", "taste", "speed", "atmosphere", "cleanliness"),
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                repository.submitFeedback(orderVisitId, GUEST_USER, 4, comment = "x".repeat(1001))
+            }
+
+            val aggregate = repository.loadVenueFeedbackAggregate(fixture.venueId)
+            assertEquals(3L, aggregate.count)
+            assertEquals(0L, aggregate.lowCount)
+        }
+
+    @Test
     fun `feedback thread messages are saved for staff and guest`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("visit-feedback-messages")
@@ -170,6 +233,7 @@ class VisitFeedbackRepositoryTest {
             assertFailsWith<IllegalArgumentException> {
                 repository.saveFeedbackMessage(feedback.id, VisitFeedbackMessageSender.STAFF, null, "")
             }
+            Unit
         }
 
     @Test
@@ -401,6 +465,64 @@ class VisitFeedbackRepositoryTest {
                 statement.setLong(2, userId)
                 statement.setTimestamp(3, Timestamp.from(Instant.parse("2030-05-10T10:00:00Z")))
                 statement.setDate(4, java.sql.Date.valueOf(LocalDate.of(2030, 5, 10)))
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    keys.next()
+                    keys.getLong(1)
+                }
+            }
+        }
+
+    private fun seedBookingBackedVisit(
+        jdbcUrl: String,
+        fixture: Fixture,
+        userId: Long,
+        bookingStatus: String,
+        source: String,
+        displayNumber: Int,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val bookingId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO bookings (
+                        venue_id,
+                        user_id,
+                        scheduled_at,
+                        party_size,
+                        status,
+                        display_date,
+                        display_number
+                    )
+                    VALUES (?, ?, ?, 2, ?, ?, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, fixture.venueId)
+                    statement.setLong(2, userId)
+                    statement.setTimestamp(3, Timestamp.from(Instant.parse("2030-05-10T10:00:00Z")))
+                    statement.setString(4, bookingStatus)
+                    statement.setDate(5, java.sql.Date.valueOf(LocalDate.of(2030, 5, 10)))
+                    statement.setInt(6, displayNumber)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO visits (venue_id, user_id, booking_id, source, occurred_at, service_date)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, fixture.venueId)
+                statement.setLong(2, userId)
+                statement.setLong(3, bookingId)
+                statement.setString(4, source)
+                statement.setTimestamp(5, Timestamp.from(Instant.parse("2030-05-10T10:15:00Z")))
+                statement.setDate(6, java.sql.Date.valueOf(LocalDate.of(2030, 5, 10)))
                 statement.executeUpdate()
                 statement.generatedKeys.use { keys ->
                     keys.next()

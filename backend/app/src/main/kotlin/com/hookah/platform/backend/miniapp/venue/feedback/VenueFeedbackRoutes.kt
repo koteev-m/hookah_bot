@@ -1,0 +1,129 @@
+package com.hookah.platform.backend.miniapp.venue.feedback
+
+import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueAggregate
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
+import com.hookah.platform.backend.miniapp.venue.VenuePermission
+import com.hookah.platform.backend.miniapp.venue.requireUserId
+import com.hookah.platform.backend.miniapp.venue.requireVenueId
+import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import io.ktor.server.application.call
+import io.ktor.server.response.respond
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
+import io.ktor.server.routing.route
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class VenueFeedbackResponse(
+    val venueId: Long,
+    val filter: String,
+    val summary: VenueFeedbackSummaryDto,
+    val items: List<VenueFeedbackItemDto>,
+)
+
+@Serializable
+data class VenueFeedbackSummaryDto(
+    val count: Long,
+    val averageRating: Double? = null,
+    val lowCount: Long,
+)
+
+@Serializable
+data class VenueFeedbackItemDto(
+    val feedbackId: Long,
+    val visitId: Long,
+    val occurredAt: String,
+    val serviceDate: String? = null,
+    val rating: Int? = null,
+    val tags: List<String> = emptyList(),
+    val comment: String? = null,
+    val guestLabel: String,
+    val createdAt: String? = null,
+)
+
+fun Route.venueFeedbackRoutes(
+    venueAccessRepository: VenueAccessRepository,
+    visitFeedbackRepository: VisitFeedbackRepository,
+) {
+    route("/venue") {
+        get("/{venueId}/feedback") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (VenuePermission.FEEDBACK_VIEW !in role.permissions()) {
+                throw ForbiddenException()
+            }
+            val filter = parseFeedbackFilter(call.request.queryParameters["filter"])
+            val limit = parseLimit(call.request.queryParameters["limit"])
+            val offset = parseOffset(call.request.queryParameters["offset"])
+            val aggregate = visitFeedbackRepository.loadVenueFeedbackAggregate(venueId)
+            val items =
+                visitFeedbackRepository.listVenueFeedback(
+                    venueId = venueId,
+                    filter = filter.repositoryFilter,
+                    limit = limit,
+                    offset = offset,
+                )
+            call.respond(
+                VenueFeedbackResponse(
+                    venueId = venueId,
+                    filter = filter.code,
+                    summary = aggregate.toDto(),
+                    items = items.map { it.toDto() },
+                ),
+            )
+        }
+    }
+}
+
+private data class FeedbackFilter(
+    val code: String,
+    val repositoryFilter: VisitFeedbackVenueFilter,
+)
+
+private fun parseFeedbackFilter(raw: String?): FeedbackFilter =
+    when (raw?.trim()?.lowercase() ?: "all") {
+        "all" -> FeedbackFilter(code = "all", repositoryFilter = VisitFeedbackVenueFilter.ALL)
+        "low" -> FeedbackFilter(code = "low", repositoryFilter = VisitFeedbackVenueFilter.LOW)
+        else -> throw InvalidInputException("Unsupported feedback filter")
+    }
+
+private fun parseLimit(raw: String?): Int =
+    raw
+        ?.toIntOrNull()
+        ?.takeIf { it in 1..50 }
+        ?: 20
+
+private fun parseOffset(raw: String?): Int =
+    raw
+        ?.toIntOrNull()
+        ?.takeIf { it >= 0 }
+        ?: 0
+
+private fun com.hookah.platform.backend.miniapp.venue.VenueRole.permissions(): Set<VenuePermission> =
+    com.hookah.platform.backend.miniapp.venue.VenuePermissions.forRole(this)
+
+private fun VisitFeedbackVenueAggregate.toDto(): VenueFeedbackSummaryDto =
+    VenueFeedbackSummaryDto(
+        count = count,
+        averageRating = averageRating,
+        lowCount = lowCount,
+    )
+
+private fun VisitFeedbackVenueSummary.toDto(): VenueFeedbackItemDto =
+    VenueFeedbackItemDto(
+        feedbackId = feedbackId,
+        visitId = visitId,
+        occurredAt = occurredAt.toString(),
+        serviceDate = serviceDate?.toString(),
+        rating = rating,
+        tags = tags,
+        comment = comment,
+        guestLabel = guestDisplayName?.takeIf { it.isNotBlank() } ?: "Гость #$guestUserId",
+        createdAt = createdAt?.toString(),
+    )

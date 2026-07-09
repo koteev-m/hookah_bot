@@ -9550,7 +9550,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `rating five with configured public review link shows one time CTA`() =
+    fun `rating five does not show public review CTA in feedback MVP`() =
         runBlocking {
             coEvery {
                 visitFeedbackRepository.submitRating(visitId = 44L, userId = 200L, rating = 5, now = any())
@@ -9566,8 +9566,6 @@ class TelegramBotRouterTableTokenTest {
                     staffNotifiedAt = null,
                     commentStaffNotifiedAt = null,
                 )
-            coEvery { venueSettingsRepository.getPublicReviewUrl(10L) } returns "https://yandex.ru/maps/org/mix/reviews"
-            coEvery { venueSettingsRepository.hasPublicReviewCtaBeenShown(200L, 10L) } returns false
 
             router.process(
                 TelegramUpdate(
@@ -9582,26 +9580,15 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { venueSettingsRepository.markPublicReviewCtaShown(200L, 10L, any()) }
+            coVerify(exactly = 0) { venueSettingsRepository.getPublicReviewUrl(10L) }
+            coVerify(exactly = 0) { venueSettingsRepository.hasPublicReviewCtaBeenShown(200L, 10L) }
+            coVerify(exactly = 0) { venueSettingsRepository.markPublicReviewCtaShown(200L, 10L, any()) }
             coVerify {
                 outboxEnqueuer.enqueueEditMessageText(
                     100,
                     20_002_141,
-                    match {
-                        it.contains("Спасибо за оценку!") &&
-                            it.contains("Если хотите, оставьте публичный отзыв")
-                    },
-                    match { markup ->
-                        markup is InlineKeyboardMarkup &&
-                            markup.inlineKeyboard.flatten().any { button ->
-                                button.text == "⭐ Оставить отзыв" &&
-                                    button.url == "https://yandex.ru/maps/org/mix/reviews"
-                            } &&
-                            markup.inlineKeyboard.flatten().any { button ->
-                                button.text == "✅ Уже оставил отзыв" &&
-                                    button.callbackData == "pubrev_done:10"
-                            }
-                    },
+                    "Спасибо за оценку!",
+                    null,
                 )
             }
         }
@@ -9623,8 +9610,6 @@ class TelegramBotRouterTableTokenTest {
                     staffNotifiedAt = null,
                     commentStaffNotifiedAt = null,
                 )
-            coEvery { venueSettingsRepository.getPublicReviewUrl(10L) } returns "https://yandex.ru/maps/org/mix/reviews"
-            coEvery { venueSettingsRepository.hasPublicReviewCtaBeenShown(200L, 10L) } returns true
 
             router.process(
                 TelegramUpdate(
@@ -9639,6 +9624,8 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
+            coVerify(exactly = 0) { venueSettingsRepository.getPublicReviewUrl(10L) }
+            coVerify(exactly = 0) { venueSettingsRepository.hasPublicReviewCtaBeenShown(200L, 10L) }
             coVerify(exactly = 0) { venueSettingsRepository.markPublicReviewCtaShown(200L, 10L, any()) }
             coVerify {
                 outboxEnqueuer.enqueueEditMessageText(

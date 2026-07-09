@@ -1,0 +1,2 @@
+ALTER TABLE IF EXISTS visit_feedback
+    ADD COLUMN IF NOT EXISTS tags_json TEXT NOT NULL DEFAULT '[]';

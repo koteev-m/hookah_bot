@@ -4,6 +4,9 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -67,6 +70,8 @@ data class VisitFeedbackRecord(
     val status: VisitFeedbackStatus,
     val staffNotifiedAt: Instant?,
     val commentStaffNotifiedAt: Instant?,
+    val tags: List<String> = emptyList(),
+    val createdAt: Instant? = null,
 )
 
 data class VisitFeedbackThread(
@@ -105,6 +110,8 @@ data class VisitFeedbackVenueSummary(
     val serviceDate: LocalDate?,
     val hasStaffReply: Boolean,
     val requiresAnswer: Boolean,
+    val tags: List<String> = emptyList(),
+    val createdAt: Instant? = null,
 )
 
 data class VisitFeedbackVenueDetail(
@@ -122,6 +129,14 @@ data class VisitFeedbackVenueDetail(
     val hasStaffReply: Boolean,
     val requiresAnswer: Boolean,
     val messages: List<VisitFeedbackMessageRecord>,
+    val tags: List<String> = emptyList(),
+    val createdAt: Instant? = null,
+)
+
+data class VisitFeedbackVenueAggregate(
+    val count: Long,
+    val averageRating: Double?,
+    val lowCount: Long,
 )
 
 class VisitFeedbackRepository(private val dataSource: DataSource?) {
@@ -235,7 +250,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val visit = loadOwnedFeedbackVisit(connection, visitId, userId) ?: return@use null
+                    val visit = loadOwnedVisibleFeedbackVisit(connection, visitId, userId) ?: return@use null
                     val existing = findFeedback(connection, visitId, userId)
                     if (existing == null) {
                         insertFeedback(
@@ -245,7 +260,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                             comment = null,
                             status = VisitFeedbackStatus.SUBMITTED,
                         )
-                    } else {
+                    } else if (existing.status != VisitFeedbackStatus.SUBMITTED) {
                         connection.prepareStatement(
                             """
                             UPDATE visit_feedback
@@ -261,7 +276,76 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                             statement.setLong(4, existing.id)
                             statement.executeUpdate()
                         }
+                    } else {
+                        return@use existing
                     }
+                    findFeedback(connection, visitId, userId)
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun submitFeedback(
+        visitId: Long,
+        userId: Long,
+        rating: Int,
+        tags: List<String> = emptyList(),
+        comment: String? = null,
+        now: Instant = Instant.now(),
+    ): VisitFeedbackRecord? {
+        require(rating in 1..5) { "rating must be between 1 and 5" }
+        val normalizedTags = normalizeTags(tags)
+        val normalizedComment = normalizeComment(comment)
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val visit = loadOwnedVisibleFeedbackVisit(connection, visitId, userId) ?: return@use null
+                    val existing = findFeedback(connection, visitId, userId)
+                    if (existing == null) {
+                        try {
+                            insertFeedback(
+                                connection = connection,
+                                visit = visit,
+                                rating = rating,
+                                comment = normalizedComment,
+                                status = VisitFeedbackStatus.SUBMITTED,
+                                tags = normalizedTags,
+                            )
+                        } catch (e: SQLException) {
+                            if (!e.isDuplicateKeyViolation()) throw e
+                        }
+                    } else if (existing.status != VisitFeedbackStatus.SUBMITTED) {
+                        updateFeedbackSubmission(
+                            connection = connection,
+                            feedbackId = existing.id,
+                            rating = rating,
+                            tags = normalizedTags,
+                            comment = normalizedComment,
+                            now = now,
+                        )
+                    } else {
+                        return@use existing
+                    }
+                    findFeedback(connection, visitId, userId)
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun findGuestFeedback(
+        visitId: Long,
+        userId: Long,
+    ): VisitFeedbackRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    loadOwnedVisibleFeedbackVisit(connection, visitId, userId) ?: return@use null
                     findFeedback(connection, visitId, userId)
                 }
             } catch (e: SQLException) {
@@ -279,7 +363,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val visit = loadOwnedFeedbackVisit(connection, visitId, userId) ?: return@use null
+                    val visit = loadOwnedVisibleFeedbackVisit(connection, visitId, userId) ?: return@use null
                     val existing = findFeedback(connection, visitId, userId)
                     if (existing == null) {
                         insertFeedback(
@@ -325,7 +409,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val visit = loadOwnedFeedbackVisit(connection, visitId, userId) ?: return@use null
+                    val visit = loadOwnedVisibleFeedbackVisit(connection, visitId, userId) ?: return@use null
                     val existing = findFeedback(connection, visitId, userId)
                     if (existing == null) {
                         insertFeedback(
@@ -479,6 +563,43 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun loadVenueFeedbackAggregate(venueId: Long): VisitFeedbackVenueAggregate {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT COUNT(*) AS feedback_count,
+                               AVG(rating) AS average_rating,
+                               COALESCE(SUM(CASE WHEN rating BETWEEN 1 AND 3 THEN 1 ELSE 0 END), 0) AS low_count
+                        FROM visit_feedback
+                        WHERE venue_id = ?
+                          AND status = ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setString(2, VisitFeedbackStatus.SUBMITTED.name)
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                val average = rs.getDouble("average_rating")
+                                VisitFeedbackVenueAggregate(
+                                    count = rs.getLong("feedback_count"),
+                                    averageRating = if (rs.wasNull()) null else average,
+                                    lowCount = rs.getLong("low_count"),
+                                )
+                            } else {
+                                VisitFeedbackVenueAggregate(count = 0L, averageRating = null, lowCount = 0L)
+                            }
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun getVenueFeedbackDetail(
         venueId: Long,
         feedbackId: Long,
@@ -528,11 +649,43 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
             statement.executeQuery().use { rs -> if (rs.next()) rs.toFeedbackVisit() else null }
         }
 
-    private fun loadOwnedFeedbackVisit(
+    private fun loadOwnedVisibleFeedbackVisit(
         connection: Connection,
         visitId: Long,
         userId: Long,
-    ): FeedbackVisit? = loadFeedbackVisit(connection, visitId)?.takeIf { it.userId == userId }
+    ): FeedbackVisit? =
+        connection.prepareStatement(
+            """
+            SELECT v.id AS visit_id,
+                   v.venue_id,
+                   v.user_id,
+                   v.order_id,
+                   v.table_session_id,
+                   COALESCE(NULLIF(vs.timezone, ''), ?) AS timezone,
+                   EXISTS (
+                       SELECT 1
+                       FROM orders o
+                       WHERE o.status = 'CLOSED'
+                         AND (
+                             (v.order_id IS NOT NULL AND o.id = v.order_id)
+                             OR (v.table_session_id IS NOT NULL AND o.table_session_id = v.table_session_id)
+                         )
+                   ) AS has_closed_order
+            FROM visits v
+            JOIN venues venue ON venue.id = v.venue_id
+            LEFT JOIN bookings b ON b.id = v.booking_id
+            LEFT JOIN venue_settings vs ON vs.venue_id = v.venue_id
+            WHERE v.id = ?
+              AND v.user_id = ?
+              AND v.source IN ('ORDER_CLOSED', 'BOOKING_SEATED', 'MERGED')
+              AND (v.booking_id IS NULL OR b.status = 'SEATED')
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE)
+            statement.setLong(2, visitId)
+            statement.setLong(3, userId)
+            statement.executeQuery().use { rs -> if (rs.next()) rs.toFeedbackVisit() else null }
+        }
 
     private fun findRequestByVisit(
         connection: Connection,
@@ -685,7 +838,9 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                    comment,
                    status,
                    staff_notified_at,
-                   comment_staff_notified_at
+                   comment_staff_notified_at,
+                   tags_json,
+                   created_at
             FROM visit_feedback
             WHERE visit_id = ? AND user_id = ?
             """.trimIndent(),
@@ -743,9 +898,11 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                    COALESCE(NULLIF(u.guest_display_name, ''), NULLIF(u.first_name, ''), NULLIF(u.username, '')) AS guest_display_name,
                    vf.rating,
                    vf.comment,
+                   vf.tags_json,
                    vf.status,
                    v.occurred_at,
                    v.service_date,
+                   vf.created_at,
                    (fr.last_staff_message_at IS NOT NULL) AS has_staff_reply,
                    (
                        vf.rating BETWEEN 1 AND 3
@@ -824,9 +981,11 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                    COALESCE(NULLIF(u.guest_display_name, ''), NULLIF(u.first_name, ''), NULLIF(u.username, '')) AS guest_display_name,
                    vf.rating,
                    vf.comment,
+                   vf.tags_json,
                    vf.status,
                    v.occurred_at,
                    v.service_date,
+                   vf.created_at,
                    (fms.last_staff_message_at IS NOT NULL) AS has_staff_reply,
                    (
                        vf.rating BETWEEN 1 AND 3
@@ -946,11 +1105,12 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         rating: Int?,
         comment: String?,
         status: VisitFeedbackStatus,
+        tags: List<String> = emptyList(),
     ) {
         connection.prepareStatement(
             """
-            INSERT INTO visit_feedback (visit_id, venue_id, user_id, rating, comment, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO visit_feedback (visit_id, venue_id, user_id, rating, comment, status, tags_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, visit.visitId)
@@ -963,6 +1123,36 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
             }
             statement.setString(5, comment)
             statement.setString(6, status.name)
+            statement.setString(7, encodeTags(tags))
+            statement.executeUpdate()
+        }
+    }
+
+    private fun updateFeedbackSubmission(
+        connection: Connection,
+        feedbackId: Long,
+        rating: Int,
+        tags: List<String>,
+        comment: String?,
+        now: Instant,
+    ) {
+        connection.prepareStatement(
+            """
+            UPDATE visit_feedback
+            SET rating = ?,
+                tags_json = ?,
+                comment = ?,
+                status = ?,
+                updated_at = ?
+            WHERE id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setInt(1, rating)
+            statement.setString(2, encodeTags(tags))
+            statement.setString(3, comment)
+            statement.setString(4, VisitFeedbackStatus.SUBMITTED.name)
+            statement.setTimestamp(5, Timestamp.from(now))
+            statement.setLong(6, feedbackId)
             statement.executeUpdate()
         }
     }
@@ -1023,6 +1213,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         val ratingWasNull = wasNull()
         val staffNotified = getTimestamp("staff_notified_at")
         val commentStaffNotified = getTimestamp("comment_staff_notified_at")
+        val createdAt = getTimestamp("created_at")
         return VisitFeedbackRecord(
             id = getLong("id"),
             visitId = getLong("visit_id"),
@@ -1033,6 +1224,8 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
             status = VisitFeedbackStatus.valueOf(getString("status")),
             staffNotifiedAt = staffNotified?.toInstant(),
             commentStaffNotifiedAt = commentStaffNotified?.toInstant(),
+            tags = decodeTags(getString("tags_json")),
+            createdAt = createdAt?.toInstant(),
         )
     }
 
@@ -1067,6 +1260,8 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
             serviceDate = getDate("service_date")?.toLocalDate(),
             hasStaffReply = getBoolean("has_staff_reply"),
             requiresAnswer = getBoolean("requires_answer"),
+            tags = decodeTags(getString("tags_json")),
+            createdAt = getTimestamp("created_at")?.toInstant(),
         )
     }
 
@@ -1088,6 +1283,8 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
             hasStaffReply = getBoolean("has_staff_reply"),
             requiresAnswer = getBoolean("requires_answer"),
             messages = messages,
+            tags = decodeTags(getString("tags_json")),
+            createdAt = getTimestamp("created_at")?.toInstant(),
         )
     }
 
@@ -1107,6 +1304,35 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         )
     }
 
+    private fun normalizeTags(tags: List<String>): List<String> {
+        require(tags.size <= MAX_TAGS) { "too many tags" }
+        return tags.map { tag ->
+            val normalized = tag.trim()
+            require(normalized in ALLOWED_TAGS) { "unknown feedback tag" }
+            normalized
+        }.distinct()
+    }
+
+    private fun normalizeComment(comment: String?): String? {
+        val normalized = comment?.trim()?.takeIf { it.isNotBlank() }
+        require((normalized?.length ?: 0) <= MAX_COMMENT_LENGTH) { "comment is too long" }
+        return normalized
+    }
+
+    private fun encodeTags(tags: List<String>): String = json.encodeToString(tags)
+
+    private fun decodeTags(raw: String?): List<String> =
+        runCatching {
+            json.decodeFromString<List<String>>(raw ?: "[]")
+                .filter { it in ALLOWED_TAGS }
+                .distinct()
+        }.getOrDefault(emptyList())
+
+    private fun SQLException.isDuplicateKeyViolation(): Boolean {
+        if (sqlState == "23505") return true
+        return generateSequence(nextException) { it.nextException }.any { it.sqlState == "23505" }
+    }
+
     private data class FeedbackVisit(
         val visitId: Long,
         val venueId: Long,
@@ -1119,5 +1345,18 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         const val DEFAULT_BATCH_SIZE: Int = 100
         const val MAX_COMMENT_LENGTH: Int = 1000
         const val MAX_MESSAGE_LENGTH: Int = 1000
+        const val MAX_TAGS: Int = 5
+        val ALLOWED_TAGS: Set<String> =
+            setOf(
+                "service",
+                "hookah_quality",
+                "taste",
+                "speed",
+                "atmosphere",
+                "cleanliness",
+                "booking",
+                "price",
+            )
+        val json: Json = Json { ignoreUnknownKeys = true }
     }
 }

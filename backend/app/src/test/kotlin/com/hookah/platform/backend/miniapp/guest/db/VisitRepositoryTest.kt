@@ -249,12 +249,11 @@ class VisitRepositoryTest {
         }
 
     @Test
-    fun `shared common bill schedules feedback per real guest visit only`() =
+    fun `shared common bill records real guest visits without scheduling feedback prompts`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("visit-feedback-shared-bill")
             val fixture = seedBase(jdbcUrl)
             val visitRepository = VisitRepository(dataSource(jdbcUrl))
-            val feedbackRepository = VisitFeedbackRepository(dataSource(jdbcUrl))
             val orderFixture = seedActiveOrderWithParticipants(jdbcUrl, fixture)
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                 val guestThreeTab =
@@ -275,7 +274,6 @@ class VisitRepositoryTest {
                 VenueOrdersRepository(
                     dataSource = dataSource(jdbcUrl),
                     visitRepository = visitRepository,
-                    visitFeedbackRepository = feedbackRepository,
                 )
 
             val result =
@@ -293,7 +291,7 @@ class VisitRepositoryTest {
             assertEquals(1L, visitRepository.getVisitCount(GUEST_THREE, fixture.venueId))
             assertEquals(0L, visitRepository.getVisitCount(SHARED_ONLY_GUEST, fixture.venueId))
             assertEquals(0L, visitRepository.getVisitCount(STAFF_USER, fixture.venueId))
-            assertEquals(listOf(GUEST_ONE, GUEST_TWO, GUEST_THREE), fetchFeedbackRequestUserIds(jdbcUrl))
+            assertEquals(emptyList(), fetchFeedbackRequestUserIds(jdbcUrl))
 
             val staleClose =
                 orderRepository.updateOrderStatus(
@@ -305,9 +303,9 @@ class VisitRepositoryTest {
 
             assertNotNull(staleClose)
             assertEquals(false, staleClose.applied)
-            assertEquals(listOf(GUEST_ONE, GUEST_TWO, GUEST_THREE), fetchFeedbackRequestUserIds(jdbcUrl))
+            assertEquals(emptyList(), fetchFeedbackRequestUserIds(jdbcUrl))
             assertEquals(3, countRows(jdbcUrl, "visits"))
-            assertEquals(3, countRows(jdbcUrl, "visit_feedback_requests"))
+            assertEquals(0, countRows(jdbcUrl, "visit_feedback_requests"))
         }
 
     @Test

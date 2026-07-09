@@ -226,6 +226,17 @@ type VenueStatsResponse = {
   topItems: Array<{ itemName: string; qty: number }>
 }
 
+type VenueFeedbackResponse = {
+  venueId: number
+  filter: 'all' | 'low'
+  summary: {
+    count: number
+    averageRating: number | null
+    lowCount: number
+  }
+  items: Array<Record<string, unknown>>
+}
+
 type BillingInvoiceFixture = {
   id: number
   periodStart: string
@@ -1004,6 +1015,40 @@ async function mockGuestApi(
           body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Visit not found' } })
         })
       }
+      return
+    }
+
+    const feedbackMatch = path.match(/^\/api\/guest\/visits\/(\d+)\/feedback$/)
+    if (feedbackMatch && request.method() === 'POST') {
+      const visitId = Number(feedbackMatch[1])
+      const detail = visitHistory.details[visitId]
+      if (!detail) {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Visit not found' } })
+        })
+        return
+      }
+      const currentFeedback = (detail.feedback ?? {}) as Record<string, unknown>
+      if (currentFeedback.submitted === true) {
+        await route.fulfill(jsonResponse({ feedback: currentFeedback }))
+        return
+      }
+      const body = JSON.parse(request.postData() || '{}') as {
+        rating?: number
+        tags?: string[]
+        comment?: string | null
+      }
+      const feedback = {
+        eligible: true,
+        submitted: true,
+        rating: body.rating ?? 5,
+        tags: body.tags ?? [],
+        comment: body.comment ?? null
+      }
+      detail.feedback = feedback
+      await route.fulfill(jsonResponse({ feedback }))
       return
     }
 
@@ -1913,6 +1958,43 @@ function buildVenueStats(period: 'today' | '7d' | '30d', overrides: Partial<Venu
   }
 }
 
+function buildVenueFeedback(filter: 'all' | 'low' = 'all'): VenueFeedbackResponse {
+  const allItems = [
+    {
+      feedbackId: 91,
+      visitId: 11,
+      occurredAt: '2030-01-11T18:30:00Z',
+      serviceDate: '2030-01-11',
+      rating: 5,
+      tags: ['service', 'taste'],
+      comment: 'Все отлично',
+      guestLabel: 'Гость 9010',
+      createdAt: '2030-01-11T19:00:00Z'
+    },
+    {
+      feedbackId: 92,
+      visitId: 12,
+      occurredAt: '2030-01-12T18:30:00Z',
+      serviceDate: '2030-01-12',
+      rating: 2,
+      tags: ['speed'],
+      comment: 'Долго ждали',
+      guestLabel: 'Гость 9011',
+      createdAt: '2030-01-12T19:00:00Z'
+    }
+  ]
+  return {
+    venueId: 1,
+    filter,
+    summary: {
+      count: 2,
+      averageRating: 3.5,
+      lowCount: 1
+    },
+    items: filter === 'low' ? allItems.filter((item) => item.rating <= 3) : allItems
+  }
+}
+
 async function mockVenueStatsApi(
   page: Page,
   options: {
@@ -1971,6 +2053,12 @@ async function mockVenueStatsApi(
     periods.push(period)
     const stats = options.statsByPeriod?.[period] ?? buildVenueStats(period)
     await route.fulfill(jsonResponse(stats))
+  })
+
+  await page.route('**/api/venue/1/feedback**', async (route) => {
+    const url = new URL(route.request().url())
+    const filter = (url.searchParams.get('filter') || 'all') as 'all' | 'low'
+    await route.fulfill(jsonResponse(buildVenueFeedback(filter)))
   })
 
   return {
@@ -3700,7 +3788,14 @@ test('guest history shows completed visits and safe closed order detail', async 
           },
           orders: [],
           totalMinor: null,
-          currency: null
+          currency: null,
+          feedback: {
+            eligible: true,
+            submitted: false,
+            rating: null,
+            tags: [],
+            comment: null
+          }
         },
         11: {
           visitId: 11,
@@ -3737,7 +3832,14 @@ test('guest history shows completed visits and safe closed order detail', async 
             }
           ],
           totalMinor: 125000,
-          currency: 'RUB'
+          currency: 'RUB',
+          feedback: {
+            eligible: true,
+            submitted: false,
+            rating: null,
+            tags: [],
+            comment: null
+          }
         },
         13: {
           visitId: 13,
@@ -3768,7 +3870,14 @@ test('guest history shows completed visits and safe closed order detail', async 
             }
           ],
           totalMinor: 50000,
-          currency: 'RUB'
+          currency: 'RUB',
+          feedback: {
+            eligible: false,
+            submitted: false,
+            rating: null,
+            tags: [],
+            comment: null
+          }
         }
       }
     }
@@ -3789,6 +3898,13 @@ test('guest history shows completed visits and safe closed order detail', async 
 
   await bookingOnlyVisit.getByRole('button', { name: 'Подробнее' }).click()
   await expect(page.getByText('Посещение по брони. Заказов в этом визите нет.')).toBeVisible()
+  await page.getByRole('button', { name: 'Оценить визит' }).click()
+  await page.getByRole('button', { name: '5', exact: true }).click()
+  await page.getByRole('button', { name: 'Бронь' }).click()
+  await page.getByPlaceholder('Комментарий').fill('Все было вовремя')
+  await page.getByRole('button', { name: 'Сохранить отзыв' }).click()
+  await expect(page.getByText('Спасибо, отзыв сохранён.')).toBeVisible()
+  await expect(page.getByText('Вы оценили визит: 5/5.')).toBeVisible()
   await expect
     .poll(async () => page.evaluate(() => Boolean((window as TestTelegramWindow).__e2eTelegramBackButtonVisible)))
     .toBe(true)
@@ -3808,6 +3924,7 @@ test('guest history shows completed visits and safe closed order detail', async 
   await legacyClosedOrderVisit.getByRole('button', { name: 'Подробнее' }).click()
   await expect(page.getByRole('heading', { name: 'Заказ №7' })).toBeVisible()
   await expect(page.getByText('Classic Hookah ×1')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Оценить визит' })).toHaveCount(0)
   await expect(page.getByText('Не удалось загрузить детали истории.')).toHaveCount(0)
   await page.getByRole('button', { name: '← Назад к истории' }).click()
   await expect(legacyClosedOrderVisit).toBeVisible()
@@ -5935,6 +6052,22 @@ test('venue owner sees statistics section', async ({ page }) => {
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Средний чек' })).toContainText(/1\s*250/)
 })
 
+test('venue owner sees feedback section and staff does not', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStatsApi(page, { role: 'OWNER', permissions: ['FEEDBACK_VIEW'] })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Отзывы', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Отзывы', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Отзывы', exact: true })).toBeVisible()
+  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Отзывы' })).toContainText('2')
+  await expect(page.getByText('Гость 9010')).toBeVisible()
+  await expect(page.getByText('Все отлично')).toBeVisible()
+  await page.getByRole('button', { name: 'Низкие' }).click()
+  await expect(page.getByText('Долго ждали')).toBeVisible()
+})
+
 test('venue staff does not see statistics section', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   await mockVenueStatsApi(page, { role: 'STAFF', permissions: ['ORDER_QUEUE_VIEW'] })
@@ -5944,6 +6077,11 @@ test('venue staff does not see statistics section', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Статистика', exact: true })).toHaveCount(0)
   await page.evaluate(() => {
     window.location.hash = '#/stats'
+  })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Отзывы', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/feedback'
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
 })

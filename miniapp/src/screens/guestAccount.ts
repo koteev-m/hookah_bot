@@ -5,11 +5,13 @@ import {
   guestGetFavoriteItems,
   guestGetFavoriteVenues,
   guestGetVisitDetail,
-  guestGetVisits
+  guestGetVisits,
+  guestSubmitVisitFeedback
 } from '../shared/api/guestApi'
 import type {
   GuestFavoriteItemDto,
   GuestFavoriteVenueDto,
+  GuestVisitFeedbackDto,
   GuestVisitDetailDto,
   GuestVisitListItemDto,
   GuestVisitOrderDto
@@ -20,6 +22,17 @@ import { formatPrice } from '../shared/ui/price'
 
 type AccountSection = 'home' | 'profile' | 'history' | 'favorites' | 'promotions' | 'loyalty'
 type OpenBotResult = { ok: true } | { ok: false; message: string }
+
+const FEEDBACK_TAGS: Array<{ slug: string; label: string }> = [
+  { slug: 'service', label: 'Сервис' },
+  { slug: 'hookah_quality', label: 'Кальян' },
+  { slug: 'taste', label: 'Вкус' },
+  { slug: 'speed', label: 'Скорость' },
+  { slug: 'atmosphere', label: 'Атмосфера' },
+  { slug: 'cleanliness', label: 'Чистота' },
+  { slug: 'booking', label: 'Бронь' },
+  { slug: 'price', label: 'Цена' }
+]
 
 export type GuestAccountScreenOptions = {
   root: HTMLDivElement | null
@@ -233,7 +246,156 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
   return card
 }
 
-function renderVisitDetail(root: HTMLElement, visit: GuestVisitDetailDto, onBack: () => void) {
+function renderSubmittedFeedback(section: HTMLElement, feedback: GuestVisitFeedbackDto, successText?: string) {
+  section.replaceChildren()
+  const title = el('h3', { text: 'Отзыв' })
+  if (successText) {
+    append(section, el('p', { className: 'status', text: successText }))
+  }
+  append(
+    section,
+    title,
+    el('p', {
+      className: 'venue-order-sub',
+      text: feedback.rating ? `Вы оценили визит: ${feedback.rating}/5.` : 'Отзыв сохранён.'
+    })
+  )
+}
+
+function renderVisitFeedbackBlock(
+  visit: GuestVisitDetailDto,
+  backendUrl: string,
+  isDebug: boolean,
+  signal: AbortSignal
+) {
+  const section = el('section', { className: 'card' })
+  const feedback = visit.feedback
+  if (!feedback?.eligible) {
+    return { element: section, dispose: () => undefined, hidden: true }
+  }
+  if (feedback.submitted) {
+    renderSubmittedFeedback(section, feedback)
+    return { element: section, dispose: () => undefined, hidden: false }
+  }
+
+  const disposables: Array<() => void> = []
+  const title = el('h3', { text: 'Отзыв' })
+  const status = el('p', { className: 'status', text: '' })
+  const openButton = el('button', { className: 'button-secondary', text: 'Оценить визит' }) as HTMLButtonElement
+  append(section, title, openButton, status)
+
+  const renderForm = () => {
+    let selectedRating = 0
+    const selectedTags = new Set<string>()
+    const ratingRow = el('div', { className: 'button-row' })
+    const tagRow = el('div', { className: 'button-row' })
+    const comment = document.createElement('textarea')
+    comment.className = 'venue-textarea'
+    comment.maxLength = 1000
+    comment.placeholder = 'Комментарий'
+    const submitButton = el('button', { text: 'Сохранить отзыв' }) as HTMLButtonElement
+    const cancelButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
+    const actions = el('div', { className: 'venue-inline-actions' })
+    const message = el('p', { className: 'status', text: '' })
+
+    const ratingButtons = [1, 2, 3, 4, 5].map((rating) => {
+      const button = el('button', { className: 'button-secondary', text: String(rating) }) as HTMLButtonElement
+      disposables.push(
+        on(button, 'click', () => {
+          selectedRating = rating
+          ratingButtons.forEach((item, index) => {
+            item.dataset.active = String(index + 1 === selectedRating)
+          })
+          message.textContent = ''
+        })
+      )
+      append(ratingRow, button)
+      return button
+    })
+
+    FEEDBACK_TAGS.forEach((tag) => {
+      const button = el('button', { className: 'button-secondary', text: tag.label }) as HTMLButtonElement
+      disposables.push(
+        on(button, 'click', () => {
+          if (selectedTags.has(tag.slug)) {
+            selectedTags.delete(tag.slug)
+            button.dataset.active = 'false'
+            message.textContent = ''
+            return
+          }
+          if (selectedTags.size >= 5) {
+            message.textContent = 'Можно выбрать до 5 тегов.'
+            return
+          }
+          selectedTags.add(tag.slug)
+          button.dataset.active = 'true'
+          message.textContent = ''
+        })
+      )
+      append(tagRow, button)
+    })
+
+    disposables.push(
+      on(cancelButton, 'click', () => {
+        section.replaceChildren(title, openButton, status)
+      }),
+      on(submitButton, 'click', async () => {
+        if (!selectedRating) {
+          message.textContent = 'Выберите оценку от 1 до 5.'
+          return
+        }
+        submitButton.disabled = true
+        message.textContent = 'Сохраняем...'
+        const result = await guestSubmitVisitFeedback(
+          backendUrl,
+          visit.visitId,
+          {
+            rating: selectedRating,
+            tags: Array.from(selectedTags),
+            comment: comment.value.trim() || null
+          },
+          requestDeps(isDebug),
+          signal
+        )
+        submitButton.disabled = false
+        if (!result.ok) {
+          if (result.error.code === REQUEST_ABORTED_CODE) return
+          message.textContent = errorText(result.error)
+          return
+        }
+        visit.feedback = result.data.feedback
+        renderSubmittedFeedback(section, result.data.feedback, 'Спасибо, отзыв сохранён.')
+      })
+    )
+
+    append(actions, submitButton, cancelButton)
+    section.replaceChildren(
+      title,
+      el('p', { className: 'venue-order-sub', text: 'Оценка обязательна, теги и комментарий — по желанию.' }),
+      ratingRow,
+      tagRow,
+      comment,
+      actions,
+      message
+    )
+  }
+
+  disposables.push(on(openButton, 'click', renderForm))
+  return {
+    element: section,
+    dispose: () => disposables.forEach((dispose) => dispose()),
+    hidden: false
+  }
+}
+
+function renderVisitDetail(
+  root: HTMLElement,
+  visit: GuestVisitDetailDto,
+  backendUrl: string,
+  isDebug: boolean,
+  signal: AbortSignal,
+  onBack: () => void
+) {
   const wrapper = el('div', { className: 'venue-settings' })
   const header = el('section', { className: 'card' })
   const heading = el('h2', { text: visit.venueName })
@@ -247,6 +409,10 @@ function renderVisitDetail(root: HTMLElement, visit: GuestVisitDetailDto, onBack
   const backButton = el('button', { text: '← Назад к истории' }) as HTMLButtonElement
   append(header, heading, meta, backButton)
   append(wrapper, header)
+  const feedbackBlock = renderVisitFeedbackBlock(visit, backendUrl, isDebug, signal)
+  if (!feedbackBlock.hidden) {
+    append(wrapper, feedbackBlock.element)
+  }
   visit.orders.forEach((order) => append(wrapper, renderVisitOrder(order)))
   if (visit.orders.length === 0) {
     const emptyText = visit.booking
@@ -256,7 +422,10 @@ function renderVisitDetail(root: HTMLElement, visit: GuestVisitDetailDto, onBack
   }
   root.replaceChildren(wrapper)
   const dispose = on(backButton, 'click', onBack)
-  return () => dispose()
+  return () => {
+    dispose()
+    feedbackBlock.dispose()
+  }
 }
 
 function renderHistorySection(
@@ -322,7 +491,7 @@ function renderHistorySection(
         })
         return
       }
-      nestedDispose = renderVisitDetail(root, result.data.visit, () => {
+      nestedDispose = renderVisitDetail(root, result.data.visit, backendUrl, isDebug, controller.signal, () => {
         void loadList()
       })
     } catch {

@@ -465,6 +465,25 @@ export type GuestVisitDetailDto = {
   currency?: string | null
   booking?: GuestVisitBookingDto | null
   orders: GuestVisitOrderDto[]
+  feedback?: GuestVisitFeedbackDto | null
+}
+
+export type GuestVisitFeedbackDto = {
+  eligible: boolean
+  submitted: boolean
+  rating?: number | null
+  tags?: string[]
+  comment?: string | null
+}
+
+export type GuestVisitFeedbackSubmitRequest = {
+  rating: number
+  tags?: string[]
+  comment?: string | null
+}
+
+export type GuestVisitFeedbackSubmitResponse = {
+  feedback: GuestVisitFeedbackDto
 }
 
 export type GuestVisitBookingDto = {

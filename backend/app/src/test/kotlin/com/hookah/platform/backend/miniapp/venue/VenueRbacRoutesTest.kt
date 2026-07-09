@@ -35,6 +35,7 @@ import io.mockk.mockk
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
@@ -168,6 +169,55 @@ class VenueRbacRoutesTest {
             val payload = json.decodeFromString(StaffChatLinkCodeResponse.serializer(), response.bodyAsText())
             assertTrue(payload.code.isNotBlank())
             assertTrue(payload.ttlSeconds > 0)
+        }
+
+    @Test
+    fun `owner and manager can read venue feedback while staff and foreign venue are denied`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-feedback-rbac")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val foreignVenueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID + 1, "OWNER")
+            seedSubmittedFeedback(jdbcUrl, venueId, guestUserId = 9010L)
+            val token = issueToken(config)
+
+            val ownerResponse =
+                client.get("/api/venue/$venueId/feedback?filter=all") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, ownerResponse.status)
+            val body = json.parseToJsonElement(ownerResponse.bodyAsText()).jsonObject
+            assertEquals("1", body.getValue("summary").jsonObject.getValue("count").jsonPrimitive.content)
+            val item = body.getValue("items").jsonArray.single().jsonObject
+            assertEquals("5", item.getValue("rating").jsonPrimitive.content)
+            assertEquals("Гость 9010", item.getValue("guestLabel").jsonPrimitive.content)
+            assertEquals("Все отлично", item.getValue("comment").jsonPrimitive.content)
+            assertEquals(2, item.getValue("tags").jsonArray.size)
+
+            updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "MANAGER")
+            val managerResponse =
+                client.get("/api/venue/$venueId/feedback?filter=low") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, managerResponse.status)
+
+            updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "STAFF")
+            val staffResponse =
+                client.get("/api/venue/$venueId/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffResponse.status)
+
+            val foreignResponse =
+                client.get("/api/venue/$foreignVenueId/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
         }
 
     @Test
@@ -813,6 +863,7 @@ class VenueRbacRoutesTest {
                     "SHIFT_EXTENSION_VIEW",
                     "SHIFT_EXTENSION_CONFIRM",
                     "SHIFT_EXTENSION_SETTINGS",
+                    "FEEDBACK_VIEW",
                     "MENU_VIEW",
                     "MENU_MANAGE",
                     "MENU_AVAILABILITY_MANAGE",
@@ -839,6 +890,7 @@ class VenueRbacRoutesTest {
                     "SHIFT_EXTENSION_VIEW",
                     "SHIFT_EXTENSION_CONFIRM",
                     "SHIFT_EXTENSION_SETTINGS",
+                    "FEEDBACK_VIEW",
                     "MENU_VIEW",
                     "MENU_MANAGE",
                     "MENU_AVAILABILITY_MANAGE",
@@ -925,6 +977,7 @@ class VenueRbacRoutesTest {
                     "SHIFT_EXTENSION_VIEW",
                     "SHIFT_EXTENSION_CONFIRM",
                     "SHIFT_EXTENSION_SETTINGS",
+                    "FEEDBACK_VIEW",
                     "MENU_VIEW",
                     "MENU_MANAGE",
                     "MENU_AVAILABILITY_MANAGE",
@@ -1245,6 +1298,77 @@ class VenueRbacRoutesTest {
                 statement.executeUpdate()
             }
             return venueId
+        }
+    }
+
+    private fun updateVenueMemberRole(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        role: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE venue_members
+                SET role = ?
+                WHERE venue_id = ? AND user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, role)
+                statement.setLong(2, venueId)
+                statement.setLong(3, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedSubmittedFeedback(
+        jdbcUrl: String,
+        venueId: Long,
+        guestUserId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                MERGE INTO users (telegram_user_id, username, first_name)
+                KEY (telegram_user_id)
+                VALUES (?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, guestUserId)
+                statement.setString(2, "guest$guestUserId")
+                statement.setString(3, "Гость $guestUserId")
+                statement.executeUpdate()
+            }
+            val visitId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO visits (venue_id, user_id, source, occurred_at, service_date)
+                    VALUES (?, ?, 'ORDER_CLOSED', ?, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, guestUserId)
+                    statement.setTimestamp(3, Timestamp.from(Instant.parse("2030-05-12T18:00:00Z")))
+                    statement.setDate(4, java.sql.Date.valueOf(java.time.LocalDate.of(2030, 5, 12)))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert visit")
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO visit_feedback (visit_id, venue_id, user_id, rating, comment, status, tags_json)
+                VALUES (?, ?, ?, 5, 'Все отлично', 'SUBMITTED', '["service","taste"]')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, visitId)
+                statement.setLong(2, venueId)
+                statement.setLong(3, guestUserId)
+                statement.executeUpdate()
+            }
         }
     }
 

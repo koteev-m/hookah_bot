@@ -18,6 +18,8 @@ import type {
   VenueLocationResolveResponse,
   VenueLocationSuggestionKind,
   VenueLocationSuggestionsResponse,
+  VenueFeedbackFilter,
+  VenueFeedbackResponse,
   VenueTableBatchCreateRequest,
   VenueTableBatchCreateResponse,
   VenueTableRotateTokensRequest,
@@ -101,6 +103,25 @@ export async function venueGetStats(
   return requestApi<VenueStatsResponse>(
     backendUrl,
     `/api/venue/${params.venueId}/stats?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueGetFeedback(
+  backendUrl: string,
+  params: { venueId: number; filter: VenueFeedbackFilter; limit?: number; offset?: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({
+    filter: params.filter,
+    limit: String(params.limit ?? 20),
+    offset: String(params.offset ?? 0)
+  })
+  return requestApi<VenueFeedbackResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/feedback?${search.toString()}`,
     { signal },
     deps
   )

@@ -28,7 +28,6 @@ import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageSender
-import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRecord
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackThread
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueDetail
@@ -5670,23 +5669,17 @@ class TelegramBotRouter(
         }
         val lowRating = rating in 1..3
         val existingComment = feedback.comment?.trim()?.takeIf { it.isNotBlank() }
-        val highRatingReply =
-            if (!lowRating) {
-                buildHighRatingFeedbackReply(user.id, feedback)
-            } else {
-                null
-            }
         val text =
             when {
                 lowRating && existingComment == null ->
                     "Спасибо за оценку.\nЧто пошло не так? Комментарий поможет заведению исправиться."
                 lowRating -> "Спасибо за отзыв. Мы передали его менеджеру заведения."
-                else -> highRatingReply?.first ?: "Спасибо за оценку!"
+                else -> "Спасибо за оценку!"
             }
         val replyMarkup =
             when {
                 lowRating && existingComment == null -> TelegramKeyboards.inlineVisitFeedbackCommentPrompt(visitId)
-                else -> highRatingReply?.second
+                else -> null
             }
         if (sourceMessageId != null) {
             enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
@@ -5699,42 +5692,6 @@ class TelegramBotRouter(
             text = "Спасибо за оценку",
             fallbackMessage = "Спасибо за оценку.",
         )
-    }
-
-    private suspend fun buildHighRatingFeedbackReply(
-        userId: Long,
-        feedback: VisitFeedbackRecord,
-    ): Pair<String, InlineKeyboardMarkup?> {
-        if (feedback.rating != 5) return "Спасибо за оценку!" to null
-        val publicReviewUrl =
-            try {
-                venueSettingsRepository.getPublicReviewUrl(feedback.venueId)
-            } catch (e: DatabaseUnavailableException) {
-                logBestEffort("load public review url", e)
-                null
-            }
-        if (publicReviewUrl.isNullOrBlank()) return "Спасибо за оценку!" to null
-        val alreadyShown =
-            try {
-                venueSettingsRepository.hasPublicReviewCtaBeenShown(userId, feedback.venueId)
-            } catch (e: DatabaseUnavailableException) {
-                logBestEffort("check public review CTA state", e)
-                true
-            }
-        if (alreadyShown) return "Спасибо за оценку!" to null
-        val markedShown =
-            try {
-                venueSettingsRepository.markPublicReviewCtaShown(userId, feedback.venueId)
-                true
-            } catch (e: DatabaseUnavailableException) {
-                logBestEffort("mark public review CTA shown", e)
-                false
-            }
-        if (!markedShown) return "Спасибо за оценку!" to null
-        return (
-            "Спасибо за оценку!\n\n" +
-                "Если хотите, оставьте публичный отзыв — это очень помогает заведению."
-        ) to TelegramKeyboards.inlinePublicReviewCtaActions(feedback.venueId, publicReviewUrl)
     }
 
     private suspend fun promptVisitFeedbackComment(

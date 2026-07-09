@@ -40,6 +40,28 @@ data class GuestVisitDetailDto(
     val orders: List<GuestVisitOrderDto>,
     val totalMinor: Long? = null,
     val currency: String? = null,
+    val feedback: GuestVisitFeedbackDto? = null,
+)
+
+@Serializable
+data class GuestVisitFeedbackDto(
+    val eligible: Boolean,
+    val submitted: Boolean,
+    val rating: Int? = null,
+    val tags: List<String> = emptyList(),
+    val comment: String? = null,
+)
+
+@Serializable
+data class GuestVisitFeedbackSubmitRequest(
+    val rating: Int,
+    val tags: List<String> = emptyList(),
+    val comment: String? = null,
+)
+
+@Serializable
+data class GuestVisitFeedbackSubmitResponse(
+    val feedback: GuestVisitFeedbackDto,
 )
 
 @Serializable

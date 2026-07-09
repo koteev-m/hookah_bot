@@ -1,10 +1,15 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.analytics.AnalyticsEventRecord
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitBookingDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitDetailDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitDetailResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitFeedbackDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitFeedbackSubmitRequest
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitFeedbackSubmitResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitListItemDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitListResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitOrderDto
@@ -18,16 +23,29 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrder
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItemOption
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRecord
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
+import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackStatus
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import io.ktor.server.application.call
+import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.Locale
 
-fun Route.guestVisitRoutes(visitRepository: VisitRepository) {
+fun Route.guestVisitRoutes(
+    visitRepository: VisitRepository,
+    visitFeedbackRepository: VisitFeedbackRepository,
+    analyticsEventRepository: AnalyticsEventRepository? = null,
+) {
     route("/visits") {
         get {
             val userId = call.requireUserId()
@@ -45,7 +63,36 @@ fun Route.guestVisitRoutes(visitRepository: VisitRepository) {
             val visit =
                 visitRepository.getGuestVisitDetail(userId = userId, visitId = visitId)
                     ?: throw NotFoundException()
-            call.respond(GuestVisitDetailResponse(visit = visit.toDto()))
+            val feedback = visitFeedbackRepository.findGuestFeedback(visitId = visitId, userId = userId)
+            call.respond(GuestVisitDetailResponse(visit = visit.toDto(feedback.toGuestFeedbackDto())))
+        }
+
+        post("/{visitId}/feedback") {
+            val userId = call.requireUserId()
+            val visitId =
+                call.parameters["visitId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("visitId must be a number")
+            visitRepository.getGuestVisitDetail(userId = userId, visitId = visitId)
+                ?: throw NotFoundException()
+            val request = call.receive<GuestVisitFeedbackSubmitRequest>()
+            val feedback =
+                try {
+                    visitFeedbackRepository.submitFeedback(
+                        visitId = visitId,
+                        userId = userId,
+                        rating = request.rating,
+                        tags = request.tags,
+                        comment = request.comment,
+                    )
+                } catch (e: IllegalArgumentException) {
+                    throw InvalidInputException(e.message ?: "Invalid feedback")
+                } ?: throw NotFoundException()
+            analyticsEventRepository.emitFeedbackSubmitted(feedback)
+            call.respond(
+                GuestVisitFeedbackSubmitResponse(
+                    feedback = feedback.toGuestFeedbackDto(),
+                ),
+            )
         }
     }
 }
@@ -79,7 +126,7 @@ private fun GuestVisitHistoryItem.toDto(): GuestVisitListItemDto =
         orderLabels = orderLabels,
     )
 
-private fun GuestVisitDetail.toDto(): GuestVisitDetailDto =
+private fun GuestVisitDetail.toDto(feedback: GuestVisitFeedbackDto? = null): GuestVisitDetailDto =
     GuestVisitDetailDto(
         visitId = visitId,
         venueId = venueId,
@@ -92,7 +139,39 @@ private fun GuestVisitDetail.toDto(): GuestVisitDetailDto =
         orders = orders.map { it.toDto() },
         totalMinor = totalMinor,
         currency = currency,
+        feedback = feedback,
     )
+
+private fun VisitFeedbackRecord?.toGuestFeedbackDto(): GuestVisitFeedbackDto =
+    GuestVisitFeedbackDto(
+        eligible = true,
+        submitted = this?.status == VisitFeedbackStatus.SUBMITTED,
+        rating = this?.takeIf { it.status == VisitFeedbackStatus.SUBMITTED }?.rating,
+        tags = this?.takeIf { it.status == VisitFeedbackStatus.SUBMITTED }?.tags ?: emptyList(),
+        comment = this?.takeIf { it.status == VisitFeedbackStatus.SUBMITTED }?.comment,
+    )
+
+private suspend fun AnalyticsEventRepository?.emitFeedbackSubmitted(feedback: VisitFeedbackRecord) {
+    if (this == null || feedback.status != VisitFeedbackStatus.SUBMITTED) return
+    runCatching {
+        append(
+            AnalyticsEventRecord(
+                eventType = "feedback_submitted",
+                venueId = feedback.venueId,
+                idempotencyKey = "feedback_submitted:${feedback.id}",
+                payload =
+                    buildJsonObject {
+                        put("venue_id", feedback.venueId)
+                        put("visit_id", feedback.visitId)
+                        put("source", "guest_history")
+                        feedback.rating?.let { put("rating", it) }
+                        put("tags", JsonArray(feedback.tags.map { JsonPrimitive(it) }))
+                        put("hasComment", !feedback.comment.isNullOrBlank())
+                    },
+            ),
+        )
+    }
+}
 
 private fun GuestVisitBooking.toDto(): GuestVisitBookingDto =
     GuestVisitBookingDto(

@@ -46,8 +46,6 @@ import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
-import com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorker
-import com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
@@ -73,6 +71,7 @@ import com.hookah.platform.backend.miniapp.shift.venueShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
+import com.hookah.platform.backend.miniapp.venue.feedback.venueFeedbackRoutes
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
 import com.hookah.platform.backend.miniapp.venue.location.createVenueLocationProvider
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
@@ -316,7 +315,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val tableSessionConfig = TableSessionConfig.from(appConfig)
     val bookingExpiryWorkerConfig = BookingExpiryWorkerConfig.from(appConfig)
     val bookingReminderWorkerConfig = BookingReminderWorkerConfig.from(appConfig)
-    val visitFeedbackWorkerConfig = VisitFeedbackWorkerConfig.from(appConfig)
     val aiAssistantConfig = AiAssistantConfig.from(appConfig)
     val guestRateLimiter = InMemoryRateLimiter()
     val platformConfig = PlatformConfig.from(appConfig)
@@ -520,10 +518,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineName("booking-reminders"),
         )
-    val visitFeedbackScope =
-        CoroutineScope(
-            SupervisorJob() + Dispatchers.IO + CoroutineName("visit-feedback"),
-        )
     val tableSessionCleanupWorker =
         TableSessionCleanupWorker(
             repository = tableSessionRepository,
@@ -540,7 +534,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         )
     var bookingExpiryJob: Job? = null
     var bookingReminderJob: Job? = null
-    var visitFeedbackJob: Job? = null
     val staffChatLinkCodeRepository =
         StaffChatLinkCodeRepository(
             dataSource = dataSource,
@@ -559,14 +552,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             interval = bookingReminderWorkerConfig.interval,
             batchSize = bookingReminderWorkerConfig.batchSize,
             scope = bookingReminderScope,
-        )
-    val visitFeedbackWorker =
-        VisitFeedbackWorker(
-            repository = visitFeedbackRepository,
-            outboxEnqueuer = telegramOutboxEnqueuer,
-            interval = visitFeedbackWorkerConfig.interval,
-            batchSize = visitFeedbackWorkerConfig.batchSize,
-            scope = visitFeedbackScope,
         )
     val staffInviteRepository =
         StaffInviteRepository(
@@ -790,17 +775,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             } else {
                 logger.info("Booking reminder worker disabled by config")
             }
-            if (visitFeedbackWorkerConfig.enabled) {
-                visitFeedbackJob = visitFeedbackWorker.start()
-            } else {
-                logger.info("Visit feedback worker disabled by config")
-            }
+            logger.info("Visit feedback worker disabled for History-only feedback MVP")
         } else {
             logger.info("Subscription billing job disabled: database is not configured")
             logger.info("Table session cleanup worker disabled: database is not configured")
             logger.info("Booking expiry worker disabled: database is not configured")
             logger.info("Booking reminder worker disabled: database is not configured")
-            logger.info("Visit feedback worker disabled: database is not configured")
+            logger.info("Visit feedback worker disabled for History-only feedback MVP")
         }
         if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
             val apiClient = telegramApiClient
@@ -818,7 +799,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         tableSessionCleanupJob?.cancel()
         bookingExpiryJob?.cancel()
         bookingReminderJob?.cancel()
-        visitFeedbackJob?.cancel()
         httpClient.close()
         telegramApiClient?.close()
         telegramScope?.cancel()
@@ -831,7 +811,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         tableSessionCleanupScope.cancel()
         bookingExpiryScope.cancel()
         bookingReminderScope.cancel()
-        visitFeedbackScope.cancel()
         DatabaseFactory.close(dataSource)
     }
     monitor.subscribe(ApplicationStopped) {
@@ -1144,7 +1123,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestRateLimitConfig = guestRateLimitConfig,
                         rateLimiter = guestRateLimiter,
                     )
-                    guestVisitRoutes(visitRepository = visitRepository)
+                    guestVisitRoutes(
+                        visitRepository = visitRepository,
+                        visitFeedbackRepository = visitFeedbackRepository,
+                        analyticsEventRepository = analyticsEventRepository,
+                    )
                     guestStaffCallRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,
                         rateLimiter = guestRateLimiter,
@@ -1241,6 +1224,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     venueStatsRepository = venueStatsRepository,
                     venueSettingsRepository = venueSettingsRepository,
+                )
+                venueFeedbackRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    visitFeedbackRepository = visitFeedbackRepository,
                 )
                 venueShiftExtensionRoutes(
                     venueAccessRepository = venueAccessRepository,
