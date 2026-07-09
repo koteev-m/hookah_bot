@@ -3,8 +3,10 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   venueDeleteScheduleOverrideRange,
+  venueClearPublicReviewUrl,
   venueGetBookingSettings,
   venueGetPublicCardSettings,
+  venueGetPublicReviewUrl,
   venueGetScheduleSettings,
   venueGetShiftExtensionSettings,
   venueReplaceScheduleOverrideRange,
@@ -12,6 +14,7 @@ import {
   venueUpdateScheduleOverrideRange,
   venueUpdateBookingSettings,
   venueUpdatePublicCardSettings,
+  venueUpdatePublicReviewUrl,
   venueUpdateShiftExtensionSettings
 } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
@@ -20,6 +23,7 @@ import type {
   VenueAccessDto,
   VenueBookingSettingsResponse,
   VenuePublicCardSettingsResponse,
+  VenuePublicReviewUrlResponse,
   VenueScheduleDayDto,
   VenueScheduleOverrideDto,
   VenueScheduleSettingsResponse
@@ -53,6 +57,12 @@ type VenueSettingsRefs = {
   cardDescriptionInput: HTMLTextAreaElement
   publicCardSaveButton: HTMLButtonElement
   publicCardForm: HTMLDivElement
+  reviewLinkCard: HTMLElement
+  reviewLinkCurrent: HTMLParagraphElement
+  reviewLinkInput: HTMLInputElement
+  reviewLinkSaveButton: HTMLButtonElement
+  reviewLinkClearButton: HTMLButtonElement
+  reviewLinkForm: HTMLDivElement
   scheduleCard: HTMLElement
   scheduleSummary: HTMLParagraphElement
   weeklyScheduleList: HTMLDivElement
@@ -96,6 +106,7 @@ const PUBLIC_CARD_CITY_MAX_LENGTH = 120
 const PUBLIC_CARD_ADDRESS_MAX_LENGTH = 300
 const PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH = 300
 const PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
+const PUBLIC_REVIEW_URL_MAX_LENGTH = 2048
 const DEFAULT_COUNTRY_CODE = 'RU'
 const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
@@ -208,6 +219,28 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     publicCardSaveButton
   )
   append(publicCard, publicTitle, publicDescription, publicNameLabel, publicName, publicCardForm)
+
+  const reviewLinkCard = el('section', { className: 'card' })
+  const reviewLinkTitle = el('h3', { text: 'Ссылка для отзывов' })
+  const reviewLinkDescription = el('p', {
+    text: 'Покажем эту кнопку гостю только после оценки 5/5. Гость сам решает, переходить ли по ссылке.'
+  })
+  const reviewLinkCurrent = el('p', { className: 'venue-order-sub', text: '' })
+  const reviewLinkForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
+  const reviewLinkLabel = el('p', { className: 'field-label', text: 'Ссылка на Яндекс.Карты' })
+  const reviewLinkInput = document.createElement('input')
+  reviewLinkInput.className = 'venue-input'
+  reviewLinkInput.type = 'url'
+  reviewLinkInput.maxLength = PUBLIC_REVIEW_URL_MAX_LENGTH
+  reviewLinkInput.placeholder = 'https://yandex.ru/maps/.../reviews'
+  const reviewLinkActions = el('div', { className: 'venue-inline-actions' }) as HTMLDivElement
+  const reviewLinkSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
+  const reviewLinkClearButton = el('button', { className: 'button-secondary', text: 'Очистить' }) as HTMLButtonElement
+  reviewLinkSaveButton.disabled = true
+  reviewLinkClearButton.disabled = true
+  append(reviewLinkActions, reviewLinkSaveButton, reviewLinkClearButton)
+  append(reviewLinkForm, reviewLinkLabel, reviewLinkInput, reviewLinkActions)
+  append(reviewLinkCard, reviewLinkTitle, reviewLinkDescription, reviewLinkCurrent, reviewLinkForm)
 
   const scheduleCard = el('section', { className: 'card' })
   const scheduleTitle = el('h3', { text: 'Часы работы' })
@@ -363,7 +396,7 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   append(extensionCard, extensionTitle, description, extensionSummary, extensionHint, extensionForm)
 
   const backButton = el('button', { className: 'button-secondary', text: 'Вернуться в обзор' }) as HTMLButtonElement
-  append(wrapper, header, publicCard, scheduleCard, bookingCard, extensionCard, backButton)
+  append(wrapper, header, publicCard, reviewLinkCard, scheduleCard, bookingCard, extensionCard, backButton)
   root.replaceChildren(wrapper)
 
   return {
@@ -382,6 +415,12 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     cardDescriptionInput,
     publicCardSaveButton,
     publicCardForm,
+    reviewLinkCard,
+    reviewLinkCurrent,
+    reviewLinkInput,
+    reviewLinkSaveButton,
+    reviewLinkClearButton,
+    reviewLinkForm,
     scheduleCard,
     scheduleSummary,
     weeklyScheduleList,
@@ -721,6 +760,13 @@ function renderPublicCardSettings(refs: VenueSettingsRefs, settings: VenuePublic
     : 'Укажите улицу и номер дома. Маршрут будет построен по указанному адресу.'
 }
 
+function renderPublicReviewUrlSettings(refs: VenueSettingsRefs, settings: VenuePublicReviewUrlResponse) {
+  const url = normalizeNullableText(settings.publicReviewUrl)
+  refs.reviewLinkInput.value = url ?? ''
+  refs.reviewLinkCurrent.textContent = url ? `Текущая ссылка: ${url}` : 'Ссылка пока не задана.'
+  refs.reviewLinkClearButton.disabled = !url
+}
+
 function renderShiftExtensionSettings(refs: VenueSettingsRefs, settings: ShiftExtensionSettingsDto) {
   refs.enabledInput.checked = settings.enabled
   refs.durationSelect.value = String(settings.durationMinutes)
@@ -745,6 +791,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const refs = buildDom(root)
   const deps = buildApiDeps(isDebug)
   const canManagePublicCard = access.role === 'OWNER' || access.role === 'MANAGER'
+  const canManageReviewLink = access.permissions.includes('VENUE_SETTINGS')
   const canManageSchedule = access.role === 'OWNER' || access.role === 'MANAGER'
   const canManageBookingSettings = access.permissions.includes('BOOKING_MANAGE')
   const canManageShiftExtension = access.permissions.includes('SHIFT_EXTENSION_SETTINGS')
@@ -753,6 +800,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let disposed = false
   let loadAbort: AbortController | null = null
   let publicCardSaveAbort: AbortController | null = null
+  let reviewLinkSaveAbort: AbortController | null = null
   let scheduleSaveAbort: AbortController | null = null
   let bookingSaveAbort: AbortController | null = null
   let extensionSaveAbort: AbortController | null = null
@@ -764,6 +812,8 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let selectedLongitude: number | null = null
   let publicCardSaving = false
   let publicCardSavedTimer: number | null = null
+  let currentReviewLinkSettings: VenuePublicReviewUrlResponse | null = null
+  let reviewLinkSaving = false
   let currentScheduleSettings: VenueScheduleSettingsResponse | null = null
   let overrideFormMode: OverrideFormMode | null = null
   let editingOverrideRange: EditingOverrideRange | null = null
@@ -849,6 +899,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   if (!canManagePublicCard) {
     refs.publicCard.remove()
   }
+  if (!canManageReviewLink) {
+    refs.reviewLinkCard.remove()
+  }
   if (!canManageSchedule) {
     refs.scheduleCard.remove()
   }
@@ -858,7 +911,13 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   if (!canManageShiftExtension) {
     refs.extensionCard.remove()
   }
-  if (!canManagePublicCard && !canManageSchedule && !canManageBookingSettings && !canManageShiftExtension) {
+  if (
+    !canManagePublicCard &&
+    !canManageReviewLink &&
+    !canManageSchedule &&
+    !canManageBookingSettings &&
+    !canManageShiftExtension
+  ) {
     refs.status.textContent = 'У вас нет доступа к настройкам заведения.'
   }
 
@@ -876,6 +935,13 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const publicCardIsDirty = () => {
     if (!publicCardSnapshot) return false
     return !sameDraft(currentPublicCardDraft(), publicCardSnapshot)
+  }
+
+  const currentReviewLinkValue = () => normalizeNullableText(refs.reviewLinkInput.value)
+
+  const reviewLinkIsDirty = () => {
+    if (!currentReviewLinkSettings) return false
+    return currentReviewLinkValue() !== normalizeNullableText(currentReviewLinkSettings.publicReviewUrl)
   }
 
   const setPublicCardSavedState = () => {
@@ -906,9 +972,26 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.publicCardSaveButton.textContent = 'Сохранить'
   }
 
+  const updateReviewLinkButtons = () => {
+    if (reviewLinkSaving) {
+      refs.reviewLinkSaveButton.disabled = true
+      refs.reviewLinkClearButton.disabled = true
+      refs.reviewLinkSaveButton.textContent = 'Сохраняем…'
+      return
+    }
+    refs.reviewLinkSaveButton.textContent = 'Сохранить'
+    refs.reviewLinkSaveButton.disabled = !reviewLinkIsDirty()
+    refs.reviewLinkClearButton.disabled = !normalizeNullableText(currentReviewLinkSettings?.publicReviewUrl)
+  }
+
   const setPublicCardBusy = (busy: boolean) => {
     publicCardSaving = busy
     updatePublicCardSaveButton()
+  }
+
+  const setReviewLinkBusy = (busy: boolean) => {
+    reviewLinkSaving = busy
+    updateReviewLinkButtons()
   }
 
   const setBookingBusy = (busy: boolean) => {
@@ -937,7 +1020,13 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const load = async () => {
-    if (!canManagePublicCard && !canManageSchedule && !canManageBookingSettings && !canManageShiftExtension) return
+    if (
+      !canManagePublicCard &&
+      !canManageReviewLink &&
+      !canManageSchedule &&
+      !canManageBookingSettings &&
+      !canManageShiftExtension
+    ) return
     refs.status.textContent = 'Загрузка…'
     loadAbort?.abort()
     const controller = new AbortController()
@@ -959,6 +1048,19 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       selectedLongitude = publicCardSnapshot.longitude
       renderPublicCardSettings(refs, currentPublicCardSettings)
       updatePublicCardSaveButton()
+    }
+    if (canManageReviewLink) {
+      const result = await venueGetPublicReviewUrl(backendUrl, { venueId }, deps, controller.signal)
+      if (disposed || loadAbort !== controller) return
+      if (!result.ok) {
+        if (result.error.code === REQUEST_ABORTED_CODE) return
+        loadAbort = null
+        renderApiError(refs.status, result.error, isDebug)
+        return
+      }
+      currentReviewLinkSettings = result.data
+      renderPublicReviewUrlSettings(refs, currentReviewLinkSettings)
+      updateReviewLinkButtons()
     }
     if (canManageSchedule) {
       const result = await venueGetScheduleSettings(backendUrl, { venueId }, deps, controller.signal)
@@ -1071,6 +1173,65 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.status.textContent = 'Публичная карточка сохранена.'
     showToast('Публичная карточка сохранена.')
     setPublicCardSavedState()
+  }
+
+  const saveReviewLinkSettings = async () => {
+    if (!canManageReviewLink || reviewLinkSaving || !reviewLinkIsDirty()) return
+    const value = currentReviewLinkValue()
+    if (!value) {
+      refs.status.textContent = 'Введите ссылку или очистите текущую настройку.'
+      return
+    }
+    if (value.length > PUBLIC_REVIEW_URL_MAX_LENGTH || !value.startsWith('https://')) {
+      refs.status.textContent = 'Ссылка должна начинаться с https:// и быть короче 2048 символов.'
+      return
+    }
+
+    setReviewLinkBusy(true)
+    reviewLinkSaveAbort?.abort()
+    const controller = new AbortController()
+    reviewLinkSaveAbort = controller
+    const result = await venueUpdatePublicReviewUrl(
+      backendUrl,
+      { venueId, body: { publicReviewUrl: value } },
+      deps,
+      controller.signal
+    )
+    if (disposed || reviewLinkSaveAbort !== controller) return
+    reviewLinkSaveAbort = null
+    setReviewLinkBusy(false)
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) return
+      renderApiError(refs.status, result.error, isDebug)
+      return
+    }
+    currentReviewLinkSettings = result.data
+    renderPublicReviewUrlSettings(refs, currentReviewLinkSettings)
+    updateReviewLinkButtons()
+    refs.status.textContent = 'Ссылка для отзывов сохранена.'
+    showToast('Ссылка для отзывов сохранена.')
+  }
+
+  const clearReviewLinkSettings = async () => {
+    if (!canManageReviewLink || reviewLinkSaving || !normalizeNullableText(currentReviewLinkSettings?.publicReviewUrl)) return
+    setReviewLinkBusy(true)
+    reviewLinkSaveAbort?.abort()
+    const controller = new AbortController()
+    reviewLinkSaveAbort = controller
+    const result = await venueClearPublicReviewUrl(backendUrl, { venueId }, deps, controller.signal)
+    if (disposed || reviewLinkSaveAbort !== controller) return
+    reviewLinkSaveAbort = null
+    setReviewLinkBusy(false)
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) return
+      renderApiError(refs.status, result.error, isDebug)
+      return
+    }
+    currentReviewLinkSettings = result.data
+    renderPublicReviewUrlSettings(refs, currentReviewLinkSettings)
+    updateReviewLinkButtons()
+    refs.status.textContent = 'Ссылка для отзывов очищена.'
+    showToast('Ссылка для отзывов очищена.')
   }
 
   const saveScheduleDay = async (weekday: number, isClosed: boolean, opensAt: string, closesAt: string) => {
@@ -1435,6 +1596,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   disposables.push(on(refs.publicCardSaveButton, 'click', () => void savePublicCardSettings()))
+  disposables.push(on(refs.reviewLinkInput, 'input', updateReviewLinkButtons))
+  disposables.push(on(refs.reviewLinkSaveButton, 'click', () => void saveReviewLinkSettings()))
+  disposables.push(on(refs.reviewLinkClearButton, 'click', () => void clearReviewLinkSettings()))
   disposables.push(on(refs.countryInput, 'input', () => {
     renderCountryOptions()
   }))
@@ -1516,6 +1680,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     disposed = true
     loadAbort?.abort()
     publicCardSaveAbort?.abort()
+    reviewLinkSaveAbort?.abort()
     scheduleSaveAbort?.abort()
     if (publicCardSavedTimer) window.clearTimeout(publicCardSavedTimer)
     bookingSaveAbort?.abort()

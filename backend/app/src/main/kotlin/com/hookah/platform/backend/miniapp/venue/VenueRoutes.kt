@@ -23,6 +23,7 @@ import com.hookah.platform.backend.telegram.db.VenueBookingHours
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenuePublicCardSettings
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -125,6 +126,17 @@ data class VenuePublicCardSettingsUpdateRequest(
 )
 
 @Serializable
+data class VenuePublicReviewUrlResponse(
+    val venueId: Long,
+    val publicReviewUrl: String? = null,
+)
+
+@Serializable
+data class VenuePublicReviewUrlUpdateRequest(
+    val publicReviewUrl: String,
+)
+
+@Serializable
 data class VenueLocationSuggestionsResponse(
     val items: List<VenueLocationSuggestionItem>,
     val unavailable: Boolean = false,
@@ -201,6 +213,7 @@ fun Route.venueRoutes(
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
     venueRepository: VenueRepository,
     venueBookingHoursRepository: VenueBookingHoursRepository,
+    venueSettingsRepository: VenueSettingsRepository,
     venueLocationProvider: VenueLocationProvider = DisabledVenueLocationProvider(),
     staffChatNotifier: StaffChatNotifier? = null,
     telegramBotUsername: String? = null,
@@ -235,6 +248,43 @@ fun Route.venueRoutes(
                 throw ForbiddenException()
             }
             call.respond(VenueMeResponse(userId = userId, venues = venues))
+        }
+
+        get("/{venueId}/public-review-url") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requirePublicReviewSettingsPermission(venueAccessRepository, userId, venueId)
+            ensureVenueExists(venueRepository, venueId)
+            call.respond(
+                VenuePublicReviewUrlResponse(
+                    venueId = venueId,
+                    publicReviewUrl = venueSettingsRepository.getPublicReviewUrl(venueId),
+                ),
+            )
+        }
+
+        put("/{venueId}/public-review-url") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requirePublicReviewSettingsPermission(venueAccessRepository, userId, venueId)
+            ensureVenueExists(venueRepository, venueId)
+            val request = call.receive<VenuePublicReviewUrlUpdateRequest>()
+            val settings =
+                try {
+                    venueSettingsRepository.updatePublicReviewUrl(venueId, request.publicReviewUrl)
+                } catch (e: IllegalArgumentException) {
+                    throw InvalidInputException("Ссылка должна начинаться с https:// и быть короче 2048 символов.")
+                }
+            call.respond(VenuePublicReviewUrlResponse(venueId = venueId, publicReviewUrl = settings.publicReviewUrl))
+        }
+
+        delete("/{venueId}/public-review-url") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requirePublicReviewSettingsPermission(venueAccessRepository, userId, venueId)
+            ensureVenueExists(venueRepository, venueId)
+            val settings = venueSettingsRepository.clearPublicReviewUrl(venueId)
+            call.respond(VenuePublicReviewUrlResponse(venueId = venueId, publicReviewUrl = settings.publicReviewUrl))
         }
 
         get("/{venueId}/public-card") {
@@ -640,6 +690,22 @@ private suspend fun requireScheduleSettingsPermission(
     userId: Long,
     venueId: Long,
 ) = requirePublicCardSettingsPermission(venueAccessRepository, userId, venueId)
+
+private suspend fun requirePublicReviewSettingsPermission(
+    venueAccessRepository: VenueAccessRepository,
+    userId: Long,
+    venueId: Long,
+) {
+    val role =
+        resolveVenueRole(
+            venueAccessRepository = venueAccessRepository,
+            userId = userId,
+            venueId = venueId,
+        )
+    if (VenuePermission.VENUE_SETTINGS !in VenuePermissions.forRole(role)) {
+        throw ForbiddenException()
+    }
+}
 
 private suspend fun ensureVenueExists(
     venueRepository: VenueRepository,

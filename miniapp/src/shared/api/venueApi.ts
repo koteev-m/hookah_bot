@@ -19,6 +19,7 @@ import type {
   VenueLocationSuggestionKind,
   VenueLocationSuggestionsResponse,
   VenueFeedbackFilter,
+  VenueFeedbackFollowUpResponse,
   VenueFeedbackResponse,
   VenueTableBatchCreateRequest,
   VenueTableBatchCreateResponse,
@@ -32,6 +33,8 @@ import type {
   VenueMenuResponse,
   VenuePublicCardSettingsResponse,
   VenuePublicCardSettingsUpdateRequest,
+  VenuePublicReviewUrlResponse,
+  VenuePublicReviewUrlUpdateRequest,
   VenueReorderCategoriesRequest,
   VenueReorderItemsRequest,
   VenueScheduleDayUpdateRequest,
@@ -123,6 +126,20 @@ export async function venueGetFeedback(
     backendUrl,
     `/api/venue/${params.venueId}/feedback?${search.toString()}`,
     { signal },
+    deps
+  )
+}
+
+export async function venueOpenFeedbackFollowUp(
+  backendUrl: string,
+  params: { venueId: number; feedbackId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueFeedbackFollowUpResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/feedback/${params.feedbackId}/follow-up`,
+    { method: 'POST', signal },
     deps
   )
 }
@@ -476,6 +493,53 @@ export async function venueUpdatePublicCardSettings(
       body: JSON.stringify(params.body),
       signal
     },
+    deps
+  )
+}
+
+export async function venueGetPublicReviewUrl(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePublicReviewUrlResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/public-review-url`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueUpdatePublicReviewUrl(
+  backendUrl: string,
+  params: { venueId: number; body: VenuePublicReviewUrlUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePublicReviewUrlResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/public-review-url`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueClearPublicReviewUrl(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePublicReviewUrlResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/public-review-url`,
+    { method: 'DELETE', signal },
     deps
   )
 }

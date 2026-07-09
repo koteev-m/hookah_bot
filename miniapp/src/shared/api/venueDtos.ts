@@ -62,6 +62,21 @@ export type VenueFeedbackItemDto = {
   createdAt?: string | null
 }
 
+export type VenueFeedbackFollowUpResponse = {
+  threadId: number
+  threadType: 'VENUE_CHAT' | string
+  message: string
+}
+
+export type VenuePublicReviewUrlResponse = {
+  venueId: number
+  publicReviewUrl?: string | null
+}
+
+export type VenuePublicReviewUrlUpdateRequest = {
+  publicReviewUrl: string
+}
+
 export type StaffChatLinkCodeResponse = {
   code: string
   expiresAt: string

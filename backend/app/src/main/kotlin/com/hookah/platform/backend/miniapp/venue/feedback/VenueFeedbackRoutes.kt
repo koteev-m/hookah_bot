@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.venue.feedback
 
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueAggregate
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
@@ -10,11 +11,13 @@ import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.server.application.call
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
 
@@ -46,9 +49,17 @@ data class VenueFeedbackItemDto(
     val createdAt: String? = null,
 )
 
+@Serializable
+data class VenueFeedbackFollowUpResponse(
+    val threadId: Long,
+    val threadType: String,
+    val message: String,
+)
+
 fun Route.venueFeedbackRoutes(
     venueAccessRepository: VenueAccessRepository,
     visitFeedbackRepository: VisitFeedbackRepository,
+    supportThreadRepository: SupportThreadRepository,
 ) {
     route("/venue") {
         get("/{venueId}/feedback") {
@@ -75,6 +86,38 @@ fun Route.venueFeedbackRoutes(
                     filter = filter.code,
                     summary = aggregate.toDto(),
                     items = items.map { it.toDto() },
+                ),
+            )
+        }
+
+        post("/{venueId}/feedback/{feedbackId}/follow-up") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val feedbackId =
+                call.parameters["feedbackId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("feedbackId is required")
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (VenuePermission.FEEDBACK_VIEW !in role.permissions()) {
+                throw ForbiddenException()
+            }
+            val feedback =
+                visitFeedbackRepository.getVenueFeedbackDetail(venueId, feedbackId)
+                    ?: throw NotFoundException()
+            val rating = feedback.rating ?: throw InvalidInputException("Only low feedback can be followed up")
+            if (rating !in 1..3) {
+                throw InvalidInputException("Only low feedback can be followed up")
+            }
+            val thread =
+                supportThreadRepository.createOrFindVenueChat(
+                    venueId = venueId,
+                    guestUserId = feedback.guestUserId,
+                    title = "Отзыв после визита",
+                )
+            call.respond(
+                VenueFeedbackFollowUpResponse(
+                    threadId = thread.thread.id,
+                    threadType = "VENUE_CHAT",
+                    message = "Чат с гостем открыт.",
                 ),
             )
         }

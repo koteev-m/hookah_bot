@@ -1373,6 +1373,7 @@ async function mockVenueShiftExtensionApi(
     bookingSettings?: BookingSettings
     scheduleSettings?: VenueScheduleSettings
     publicCardSettings?: PublicCardSettings
+    publicReviewUrl?: string | null
     failPublicCardUpdateOnce?: boolean
   } = {}
 ) {
@@ -1383,11 +1384,13 @@ async function mockVenueShiftExtensionApi(
   let bookingSettings = options.bookingSettings ?? buildBookingSettings()
   let scheduleSettings = options.scheduleSettings ?? buildVenueScheduleSettings()
   let publicCardSettings = options.publicCardSettings ?? buildPublicCardSettings()
+  let publicReviewUrl = options.publicReviewUrl ?? null
   let approveCalls = 0
   let rejectCalls = 0
   let updateSettingsCalls = 0
   let updateBookingSettingsCalls = 0
   let updatePublicCardSettingsCalls = 0
+  let updatePublicReviewUrlCalls = 0
   let locationProviderCalls = 0
   let failPublicCardUpdateOnce = options.failPublicCardUpdateOnce === true
   let orderServiceCharges: ServiceCharge[] = []
@@ -1770,6 +1773,26 @@ async function mockVenueShiftExtensionApi(
     await route.fulfill(jsonResponse(scheduleSettings))
   })
 
+  await page.route('**/api/venue/1/public-review-url', async (route) => {
+    const request = route.request()
+    if (request.method() === 'PUT') {
+      const body = (await request.postDataJSON()) as { publicReviewUrl?: string | null }
+      const value = body.publicReviewUrl?.trim() ?? ''
+      if (!value.startsWith('https://')) {
+        await route.fulfill(
+          jsonResponse({ error: { code: 'INVALID_INPUT', message: 'Ссылка должна начинаться с https://' } }, 400)
+        )
+        return
+      }
+      publicReviewUrl = value
+      updatePublicReviewUrlCalls += 1
+    } else if (request.method() === 'DELETE') {
+      publicReviewUrl = null
+      updatePublicReviewUrlCalls += 1
+    }
+    await route.fulfill(jsonResponse({ venueId: 1, publicReviewUrl }))
+  })
+
   await page.route('**/api/venue/1/public-card', async (route) => {
     if (route.request().method() === 'PUT') {
       updatePublicCardSettingsCalls += 1
@@ -1923,11 +1946,13 @@ async function mockVenueShiftExtensionApi(
     getUpdateSettingsCalls: () => updateSettingsCalls,
     getUpdateBookingSettingsCalls: () => updateBookingSettingsCalls,
     getUpdatePublicCardSettingsCalls: () => updatePublicCardSettingsCalls,
+    getUpdatePublicReviewUrlCalls: () => updatePublicReviewUrlCalls,
     getLocationProviderCalls: () => locationProviderCalls,
     getSettings: () => settings,
     getBookingSettings: () => bookingSettings,
     getScheduleSettings: () => scheduleSettings,
     getPublicCardSettings: () => publicCardSettings,
+    getPublicReviewUrl: () => publicReviewUrl,
     getRejectedReasons: () => rejectedReasons,
     setRequests: (nextRequests: ShiftExtensionRequest[]) => {
       requests = nextRequests
@@ -2009,6 +2034,26 @@ async function mockVenueStatsApi(
   const role = options.role ?? 'MANAGER'
   const permissions = options.permissions ?? []
   const periods: string[] = []
+  let followUpCalls = 0
+  const followUpThread: SupportThreadFixture = {
+    threadId: 501,
+    venueId: 1,
+    venueName: 'Микс',
+    guestDisplayName: 'Гость 9011',
+    threadType: 'VENUE_CHAT',
+    assigneeScope: 'VENUE',
+    category: 'OTHER',
+    contextLabel: 'Отзыв после визита',
+    status: 'IN_PROGRESS',
+    statusLabel: 'В работе',
+    title: 'Отзыв после визита',
+    lastMessagePreview: null,
+    lastMessageAt: null,
+    unreadCount: 0,
+    createdAt: '2030-01-12T19:05:00Z',
+    updatedAt: '2030-01-12T19:05:00Z',
+    booking: null
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -2059,13 +2104,31 @@ async function mockVenueStatsApi(
   })
 
   await page.route('**/api/venue/1/feedback**', async (route) => {
+    const request = route.request()
     const url = new URL(route.request().url())
+    const followUpMatch = url.pathname.match(/\/api\/venue\/1\/feedback\/(\d+)\/follow-up$/)
+    if (followUpMatch && request.method() === 'POST') {
+      followUpCalls += 1
+      await route.fulfill(jsonResponse({ threadId: followUpThread.threadId, threadType: 'VENUE_CHAT', message: 'Чат с гостем открыт.' }))
+      return
+    }
     const filter = (url.searchParams.get('filter') || 'all') as 'all' | 'low'
     await route.fulfill(jsonResponse(buildVenueFeedback(filter)))
   })
 
+  await page.route('**/api/venue/1/support/threads**', async (route) => {
+    const url = new URL(route.request().url())
+    const threadMatch = url.pathname.match(/\/api\/venue\/1\/support\/threads\/(\d+)$/)
+    if (threadMatch) {
+      await route.fulfill(jsonResponse({ thread: followUpThread, messages: [] }))
+      return
+    }
+    await route.fulfill(jsonResponse({ items: followUpCalls > 0 ? [followUpThread] : [] }))
+  })
+
   return {
-    getPeriods: () => periods
+    getPeriods: () => periods,
+    getFollowUpCalls: () => followUpCalls
   }
 }
 
@@ -4010,7 +4073,9 @@ test('guest history shows completed visits and safe closed order detail', async 
 
   await bookingOnlyVisit.getByRole('button', { name: 'Подробнее' }).click()
   await expect(page.getByText('Посещение по брони. Заказов в этом визите нет.')).toBeVisible()
+  await expect(page.getByText('Можно оценить бронь, встречу и обслуживание.')).toBeVisible()
   await page.getByRole('button', { name: 'Оценить визит' }).click()
+  await expect(page.getByText('Можно оценить бронь, встречу и обслуживание.')).toBeVisible()
   const bookingFeedbackSubmit = page.getByRole('button', { name: 'Сохранить отзыв' })
   await expect(bookingFeedbackSubmit).toBeDisabled()
   const ratingFive = page.getByRole('button', { name: '5', exact: true })
@@ -5003,6 +5068,40 @@ test('venue manager configures public profile card settings', async ({ page }) =
     'href',
     buildTextRouteUrl('Микс', 'RU', 'Санкт-Петербург', 'Литейный проспект, 7')
   )
+})
+
+test('venue owner configures public review link settings', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, {
+    role: 'OWNER',
+    permissions: ['VENUE_SETTINGS'],
+    publicReviewUrl: null
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  const reviewCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Ссылка для отзывов' }) })
+  await expect(reviewCard).toContainText('Покажем эту кнопку гостю только после оценки 5/5')
+  await expect(reviewCard.getByText('Ссылка пока не задана.')).toBeVisible()
+  await expect(reviewCard.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
+
+  await reviewCard.getByPlaceholder('https://yandex.ru/maps/.../reviews').fill('http://unsafe.example/reviews')
+  await reviewCard.getByRole('button', { name: 'Сохранить' }).click()
+  await expect(page.locator('p.status')).toContainText('Ссылка должна начинаться с https://')
+  expect(api.getUpdatePublicReviewUrlCalls()).toBe(0)
+
+  await reviewCard.getByPlaceholder('https://yandex.ru/maps/.../reviews').fill('https://yandex.ru/maps/org/mix/reviews')
+  await reviewCard.getByRole('button', { name: 'Сохранить' }).click()
+  await expect(page.locator('p.status')).toHaveText('Ссылка для отзывов сохранена.')
+  await expect(reviewCard).toContainText('Текущая ссылка: https://yandex.ru/maps/org/mix/reviews')
+  expect(api.getPublicReviewUrl()).toBe('https://yandex.ru/maps/org/mix/reviews')
+
+  await reviewCard.getByRole('button', { name: 'Очистить' }).click()
+  await expect(page.locator('p.status')).toHaveText('Ссылка для отзывов очищена.')
+  await expect(reviewCard.getByText('Ссылка пока не задана.')).toBeVisible()
+  expect(api.getPublicReviewUrl()).toBeNull()
 })
 
 test('venue staff does not see public profile card settings', async ({ page }) => {
@@ -6219,7 +6318,7 @@ test('venue owner sees statistics section', async ({ page }) => {
 
 test('venue owner sees feedback section and staff does not', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  await mockVenueStatsApi(page, { role: 'OWNER', permissions: ['FEEDBACK_VIEW'] })
+  const api = await mockVenueStatsApi(page, { role: 'OWNER', permissions: ['FEEDBACK_VIEW', 'SUPPORT_MANAGE'] })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
@@ -6231,6 +6330,10 @@ test('venue owner sees feedback section and staff does not', async ({ page }) =>
   await expect(page.getByText('Все отлично')).toBeVisible()
   await page.getByRole('button', { name: 'Низкие' }).click()
   await expect(page.getByText('Долго ждали')).toBeVisible()
+  await page.getByRole('button', { name: 'Связаться с гостем' }).click()
+  await expect.poll(() => api.getFollowUpCalls()).toBe(1)
+  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.getByText('Отзыв после визита')).toBeVisible()
 })
 
 test('venue staff does not see statistics section', async ({ page }) => {

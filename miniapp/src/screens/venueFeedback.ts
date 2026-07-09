@@ -1,7 +1,7 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { venueGetFeedback } from '../shared/api/venueApi'
+import { venueGetFeedback, venueOpenFeedbackFollowUp } from '../shared/api/venueApi'
 import type { VenueAccessDto, VenueFeedbackFilter, VenueFeedbackItemDto, VenueFeedbackResponse } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
@@ -38,6 +38,10 @@ const TAG_LABELS: Record<string, string> = {
   cleanliness: 'Чистота',
   booking: 'Бронь',
   price: 'Цена'
+}
+
+type FeedbackCallbacks = {
+  onFollowUp: (item: VenueFeedbackItemDto, button: HTMLButtonElement) => void
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -114,7 +118,7 @@ function setActiveFilter(refs: FeedbackRefs, filter: VenueFeedbackFilter) {
   refs.filterButtons.low.dataset.active = String(filter === 'low')
 }
 
-function renderFeedbackItem(item: VenueFeedbackItemDto) {
+function renderFeedbackItem(item: VenueFeedbackItemDto, callbacks: FeedbackCallbacks) {
   const row = el('article', { className: 'card' })
   const title = el('h3', { text: `${item.rating ?? '—'}/5 · ${item.guestLabel}` })
   const meta = el('p', {
@@ -129,10 +133,20 @@ function renderFeedbackItem(item: VenueFeedbackItemDto) {
   append(row, title, meta)
   if (tagText) append(row, tagText)
   if (comment) append(row, comment)
+  if (item.rating != null && item.rating >= 1 && item.rating <= 3) {
+    const actions = el('div', { className: 'venue-inline-actions' })
+    const followUpButton = el('button', {
+      className: 'button-secondary button-small',
+      text: 'Связаться с гостем'
+    }) as HTMLButtonElement
+    followUpButton.addEventListener('click', () => callbacks.onFollowUp(item, followUpButton))
+    append(actions, followUpButton)
+    append(row, actions)
+  }
   return row
 }
 
-function renderFeedback(refs: FeedbackRefs, data: VenueFeedbackResponse) {
+function renderFeedback(refs: FeedbackRefs, data: VenueFeedbackResponse, callbacks: FeedbackCallbacks) {
   refs.metrics.replaceChildren(
     renderMetric('Отзывы', String(data.summary.count)),
     renderMetric('Средняя оценка', data.summary.averageRating == null ? '—' : data.summary.averageRating.toFixed(1)),
@@ -140,7 +154,7 @@ function renderFeedback(refs: FeedbackRefs, data: VenueFeedbackResponse) {
   )
   refs.list.replaceChildren()
   refs.empty.hidden = data.items.length > 0
-  data.items.forEach((item) => refs.list.appendChild(renderFeedbackItem(item)))
+  data.items.forEach((item) => refs.list.appendChild(renderFeedbackItem(item, callbacks)))
 }
 
 export function renderVenueFeedbackScreen(options: VenueFeedbackOptions) {
@@ -152,6 +166,7 @@ export function renderVenueFeedbackScreen(options: VenueFeedbackOptions) {
   const canView = access.permissions.includes('FEEDBACK_VIEW')
   let disposed = false
   let loadAbort: AbortController | null = null
+  let followUpAbort: AbortController | null = null
   let inFlight = false
   let currentFilter: VenueFeedbackFilter = 'all'
 
@@ -170,6 +185,37 @@ export function renderVenueFeedbackScreen(options: VenueFeedbackOptions) {
     renderErrorActions(refs.errorActions, actions)
     renderErrorDetails(refs.errorDetails, error, { isDebug })
     refs.error.hidden = false
+  }
+
+  const openFollowUp = async (item: VenueFeedbackItemDto, button: HTMLButtonElement) => {
+    button.disabled = true
+    button.textContent = 'Открываем...'
+    refs.status.textContent = ''
+    followUpAbort?.abort()
+    const controller = new AbortController()
+    followUpAbort = controller
+    const result = await venueOpenFeedbackFollowUp(
+      backendUrl,
+      { venueId, feedbackId: item.feedbackId },
+      deps,
+      controller.signal
+    )
+    if (disposed || followUpAbort !== controller) return
+    followUpAbort = null
+    if (!result.ok) {
+      button.disabled = false
+      button.textContent = 'Связаться с гостем'
+      if (result.error.code === REQUEST_ABORTED_CODE) return
+      refs.status.textContent = 'Не удалось открыть чат с гостем.'
+      showError(result.error)
+      return
+    }
+    refs.status.textContent = result.data.message || 'Чат с гостем открыт.'
+    window.location.hash = '#/messages'
+  }
+
+  const callbacks: FeedbackCallbacks = {
+    onFollowUp: (item, button) => void openFollowUp(item, button)
   }
 
   const load = async () => {
@@ -198,7 +244,7 @@ export function renderVenueFeedbackScreen(options: VenueFeedbackOptions) {
       return
     }
     setActiveFilter(refs, result.data.filter)
-    renderFeedback(refs, result.data)
+    renderFeedback(refs, result.data, callbacks)
     refs.status.textContent = result.data.filter === 'low' ? 'Фильтр: низкие оценки.' : 'Фильтр: все отзывы.'
   }
 
@@ -222,6 +268,8 @@ export function renderVenueFeedbackScreen(options: VenueFeedbackOptions) {
     disposed = true
     loadAbort?.abort()
     loadAbort = null
+    followUpAbort?.abort()
+    followUpAbort = null
     disposables.forEach((dispose) => dispose())
   }
 }

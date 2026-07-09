@@ -17,6 +17,7 @@ import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -35,6 +36,7 @@ import io.mockk.mockk
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -216,6 +218,149 @@ class VenueRbacRoutesTest {
             val foreignResponse =
                 client.get("/api/venue/$foreignVenueId/feedback") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
+        }
+
+    @Test
+    fun `owner can manage public review link and guest rating five sees it`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-review-url")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val guestUserId = 9020L
+            seedUser(jdbcUrl, guestUserId)
+            val visitId = seedCompletedVisit(jdbcUrl, venueId, guestUserId)
+            val ownerToken = issueToken(config)
+            val guestToken = issueToken(config, guestUserId)
+
+            val saveResponse =
+                client.put("/api/venue/$venueId/public-review-url") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"publicReviewUrl":"https://yandex.ru/maps/org/mix/reviews"}""")
+                }
+            assertEquals(HttpStatusCode.OK, saveResponse.status)
+            val saved = json.parseToJsonElement(saveResponse.bodyAsText()).jsonObject
+            assertEquals(
+                "https://yandex.ru/maps/org/mix/reviews",
+                saved.getValue("publicReviewUrl").jsonPrimitive.content,
+            )
+
+            val guestSubmit =
+                client.post("/api/guest/visits/$visitId/feedback") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"rating":5}""")
+                }
+            assertEquals(HttpStatusCode.OK, guestSubmit.status)
+            val feedback =
+                json
+                    .parseToJsonElement(guestSubmit.bodyAsText())
+                    .jsonObject
+                    .getValue("feedback")
+                    .jsonObject
+            assertEquals(
+                "https://yandex.ru/maps/org/mix/reviews",
+                feedback.getValue("publicReviewUrl").jsonPrimitive.content,
+            )
+
+            val clearResponse =
+                client.delete("/api/venue/$venueId/public-review-url") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, clearResponse.status)
+            val cleared = json.parseToJsonElement(clearResponse.bodyAsText()).jsonObject
+            assertEquals(null, cleared["publicReviewUrl"]?.jsonPrimitive?.contentOrNull)
+        }
+
+    @Test
+    fun `public review link settings reject unsafe values and are owner only`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-review-url-rbac")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val token = issueToken(config)
+
+            val unsafe =
+                client.put("/api/venue/$venueId/public-review-url") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"publicReviewUrl":"http://unsafe.example/reviews"}""")
+                }
+            assertEquals(HttpStatusCode.BadRequest, unsafe.status)
+
+            updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "MANAGER")
+            val managerRead =
+                client.get("/api/venue/$venueId/public-review-url") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, managerRead.status)
+
+            updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "STAFF")
+            val staffUpdate =
+                client.put("/api/venue/$venueId/public-review-url") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"publicReviewUrl":"https://yandex.ru/maps/org/mix/reviews"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffUpdate.status)
+        }
+
+    @Test
+    fun `owner and manager can open low feedback venue chat while staff and foreign venue are denied`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-feedback-follow-up")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val foreignVenueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID + 1, "OWNER")
+            val feedbackId = seedSubmittedFeedback(jdbcUrl, venueId, guestUserId = 9030L, rating = 2)
+            val ownerToken = issueToken(config)
+
+            val ownerResponse =
+                client.post("/api/venue/$venueId/feedback/$feedbackId/follow-up") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, ownerResponse.status)
+            val ownerBody = json.parseToJsonElement(ownerResponse.bodyAsText()).jsonObject
+            assertEquals("VENUE_CHAT", ownerBody.getValue("threadType").jsonPrimitive.content)
+            assertEquals(1, countRows(jdbcUrl, "support_threads"))
+            assertEquals(0, countRows(jdbcUrl, "support_messages"))
+
+            updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "MANAGER")
+            val managerResponse =
+                client.post("/api/venue/$venueId/feedback/$feedbackId/follow-up") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, managerResponse.status)
+            assertEquals(1, countRows(jdbcUrl, "support_threads"))
+
+            updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "STAFF")
+            val staffResponse =
+                client.post("/api/venue/$venueId/feedback/$feedbackId/follow-up") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffResponse.status)
+
+            updateVenueMemberRole(jdbcUrl, venueId, TELEGRAM_USER_ID, "OWNER")
+            val foreignResponse =
+                client.post("/api/venue/$foreignVenueId/feedback/$feedbackId/follow-up") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
                 }
             assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
         }
@@ -1246,9 +1391,32 @@ class VenueRbacRoutesTest {
         )
     }
 
-    private fun issueToken(config: MapApplicationConfig): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long = TELEGRAM_USER_ID,
+    ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
-        return service.issueToken(TELEGRAM_USER_ID).token
+        return service.issueToken(userId).token
+    }
+
+    private fun seedUser(
+        jdbcUrl: String,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                MERGE INTO users (telegram_user_id, username, first_name, last_name)
+                KEY (telegram_user_id)
+                VALUES (?, ?, ?, '')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.setString(2, "guest$userId")
+                statement.setString(3, "Гость $userId")
+                statement.executeUpdate()
+            }
+        }
     }
 
     private fun seedVenueMembership(
@@ -1323,11 +1491,37 @@ class VenueRbacRoutesTest {
         }
     }
 
+    private fun seedCompletedVisit(
+        jdbcUrl: String,
+        venueId: Long,
+        guestUserId: Long,
+    ): Long {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            return connection.prepareStatement(
+                """
+                INSERT INTO visits (venue_id, user_id, source, occurred_at, service_date)
+                VALUES (?, ?, 'ORDER_CLOSED', ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, guestUserId)
+                statement.setTimestamp(3, Timestamp.from(Instant.parse("2030-05-12T18:00:00Z")))
+                statement.setDate(4, java.sql.Date.valueOf(java.time.LocalDate.of(2030, 5, 12)))
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert visit")
+                }
+            }
+        }
+    }
+
     private fun seedSubmittedFeedback(
         jdbcUrl: String,
         venueId: Long,
         guestUserId: Long,
-    ) {
+        rating: Int = 5,
+    ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -1358,16 +1552,35 @@ class VenueRbacRoutesTest {
                         if (rs.next()) rs.getLong(1) else error("Failed to insert visit")
                     }
                 }
-            connection.prepareStatement(
+            return connection.prepareStatement(
                 """
                 INSERT INTO visit_feedback (visit_id, venue_id, user_id, rating, comment, status, tags_json)
-                VALUES (?, ?, ?, 5, 'Все отлично', 'SUBMITTED', '["service","taste"]')
+                VALUES (?, ?, ?, ?, 'Все отлично', 'SUBMITTED', '["service","taste"]')
                 """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
                 statement.setLong(1, visitId)
                 statement.setLong(2, venueId)
                 statement.setLong(3, guestUserId)
+                statement.setInt(4, rating)
                 statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else error("Failed to insert feedback")
+                }
+            }
+        }
+    }
+
+    private fun countRows(
+        jdbcUrl: String,
+        tableName: String,
+    ): Int {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM $tableName").use { rs ->
+                    rs.next()
+                    return rs.getInt(1)
+                }
             }
         }
     }

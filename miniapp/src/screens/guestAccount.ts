@@ -293,9 +293,15 @@ function renderVisitFeedbackBlock(
 
   const disposables: Array<() => void> = []
   const title = el('h3', { text: 'Отзыв' })
+  const bookingOnlyFeedbackText =
+    visit.booking && visit.orders.length === 0 ? 'Можно оценить бронь, встречу и обслуживание.' : null
   const status = el('p', { className: 'status', text: '' })
   const openButton = el('button', { className: 'button-secondary', text: 'Оценить визит' }) as HTMLButtonElement
-  append(section, title, openButton, status)
+  append(section, title)
+  if (bookingOnlyFeedbackText) {
+    append(section, el('p', { className: 'venue-order-sub', text: bookingOnlyFeedbackText }))
+  }
+  append(section, openButton, status)
 
   const renderForm = () => {
     let selectedRating = 0
@@ -379,7 +385,12 @@ function renderVisitFeedbackBlock(
 
     disposables.push(
       on(cancelButton, 'click', () => {
-        section.replaceChildren(title, openButton, status)
+        const nodes: Node[] = [title]
+        if (bookingOnlyFeedbackText) {
+          nodes.push(el('p', { className: 'venue-order-sub', text: bookingOnlyFeedbackText }))
+        }
+        nodes.push(openButton, status)
+        section.replaceChildren(...nodes)
       }),
       on(submitButton, 'click', async () => {
         if (!selectedRating) {
@@ -418,8 +429,13 @@ function renderVisitFeedbackBlock(
     )
 
     append(actions, submitButton, cancelButton)
-    section.replaceChildren(
+    const formNodes: Node[] = [
       title,
+    ]
+    if (bookingOnlyFeedbackText) {
+      formNodes.push(el('p', { className: 'venue-order-sub', text: bookingOnlyFeedbackText }))
+    }
+    formNodes.push(
       el('p', { className: 'venue-order-sub', text: 'Оценка обязательна, теги и комментарий — по желанию.' }),
       ratingRow,
       tagRow,
@@ -428,6 +444,7 @@ function renderVisitFeedbackBlock(
       actions,
       message
     )
+    section.replaceChildren(...formNodes)
   }
 
   disposables.push(on(openButton, 'click', renderForm))
