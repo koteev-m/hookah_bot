@@ -1,8 +1,8 @@
 # Guest Growth And Retention Model
 
-Дата актуализации: 2026-07-08.
+Дата актуализации: 2026-07-09.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются закрытыми, пока для них нет backend/Mini App/Bot evidence и staging smoke. Guest visit/order history foundation is MVP / local-smoke-passed; broader retention loops remain partial/future. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются закрытыми, пока для них нет backend/Mini App/Bot evidence и staging smoke. Guest visit/order history foundation is **DONE / MVP / staging-smoke-passed**; broader retention loops remain partial/future. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
 
 ## Core Rule
 
@@ -20,9 +20,17 @@ Transactional flows remain separate:
 ## Current Implementation
 
 Current implementation is **partial**:
-- Guest visit/order history foundation is implemented and local-smoke-passed: `/api/guest/visits` and `/api/guest/visits/{visitId}` are scoped to the current user, booking `SEATED` and closed-order signals create/merge visits, non-seated booking statuses and bare table-session cleanup do not create visits, and closed-order details show only the guest's own billable batches/tabs.
+- Guest visit/order history foundation is **DONE / MVP / staging-smoke-passed**: `/api/guest/visits` and `/api/guest/visits/{visitId}` are scoped to the current user, booking `SEATED` and closed-order signals create/merge visits, non-seated booking statuses and bare table-session cleanup do not create visits, and closed-order details show only the guest's own billable batches/tabs.
+- History list/detail shows real completed visits/orders:
+  - `ORDER_CLOSED` / closed order visit;
+  - `BOOKING_SEATED` / seated booking visit;
+  - merged/deduped visit when booking seated + order closed represent the same real visit.
+- `CANCELED`, `NO_SHOW`, `EXPIRED`, `PENDING` and `CHANGED` bookings are excluded from History as visits. Legacy invalid rows are preserved in storage and hidden by query/filtering; no cleanup migration is required for the closed bugfix.
+- Closed order detail opens for the current guest, including old closed orders that do not have `promotionDiscounts`, options, notes or complete item fields. Backend returns `promotionDiscounts: []`; Mini App tolerates missing optional `promotionDiscounts`, `items`, `itemName`/`itemId`/`qty`, options and notes.
+- History detail keeps the safe error state `Не удалось загрузить детали истории.` for real 404/errors, has `← Назад к истории`, and Telegram BackButton inside detail returns to the History list instead of app home.
+- Privacy filters remain strict: foreign visit detail returns 404, another guest's personal tab/order detail is hidden, and shared-tab-only members do not see чужие personal/order details.
 - Account favorites and broader retention loops still require separate implementation/smoke before being marked complete.
-- Booking seated/no-show, order close and table-session close signals exist as foundations for visit history; completed repeat/favorites/feedback/promotion loops are not closed.
+- Booking `SEATED`, order close and table-session close signals exist as foundations for visit history; no-show remains a non-visit booking outcome. Completed repeat/favorites/feedback/promotion loops are not closed.
 - Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
   campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
@@ -34,8 +42,8 @@ Current implementation is **partial**:
 | Term | Meaning | Status |
 | --- | --- | --- |
 | `FAVORITE_VENUE` | Guest saves/removes a venue and can list favorite venues. | MVP target; current baseline needs verification before DONE. |
-| `VISIT_HISTORY` | Guest-visible history of confirmed visits derived from table session, booking and closed order signals. | MVP / local-smoke-passed for completed visits and booking-only seated visits. |
-| `ORDER_HISTORY` | Closed orders shown to the guest with safe venue/date/total/context data. | MVP / local-smoke-passed for closed-order visit detail; repeat templates remain future. |
+| `VISIT_HISTORY` | Guest-visible history of confirmed visits derived from table session, booking `SEATED` and closed order signals. | DONE / MVP / staging-smoke-passed for completed visits and booking-only seated visits. |
+| `ORDER_HISTORY` | Closed orders shown to the guest with safe venue/date/total/context data. | DONE / MVP / staging-smoke-passed for closed-order visit detail; repeat templates remain future. |
 | `BOOKING_HISTORY` | Past and upcoming bookings shown in account/history context. | Partial foundation; keep booking MVP in regression. |
 | `REPEAT_TEMPLATE` | A saved template from a past order/visit that can be applied on the next table context. | MVP target; must not create an order outside table context. |
 | `POST_VISIT_FEEDBACK` | 1-5 rating, tags and optional comment requested only after confirmed visit. | MVP target/future implementation. |
@@ -99,7 +107,7 @@ Platform may moderate growth monetization later, but it is not required for MVP:
 ## Dependencies And Blockers
 
 - Growth implementation depends on stable visit/order history.
-- Repeat/favorites/history depend on active order scoped by `table_session` / `tab` according to `docs/ORDER_SESSION_TAB_CORE.md`.
+- Visit/order history foundation is stable enough for follow-on Growth MVP blocks; repeat/favorites/history still depend on active order scoped by `table_session` / `tab` according to `docs/ORDER_SESSION_TAB_CORE.md`.
 - Repeat templates depend on current menu availability, stop-list and selected-option validation.
 - Feedback depends on a correct close visit/order signal.
 - Preorder depends on booking lifecycle from `docs/BOOKING_LIFECYCLE.md` and reliable `visit_count`.
@@ -129,11 +137,26 @@ These events are future/partial until the corresponding growth features are impl
 - List cards, notifications and analytics must avoid unrelated PII, raw Telegram payloads, initData, secrets and provider payloads.
 - Staff profile/today-shift public data must follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: no public phone/email by default, no raw Telegram username without explicit opt-in and no guest exposure of `linked_user_id`.
 
+## History Foundation Regression Checklist
+
+1. New guest sees empty History state.
+2. Closed order appears in History.
+3. Old closed order with no discounts/options opens detail.
+4. Detail shows positions and total.
+5. Missing `promotionDiscounts`, options or note does not crash the UI.
+6. Booking-only `SEATED` visit can show safe copy if no order lines exist.
+7. `CANCELED`, `NO_SHOW`, `EXPIRED`, `PENDING` and `CHANGED` bookings do not appear as visits.
+8. `← Назад к истории` returns to the History list.
+9. Telegram BackButton inside detail returns to the History list.
+10. Real 404/error shows `Не удалось загрузить детали истории.`.
+11. Foreign detail returns 404; guest does not see another guest's personal tab/order detail; shared-tab-only member does not see чужие personal/order details.
+12. Booking `SEATED` + order closed does not double-count the same real visit where merge/dedup applies.
+
 ## Future Acceptance / Smoke Checklist
 
 1. Guest can favorite and unfavorite a venue.
 2. Guest sees favorite venues.
-3. Guest sees visit, order and booking history.
+3. Guest history regression checklist above remains green.
 4. Repeat template requires table context before creating an order.
 5. Repeat template skips or clearly marks unavailable/stopped items.
 6. Feedback is requested only after confirmed visit.
@@ -147,10 +170,22 @@ These events are future/partial until the corresponding growth features are impl
 ## Status Summary
 
 - Growth/retention: `SPEC UPDATED / PARTIAL-FUTURE`.
-- Visit/order history foundation: `MVP / LOCAL-SMOKE-PASSED`; staging smoke still required before production readiness.
+- Visit/order history foundation: `DONE / MVP / STAGING-SMOKE-PASSED`.
+- History detail legacy order compatibility: `DONE`.
+- Full base item historical snapshotting: `FUTURE/FOLLOW-UP` if a later audit still finds gaps beyond the current safe rendering.
 - Favorites/repeat: `FUTURE/PARTIAL FOUNDATION` until implementation smoke proves the end-to-end flows.
 - Promotions: `PLACEHOLDER/PARTIAL FOUNDATION` unless backend + Guest/Venue surfaces are verified for the simple promotion MVP.
 - Reviews/post-visit feedback: `FUTURE`.
 - Loyalty/referrals: `FUTURE`.
 - Paid placement/promotion boosting: `FUTURE`.
 - Visit history foundation: implemented on top of order/session/booking lifecycle; keep privacy, dedup and terminal-status tests in regression.
+
+## Recommended Next Runtime Block
+
+Recommended next bounded Growth MVP step: **Post-visit feedback MVP from completed History**.
+
+Why:
+- It builds directly on the staging-smoked `VISIT_HISTORY` / `ORDER_HISTORY` foundation.
+- It does not require acquiring, Telegram Stars, crypto, loyalty points, promo accounting or online guest order payment.
+- A small MVP can be limited to `Оценить` on completed visit/history detail, one guest-owned rating/tag/comment submission per visible visit, route-level privacy tests and a safe Venue Owner/Manager read model later if needed.
+- It must not send marketing notifications, auto-open public review links or treat low ratings as public reviews.

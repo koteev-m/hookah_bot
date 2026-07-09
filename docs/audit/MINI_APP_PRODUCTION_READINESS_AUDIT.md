@@ -14,11 +14,13 @@
 >
 > Current correction as of 2026-07-08: Staff-call lifecycle finishing patch is CLOSED / staging smoke passed. Guest staff-call status now includes `NEW`, `ACK`, `DONE` and `CANCELLED` for the current guest and current `tableSessionId`; `CANCELLED` is shown as `Вызов отменён`. Venue active queue remains `NEW` / `ACK` only. No migration, manual cancel UI, Mini App change or staff-chat callback refactor is claimed.
 >
+> Current correction as of 2026-07-09: Guest History Foundation MVP and its staging bugfix are CLOSED / staging smoke passed. History list/detail show closed-order visits and booking-only `SEATED` visits, hide `CANCELED` / `NO_SHOW` / `EXPIRED` / `PENDING` / `CHANGED` bookings as visits, preserve but filter legacy invalid rows, open old closed-order details without required `promotionDiscounts`/options/notes, keep `Не удалось загрузить детали истории.` for real errors, provide `← Назад к истории`, return Telegram BackButton from detail to History list, and preserve foreign-detail 404 plus personal/shared tab privacy. No migration was added. Favorites, repeat templates, post-visit feedback, simple promotions, loyalty, tips, preorder and marketing notifications remain future.
+>
 > Current docs correction as of 2026-07-06: Platform cockpit source of truth is `docs/PLATFORM_COCKPIT.md`. Platform Mini App has smoke-passed manual billing and support-ticket MVPs; onboarding requests, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 >
-> Current docs correction as of 2026-07-06: Growth/retention source of truth is `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty stamps/points, referrals, paid placement/boosting, segmentation and advanced recommendations remain future.
+> Current docs correction as of 2026-07-09: Growth/retention source of truth is `docs/GROWTH_RETENTION.md`. Guest visit/order history foundation is DONE / MVP / staging-smoke-passed; favorites, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications remain `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty stamps/points, referrals, paid placement/boosting, segmentation and advanced recommendations remain future.
 >
-> Current docs correction as of 2026-07-06: Order/session/tab core source of truth is `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-table risk is closed through `tableSessionId`/`tabId` scoping; keep the core in regression for QR session, active order, batches, tabs, bill request/paid/closed flow and privacy boundaries. Visit entity/history, force-close reason/audit, DB-level uniqueness nuances and broader analytics events remain future/partial.
+> Current docs correction as of 2026-07-09: Order/session/tab core source of truth is `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-table risk is closed through `tableSessionId`/`tabId` scoping and Guest History Foundation MVP is staging-smoked; keep the core in regression for QR session, active order, batches, tabs, bill request/paid/closed flow, history privacy/dedup and terminal-status filtering. Force-close reason/audit, DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics events remain future/partial.
 >
 > Current docs correction as of 2026-07-07: Analytics/events source of truth is `docs/ANALYTICS_EVENTS.md`. Analytics events, audit/event boundaries, KPI formulas, role dashboards and privacy rules are `SPEC UPDATED`; implementation and Platform analytics dashboards remain partial/future until event emission and payload safety are verified.
 >
@@ -28,7 +30,7 @@
 >
 > Current docs correction as of 2026-07-07: Venue Mode operations source of truth is `docs/VENUE_OPERATIONS.md`. Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are `SPEC UPDATED`; staff-chat is notification/radar/shortcut only.
 >
-> Current docs correction as of 2026-07-07: Booking lifecycle source of truth is `docs/BOOKING_LIFECYCLE.md`. Guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, support routing, analytics, RBAC and smoke are `SPEC UPDATED`; reminder rollout, automation, preorder and visit-history integration remain partial/future.
+> Current docs correction as of 2026-07-09: Booking lifecycle source of truth is `docs/BOOKING_LIFECYCLE.md`. Guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, support routing, analytics, RBAC and smoke are `SPEC UPDATED`; booking `SEATED` -> Guest History is staging-smoked, while reminder rollout, automation, preorder and feedback remain partial/future.
 >
 > Current docs correction as of 2026-07-07: Telegram fallback/staff-chat source of truth is `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Telegram bot entrypoints, QR `/start`, fallback chat order, staff-call, staff-chat link/test/unlink, notification policy, callbacks, parity, security and smoke are `SPEC UPDATED`; staff-chat is radar/shortcut only.
 >
@@ -84,7 +86,7 @@ Status: `PARTIAL`.
 - Telegram fallback/staff-chat behavior must follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: QR `/start`, fallback order, bot staff-call, staff-chat link/test/unlink, callback RBAC and notification allow/deny policy stay in regression;
 - QA/release behavior must follow `docs/TESTING_QA_SMOKE_STRATEGY.md`: validations match change type, GitHub Actions are green before release, runtime changes get staging smoke and failure reports include the real test assertion;
 - Deployment/runbook behavior must follow `docs/DEPLOYMENT_RUNBOOK.md`: runtime releases need staging deploy/smoke and rollback notes, while docs-only changes skip staging deploy;
-- guest booking/profile/history and advanced support UI parity need dedicated regression passes;
+- guest booking/profile/history and advanced support UI parity need dedicated regression passes; Guest History Foundation itself is staging-smoked and stays in regression;
 - promotions/loyalty/growth display must be smoke-tested against backend and bot output before being called complete.
 
 ### Venue Mini App
@@ -439,7 +441,7 @@ Tests to add/update:
 ## 5. P2 Improvements
 
 - Guest Mini App public venue card enrichment: media, hours, richer promo previews.
-- Growth/retention MVP from `docs/GROWTH_RETENTION.md`: favorite venues, visit/order/booking history, repeat templates that require table context, post-visit feedback, simple venue promotions and opt-in notification rules.
+- Growth/retention MVP from `docs/GROWTH_RETENTION.md`: Guest History Foundation is staging-smoked; favorite venues, repeat templates that require table context, post-visit feedback, simple venue promotions and opt-in notification rules remain future.
 - Platform analytics dashboard beyond operational baseline.
 - Menu photos/modifiers/top-list if not required for launch.
 - Channel sync polish: start in bot, continue in Mini App, back to bot.

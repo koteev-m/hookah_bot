@@ -84,7 +84,7 @@ Derived responsibilities:
 - staff_tip_method / staff_tip_intent: future staff-tip model for a specific staff member; MVP money must not touch the platform and tip intent is not proof of payment
 - subscription: venue_id, status trialing/active/past_due/suspended/canceled, price override, trial_end, paid_until, grace_end, methods enabled(card/stars)
 - support_ticket: guest/venue/platform tickets with context (venue/table/order)
-- visit: product-level history/retention concept derived from table session + closed order + booking seated/no-show where implemented; see `docs/ORDER_SESSION_TAB_CORE.md`
+- visit: product-level history/retention concept derived from table session + closed order + booking `SEATED` where implemented; cancelled/no-show/expired/pending/changed bookings are not visits. See `docs/ORDER_SESSION_TAB_CORE.md`.
 
 ## Key UX decisions (must)
 - Mini App is primary UX. If Mini App fails to load, show button: “Не грузится? → Оформить в чате” which triggers fallback ordering in chat.

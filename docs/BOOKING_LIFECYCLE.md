@@ -1,8 +1,8 @@
 # Booking Lifecycle Model
 
-Дата актуализации: 2026-07-08.
+Дата актуализации: 2026-07-09.
 
-Статус: **current product reference / SPEC UPDATED**. Booking flows are implemented in several bounded slices: guest booking create/list/cancel/change acceptance foundations, Venue Mini App booking queue/lifecycle, hold settings, `arrival_deadline_at`, confirmed-only arrival terminal actions, state-aware staff-chat booking buttons, booking conversation threads and opt-in reminder code are documented as smoke-closed or code/test-backed in the current roadmap. The complete booking lifecycle is still **PARTIAL / needs verification** for rollout-gated reminders, full automation, preorder, visit-history integration and all analytics/audit event coverage.
+Статус: **current product reference / SPEC UPDATED**. Booking flows are implemented in several bounded slices: guest booking create/list/cancel/change acceptance foundations, Venue Mini App booking queue/lifecycle, hold settings, `arrival_deadline_at`, confirmed-only arrival terminal actions, state-aware staff-chat booking buttons, booking conversation threads, booking `SEATED` -> Guest History integration and opt-in reminder code are documented as smoke-closed or code/test-backed in the current roadmap. The complete booking lifecycle is still **PARTIAL / needs verification** for rollout-gated reminders, full automation, preorder, feedback and all analytics/audit event coverage.
 
 ## Core Rule
 
@@ -28,7 +28,7 @@ Canonical dependencies:
 | `BOOKING_CHAT` | Conversation tied to exactly one `booking_id`, opened from booking action `Открыть переписку`. | Implemented/smoke-closed through booking conversation threads; not support. |
 | `ARRIVAL_DEADLINE` | Local deadline until which the venue holds a confirmed booking. A changed/proposed-time booking may carry a deadline snapshot, but it is not arrival-ready until confirmed. Target default is `scheduled_at + hold_minutes`. | `arrival_deadline_at` is documented as persisted/smoked; automation semantics remain partial. |
 | `HOLD_MINUTES` | Per-venue setting for how long a booking is held after scheduled time. | Current docs say Venue Mini App settings route exists. Target recommended default: 15 minutes, configurable to 15/30/60 and custom later. |
-| `SEATED_VISIT` | Booking whose guest arrived and was marked seated. It can become a visit-history source later. | Current enum/status exists; visit-history integration remains partial/future. |
+| `SEATED_VISIT` | Booking whose guest arrived and was marked seated. It can become a Guest History source. | Current enum/status exists; booking `SEATED` -> Guest History integration is staging-smoked. |
 
 ## Status State Machine
 
@@ -310,14 +310,14 @@ Privacy:
 | --- | --- | --- | --- |
 | Guest booking create/list/update/cancel | Guest booking MVP exists; Bot `/my` and Guest Mini App `Мои брони` parity is documented. | Guest owns create/list/cancel/proposed-time response for own bookings. | Real two-account Telegram isolation smoke remains explicitly unverified. |
 | Venue booking status actions | Venue Mini App queue/lifecycle is smoke-closed; Owner/Manager confirm/change/cancel/message/settings, Staff confirmed-only arrival/no-show split exists. | Full venue queue with filters, reasons, audit and timezone-safe actions. | Keep route/RBAC, confirmed-only arrival guard and cross-venue regression; audit completeness needs verification. |
-| Mini App guest booking screen | `Мои брони` active/upcoming list with public label/time/deadline is documented. | Account booking list/history with safe status labels and actions. | Full history/retention integration remains future. |
+| Mini App guest booking screen | `Мои брони` active/upcoming list with public label/time/deadline is documented; Guest History Foundation is staging-smoked for booking-only `SEATED` visits and non-seated booking filtering. | Account booking list/history with safe status labels and actions. | Broader booking-history polish, feedback and retention loops remain future. |
 | Venue Mini App booking queue | Implemented/smoked for M3/M7a/M7b/M7c slices. | Source-of-truth operational queue under Venue Mode. | Overdue automation, broader reminder UI and preorder remain partial/future. |
 | Telegram `/my` booking list | Implemented and compared visually with Guest Mini App for public label/time/deadline. | Same identity/status/deadline semantics across Bot and Mini App. | Keep runtime regression. |
 | Booking chat | Implemented as persisted booking threads; `Открыть переписку` opens messages. | `BOOKING_CHAT` is separate from support and staff-chat. | Race/unique constraints and Bot full inbox remain future where needed. |
 | Booking lifecycle statuses | Runtime statuses include `PENDING`, `CONFIRMED`, `CHANGED`, `CANCELED`, `EXPIRED`, `NO_SHOW`, `SEATED`. | Product copy distinguishes proposed time and cancellation actor. | Split `canceled_by_guest` / `canceled_by_venue` only when runtime supports it. |
 | Hold minutes / arrival deadline | `venue_booking_settings.hold_minutes` and `arrival_deadline_at` are documented as implemented/smoked. | Venue setting with deadline snapshot and venue-local display. | Automatic policy edge cases need verification. |
 | Reminders worker | M7c is code/test-backed and one controlled staging smoke passed; runtime disabled by default. | Rollout-gated transactional reminders with dedupe, quiet hours and safe actions. | Enable only with explicit rollout/smoke; management UI future. |
-| No-show / seated | Runtime statuses, confirmed-only arrival guard and `BOOKING_SEATED` visit creation are documented. | Seated can feed visit; no-show must not. | Broader visit history and feedback integration remain partial/future. |
+| No-show / seated | Runtime statuses, confirmed-only arrival guard and `BOOKING_SEATED` visit creation are documented; staging smoke confirmed non-seated booking statuses are hidden from Guest History. | Seated can feed visit; no-show must not. | Feedback, preorder and `visit_count` remain partial/future. |
 | Analytics events | Analytics spec says booking events need verification. | Emit full booking lifecycle/reminder/chat facts. | Event emission/payload safety is partial/future unless tests prove it. |
 | Staff-chat booking notifications | State-aware operational booking notifications are allowed by policy and smoke-closed for current paths. | Staff-chat is radar only; no booking chat/support ticket spam. | Keep per-venue real Telegram group regression. |
 | Support routing for booking problems | `SUPPORT_TICKET` category `Бронь` requires verified booking/venue context. | Booking problems escalate through support, not booking chat lifecycle. | Keep context verification and staff-chat denial in support regression. |
@@ -329,9 +329,9 @@ Privacy:
 - Booking Mini App management: `CLOSED for current MVP`, with future filters/history/polish.
 - Hold minutes / arrival deadline: `CLOSED for current MVP`, with automatic policy edge cases needing verification.
 - Reminders: `PARTIAL / rollout-gated`; implemented/test-backed and one controlled staging smoke passed, but disabled by default.
-- No-show/seated: `CLOSED for confirmed-only operational guard`; broader visit/history integration remains future.
+- No-show/seated: `CLOSED for confirmed-only operational guard`; booking `SEATED` -> Guest History integration is staging-smoked; feedback, preorder and `visit_count` remain future.
 - Booking chat: `MVP / CLOSED for current smoke paths`.
-- Visit/history dependencies: blocked until booking lifecycle plus order/session/tab close signals are reliable across real traffic.
+- Visit/history dependencies: Guest History Foundation is staging-smoked; keep booking `SEATED` conversion, non-seated filtering, order/session/tab close signals and privacy/dedup in regression.
 
 ## Smoke Checklist
 

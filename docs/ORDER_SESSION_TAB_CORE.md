@@ -1,8 +1,8 @@
 # Order / Session / Tab Core Model
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-09.
 
-Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk is documented as closed in current audit notes, while visit history, force-close policy, some DB-level uniqueness nuances and broader analytics remain future/partial.
+Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
 
 Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`. Booking seated/no-show lifecycle inputs are defined in `docs/BOOKING_LIFECYCLE.md`. Telegram fallback order and staff-chat behavior are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Testing/smoke strategy is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -20,7 +20,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 | `ACTIVE_TABLE_ORDER` | Order container for the current table visit/session. Target scope is `venue_id + table_id + table_session_id`, not only `table_id`. There is one active order for the current table session/visit; a closed/expired session cannot receive new batches. |
 | `ORDER_BATCH` | One cart submission / one `дозаказ`. It always belongs to an active order, has source such as `miniapp` or `bot_fallback`, is idempotent by client idempotency key and carries item/price/option snapshots. |
 | `TAB` | Bill/account inside a visit. Personal tab is default for a guest. Shared tab is explicit and visible only to participants. Each order batch belongs to a `tab_id`. |
-| `VISIT` | Product-level history/retention concept derived from `TABLE_SESSION` + closed order + booking seated/no-show signals. Booking lifecycle source: `docs/BOOKING_LIFECYCLE.md`. It does not have to be a runtime entity until a later implementation creates one. |
+| `VISIT` | Product-level history/retention concept derived from `TABLE_SESSION` + closed order + booking `SEATED` signals. `CANCELED`, `NO_SHOW`, `EXPIRED`, `PENDING` and `CHANGED` bookings are not visits. Booking lifecycle source: `docs/BOOKING_LIFECYCLE.md`. |
 
 ## Core Invariants
 
@@ -50,7 +50,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 | Display order number | Human `Заказ №<display_number>` is used on Guest/Venue/Bot surfaces where present. | Human display number is primary for operators and guests; raw DB ids stay internal/secondary. | No DB uniqueness constraint for display number is documented; keep venue-local day semantics explicit. |
 | Staff-call separation | `STAFF_CALL` is separate from support/chat. Bill request is stored through staff-call context but remains order/tab-scoped and deduped. | Staff calls are operational events tied to current table/session/order context where available. | CANCELLED UI/lifecycle and row-level ACK/DONE actor columns remain future where docs already say so. |
 | Fallback chat order | Mini App fallback emits `cmd=start_quick_order` with `table_token`; real Telegram fallback remains release smoke. Canonical fallback/staff-chat rules are in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. | Bot fallback must create/use the same table session/tab rules as Mini App. | Keep fallback smoke whenever bot order fallback changes. |
-| Visit history foundation | Booking/order/table-session close signals exist; Growth docs depend on this foundation. | `VISIT` can be derived from closed table sessions/orders and booking seated/no-show. | Dedicated `VISIT` entity/history rules remain future unless implemented by a later task. |
+| Visit history foundation | Guest History Foundation MVP is DONE / staging-smoke-passed: current-user list/detail shows closed-order visits and booking-only `SEATED` visits, filters non-seated booking statuses, preserves but hides legacy invalid rows, opens legacy closed order details safely and keeps privacy filters strict. | `VISIT` is derived from closed orders and booking `SEATED`, with merge/dedup where booking + order represent the same real visit. | Repeat templates, post-visit feedback, full base item historical snapshotting where still missing, loyalty/preorder `visit_count` and analytics event completeness remain follow-ups. |
 
 ## Guest UX
 
@@ -58,6 +58,9 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - `Мой заказ` / `Мой счёт` shows the guest's personal tab or joined shared tab, not every guest's personal bill at the physical table.
 - `Дозаказать` creates a new `ORDER_BATCH` in the current active order/session and current selected tab.
 - Growth `Повторить как шаблон` must not create an order without active table context, selected tab and current menu/stop-list validation.
+- Account `История` shows completed visits/orders only: closed-order visits, booking-only `SEATED` visits and merged same-real-visit records where dedup applies. Cancelled/no-show/expired/pending/changed bookings are hidden as visits.
+- History detail opens the current guest's closed order detail, tolerates legacy missing optional fields such as `promotionDiscounts`, options and notes, and keeps the safe error copy `Не удалось загрузить детали истории.` for real 404/errors.
+- History detail has `← Назад к истории`; Telegram BackButton inside detail returns to the History list, not app home.
 - After table session expiry/close or user-scoped exit, the guest must scan the table QR again to re-enter.
 - If the session is expired or unavailable, guest copy should be safe: `Отсканируйте QR на столе заново.`
 
@@ -111,6 +114,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 
 - Canonical Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`.
 - Guest cannot read another guest's personal tab.
+- Guest History detail is current-user scoped: foreign visit detail returns 404, a guest does not see another guest's personal tab/order detail, and a shared-tab-only member does not see чужие personal/order details.
 - Guest cannot add a batch to a tab where they are not owner/member.
 - Venue users access only their own venue orders/sessions/tabs.
 - Staff sees operational orders/calls only according to role.
@@ -139,7 +143,7 @@ Needed server events for analytics:
 - `tab_closed`
 - `order_closed`
 - `booking_seated`
-- `booking_no_show`
+- `booking_no_show` for booking analytics only; no-show bookings must not be counted as visits in Guest History.
 
 Use the canonical event envelope, naming convention and privacy rules from `docs/ANALYTICS_EVENTS.md`; do not add raw order notes, Telegram payloads, initData or payment data to analytics events.
 
@@ -147,9 +151,10 @@ Use the canonical event envelope, naming convention and privacy rules from `docs
 
 - Order/session/tab core spec: `UPDATED`.
 - Runtime active-order table-only risk: documented as closed in current audit/roadmap; keep in regression.
-- Remaining runtime status: `PARTIAL` for visit entity/history, staff force-close policy/audit, some DB-level uniqueness nuances and broader analytics events.
-- Growth dependencies remain blocked by order/session/tab stability until visit history, repeat template, feedback and loyalty/preorder have their own implementation evidence.
-- Do not mark Growth, loyalty, preorder or feedback ready until visit foundation is stable.
+- Guest History Foundation MVP: `DONE / STAGING-SMOKE-PASSED`; keep privacy, terminal-status filtering, legacy closed-order detail compatibility, BackButton/list return and merge/dedup behavior in regression.
+- Remaining runtime status: `PARTIAL` for staff force-close policy/audit, some DB-level uniqueness nuances, repeat template, post-visit feedback, loyalty/preorder `visit_count` and broader analytics events.
+- Growth dependencies can now build on the completed History foundation, but repeat template, feedback, loyalty/preorder and promotions still need their own implementation evidence.
+- Do not mark repeat, loyalty, preorder, promotions or feedback ready until each feature has code/test/smoke evidence.
 
 ## Manual Smoke Checklist
 
@@ -170,3 +175,11 @@ Use the canonical event envelope, naming convention and privacy rules from `docs
 15. Re-scan after close creates or uses the expected new session.
 16. Fallback chat order creates batch with the same session/tab rules.
 17. Stop-list change before submit blocks unavailable item/option.
+18. New guest sees empty History state.
+19. Closed order appears in History and detail shows positions/total.
+20. Old closed order with missing `promotionDiscounts`, options or notes opens without crashing.
+21. Booking-only `SEATED` visit can show safe no-order-lines copy.
+22. `CANCELED`, `NO_SHOW`, `EXPIRED`, `PENDING` and `CHANGED` bookings do not appear as visits.
+23. `← Назад к истории` and Telegram BackButton inside detail return to the History list.
+24. Real 404/error shows `Не удалось загрузить детали истории.`.
+25. Foreign detail returns 404, чужие personal/order details remain hidden, and booking `SEATED` + order closed does not double-count where merge/dedup applies.

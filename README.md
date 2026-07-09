@@ -167,7 +167,7 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 
 Platform/billing product status is tracked in `docs/PLATFORM_COCKPIT.md`. The smoke-closed MVP is manual/fake-provider billing with explicit invoice/checkout ensure, manual mark-paid, advance next invoice and courtesy days. `GenericHmacBillingProvider` is an integration base; real acquiring provider rollout, Telegram Stars and recurring automatic payments are separate future milestones unless explicitly implemented and smoked.
 
-Order/session/tab core product status is tracked in `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say active order scoping by `tableSessionId`/`tabId` is closed and must stay in regression; visit history/entity, force-close audit, DB-level uniqueness nuances and broader analytics events remain partial/future.
+Order/session/tab core product status is tracked in `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say active order scoping by `tableSessionId`/`tabId` and Guest History Foundation MVP are closed and must stay in regression; force-close audit, DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics events remain partial/future.
 
 Analytics/events product status is tracked in `docs/ANALYTICS_EVENTS.md`. Analytics events, audit/event boundaries, KPI formulas, role dashboards and privacy rules are `SPEC UPDATED`; implementation and Platform analytics dashboards remain partial/future unless specific event emission and payload safety are verified.
 
@@ -177,13 +177,13 @@ Menu/options/stop-list product status is tracked in `docs/MENU_OPTIONS_STOPLIST.
 
 Venue Mode operations product status is tracked in `docs/VENUE_OPERATIONS.md`. Venue dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are `SPEC UPDATED`; Venue Mode is source of truth and staff-chat is radar/shortcut only.
 
-Booking lifecycle product status is tracked in `docs/BOOKING_LIFECYCLE.md`. Guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke are `SPEC UPDATED`; queue/hold/list/chat MVP paths are smoke-closed by slice, while reminder rollout, full automation, preorder and visit-history integration remain partial/future.
+Booking lifecycle product status is tracked in `docs/BOOKING_LIFECYCLE.md`. Guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke are `SPEC UPDATED`; queue/hold/list/chat and booking `SEATED` -> Guest History MVP paths are smoke-closed by slice, while reminder rollout, full automation, preorder and feedback remain partial/future.
 
 Telegram fallback/staff-chat product status is tracked in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity are `SPEC UPDATED`; staff-chat is radar/shortcut only, while Platform Owner guest-QR test escape, platform menu parity, personal staff notifications and delivery-history surfaces remain partial/future.
 
 Testing/QA smoke strategy is tracked in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Local validation, GitHub Actions expectations, change-type test matrix, manual smoke suites, staging deploy policy, failure reporting and Codex handoff rules are `UPDATED`; docs-only changes do not require staging deploy.
 
-Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Favorites, visit/order/booking history, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
+Guest growth/retention product status is tracked in `docs/GROWTH_RETENTION.md`. Guest visit/order history foundation is `DONE / MVP / STAGING-SMOKE-PASSED`; favorites, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications remain `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty, referrals, paid placement/boosting and advanced recommendations are future unless explicitly implemented and smoked.
 
 ## Telegram payments: Stars vs external billing
 Telegram поддерживает оплату Stars и внешние платежи, это разные потоки:

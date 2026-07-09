@@ -1,6 +1,6 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-07-08.
+Дата актуализации: 2026-07-09.
 
 Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, shift check, arbitrary stats, all dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
@@ -211,7 +211,7 @@ Hold minutes / arrival deadline:
 
 Current vs target:
 - Venue Mini App booking queue/lifecycle, Staff arrival/no-show split, confirmed-only arrival guard, state-aware staff-chat booking buttons and M7a hold settings are smoke-closed.
-- Broader automatic expiry/no-show, preorder, visit-history integration and reminder rollout remain partial/future unless explicitly enabled and smoked under `docs/BOOKING_LIFECYCLE.md`.
+- Broader automatic expiry/no-show, preorder, feedback and reminder rollout remain partial/future unless explicitly enabled and smoked under `docs/BOOKING_LIFECYCLE.md`; Guest History Foundation is closed and stays in regression.
 
 ## Menu / Stop-List Operations
 

@@ -1,6 +1,6 @@
 # Analytics And Events Model
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-09.
 
 Статус: **current product reference / SPEC UPDATED**. Analytics implementation is **PARTIAL / needs verification** unless a specific repository, migration, dashboard or smoke result is cited by an implementation task. This document defines target events, KPI formulas, dashboards, audit boundaries and privacy rules for Telegram bot + Mini App.
 
@@ -281,7 +281,7 @@ Booking:
 - Booking seated rate = `booking_seated` / confirmed or changed bookings.
 - Time to confirm = `booking_confirmed` - `booking_created`.
 - Reminder confirmation rate = attendance confirmations / sent reminders. This is future/rollout-gated where reminders remain disabled by default.
-- Booking-to-visit conversion = `booking_seated` or linked completed visit / `booking_created`.
+- Booking-to-visit conversion = `booking_seated` or linked completed visit / `booking_created`; cancelled, no-show, expired, pending and changed bookings are not visit conversions.
 
 Support:
 - TTFR = first non-guest support reply - `support_ticket_created`.
@@ -374,7 +374,7 @@ Platform Owner:
 | Telegram fallback / staff-chat events | Fallback payload, staff-call ACK/DONE and staff-chat diagnostics are closed for current smoke paths; broad event coverage needs verification. | Emit safe bot entrypoint, fallback order, staff-call, link/test, notification and callback facts. | Delivery/outbox telemetry is not business source of truth; payloads must not include message text or secrets. |
 | Billing events | Billing audit exists for checkout ensure, mark-paid and courtesy days. Provider/webhook analytics needs verification. | Emit subscription, invoice and payment webhook facts. | Card/Stars metrics future until provider rollout. |
 | Staff profile/shift/tip events | Phase 1 staff profiles/today shift runtime is done/local-smoke-passed; analytics emission coverage still needs verification. Canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Emit safe profile view/publish, today-shift view/mark-active, future schedule shift-created/confirmed and future tip intent/click facts. | Tip intent/click must not be interpreted as payment confirmation; schedule/tip events remain future until those domains exist. |
-| Growth events | Growth product is `SPEC UPDATED / PARTIAL-FUTURE`. | Emit favorite, visit, repeat, feedback and promotion facts. | Blocked by Growth implementation and visit foundation. |
+| Growth events | Guest History Foundation MVP is DONE / staging-smoke-passed as domain read behavior, but growth analytics event emission still needs verification. | Emit favorite, visit, repeat, feedback and promotion facts from authoritative server-side mutations. | `visit_recorded` should count only real completed visits/orders: closed-order visits, booking `SEATED` visits and deduped merged visits. Cancelled/no-show/expired/pending/changed bookings and legacy invalid rows must not become visit analytics facts. Favorites, repeat, feedback and promotions remain future until implemented/smoked. |
 | Dashboard UI | Venue read-only stats exist; Platform analytics dashboard is future/partial. | Role-specific dashboards from reliable events. | Advanced dashboards after event reliability. |
 | Audit logs | Several critical audit rows exist where implemented. | Audit all critical state changes with actor and safe old/new fields. | Fill gaps for menu price, QR rotate, force close, tab reopen, provider config. |
 | Notification outbox | Telegram outbox/workers exist and expose operational metrics. | Delivery state is technical telemetry, separate from analytics facts. | Do not treat outbox rows as business conversions. |
@@ -386,7 +386,7 @@ Platform Owner:
 - Security/RBAC matrix: `UPDATED` in `docs/SECURITY_RBAC_MATRIX.md`; analytics exports and audit views must follow that role/scope model.
 - Platform analytics dashboard: `FUTURE/PARTIAL`.
 - Booking/support/Telegram fallback/staff-chat/growth events: `PARTIAL/FUTURE` unless implementation evidence exists.
-- Growth remains blocked by order/session/tab and visit history stability.
+- Growth analytics can build on the completed Guest History Foundation, but analytics event emission and dashboards remain partial until `visit_recorded` and later favorite/repeat/feedback/promotion events are implemented and verified.
 - Advanced dashboards should wait until event emission, payload safety and aggregation semantics are reliable.
 
 ## Smoke / Acceptance Checklist
@@ -404,3 +404,4 @@ Platform Owner:
 11. Venue Owner cannot see another venue analytics.
 12. Staff does not see platform analytics.
 13. Staff profile/shift analytics contains only public display fields or opaque ids, not `linked_user_id`, private Telegram usernames, phone/email or external payment secrets.
+14. If `visit_recorded` exists, it excludes cancelled/no-show/expired/pending/changed bookings, hides legacy invalid rows and dedupes booking `SEATED` + closed order for the same real visit.

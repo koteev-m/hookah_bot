@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-08.
+Дата актуализации: 2026-07-09.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -66,6 +66,7 @@ Expectations:
 | Support/tickets | `*Support*`, RBAC tests, Mini App build/e2e if UI changed. | Backend split + Mini App if affected. | Yes for runtime. | Guest/Venue/Platform support smoke. | Medium/high. |
 | Booking | `*VenueBookingRoutesTest*`, Guest booking/reminder tests if affected, Telegram tests if bot changed. | `backend-venue-booking-rbac`, Telegram lightweight where affected. | Yes for runtime. | Booking lifecycle smoke. | Medium/high. |
 | Menu/stop-list | Menu/availability route tests, order stale-availability tests, Mini App build/e2e if UI changed. | Backend + Mini App if affected. | Usually yes. | Menu/stop-list smoke. | Medium/high. |
+| Guest history/growth | `*Visit*`, `*GuestVisitRoutesTest*`, Mini App build/e2e smoke for UI changes. | Backend split + Mini App if affected. | Yes for runtime. | Guest History or Growth checklist from `docs/GROWTH_RETENTION.md`. | Medium/high for privacy. |
 
 ## Standard Pre-Commit Workflow
 
@@ -273,6 +274,22 @@ Booking:
 - pending and changed booking cards have no arrival buttons;
 - stale staff-chat booking arrival callback does not change booking state;
 - booking chat stays `BOOKING_CHAT`.
+
+Guest History:
+- new guest sees empty History state;
+- closed order appears in History;
+- old closed order with no discounts/options opens detail;
+- detail shows positions and total;
+- missing `promotionDiscounts`, options or note does not crash;
+- booking-only `SEATED` visit can show safe copy if no order lines exist;
+- canceled/no-show/expired/pending/changed bookings do not appear as visits;
+- `← Назад к истории` returns to the History list;
+- Telegram BackButton inside detail returns to the History list;
+- real 404 shows `Не удалось загрузить детали истории.`;
+- foreign detail returns 404;
+- guest does not see another guest's personal tab/order detail;
+- shared-tab-only member does not see чужие personal/order details;
+- booking `SEATED` + order closed does not double-count the same real visit where merge/dedup applies.
 
 Platform/support:
 - Platform sees support tickets;

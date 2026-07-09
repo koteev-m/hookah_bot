@@ -1,6 +1,6 @@
 # Guest
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-09.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл фиксирует текущее поведение Guest в Telegram bot и Mini App после последних parity/fix-pack'ов.
 
@@ -67,9 +67,10 @@ Account/bookings:
 - guest booking MVP присутствует: create/list active bookings/status refresh, cancel/accept changed time where supported;
 - M7b Guest Mini App `Мои брони` implemented with staging visual parity: account-level list shows active/upcoming bookings across venues with bot-compatible public `Бронь №...`, venue-local date/time, status, party size, comment and `Держим до HH:mm` when applicable; recorded staging evidence compares Bot `/my` and Guest Mini App public label, venue-local time and deadline, while real two-account Telegram runtime isolation remains unverified;
 - account baseline включает history/favorites sections;
+- Guest History Foundation is DONE / staging-smoke-passed: History shows closed-order visits and booking-only `SEATED` visits, hides non-seated booking statuses as visits, opens old closed-order details safely and keeps privacy filters strict.
 - Growth/retention target UX:
   - `Избранное` in catalog/card for favorite venues;
-  - `История` as visits, bookings and closed orders, not raw technical ids;
+  - `История` as completed visits/orders, not raw technical ids;
   - `Повторить` as a template applied only on the next verified table context;
   - `Оценить` only after confirmed visit;
   - `Акции` with clear period and terms;
@@ -96,7 +97,7 @@ Account/bookings:
 - Смотреть свой active/current order и backend-owned счёт.
 - Запросить счёт по своему active order/tab and choose an on-site payment note for staff.
 - Завершать свой table context, если нет активного счёта/обязательств и активного вызова персонала.
-- Пользоваться account/favorites/history baseline, где он доступен; full `FAVORITE_VENUE`, `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`, `REPEAT_TEMPLATE`, `POST_VISIT_FEEDBACK`, `VENUE_PROMOTION` and `OPT_IN_NOTIFICATION` behavior remains governed by `docs/GROWTH_RETENTION.md`.
+- Пользоваться account/favorites/history baseline, где он доступен. `VISIT_HISTORY` / `ORDER_HISTORY` foundation is staging-smoked; full `FAVORITE_VENUE`, `BOOKING_HISTORY` polish, `REPEAT_TEMPLATE`, `POST_VISIT_FEEDBACK`, `VENUE_PROMOTION` and `OPT_IN_NOTIFICATION` behavior remains governed by `docs/GROWTH_RETENTION.md`.
 
 ## Denied actions
 
@@ -125,7 +126,8 @@ Account/bookings:
 - Telegram fallback/staff-chat spec is `UPDATED` in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Guest QR `/start`, table context, fallback chat order, bot staff-call, `Чаты`/`Помощь` handoff and staff-chat allow/deny policy are canonical.
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Guest-facing changes require matching backend/Mini App/Telegram validation and manual smoke according to change type.
 - Полная guest profile/promotions/loyalty parity остаётся частичной.
-- Favorites/history есть как baseline, но full growth/retention MVP remains `SPEC UPDATED / PARTIAL-FUTURE` until staging smoke proves favorite/unfavorite, visit/order/booking history, repeat template, post-visit feedback, simple promotions and opt-in notification behavior.
+- Guest History Foundation is CLOSED / staging smoke passed and stays in regression: closed-order visits and booking-only `SEATED` visits are visible, old closed-order details tolerate missing `promotionDiscounts`/options/notes, non-seated bookings are hidden as visits, detail back navigation returns to History and privacy checks stay strict.
+- Favorites, repeat template, post-visit feedback, simple promotions and opt-in notification behavior remain `SPEC UPDATED / PARTIAL-FUTURE`.
 - M4B/M4C `Сообщения` staging smoke passed; keep thread scoping, unread and resolve/reopen lifecycle in regression.
 - Guest Communication UX split is CLOSED / smoke passed: global `Чаты`, global `Помощь`, catalog/venue-detail `Задать вопрос`, `VENUE_CHAT` reuse, support ticket context routing and table-context staff-call separation stay in regression. Advanced support features such as SLA automation, attachments, macros, CSAT and diagnostics reports remain future work.
 - M5 staff-call compact UX staging smoke passed; `tableSessionId` payload, backend persistence and staff-chat event/enqueue are CLOSED / code-test verification passed. Guest status now includes `NEW` / `ACK` / `DONE` / `CANCELLED` for the current guest and current table session, with `CANCELLED` shown as `Вызов отменён`. Staff-chat activity-card polish also passed: DONE/CANCELLED generic calls no longer stay active in `Оперативно`, and linked closed-visit call leftovers are resolved on order/bill close.
@@ -162,11 +164,22 @@ Account/bookings:
 17. Verify order/session/tab core from `docs/ORDER_SESSION_TAB_CORE.md`: first and second batches stay in the same active table session/order with separate batches; second guest at the same table gets own personal tab and cannot see the first guest personal tab; joined shared tab is visible only after consent; expired session shows `Отсканируйте QR на столе заново.`
 18. Verify menu/options/stop-list core from `docs/MENU_OPTIONS_STOPLIST.md`: unavailable item/option is hidden or disabled by venue policy, stale cart submit is rejected safely, and selected option names/prices remain visible in the resulting order/bill snapshot.
 
+Guest History regression smoke from `docs/GROWTH_RETENTION.md`:
+
+19. Open History as a new guest and verify the empty state.
+20. Confirm a closed order appears in History, opens detail, and detail shows positions and total.
+21. Confirm an old closed order with missing discounts/options/notes opens without crashing.
+22. Confirm booking-only `SEATED` visit can show safe copy when no order lines exist.
+23. Confirm `CANCELED`, `NO_SHOW`, `EXPIRED`, `PENDING` and `CHANGED` bookings do not appear as visits.
+24. Confirm `← Назад к истории` and Telegram BackButton inside detail return to the History list.
+25. Confirm real 404 shows `Не удалось загрузить детали истории.`.
+26. Confirm foreign detail returns 404 and чужие personal/shared/private order details are hidden.
+27. Confirm booking `SEATED` + order closed does not double-count where merge/dedup applies.
+
 Future Growth/retention smoke from `docs/GROWTH_RETENTION.md`:
 
-19. Favorite and unfavorite a venue; verify it appears/disappears in favorite venues.
-20. Open history and verify visits, closed orders and bookings are shown with safe labels.
-21. Use `Повторить`; confirm it creates only a repeat template and requires the next table context before order creation.
-22. Confirm unavailable/stopped items are skipped or clearly marked during repeat template application.
-23. Confirm feedback is requested only after a confirmed visit and low ratings do not auto-open a public review link.
-24. Confirm promotions show active period/terms, hidden/suspended promotions are absent, and marketing notifications require opt-in plus unsubscribe.
+28. Favorite and unfavorite a venue; verify it appears/disappears in favorite venues.
+29. Use `Повторить`; confirm it creates only a repeat template and requires the next table context before order creation.
+30. Confirm unavailable/stopped items are skipped or clearly marked during repeat template application.
+31. Confirm feedback is requested only after a confirmed visit and low ratings do not auto-open a public review link.
+32. Confirm promotions show active period/terms, hidden/suspended promotions are absent, and marketing notifications require opt-in plus unsubscribe.
