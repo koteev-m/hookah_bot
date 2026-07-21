@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-09.
+Дата актуализации: 2026-07-21.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -291,6 +291,20 @@ Guest History:
 - shared-tab-only member does not see чужие personal/order details;
 - booking `SEATED` + order closed does not double-count the same real visit where merge/dedup applies.
 
+Post-Visit Feedback:
+- Owner opens Venue Settings `Ссылка для отзывов` and sees the Yandex Maps/Yandex Business helper plus ethical hint;
+- Owner saves a safe public review URL; Bot and Mini App read the same setting;
+- Guest submits manual `5/5` from an eligible History detail and sees `Оставить отзыв на Яндекс.Картах` only when the URL exists;
+- clearing the URL removes the CTA; no broken CTA or automatic Yandex redirect appears;
+- Guest submits `1/5`; the feedback appears in the own-venue Feedback list with low-rating helper;
+- Owner/Manager clicks `Связаться с гостем`; the exact `VENUE_CHAT` detail opens with `Отзыв после визита` context;
+- an existing active chat is reused with fresh feedback context; a closed/resolved old chat leads to a new active chat;
+- Owner/Manager sends a manual reply and Guest receives it in `Чаты`, not Support;
+- Staff cannot see the Feedback section or follow-up action, including through direct API;
+- feedback submit/follow-up creates no staff-chat notification and no support ticket;
+- `VisitFeedbackWorker`, scheduled Telegram feedback prompts, marketing push and automatic Yandex redirect remain disabled;
+- booking-only `SEATED` feedback keeps `Можно оценить бронь, встречу и обслуживание.` and non-seated booking outcomes remain ineligible.
+
 Platform/support:
 - Platform sees support tickets;
 - Platform does not see ordinary `VENUE_CHAT`;
@@ -320,7 +334,7 @@ Telegram/staff-chat:
 - Real Telegram fallback order smoke remains required for release confidence.
 - Platform Owner guest QR test escape remains open/needs verification.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
-- Advanced support, growth and billing/provider features remain future unless implemented and smoked.
+- Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP is staging-smoke-passed and stays in regression.
 - Menu shift check and per-venue `staff_stoplist_enabled` remain future.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.

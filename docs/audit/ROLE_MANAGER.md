@@ -1,12 +1,12 @@
 # Manager
 
-Дата актуализации: 2026-07-08.
+Дата актуализации: 2026-07-21.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
 ## Current status
 
-Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; `Акции и удержание` remain partial/future unless backend-backed and smoked.
+Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; Post-Visit Feedback read/follow-up is staging-smoked, while promotions and other growth loops remain partial/future.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Booking lifecycle and queue rules follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat and callback rules follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profiles, today shift and future staff tips follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -47,6 +47,7 @@ Manager Mini App areas:
 - bookings;
 - `Сообщения` for `BOOKING_CHAT` and `VENUE_CHAT`;
 - `Помощь` / `Обращения` for own-venue `SUPPORT_TICKET`;
+- `Отзывы` with read-only own-venue aggregate/list and low-rating `Связаться с гостем`;
 - staff calls;
 - shift-extension requests/settings;
 - menu and availability management;
@@ -68,6 +69,7 @@ Manager Mini App areas:
 - Manage bookings: confirm, cancel, change/propose time, message guest, mark confirmed bookings arrived/no-show and booking settings.
 - Read/reply/resolve booking conversation threads where `BOOKING_MANAGE` allows it.
 - Read/reply to ordinary `VENUE_CHAT` for the manager's venue.
+- Read own-venue feedback and manually open exact `VENUE_CHAT` follow-up with feedback context for ratings `1..3`.
 - Read/reply/resolve own-venue `SUPPORT_TICKET` and manually `Передать платформе` support tickets when needed.
 - View statistics.
 - View Manager analytics where implemented: shift dashboard, queue backlog, SLA timers, active staff calls and bookings waiting response.
@@ -85,6 +87,7 @@ Manager Mini App areas:
 - Subscription commercial terms, Platform Owner billing cockpit, manual mark-paid and courtesy/free-days controls.
 - Billing/payment controls in Venue Owner subscription screen.
 - Owner-only venue settings if backend requires owner permission.
+- Edit the Owner-only public review URL setting.
 - Promote users to owner/platform owner or bypass last-owner protection.
 - Rotate all table tokens or other owner-only QR actions if backend permission does not allow it.
 - Unlink staff chat if backend keeps unlink owner-only.
@@ -115,7 +118,7 @@ Manager Mini App areas:
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Manager/Venue changes require role smoke and direct denial checks according to change type.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current docs allow broad Manager menu management, but conservative target policy keeps Manager to stop-list, shift check and basic availability unless product explicitly retains broader `MENU_MANAGE`.
-- Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE`: simple venue promotions, favorite/history/repeat loops and post-visit feedback need implementation and staging smoke before being called complete. Staff remains excluded from growth campaign management.
+- Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE` overall. Post-Visit Feedback read and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed; favorites, repeat and simple promotions remain future. Staff remains excluded from feedback and growth campaign management.
 - Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Manager may mark today's visible shift under current conservative policy, while Owner remains the default for profile publish/hide and future tip-method approval. Schedule, photo upload and staff tips remain future.
 
 ## Smoke-critical checks
@@ -136,10 +139,12 @@ Manager Mini App areas:
 14. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
 15. Manager menu permissions match the product policy from `docs/MENU_OPTIONS_STOPLIST.md`: stop-list/shift check/basic availability are allowed, while price/media/structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally retained and tested.
 16. Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
+17. Manager sees only own-venue feedback, can open exact `VENUE_CHAT` follow-up only for rating `1..3`, and sees the feedback context without an auto-sent personal message.
+18. Manager cannot edit the Owner-only public review URL; feedback follow-up creates no support ticket or staff-chat notification.
 
 Future Growth/retention checks:
 
-17. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
-18. Promotion is visible only during active period and hidden/suspended promotions are absent.
-19. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
-20. Staff cannot see or manage `Акции и удержание`.
+19. If Manager access is allowed, Manager can create a simple promotion with title, description, active period, terms and visibility/status.
+20. Promotion is visible only during active period and hidden/suspended promotions are absent.
+21. Promotion copy does not imply automatic discount unless promo engine/accounting is implemented.
+22. Staff cannot see or manage `Акции и удержание`.

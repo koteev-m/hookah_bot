@@ -1,6 +1,6 @@
 # Staff
 
-Дата актуализации: 2026-07-08.
+Дата актуализации: 2026-07-21.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
 
@@ -8,7 +8,7 @@
 
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
 
-Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET` and does not handle ordinary `VENUE_CHAT`. Booking lifecycle and Staff arrival/no-show boundaries follow `docs/BOOKING_LIFECYCLE.md`. Telegram/staff-chat callback behavior follows `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profile, own draft edit and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
+Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET`, ordinary `VENUE_CHAT` or Post-Visit Feedback/follow-up. Booking lifecycle and Staff arrival/no-show boundaries follow `docs/BOOKING_LIFECYCLE.md`. Telegram/staff-chat callback behavior follows `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profile, own draft edit and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
@@ -62,7 +62,7 @@ STAFF Mini App behavior:
 - menu content read-only, with operational item/option availability toggles;
 - tables read-only;
 - forbidden management controls hidden and backend-protected.
-- `Помощь` / `Обращения` and ordinary venue chats are hidden and backend-forbidden.
+- `Помощь` / `Обращения`, ordinary venue chats and `Отзывы`/feedback follow-up are hidden and backend-forbidden.
 
 ## Allowed actions
 
@@ -107,6 +107,7 @@ STAFF Mini App behavior:
 - Manage staff chat link/status diagnostics.
 - See or reply to `SUPPORT_TICKET`.
 - See or reply to ordinary `VENUE_CHAT`.
+- See venue feedback, trigger low-rating follow-up or access the Owner-only public review URL setting.
 - Manage venue settings.
 - Manage billing/subscription/platform features, including mark-paid, invoice ensure, courtesy/free-days or payment controls.
 - Treat staff chat as the source of truth for order/bill state or merge orders from different table sessions.
@@ -122,6 +123,7 @@ STAFF Mini App behavior:
 - Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. STAFF active work queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Direct API denial tests remain critical: UI hiding is not a security boundary.
 - Guest Communication UX split is CLOSED / smoke passed for STAFF boundaries: staff remains operational, support/venue-chat API access is denied, and staff-call/order behavior stays separate.
+- Post-Visit Feedback is CLOSED / staging smoke passed with STAFF denied from feedback list, low-rating follow-up and public review URL settings. Feedback and follow-up context do not post to staff-chat.
 - Order/session/tab core is `SPEC UPDATED` in `docs/ORDER_SESSION_TAB_CORE.md`: STAFF can operate statuses according to role, but queue/detail must preserve table-session, batch and tab boundaries. Force close should require reason/audit if implemented by an allowed role.
 - Venue operations spec is `UPDATED` in `docs/VENUE_OPERATIONS.md`: STAFF remains operational-only, sees allowed queue/call/booking/availability surfaces and must not see settings/billing/support/venue-chat workspaces.
 - Booking lifecycle spec is `UPDATED` in `docs/BOOKING_LIFECYCLE.md`: Staff booking scope is operational view plus `SEATED` / `NO_SHOW` only for confirmed bookings under current policy; Staff must not confirm, cancel, change/propose time, message guest or change booking settings.
@@ -151,3 +153,5 @@ STAFF Mini App behavior:
 15. STAFF does not see Owner/Platform analytics dashboards or raw analytics/audit payloads.
 16. STAFF stop-list action, where allowed, changes only item/option availability, writes audit where implemented and behaves identically in Telegram Bot and Venue Mini App.
 17. If policy allows own draft edit, STAFF can edit only own linked public-profile draft fields and cannot publish, hide, enable visibility, edit another profile, mark shifts or approve tip methods.
+18. STAFF does not see `Отзывы`, cannot list feedback or trigger `Связаться с гостем` through direct API, and cannot access the Owner-only public review URL setting.
+19. Staff-chat receives no feedback submission or follow-up context.

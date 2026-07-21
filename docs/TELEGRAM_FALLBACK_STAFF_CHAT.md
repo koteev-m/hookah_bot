@@ -1,6 +1,6 @@
 # Telegram Fallback And Staff-Chat Model
 
-Дата актуализации: 2026-07-08.
+Дата актуализации: 2026-07-21.
 
 Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, guest-visible staff-call `CANCELLED`, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, Platform Owner guest-QR test escape, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
 
@@ -158,6 +158,7 @@ Booking notification buttons are state-aware:
 Forbidden events:
 - `SUPPORT_TICKET` create/reply;
 - `VENUE_CHAT` create/reply;
+- post-visit feedback submit and low-rating feedback follow-up context;
 - full `BOOKING_CHAT` message stream;
 - raw support text;
 - raw payment secrets/provider payloads;
@@ -171,6 +172,9 @@ Clarifications:
 - Booking arrival callbacks must re-load the booking and require `CONFIRMED`; stale callbacks answer `Бронь уже изменилась. Откройте кабинет.`
 - No-permission callbacks answer `Нет прав.`
 - Guest booking replies persist to `BOOKING_CHAT` and do not post into staff-chat.
+- Post-Visit Feedback is guest-initiated from History detail only. `VisitFeedbackWorker`, scheduled Telegram prompts and marketing feedback pushes remain disabled.
+- The public review URL configured in Bot and Venue Mini App is one shared backend setting. Telegram must not create a second review-link source, auto-prompt the guest or auto-open Yandex.
+- Low-rating follow-up uses exact `VENUE_CHAT`; its system/context message and later replies do not post to staff-chat or create a support ticket.
 - Staff-chat messages should include minimum operational context and avoid unrelated PII.
 
 ## Inline Callback Actions
@@ -208,6 +212,7 @@ Current vs target:
 | Booking list/actions | Bot `/my` and booking actions exist. | `Мои брони` parity documented. | Queue/lifecycle smoke-closed. | No ordinary booking ops. | State-aware operational notifications; no full chat stream. | M7c rollout disabled by default; two-account smoke unverified. | Regression |
 | Booking chat | Guest bot replies supported. | `Чаты` includes booking threads. | `Сообщения` includes booking threads. | No ordinary booking chat. | Not full chat stream. | Must not mutate booking lifecycle. | Regression |
 | Venue chat | Bot support depends on current implementation. | Catalog/detail `Задать вопрос` -> `VENUE_CHAT`. | Owner/Manager can reply. | No ordinary venue chat. | Forbidden. | Bot venue-chat entry is target/needs verification if not implemented. | P2 |
+| Post-visit feedback | No automated feedback prompt; public review URL shares backend source with Venue Mini App. | Manual submit from History detail; explicit public review click only after `5/5` when configured. | Owner/Manager feedback list and exact low-rating `VENUE_CHAT`; Owner-only URL edit. | Feedback dashboard future. | Forbidden. | Keep worker/prompts/auto-redirect disabled. | Regression |
 | Support ticket | `/support` fallback where implemented. | `Помощь`. | Own-venue `Обращения`. | Support Center. | Forbidden. | Staff denied; no staff-chat spam. | Regression |
 | Orders queue | Bot shift hub exists. | No. | Primary queue. | No. | Shortcut/notification only. | Large queue/pagination parity needs smoke. | P2 |
 | Staff-call queue | Bot shift hub/staff-chat callbacks exist. | No venue queue. | Primary queue. | No. | Shortcut/notification. | Venue Mode source of truth. | Regression |
@@ -344,3 +349,6 @@ Rules:
 26. Manager cannot access billing/settings from Telegram.
 27. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
 28. Multi-venue user selects correct venue or current gap is documented.
+29. Bot and Venue Mini App read the same public review URL; clearing it removes the Guest `5/5` CTA.
+30. No `VisitFeedbackWorker` or scheduled Telegram feedback prompt is started, and no Yandex link opens automatically.
+31. Feedback submit/follow-up context creates no staff-chat notification and no support ticket.

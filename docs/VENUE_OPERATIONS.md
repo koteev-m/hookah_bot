@@ -1,6 +1,6 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-07-09.
+Дата актуализации: 2026-07-21.
 
 Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, shift check, arbitrary stats, all dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
@@ -36,7 +36,8 @@ Canonical dependencies:
 | Staff / invites | Membership, roles and invite links. | Staff/Manager invite sharing and acceptance are staging-smoked; Platform Owner OWNER invite/revoke is smoke-closed. | Role parity still needs regression after new routes. |
 | Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists and local smoke passed. | Needs staging UX acceptance before production readiness; catalog preview remains future. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
-| Settings | Venue profile, schedule, booking hold, extension, staff-chat and operational settings. | Booking hold, shift extension, public profile/card and schedule/date exceptions are smoke-closed. | Broader settings/media/promotions/preview remain partial/future. |
+| Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
+| Settings | Venue profile, schedule, booking hold, extension, staff-chat and operational settings. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. | Broader settings/media/promotions/preview remain partial/future. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
 
 ## Dashboard
@@ -211,7 +212,7 @@ Hold minutes / arrival deadline:
 
 Current vs target:
 - Venue Mini App booking queue/lifecycle, Staff arrival/no-show split, confirmed-only arrival guard, state-aware staff-chat booking buttons and M7a hold settings are smoke-closed.
-- Broader automatic expiry/no-show, preorder, feedback and reminder rollout remain partial/future unless explicitly enabled and smoked under `docs/BOOKING_LIFECYCLE.md`; Guest History Foundation is closed and stays in regression.
+- Broader automatic expiry/no-show, preorder and reminder rollout remain partial/future unless explicitly enabled and smoked under `docs/BOOKING_LIFECYCLE.md`; Guest History Foundation and booking-only `SEATED` Post-Visit Feedback are closed and stay in regression.
 
 ## Menu / Stop-List Operations
 
@@ -316,6 +317,7 @@ Allowed staff-chat events:
 Forbidden staff-chat events:
 - `SUPPORT_TICKET`;
 - `VENUE_CHAT`;
+- post-visit feedback submission or feedback follow-up context;
 - ordinary guest support messages;
 - raw menu/price edits.
 
@@ -330,6 +332,19 @@ Target settings groups:
 - Modules: orders, staff calls, bookings, promotions/future, menu visibility policy.
 - Operations: timezone, order numbering, notification toggles, staff-chat settings.
 - Owner-only: billing/subscription, dangerous lifecycle request, owner access.
+
+Closed public review setting:
+- `Ссылка для отзывов` is edited by Owner only; Staff has no access. Telegram bot and Venue Mini App read/write the same backend setting and must not create duplicate storage.
+- Description: `Эту кнопку покажем гостю только после оценки 5/5. Гость сам решает, переходить ли на Яндекс.Карты.`
+- Helper: `Где взять ссылку: откройте карточку заведения в Яндекс.Картах, нажмите «Поделиться» и скопируйте ссылку. Если у вас есть доступ к Яндекс Бизнесу, лучше взять ссылку на форму отзывов в разделе «О компании» → «Промоматериалы».`
+- Ethical hint: `Не обещайте скидки или бонусы за отзыв и не просите поставить конкретную оценку.`
+- Only a validated safe URL reaches Guest History detail after manual `5/5`; clearing the setting removes the CTA, and no automatic redirect is allowed.
+
+Closed feedback operations:
+- Owner/Manager sees read-only feedback aggregate/list for the current venue; Staff does not see the section or direct API.
+- `Связаться с гостем` is available only for ratings `1..3` and opens the exact active `VENUE_CHAT` with `Отзыв после визита` context. An active thread is reused; a closed/resolved old thread leads to a new active thread.
+- Context may contain rating, tags, comment and visit date. It is a system/context message, not an auto-sent personal reply.
+- Follow-up does not create `SUPPORT_TICKET`, post to staff-chat or send a message until Owner/Manager explicitly replies.
 
 Current vs target:
 - Venue Mini App settings are no longer a broad dead placeholder for the closed slices: booking hold, shift extension settings, public profile/card, schedule/date exceptions and staff-chat management are backend-backed in current docs.
@@ -377,7 +392,7 @@ Current vs target:
 | Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotate audit/diagnostics need verification. | P2 |
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |
-| Settings | Bot richer in some areas. | Backend-backed slices exist; broader settings partial. | No. | Hide non-backed placeholders. | P2 |
+| Settings | Bot and Mini App share the public review URL source; Bot remains richer in some other areas. | Backend-backed slices include Owner-only `Ссылка для отзывов`; broader settings partial. | No. | Keep shared-source parity and hide non-backed placeholders. | Regression/P2 |
 | Stats | Bot stats exist. | Read-only stats smoke-closed. | No. | Custom ranges/advanced analytics future. | P2 |
 
 ## Current Known Gaps
@@ -385,10 +400,10 @@ Current vs target:
 - Staff-call ACK/DONE and guest-visible `CANCELLED` are smoke-closed; manual cancel UI, row-level actor/timestamps and quick replies remain future.
 - Booking queue/lifecycle is smoke-closed for MVP; automatic expiry/no-show policy, preorder and broad reminder rollout remain future.
 - Full bill/display/order snapshots are smoke-closed for current paths; tab reopen, force-close reason/audit and all modifier variants need verification.
-- Settings are `PARTIAL`: closed slices are backend-backed, but broader settings/media/promotions/preview remain future/partial.
+- Settings are `PARTIAL`: closed slices are backend-backed, including Owner-only public review URL shared by Bot/Mini App, but broader settings/media/promotions/preview remain future/partial.
 - Staff stop-list parity is documented as aligned for current item/option availability; per-venue `staff_stoplist_enabled` remains future.
 - Manager broad `MENU_MANAGE` remains a product-policy decision: keep and test it, or narrow to stop-list/shift check/basic availability.
-- Staff-chat notification policy is documented for orders/calls/bookings and explicitly excludes support/venue chats; personal staff notifications remain future.
+- Staff-chat notification policy is documented for orders/calls/bookings and explicitly excludes support, venue chats and post-visit feedback/follow-up context; personal staff notifications remain future.
 - Multi-venue selector/entry should stay in regression for users with several venue memberships.
 
 ## Roadmap Status
@@ -397,7 +412,8 @@ Current vs target:
 - Venue operations implementation: `PARTIAL / DONE-POLISH by slice`; core orders/bill/staff-call/bookings/staff-chat/menu-options settings slices are smoke-closed, but a complete operating cockpit still has future/partial areas.
 - Staff-call lifecycle: `CLOSED for NEW/ACK/DONE MVP plus guest-visible CANCELLED`, `PARTIAL` for manual cancel UI, quick replies and row-level actors.
 - Booking queue: `CLOSED for MVP`, `PARTIAL` for automation/preorder/reminder rollout.
-- Settings: `PARTIAL`, with several backend-backed slices closed.
+- Post-Visit Feedback: `DONE / MVP / STAGING-SMOKE-PASSED`, including manual `5/5` public review CTA and low-rating `VENUE_CHAT` follow-up.
+- Settings: `PARTIAL`, with several backend-backed slices closed, including Owner-only `Ссылка для отзывов` shared by Bot/Mini App.
 - Full bill/display/order snapshots: `CLOSED for current smoke paths`, `PARTIAL` for force-close/reopen/all modifier variants.
 - Stop-list parity: current item/option parity documented; per-venue Staff policy and mass/shift-check remain future.
 - Staff-chat source-of-truth policy: `DOCUMENTED`.
@@ -432,3 +448,11 @@ Current vs target:
 26. Manager cannot access billing.
 27. Staff cannot access settings, billing, support tickets or venue chats.
 28. Venue user cannot access another venue.
+29. Owner opens `Ссылка для отзывов`, sees the Yandex Maps/Yandex Business helper plus ethical hint, and can save/update/clear a safe URL; Manager/Staff cannot edit it.
+30. Guest manual `5/5` submit shows the Yandex CTA only while the safe URL exists; clearing the URL removes it and no automatic redirect occurs.
+31. Guest `1/5` feedback appears in the own-venue Feedback list; Staff cannot see the section/action.
+32. Owner/Manager clicks `Связаться с гостем` and the exact `VENUE_CHAT` opens with rating, tags/comment when present and visit date context.
+33. Existing active guest+venue chat is reused with fresh feedback context; a closed/resolved old chat results in a new active thread.
+34. Guest receives only a manual Owner/Manager reply in `Чаты`, not Support.
+35. Feedback submission/follow-up creates no support ticket and no staff-chat notification.
+36. `VisitFeedbackWorker`, scheduled Telegram feedback prompts and automatic Yandex redirect remain disabled.

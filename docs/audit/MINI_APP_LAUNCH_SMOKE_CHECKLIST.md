@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-09.
+Дата: 2026-07-21.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -40,12 +40,13 @@
 - Platform Billing Renewal / Advance Invoice / Courtesy Days: CLOSED / staging smoke passed. Next invoice period is based on effective paid-through + 1 day, repeated next-invoice ensure is idempotent, Platform Owner can create the next invoice in advance, `billing_adjustments` stores `COURTESY_DAYS`, Platform Owner courtesy/free days require reason, `BILLING_COURTESY_DAYS_ADDED` audit is written, paid-through/next-payment dates shift, Venue Owner sees adjusted state, and Manager/Staff cannot access payment controls.
 - Staff/Manager invite deep-link sharing polish: CLOSED / staging smoke passed. Telegram invite messages use valid `t.me` staff invite links and copy-text buttons where supported; Venue Mini App invite result has one selectable invite link field, primary copy-link/share-in-Telegram actions, a secondary fallback command and no self-open result-card action. Manager/Staff invite acceptance smoke passed and payment controls stayed hidden/forbidden.
 - Guest Communication UX / Support Tickets MVP: CLOSED / smoke passed. Canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL`; Guest nav is `Чаты` / `Помощь`; catalog/venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` stays `BOOKING_CHAT`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support and venue chat create/reply paths do not post to staff-chat.
-- Order/session/tab core docs: `docs/ORDER_SESSION_TAB_CORE.md` is the source of truth for `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation. Current runtime docs say table-session/tab scoping and Guest History Foundation MVP are closed; force-close reason/audit, DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
+- Post-Visit Feedback MVP plus public-review/follow-up smoke-fix: CLOSED / staging smoke passed. Guest submits only from own completed History detail; booking-only `SEATED` remains eligible; manual `5/5` can show a configured safe Yandex CTA; Owner/Manager sees feedback and opens exact low-rating `VENUE_CHAT` with context; Staff denied; no automatic message, support ticket, staff-chat notification, worker prompt or auto-redirect.
+- Order/session/tab core docs: `docs/ORDER_SESSION_TAB_CORE.md` is the source of truth for `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are closed; force-close reason/audit, DB-level uniqueness nuances, repeat/loyalty/preorder and broader analytics remain future/partial.
 - Analytics/events docs: `docs/ANALYTICS_EVENTS.md` is the source of truth for analytics events, KPI formulas, dashboards, audit/event boundaries and payload privacy rules. Implementation remains partial/needs verification; client events must not drive money, access, billing or order state.
 - Security/RBAC docs: `docs/SECURITY_RBAC_MATRIX.md` is the source of truth for roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist. Permission parity and dangerous-action audit remain partial unless route tests/smoke prove them.
 - Menu/options/stop-list docs: `docs/MENU_OPTIONS_STOPLIST.md` is the source of truth for structured menu, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions. Selected-option parity is smoke-closed; broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
 - Venue operations docs: `docs/VENUE_OPERATIONS.md` is the source of truth for Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke. Venue Mode is source of truth; staff-chat is radar/shortcut only.
-- Booking lifecycle docs: `docs/BOOKING_LIFECYCLE.md` is the source of truth for guest booking flow, Venue booking queue, statuses, hold minutes, `arrival_deadline`, confirmed-only arrival actions, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke. Current queue/hold/list/chat/arrival-guard and booking `SEATED` -> Guest History paths are smoke-closed by slice; reminder rollout, automation, preorder and feedback remain partial/future.
+- Booking lifecycle docs: `docs/BOOKING_LIFECYCLE.md` is the source of truth for guest booking flow, Venue booking queue, statuses, hold minutes, `arrival_deadline`, confirmed-only arrival actions, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke. Current queue/hold/list/chat/arrival-guard, booking `SEATED` -> Guest History and booking-only `SEATED` feedback eligibility are smoke-closed by slice; reminder rollout, automation and preorder remain partial/future.
 - Telegram fallback/staff-chat docs: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` is the source of truth for Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity. Staff-chat is radar/shortcut only.
 - Testing/QA smoke strategy docs: `docs/TESTING_QA_SMOKE_STRATEGY.md` is the source of truth for change-type validation, GitHub Actions expectations, staging policy, manual smoke suites, failure reporting and Codex handoff.
 - Deployment/runbook docs: `docs/DEPLOYMENT_RUNBOOK.md` is the source of truth for release model, staging deploy command, environment inventory, migration runbook, rollback policy, troubleshooting and incident response.
@@ -62,7 +63,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE THROUGH GUEST COMMUNICATION UX / SUPPORT TICKETS MVP`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish and guest communication/support-ticket split.
+Status: `PASSED FOR CURRENT RELEASE THROUGH POST-VISIT FEEDBACK MVP SMOKE-FIX`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish, guest communication/support-ticket split and Post-Visit Feedback.
 
 Confirmed:
 
@@ -112,7 +113,7 @@ Remaining:
 - invoice void/reissue for courtesy conflicts with already-open future invoices remains a follow-up;
 - billing-created versus manual `SUSPENDED_BY_PLATFORM` distinction remains a follow-up before broader auto-reactivation;
 - Support/Tickets MVP beyond booking threads is closed and stays in regression; SLA automation, auto-escalation, macros, attachments, CSAT, diagnostics and support analytics remain future work;
-- guest growth/retention flows remain `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`: Guest History Foundation MVP is closed/staging-smoked and stays in regression; favorites, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications are future smoke targets;
+- guest growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` overall in `docs/GROWTH_RETENTION.md`: Guest History Foundation and Post-Visit Feedback MVP are closed/staging-smoked and stay in regression; favorites, repeat templates, simple venue promotions and opt-in notifications are future smoke targets;
 - platform analytics dashboards remain future work;
 - P1 follow-up: paid venue/shift extension is implemented in backend, Guest/Venue Mini App, Guest Bot entry and staff-chat action path; remaining parity is Owner/Manager Bot settings smoke/closure where still needed by roadmap;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
@@ -603,7 +604,7 @@ Use this checklist after any order/session/tab, bill, tab, staff-chat order-card
 
 ## 11. Guest History And Future Growth/Retention Smoke Checklist
 
-Use the History section after any Guest History change. Use the future Growth section only after a dedicated Growth/retention implementation milestone. Current status is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`, with Guest History Foundation MVP already `DONE / STAGING-SMOKE-PASSED`.
+Use the History and Feedback sections after changes to their closed slices. Use the future Growth section only after another dedicated Growth/retention implementation milestone. Current overall status is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`, with Guest History Foundation and Post-Visit Feedback MVP already `DONE / STAGING-SMOKE-PASSED`.
 
 History regression:
 1. New guest sees empty History state.
@@ -621,18 +622,29 @@ History regression:
 13. Shared-tab-only member does not see чужие personal/order details.
 14. Booking `SEATED` + order closed does not double-count the same real visit where merge/dedup applies.
 
+Post-Visit Feedback regression:
+1. Owner opens `Ссылка для отзывов` and sees the Yandex Maps/Yandex Business helper plus ethical hint.
+2. Owner saves a safe public review URL; Bot and Mini App use the same backend value.
+3. Guest submits `5/5` from eligible History detail and sees `Оставить отзыв на Яндекс.Картах` only while the URL exists.
+4. Clearing the URL removes the CTA; no broken CTA or automatic Yandex redirect appears.
+5. Guest submits `1/5`; the feedback appears in Venue Feedback and Owner/Manager sees `Связаться с гостем`.
+6. The action opens the exact `VENUE_CHAT` detail and shows `Отзыв после визита` with rating, tags/comment when present and visit date.
+7. Existing active chat is reused with fresh feedback context; a closed/resolved old chat results in a new active chat.
+8. Owner/Manager sends a manual reply and Guest receives it in `Чаты`, not Support.
+9. Staff cannot see feedback or follow-up actions; feedback creates no staff-chat notification or support ticket.
+10. Booking-only `SEATED` keeps `Можно оценить бронь, встречу и обслуживание.`; non-seated outcomes remain ineligible.
+11. `VisitFeedbackWorker`, scheduled Telegram prompts, marketing push and automatic Yandex redirect remain disabled.
+
 Future Growth:
 1. Guest can favorite and unfavorite a venue from catalog/card.
 2. Guest sees favorite venues.
 3. `Повторить` creates a repeat template and requires table context before any order is created.
 4. Repeat template skips or clearly marks unavailable/stopped items.
-5. Feedback is requested only after confirmed visit.
-6. Low rating does not automatically push a public review link.
-7. Promotion is visible only during active period.
-8. Suspended/hidden venue promotions are not visible.
-9. Promo/retention notifications require opt-in and can be disabled.
-10. Staff does not see or manage growth campaigns.
-11. Platform paid placement label is visible if/when paid placement is implemented.
+5. Promotion is visible only during active period.
+6. Suspended/hidden venue promotions are not visible.
+7. Promo/retention notifications require opt-in and can be disabled.
+8. Staff does not see or manage growth campaigns.
+9. Platform paid placement label is visible if/when paid placement is implemented.
 
 ## 12. Analytics/Events Smoke Checklist
 

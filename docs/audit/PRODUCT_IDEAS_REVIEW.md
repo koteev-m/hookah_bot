@@ -10,7 +10,7 @@
 >
 > Current docs correction as of 2026-07-06: Platform cockpit status is consolidated in `docs/PLATFORM_COCKPIT.md`. Manual billing and support-ticket center are closed as MVPs; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle state normalization remain future/partial.
 >
-> Current docs correction as of 2026-07-09: Guest growth/retention status is consolidated in `docs/GROWTH_RETENTION.md`. Guest History Foundation is DONE / MVP / staging-smoke-passed; favorite venues, repeat as a template for the next table context, post-visit feedback after confirmed visit, simple venue promotions/banners and opt-in notifications remain future. Promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and recommendations remain future.
+> Current docs correction as of 2026-07-21: Guest growth/retention status is consolidated in `docs/GROWTH_RETENTION.md`. Guest History Foundation and Post-Visit Feedback MVP are DONE / MVP / staging-smoke-passed. Manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; automated review prompts/public review automation and Platform feedback dashboard remain future/disabled. Favorite venues, repeat as a template, simple promotions/banners and opt-in notifications remain future. Promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and recommendations remain future.
 >
 > Current docs correction as of 2026-07-09: Order/session/tab core status is consolidated in `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-physical-table risk is closed through table-session/tab scoping and Guest History Foundation MVP is staging-smoked; the canonical model now defines `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, lifecycle, privacy/RBAC and visit-history dependencies. Force-close reason/audit, repeat/feedback/loyalty/preorder, some DB-level uniqueness nuances and analytics events remain future/partial.
 >
@@ -30,6 +30,8 @@
 >
 > Current correction as of 2026-07-09: Guest History Foundation MVP staging bugfix is CLOSED / staging smoke passed. History list/detail show closed-order visits and booking-only `SEATED` visits, hide `CANCELED` / `NO_SHOW` / `EXPIRED` / `PENDING` / `CHANGED` bookings as visits, preserve but filter legacy invalid rows, open old closed-order details without required `promotionDiscounts`/options/notes, keep `Не удалось загрузить детали истории.` for real errors, provide `← Назад к истории`, return Telegram BackButton from detail to History list, and preserve foreign-detail 404 plus personal/shared tab privacy. No migration was added. Favorites, repeat templates, post-visit feedback, simple promotions, loyalty, tips, preorder and marketing notifications remain future.
 >
+> Current correction as of 2026-07-21: Post-Visit Feedback MVP and latest smoke-fix are CLOSED / staging smoke passed. Feedback is manual from own completed History detail, including booking-only `SEATED`; Owner/Manager sees own-venue feedback; Staff denied. Owner-only `Ссылка для отзывов` is shared by Bot/Mini App. Manual `5/5` may show a safe configured Yandex CTA on explicit click; low `1..3` follow-up opens exact `VENUE_CHAT` with context and no automatic Owner message, support ticket or staff-chat notification. `VisitFeedbackWorker`, scheduled Telegram prompts and auto-redirect remain disabled.
+>
 > Current docs correction as of 2026-07-07: Testing/QA smoke strategy is consolidated in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Local validation, GitHub Actions expectations, change-type decision matrix, staging smoke policy, failure reporting, manual smoke suites and Codex handoff rules are canonical. Do not infer release readiness from this historical audit alone.
 >
 > Current docs correction as of 2026-07-07: Deployment/runbook operations are consolidated in `docs/DEPLOYMENT_RUNBOOK.md`. Release model, staging deploy command, environment inventory, migration runbook, rollback policy, troubleshooting, incident response and Codex/ChatGPT handoff are canonical. Exact production deploy/rollback/backup commands remain needs verification.
@@ -40,7 +42,7 @@
 
 Частично, но с заметными gap: booking lifecycle, Mini App surfaces and M7c core reminder flow are now much stronger, but preorder, automatic expiry/no-show automation, broader reminder rollout and broader retention remain later; каталог без server-side search/filter/map/geo; Guest History Foundation is staging-smoke-passed but repeat templates, feedback and broader retention remain later; discount существует как ручной percent на item в счёте, но не как complete growth/promo/loyalty system.
 
-Отсутствует или не launch-complete как full product flow: post-visit feedback/reviews, Yandex review link, paid placement, promotion boosting, repeat templates, preorder, cashback/points/flexible loyalty rules, promo-code limits/accounting, referrals, segmentation/campaigns, hookah master subrole/profile/shift schedule, network/group entity for venue chains. Guest History Foundation is smoked; favorites and promotions may have foundations but should be tracked through `docs/GROWTH_RETENTION.md` until smoked. M7c reminder rollout remains opt-in disabled, not absent.
+Отсутствует или не launch-complete как full product flow: automated review prompts/public review automation, Platform feedback dashboard, paid placement, promotion boosting, repeat templates, preorder, cashback/points/flexible loyalty rules, promo-code limits/accounting, referrals, segmentation/campaigns, hookah master subrole/profile/shift schedule, network/group entity for venue chains. Guest History and Post-Visit Feedback are smoked; favorites and promotions may have foundations but should be tracked through `docs/GROWTH_RETENTION.md` until smoked. M7c reminder rollout remains opt-in disabled, not absent.
 
 Главные зависимости:
 - Core order/session/tab scoping is no longer the old April P0; current code scopes active orders by table session/tab, PostgreSQL has the intended active-order and active personal-tab uniqueness constraints, and H2 now mirrors those predicates for local/test schema fidelity.
@@ -54,7 +56,7 @@
 - `docs/TESTING_QA_SMOKE_STRATEGY.md` is the current source for validation commands, CI expectations, staging policy, failure reporting and manual smoke suite decisions; do not infer QA/release strategy from this historical audit alone.
 - `docs/DEPLOYMENT_RUNBOOK.md` is the current source for release/deploy model, staging command, environment inventory, migrations, rollback, troubleshooting, incident response and Codex/ChatGPT handoff; do not infer operations readiness from this historical audit alone.
 - P1 ops: table-context exit, guest/staff bill display parity, bill request/payment method UX, staff-chat activity card, guest-visible staff-call `CANCELLED`, manual platform billing cockpit, renewal/courtesy, staff invite sharing, Platform cockpit documentation and support/tickets MVP are now staging/smoke-closed or docs-closed; provider payment decision is the next launch-commercial gap before broad growth.
-- P2 growth: post-visit feedback, favorites, repeat templates, simple promotions and opt-in notifications can build on stable Guest History, but each needs its own implementation/smoke.
+- P2 growth: Post-Visit Feedback is closed; favorites, repeat templates, simple promotions and opt-in notifications can build on stable Guest History, but each needs its own implementation/smoke.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.
 
 ## Таблица статусов
@@ -63,7 +65,7 @@
 |---|---|---|---|---|---|---|---|
 | 1. Брони гостя и жизненный цикл | PARTIAL | `V32__bookings.sql`; `GuestBookingRepository.BookingStatus`; `GuestBookingRoutes`; `VenueBookingRoutes`; `VenueSettingsRepository`; `TelegramBotRouter.showMyOrdersAndBookings`; `guestBookings.ts`; `venueBookings.ts` | Create/update/cancel/list, venue confirm/change/cancel/confirmed-only arrival/no-show, state-aware staff-chat booking buttons, Telegram `/my`, Guest Mini App `Мои брони`, Venue Mini App queue, persisted `arrival_deadline_at`, hold setting, M7c reminder anchors and attendance intent | Preorder, broader automatic expiry/no-show policy, broader rollout of opt-in reminders, real two-account M7b isolation evidence | Keep M3/M7a/M7b/M7c and arrival/staff-chat button guards in regression | Label/timezone drift across Bot/Mini App if DTO parity regresses | P1 |
 | 2. Напоминания о бронях | M7c IMPLEMENTED / CORE SMOKE PASSED | `BookingReminderWorker`, `booking_reminders`, `GuestBookingRepository.scheduleRemindersForBooking`, `BookingReminderWorkerConfig`; `V109__m7c_booking_reminders.sql`; Mini App booking screens | Immediate messages on booking create/update/cancel/venue status; M7c adaptive scheduler; policy-version legacy isolation; outbox dedupe; final callbacks; Guest/Venue attendance indicators; disabled-by-default worker; one controlled real Telegram smoke passed | Broader rollout approval and regression smoke before enabling beyond controlled test | M7c: one adaptive transactional reminder for confirmed/changed bookings using outbox and venue-local quiet window | Спам, timezone/quiet hours, duplicate sends, legacy rows sent under old policy if feature flag/query regress | P1 |
-| 3. Поствизитный feedback и отзывы | FUTURE | `VenueOrdersRepository` can close orders; `TableSessionRepository` can end sessions; no complete feedback flow verified | Technical close signals exist | Review/rating routes/screens, post-visit trigger, public review handoff policy | `POST_VISIT_FEEDBACK`: 1-5, tags, optional comment only after confirmed visit | Wrong timing, ночные сообщения, privacy, low rating must not auto-open public review link | P2 |
+| 3. Поствизитный feedback и отзывы | DONE / MVP / STAGING-SMOKE-PASSED | Current runtime repositories/routes/screens/tests are summarized in `docs/GROWTH_RETENTION.md` | History-only rating/tags/comment; booking-only `SEATED`; Owner/Manager read; Staff denied; manual `5/5` safe Yandex CTA; low `1..3` exact `VENUE_CHAT` follow-up | Platform feedback dashboard and automated review prompts/public review automation | Keep the closed MVP in regression; no worker/Telegram prompt, auto-redirect, support ticket or staff-chat notification | Privacy/RBAC and accidental automation regressions | Regression |
 | 4. Owner venue description sections | PARTIAL | `VenueInfoSectionsRepository.defaultSections`; `V46__venue_info_sections.sql`; `V48__venue_info_section_media.sql`; Telegram owner description callbacks | Default: about/rules/cork_fee/faq/menu; custom sections; image/pdf media in Telegram | Default hall plan/interior; guest Mini App display | Add templates `hall_plan`, `interior`, expose sections in guest venue API | Media storage uses Telegram file_id, Mini App rendering needs file access strategy | P1/P2 |
 | 5. Guest catalog search/filter/map | PARTIAL | `GuestVenueRepository.listCatalogVenues` `ORDER BY v.id ASC`; `catalog.ts` local name/city search | Published venues, city/address, local Mini App search | Server search, address/district filters, open now, price, coordinates, map | Backend `q/city/district`, search name/city/address | Geo consent, distance accuracy, no coords | P2 |
 | 6. Catalog promotion / paid placement | FUTURE | Platform billing exists separately; placements are documented as future/partial | Subscription/billing foundation | Placement/campaign/budget/status/labeling and moderation | Platform-managed paid placement with visible ad label | Abuse, undisclosed ads, unfair ranking | P3 |
@@ -218,6 +220,8 @@ Tests/smoke checks:
 Что делать не сейчас: multistep marketing automation; start with one operational reminder.
 
 ### 3. Поствизитный feedback и отзывы
+
+Current correction: the April evidence/design below is historical and superseded by the staging-smoked MVP described in `docs/GROWTH_RETENTION.md`. The implemented flow is History-detail-only; it deliberately does not schedule a worker/Telegram prompt. The public review CTA is a manual `5/5` click when the Owner-configured safe URL exists, and low-rating follow-up uses exact `VENUE_CHAT` with context.
 
 Продуктовая цель: after visit ask for rating/comment and optionally route happy guests to public review.
 
@@ -755,7 +759,7 @@ Tests/smoke checks:
 Риски:
 - Current order/session/tab scoping issues can leak or mix history.
 
-Рекомендованный приоритет: History foundation is DONE; next Growth recommendation is **post-visit feedback MVP** before repeat if product wants the smallest block directly built on completed History.
+Рекомендованный приоритет: History and Post-Visit Feedback are DONE; next Growth recommendation is **Guest Favorites Phase 1: favorite venues only**.
 
 Что делать не сейчас: analytics-heavy personalization before growth analytics events and safe aggregation are verified.
 
@@ -1129,7 +1133,7 @@ Tests/smoke checks:
 - Use `docs/GROWTH_RETENTION.md` before opening Growth/retention tasks; keep current implementation versus MVP versus future status explicit.
 
 Отложить до стабилизации post-platform-owner launch core:
-- Visit_count, favorites, repeat template, simple promotions and preorder eligibility until their own rules are stable. Guest History Foundation is stable enough for the next bounded block; recommended next is post-visit feedback MVP.
+- Visit_count, favorites, repeat template, simple promotions and preorder eligibility until their own rules are stable. Guest History and Post-Visit Feedback are stable; recommended next is Guest Favorites Phase 1.
 
 Отложить до real provider billing/analytics:
 - Catalog paid placement, promotion boosting, campaign budgets, impressions/clicks.
@@ -1157,8 +1161,8 @@ No current P0 is selected from this historical list. The original P0 order/sessi
 
 ### P2 Growth/retention
 
-1. Post-visit feedback after confirmed visit/history detail; public review handoff later and never automatic for low rating.
-2. Favorites and repeat templates that require next table context.
+1. Guest Favorites Phase 1: add/remove favorite venue, current-user list and safe hidden/suspended filtering.
+2. Repeat templates that require next table context.
 3. Simple venue promotions/announcements with terms, period, status and opt-in-safe notifications.
 4. Visit_count / owner retention summaries after valid visit counting is explicitly designed.
 5. Catalog server search/filter by name/city/address/district.

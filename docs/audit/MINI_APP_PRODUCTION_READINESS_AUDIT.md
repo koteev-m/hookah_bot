@@ -16,9 +16,11 @@
 >
 > Current correction as of 2026-07-09: Guest History Foundation MVP and its staging bugfix are CLOSED / staging smoke passed. History list/detail show closed-order visits and booking-only `SEATED` visits, hide `CANCELED` / `NO_SHOW` / `EXPIRED` / `PENDING` / `CHANGED` bookings as visits, preserve but filter legacy invalid rows, open old closed-order details without required `promotionDiscounts`/options/notes, keep `Не удалось загрузить детали истории.` for real errors, provide `← Назад к истории`, return Telegram BackButton from detail to History list, and preserve foreign-detail 404 plus personal/shared tab privacy. No migration was added. Favorites, repeat templates, post-visit feedback, simple promotions, loyalty, tips, preorder and marketing notifications remain future.
 >
+> Current correction as of 2026-07-21: Post-Visit Feedback MVP and its latest smoke-fix are CLOSED / staging smoke passed. Guest submits rating/tags/comment only from own completed History detail, including booking-only `SEATED`; manual `5/5` can show a configured safe Yandex CTA on explicit click; Owner/Manager sees own-venue feedback and opens exact low-rating `VENUE_CHAT` with persisted context; Staff denied. The Owner-only public review URL is shared by Bot/Mini App. No automatic Owner message, support ticket, staff-chat notification, `VisitFeedbackWorker` prompt, scheduled Telegram prompt or auto-redirect is enabled. Favorites, repeat templates, simple promotions, loyalty, tips, payments, Stars and crypto remain future.
+>
 > Current docs correction as of 2026-07-06: Platform cockpit source of truth is `docs/PLATFORM_COCKPIT.md`. Platform Mini App has smoke-passed manual billing and support-ticket MVPs; onboarding requests, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle normalization remain future/partial.
 >
-> Current docs correction as of 2026-07-09: Growth/retention source of truth is `docs/GROWTH_RETENTION.md`. Guest visit/order history foundation is DONE / MVP / staging-smoke-passed; favorites, repeat templates, post-visit feedback, simple venue promotions and opt-in notifications remain `SPEC UPDATED / PARTIAL-FUTURE`; promo codes, loyalty stamps/points, referrals, paid placement/boosting, segmentation and advanced recommendations remain future.
+> Current docs correction as of 2026-07-21: Growth/retention source of truth is `docs/GROWTH_RETENTION.md`. Guest History Foundation and Post-Visit Feedback MVP are DONE / MVP / staging-smoke-passed; favorites, repeat templates, simple venue promotions and opt-in notifications remain `SPEC UPDATED / PARTIAL-FUTURE`; Platform feedback dashboard, automated review prompts/public review automation, promo codes, loyalty stamps/points, referrals, paid placement/boosting, segmentation and advanced recommendations remain future.
 >
 > Current docs correction as of 2026-07-09: Order/session/tab core source of truth is `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-table risk is closed through `tableSessionId`/`tabId` scoping and Guest History Foundation MVP is staging-smoked; keep the core in regression for QR session, active order, batches, tabs, bill request/paid/closed flow, history privacy/dedup and terminal-status filtering. Force-close reason/audit, DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics events remain future/partial.
 >
@@ -441,7 +443,7 @@ Tests to add/update:
 ## 5. P2 Improvements
 
 - Guest Mini App public venue card enrichment: media, hours, richer promo previews.
-- Growth/retention MVP from `docs/GROWTH_RETENTION.md`: Guest History Foundation is staging-smoked; favorite venues, repeat templates that require table context, post-visit feedback, simple venue promotions and opt-in notification rules remain future.
+- Growth/retention MVP from `docs/GROWTH_RETENTION.md`: Guest History Foundation and Post-Visit Feedback are staging-smoked; favorite venues, repeat templates that require table context, simple venue promotions and opt-in notification rules remain future. Recommended next bounded block is Guest Favorites Phase 1.
 - Platform analytics dashboard beyond operational baseline.
 - Menu photos/modifiers/top-list if not required for launch.
 - Channel sync polish: start in bot, continue in Mini App, back to bot.

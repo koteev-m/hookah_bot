@@ -1,6 +1,6 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-21.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/today-shift/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -28,6 +28,7 @@ Tokens and client-provided ids are context pointers, not authority:
 | `tab` | Personal/shared bill account inside a table session. | Guest sees only own personal tab or joined shared tabs. |
 | `support_ticket` | Status-tracked support/problem ticket. | Guest own tickets, Venue Owner/Manager own venue tickets, Platform Owner all tickets. Staff none. |
 | `booking` | Guest booking, booking queue and booking conversation. | Guest own booking, Venue Owner/Manager own venue; Staff operational view/arrival/no-show only where allowed; canonical lifecycle in `docs/BOOKING_LIFECYCLE.md`. |
+| `feedback` | One post-visit rating/tags/comment bound to a visible completed guest visit. | Guest submits only for own visible completed visit; Venue Owner/Manager reads own venue and may open low-rating `VENUE_CHAT`; Staff none; Platform dashboard future. |
 | `staff_profile` | Public staff display profile and linked private venue-member relation. | Guest sees only opt-in public fields; linked user ids stay private; Owner controls publish/hide. |
 | `staff_shift` | Manual "today on shift" visibility for public staff profiles. | Guest sees only visible shifts for visible profiles; Manager shift marking depends on venue policy. |
 | `staff_tip` | Future staff-specific tip method/intent. | External tip link + intent only in Phase 2; money does not touch platform in MVP; intent is not proof of payment. |
@@ -41,9 +42,9 @@ Tokens and client-provided ids are context pointers, not authority:
 | Guest | End user without venue/platform role. | Can browse, book, order in verified table session, use own chats/tickets and own tabs. |
 | Tab Host | Guest who creates/hosts a shared tab. | Derived responsibility inside `tab` scope, not a global role. |
 | Tab Member | Guest who joined a shared tab by invitation/consent. | Derived responsibility inside `tab` scope, not a global role. |
-| Staff | Shift operations role. | Orders, operational calls, allowed booking arrival/no-show and stop-list availability only. No support tickets, venue chats, billing, settings or platform. |
-| Venue Manager | Venue operations management role. | Own venue only. Can manage bookings, orders, menu/availability, tables where allowed, chats and own-venue support. No platform/billing commercial controls. |
-| Venue Owner | Venue owner role through active `venue_members(role=OWNER)`. | Own venue operations, staff, settings, staff chat and venue billing view/pay where implemented. |
+| Staff | Shift operations role. | Orders, operational calls, allowed booking arrival/no-show and stop-list availability only. No support tickets, venue chats, feedback dashboard/follow-up, billing, settings or platform. |
+| Venue Manager | Venue operations management role. | Own venue only. Can manage bookings, orders, menu/availability, tables where allowed, chats, feedback read/follow-up and own-venue support. No platform/billing commercial controls or public review link editing. |
+| Venue Owner | Venue owner role through active `venue_members(role=OWNER)`. | Own venue operations, staff, settings, staff chat, feedback read/follow-up, public review link editing and venue billing view/pay where implemented. |
 | Platform Owner | Platform-wide operator. | Venues, lifecycle, owner access, billing, support center, analytics/audit. Does not see ordinary `VENUE_CHAT` by default. |
 | Support actor | Derived responsibility when a Guest, Venue Owner/Manager or Platform Owner handles a support ticket. | Not a separate global role in the product model. |
 
@@ -63,6 +64,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Guest | `staff_tip.intent_create` | Visible/tips-enabled staff profile | Future Phase 2. Creates intent/clickout only; no platform payment and no proof of payment. |
 | Guest | `support_ticket.create_own`, `support_ticket.view_own`, `support_ticket.reply_own` | Own support tickets | Current MVP. Venue/order/booking context must be server-verified. |
 | Guest | `booking.create_own`, `booking.view_own` | Own bookings | Current. Status/action availability depends on booking lifecycle. |
+| Guest | `feedback.submit_own_completed_visit`, `feedback.view_own` | Own visible completed History visit | DONE / MVP / staging-smoke-passed. `ORDER_CLOSED`, booking `SEATED` and merged visits only; duplicate submit does not overwrite. |
 | Guest | `order_batch.create_own_in_session` | Current table session + own/joined tab | Current target/core. Requires active table context, selected tab and menu/stop-list validation. |
 | Guest | `tab.view_own`, `tab.join_shared_by_invite` | Own personal tab or joined shared tab | Current target/core; two-guest privacy remains smoke-critical. |
 | Guest | `staff_call.create_in_session` | Current table session | Current. Staff call is operational, not support. |
@@ -74,12 +76,13 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `booking.view`, arrival/no-show where allowed | Own venue bookings | Current STAFF booking split. Confirm/cancel/change/message/settings denied. |
 | Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own draft fields only, cannot self-publish or enable guest visibility. Photo upload remains future. |
-| Staff | `support_ticket.none`, `venue_chat.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
+| Staff | `support_ticket.none`, `venue_chat.none`, `feedback.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
 | Venue Manager | `order_queue.view`, `order_batch.status_update`, `order_batch.reject` | Own venue | Current where route permissions allow. |
 | Venue Manager | `booking.manage`, `staff_call.manage` | Own venue | Current. |
 | Venue Manager | `menu.view`, `menu.manage`, `stop_list.manage` | Own venue | Current with policy caveats by route. Conservative target keeps Manager to stop-list/shift check/basic availability unless broad `MENU_MANAGE` is explicitly retained; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Venue Manager | `table.view`, limited `table.manage` | Own venue | Current where backend permission allows; owner-only QR actions must stay denied if configured so. |
 | Venue Manager | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current support/chat MVP. Venue cannot reply when support ticket is assigned to Platform unless product policy explicitly allows it. |
+| Venue Manager | `feedback.view_own_venue`, `feedback.follow_up_low` | Own venue only | Current MVP. Read-only aggregate/list; rating `1..3` follow-up opens exact `VENUE_CHAT`. Public review link edit denied. |
 | Venue Manager | `staff_invite.create_staff_only` | Own venue | Current conservative policy where route allows; cannot create Owner/Platform access. |
 | Venue Manager | `staff_shift.manage_today` | Own venue | Current conservative Phase 1. Manager marks today shift state, but does not approve public profiles or future tip methods by default. |
 | Venue Manager | `billing.none`, dangerous lifecycle none | Billing/platform/lifecycle | Current product rule. |
@@ -88,6 +91,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Owner | `staff_profile.manage`, `staff_profile.publish`, `staff_shift.manage_today`, `staff_tip_method.approve` | Own venue | Current for Phase 1 profiles + today shift; future for tip method approval. |
 | Venue Owner | `billing.view/pay` | Own venue subscription/payment state | Current manual billing MVP for view/pay surfaces; Platform-only mark-paid/courtesy remain denied. |
 | Venue Owner | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current. Can transfer support tickets to Platform. |
+| Venue Owner | `feedback.view_own_venue`, `feedback.follow_up_low`, `public_review_url.manage` | Own venue only | Current MVP. Public review URL setting is Owner-only and shared by Bot/Mini App. |
 | Venue Owner | `venue.lifecycle.request_pause/archive/delete` | Own venue | Target only if product implements owner-requested lifecycle; Platform lifecycle remains Platform Owner. |
 | Platform Owner | `platform.venues.manage`, `platform.lifecycle.manage`, `platform.owner_access.manage` | Platform | Current for implemented cockpit/lifecycle/owner access. |
 | Platform Owner | `platform.billing.manage`, `platform.support.manage_all`, `platform.analytics.view`, `platform.audit.view`, `platform.settings.manage` | Platform | Billing/support MVP current; analytics/audit explorer partial/future. |
@@ -102,6 +106,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Bookings | Guest `/my`, booking actions and venue/admin flows where implemented. | Guest booking/list. | Owner/Manager booking queue/actions; Staff view/arrival/no-show only. | Platform only if future analytics/audit requires. | Booking operational notifications allowed by existing policy. | Booking lifecycle follows `docs/BOOKING_LIFECYCLE.md`; booking chat stays `BOOKING_CHAT`, not support. |
 | Support tickets | `/support` fallback where implemented. | Guest `Помощь`. | Owner/Manager `Обращения` for own venue. | Platform `Обращения` / Support Center. | Never for support tickets. | Staff denied. Platform sees support, not ordinary venue chats. |
 | Venue chats | Guest bot/Mini App entry where implemented. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Never for ordinary venue chats. | Staff denied. |
+| Post-visit feedback | No automated prompt; public review setting uses the same backend source as Mini App. | Submit only from own completed History detail; optional explicit Yandex CTA after `5/5`. | Owner/Manager read list and open low-rating exact `VENUE_CHAT`; Owner edits public review URL; Staff denied. | Feedback analytics dashboard future. | Never. | No auto support ticket, Owner message, Telegram prompt or public redirect. |
 | Booking chats | Booking action `Открыть переписку`. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Notification mirror only where existing policy allows. | Must not become support queue. |
 | Menu/stop-list | Bot owner/manager/staff paths where implemented. | Guest read/order only after QR. | Owner/Manager manage; Staff availability only. | No ordinary menu management. | No source-of-truth edits. | Price/content edits are dangerous and audited where implemented. |
 | Tables/QR | Bot management where implemented. | QR context only. | Owner/Manager table/QR where allowed; Staff read-only. | No ordinary venue table management unless platform support policy says so. | No. | QR token is context pointer. |
@@ -140,6 +145,7 @@ These actions require server-side authorization and should require confirmation,
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat hidden. | Platform does not bypass ordinary venue RBAC by default. | Event/audit explorer and analytics exports need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
 | Staff profiles / today shift | Phase 1 backend + Mini App implementation exists and local smoke passed; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Keep role/privacy smoke in regression; staging UX acceptance is still required before production readiness. |
+| Post-visit feedback | History-only submit, own-venue Owner/Manager read, Owner-only public review URL and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed. | Preserve own-visit/own-venue isolation, Staff denial and manual-only external/follow-up actions. | Platform feedback dashboard, automated prompts and public review automation remain future/disabled. |
 | Staff tips | No runtime implementation yet; canonical future boundaries are `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 external staff tip link + intent only; money does not touch platform in MVP; intent is not proof of payment. | Provider/direct payout needs legal/product decision; Telegram Stars and crypto are not MVP. |
 | Surface parity | Bot and Mini App parity is closed for several slices; some Telegram flows are still richer. | Required product surfaces are aligned or explicitly documented as exceptions. | Keep parity roadmap current before adding new management functions. |
 
@@ -163,6 +169,11 @@ These actions require server-side authorization and should require confirmation,
 16. Guest staff-profile APIs expose only public visible profiles/shifts and never `linked_user_id` or private Telegram/contact data.
 17. Staff cannot publish their own profile or enable guest visibility without Owner approval.
 18. Staff tip intent, when implemented, does not create provider payment, close bill or prove payment.
+19. Guest can submit feedback only for their own visible completed History visit; foreign/hidden/non-seated visits are denied safely.
+20. Staff cannot read venue feedback, trigger follow-up or edit/view the Owner settings control for public review URL through direct API.
+21. Venue Owner/Manager cannot read or follow up feedback from another venue; Manager cannot edit the Owner-only public review URL.
+22. Low-rating follow-up opens only the feedback guest's exact `VENUE_CHAT`, creates no support ticket and posts nothing to staff-chat.
+23. A public review URL reaches Guest only after manual `5/5`, only when validated/configured, and never causes an automatic redirect.
 
 ## Roadmap Status
 
@@ -174,3 +185,4 @@ These actions require server-side authorization and should require confirmation,
 - Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.
 - Dangerous action audit: `PARTIAL` until all listed dangerous actions have verified audit evidence.
 - Security smoke checklist: `UPDATED`.
+- Post-Visit Feedback RBAC/privacy: `DONE / MVP / STAGING-SMOKE-PASSED`; Platform feedback dashboard remains `FUTURE`.

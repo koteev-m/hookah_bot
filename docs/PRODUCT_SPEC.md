@@ -434,10 +434,11 @@ SHOULD:
 ## Block 15 — Growth (guest retention)
 MUST:
 - Use `docs/GROWTH_RETENTION.md` as the canonical model for guest growth and retention. Current status is `SPEC UPDATED / PARTIAL-FUTURE`, not a closed implementation claim.
+- Current closed slices: Guest History Foundation and Post-Visit Feedback MVP are `DONE / MVP / STAGING-SMOKE-PASSED`. Feedback is submitted only from the current guest's visible completed History detail; booking-only `SEATED` visits remain eligible. Manual `5/5` may show a validated venue-configured public review URL only after explicit guest click. Low `1..3` follow-up is a manual Owner/Manager action through exact `VENUE_CHAT`; it does not create Support, staff-chat notification or an automatic Owner message.
 - `FAVORITE_VENUE`: guest can favorite/unfavorite venues and list favorite venues.
 - `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`: guest history combines confirmed visits, closed orders and bookings only after the visit/order/session model is stable.
 - `REPEAT_TEMPLATE`: repeat uses a saved template and applies it on the next verified table context; it must not create an order without QR/table context, selected tab and current menu/stop-list validation.
-- `POST_VISIT_FEEDBACK`: rating 1-5, tags and optional comment only after a confirmed visit/order close signal.
+- `POST_VISIT_FEEDBACK`: rating 1-5, tags and optional comment only after a confirmed visit/order close signal. Automated Telegram/worker prompts and public review automation remain disabled/future.
 - `VENUE_PROMOTION`: simple venue promotions/banners with title, description, period, terms and visibility/status; do not promise automatic discounts without a real promo engine/accounting path.
 - `OPT_IN_NOTIFICATION`: retention/promo notifications require explicit guest opt-in, frequency limits and unsubscribe.
 SHOULD:
@@ -449,7 +450,7 @@ SHOULD:
 MUST:
 - Use the canonical Guest communication model from `docs/COMMUNICATION_MODEL.md`: `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate scenarios.
 - `BOOKING_CHAT`: booking `Открыть переписку`; Guest + Venue Owner/Manager; not a support ticket; does not post to staff-chat.
-- `VENUE_CHAT`: catalog `Задать вопрос` and venue detail `💬 Задать вопрос`; Guest + Venue Owner/Manager; Staff denied; Platform does not see ordinary venue chats; does not post to staff-chat; new thread creation is rate-limited and existing guest+venue chats are reused.
+- `VENUE_CHAT`: catalog `Задать вопрос`, venue detail `💬 Задать вопрос` and manual low-feedback `Связаться с гостем`; Guest + Venue Owner/Manager; Staff denied; Platform does not see ordinary venue chats; does not post to staff-chat. Feedback follow-up opens the exact active thread with system/context message, reuses an active thread or creates a new one after a closed/resolved thread, and never auto-sends a personal Owner message.
 - `SUPPORT_TICKET`: global `Помощь` -> `Сообщить о проблеме` plus table-context secondary help/problem entry; Guest own tickets, Venue Owner/Manager own venue tickets, Platform Owner support tickets, Staff denied.
 - Support tickets carry verified context when available: venue, table, table session, order, booking, user, source/app metadata.
 - Support routing: technical/Mini App/bot/QR/platform issue can go to Platform without venue; order/service outside table requires verified venue/order/table context; booking outside table requires booking or venue; table context attaches verified venue/table/session and order context when available.
