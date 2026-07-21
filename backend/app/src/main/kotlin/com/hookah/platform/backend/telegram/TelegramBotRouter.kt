@@ -559,6 +559,14 @@ class TelegramBotRouter(
         CANCELLATIONS,
     }
 
+    private enum class FavoriteVenuesSource(
+        val backText: String,
+        val backCallbackData: String,
+    ) {
+        CATALOG("↩️ К каталогу", "bot_catalog_open"),
+        PROFILE("↩️ К профилю", "guest_profile_open"),
+    }
+
     private data class VenueBotAccess(
         val venueId: Long,
         val role: VenueBotRole,
@@ -1051,6 +1059,7 @@ class TelegramBotRouter(
                 showGuestLoyaltyProgress(chatId, callbackQuery.from.id)
                 enqueueCallbackAnswer(chatId, callbackQuery.id)
             }
+            data == "guest_profile_open" -> showGuestProfile(chatId, callbackQuery.from)
             data == "guest_profile_back" -> {
                 callbackAnswered = true
                 showRoleAwareMainMenu(chatId, callbackQuery.from)
@@ -1204,7 +1213,10 @@ class TelegramBotRouter(
                 callbackAnswered = true
                 confirmVenueBookingCancelFromBot(chatId, callbackQuery.from, sourceMessageId, callbackQuery.id, data)
             }
-            data == "fav_v_list" -> showFavoriteVenues(chatId, callbackQuery.from)
+            data == "fav_v_list" ->
+                showFavoriteVenues(chatId, callbackQuery.from, FavoriteVenuesSource.CATALOG)
+            data == "fav_v_list:profile" ->
+                showFavoriteVenues(chatId, callbackQuery.from, FavoriteVenuesSource.PROFILE)
             data?.startsWith("fav_v_add:") == true -> {
                 callbackAnswered = true
                 addFavoriteVenue(chatId, callbackQuery.from, callbackQuery.id, data)
@@ -2416,6 +2428,7 @@ class TelegramBotRouter(
     private suspend fun showFavoriteVenues(
         chatId: Long,
         from: User?,
+        source: FavoriteVenuesSource,
     ) {
         val userId = from?.id ?: chatContextRepository.get(chatId)?.userId
         if (userId == null) {
@@ -2433,7 +2446,11 @@ class TelegramBotRouter(
             enqueueMessage(
                 chatId,
                 "У вас пока нет избранных заведений.",
-                TelegramKeyboards.inlineFavoriteVenues(emptyList()),
+                TelegramKeyboards.inlineFavoriteVenues(
+                    venues = emptyList(),
+                    backText = source.backText,
+                    backCallbackData = source.backCallbackData,
+                ),
             )
             return
         }
@@ -2444,6 +2461,8 @@ class TelegramBotRouter(
                 venues.map { venue ->
                     venue.venueId to "${venue.name} · ${formatFavoriteVenueAddress(venue)}"
                 },
+                backText = source.backText,
+                backCallbackData = source.backCallbackData,
             ),
         )
     }

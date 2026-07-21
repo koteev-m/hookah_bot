@@ -13,6 +13,7 @@ import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.EndUserTableSessionResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
+import com.hookah.platform.backend.miniapp.guest.db.FavoriteVenue
 import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
@@ -935,6 +936,216 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     match { it.contains("👤 Мой профиль") && it.contains("Имя: Алексей") && it.contains("05.09") },
                     match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `guest can open shared repository favorite venues from profile`() =
+        runBlocking {
+            coEvery { guestFavoritesRepository.listFavoriteVenues(200L, 50) } returns
+                listOf(
+                    FavoriteVenue(
+                        venueId = 10L,
+                        name = "Mix",
+                        city = "Москва",
+                        address = "Тверская, 1",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_01,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-profile-favorite-venues",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_01, chat = Chat(id = 100, type = "private")),
+                            data = "fav_v_list:profile",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) { guestFavoritesRepository.listFavoriteVenues(200L, 50) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "⭐ Избранные заведения\nВыберите заведение.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text.contains("Mix") && button.callbackData == "bot_catalog_venue:10"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "↩️ К профилю" && button.callbackData == "guest_profile_open"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `empty profile favorite venues keep profile back navigation`() =
+        runBlocking {
+            coEvery { guestFavoritesRepository.listFavoriteVenues(200L, 50) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_02,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-profile-favorite-venues-empty",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_02, chat = Chat(id = 100, type = "private")),
+                            data = "fav_v_list:profile",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "У вас пока нет избранных заведений.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().single().let { button ->
+                                button.text == "↩️ К профилю" && button.callbackData == "guest_profile_open"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `favorite venues back from profile opens profile`() =
+        runBlocking {
+            coEvery { userRepository.findGuestProfile(200L) } returns
+                GuestProfile(
+                    telegramUserId = 200L,
+                    guestDisplayName = "Алексей",
+                    birthdayMonth = null,
+                    birthdayDay = null,
+                    birthdaySetAt = null,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_03,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-profile-favorite-venues-back",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_03, chat = Chat(id = 100, type = "private")),
+                            data = "guest_profile_open",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("👤 Мой профиль") && it.contains("Имя: Алексей") },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⭐ Избранные заведения" && button.callbackData == "fav_v_list:profile"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `catalog favorite venues keep catalog back navigation`() =
+        runBlocking {
+            coEvery { guestFavoritesRepository.listFavoriteVenues(200L, 50) } returns emptyList()
+            coEvery { venueRepository.ensureBotTestCatalogVenues() } returns Unit
+            coEvery { venueRepository.listCatalogVenuesForGuest() } returns
+                listOf(
+                    CatalogVenueShort(
+                        id = 10L,
+                        name = "Mix",
+                        city = "Москва",
+                        address = "Тверская, 1",
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_04,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-catalog-favorite-venues",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_04, chat = Chat(id = 100, type = "private")),
+                            data = "fav_v_list",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_05,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-catalog-favorite-venues-back",
+                            from = User(id = 200L),
+                            message = Message(messageId = 201_05, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_open",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "У вас пока нет избранных заведений.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().single().let { button ->
+                                button.text == "↩️ К каталогу" && button.callbackData == "bot_catalog_open"
+                            }
+                    },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "🍽 Каталог кальянных\nВыберите заведение.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⭐ Избранные заведения" && button.callbackData == "fav_v_list"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `profile favorite venues are isolated by current user`() =
+        runBlocking {
+            coEvery { guestFavoritesRepository.listFavoriteVenues(201L, 50) } returns emptyList()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 101_06,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-profile-favorite-venues-other-user",
+                            from = User(id = 201L),
+                            message = Message(messageId = 201_06, chat = Chat(id = 101, type = "private")),
+                            data = "fav_v_list:profile",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) { guestFavoritesRepository.listFavoriteVenues(201L, 50) }
+            coVerify(exactly = 0) { guestFavoritesRepository.listFavoriteVenues(200L, any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    101,
+                    "У вас пока нет избранных заведений.",
+                    any(),
                 )
             }
         }

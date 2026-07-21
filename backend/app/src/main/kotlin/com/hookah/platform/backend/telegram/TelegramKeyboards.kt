@@ -1754,6 +1754,12 @@ object TelegramKeyboards {
                 ),
                 listOf(
                     InlineKeyboardButton(
+                        text = "⭐ Избранные заведения",
+                        callbackData = "fav_v_list:profile",
+                    ),
+                ),
+                listOf(
+                    InlineKeyboardButton(
                         text = "🎁 Лояльность",
                         callbackData = "guest_loyalty",
                     ),
@@ -6685,6 +6691,7 @@ object TelegramKeyboards {
 
     fun inlineFavoriteVenues(
         venues: List<Pair<Long, String>>,
+        backText: String = "↩️ К каталогу",
         backCallbackData: String = "bot_catalog_open",
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
@@ -6703,7 +6710,7 @@ object TelegramKeyboards {
                     add(
                         listOf(
                             InlineKeyboardButton(
-                                text = "↩️ К каталогу",
+                                text = backText,
                                 callbackData = backCallbackData,
                             ),
                         ),

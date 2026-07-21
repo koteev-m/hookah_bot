@@ -116,7 +116,7 @@ class TelegramKeyboardsTest {
     }
 
     @Test
-    fun `guest profile actions include name birthday loyalty and back`() {
+    fun `guest profile actions include name birthday favorite venues loyalty and back`() {
         val markup = TelegramKeyboards.inlineGuestProfileActions()
         val buttons = markup.inlineKeyboard.flatten()
 
@@ -124,10 +124,12 @@ class TelegramKeyboardsTest {
         assertEquals("guest_profile_name", buttons[0].callbackData)
         assertEquals("🎁 Указать день рождения", buttons[1].text)
         assertEquals("guest_profile_birthday", buttons[1].callbackData)
-        assertEquals("🎁 Лояльность", buttons[2].text)
-        assertEquals("guest_loyalty", buttons[2].callbackData)
-        assertEquals("↩️ Назад", buttons[3].text)
-        assertEquals("guest_profile_back", buttons[3].callbackData)
+        assertEquals("⭐ Избранные заведения", buttons[2].text)
+        assertEquals("fav_v_list:profile", buttons[2].callbackData)
+        assertEquals("🎁 Лояльность", buttons[3].text)
+        assertEquals("guest_loyalty", buttons[3].callbackData)
+        assertEquals("↩️ Назад", buttons[4].text)
+        assertEquals("guest_profile_back", buttons[4].callbackData)
     }
 
     @Test
@@ -1676,6 +1678,22 @@ class TelegramKeyboardsTest {
         assertEquals("⭐ Избранные заведения", buttons[0].text)
         assertEquals("fav_v_list", buttons[0].callbackData)
         assertEquals("First", buttons[1].text)
+    }
+
+    @Test
+    fun `favorite venues keyboard supports catalog and profile back navigation`() {
+        val catalogBack = TelegramKeyboards.inlineFavoriteVenues(emptyList()).inlineKeyboard.flatten().single()
+        val profileBack =
+            TelegramKeyboards.inlineFavoriteVenues(
+                venues = emptyList(),
+                backText = "↩️ К профилю",
+                backCallbackData = "guest_profile_open",
+            ).inlineKeyboard.flatten().single()
+
+        assertEquals("↩️ К каталогу", catalogBack.text)
+        assertEquals("bot_catalog_open", catalogBack.callbackData)
+        assertEquals("↩️ К профилю", profileBack.text)
+        assertEquals("guest_profile_open", profileBack.callbackData)
     }
 
     @Test
