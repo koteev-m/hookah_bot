@@ -2,14 +2,13 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
-  guestGetFavoriteItems,
   guestGetFavoriteVenues,
+  guestRemoveFavoriteVenue,
   guestGetVisitDetail,
   guestGetVisits,
   guestSubmitVisitFeedback
 } from '../shared/api/guestApi'
 import type {
-  GuestFavoriteItemDto,
   GuestFavoriteVenueDto,
   GuestVisitFeedbackDto,
   GuestVisitDetailDto,
@@ -38,11 +37,12 @@ export type GuestAccountScreenOptions = {
   root: HTMLDivElement | null
   backendUrl: string
   isDebug: boolean
-  currentVenueId: number | null
   hasTableContext: boolean
   onBack: () => void
   onOpenBookings: () => void
   onOpenVenue: (venueId: number) => void
+  onBookVenue: (venueId: number) => void
+  onAskVenue: (venueId: number) => void
   onOpenBot: () => OpenBotResult
   onInternalBackStateChange?: (handler: (() => void) | null) => void
 }
@@ -153,13 +153,13 @@ function renderAccountHome(
   const card = el('section', { className: 'card' })
   const heading = el('h2', { text: 'Профиль' })
   const body = el('p', {
-    text: 'Здесь собраны гостевые разделы: брони, история, любимое, акции и лояльность.'
+    text: 'Здесь собраны гостевые разделы: брони, история, избранные заведения, акции и лояльность.'
   })
   const actions = el('div', { className: 'venue-inline-actions' })
   const buttons: Array<[AccountSection, string]> = [
     ['profile', '👤 Профиль'],
     ['history', '🕘 История'],
-    ['favorites', '⭐ Любимое'],
+    ['favorites', '⭐ Избранные заведения'],
     ['promotions', '🎁 Акции'],
     ['loyalty', '🎁 Лояльность']
   ]
@@ -577,101 +577,145 @@ function renderHistorySection(
   }
 }
 
-function renderFavoriteVenue(item: GuestFavoriteVenueDto, onOpenVenue: (venueId: number) => void) {
+function renderFavoriteVenue(
+  item: GuestFavoriteVenueDto,
+  pending: boolean,
+  onOpenVenue: (venueId: number) => void,
+  onBookVenue: (venueId: number) => void,
+  onAskVenue: (venueId: number) => void,
+  onRemove: (venueId: number) => void
+) {
   const card = el('article', { className: 'card' })
   const title = el('h3', { text: item.name })
   const meta = el('p', {
     className: 'venue-order-sub',
     text: [item.city, item.address].filter((value): value is string => Boolean(value)).join(' · ') || 'Любимое заведение'
   })
-  const openButton = el('button', { className: 'button-secondary', text: 'Открыть меню' }) as HTMLButtonElement
-  append(card, title, meta, openButton)
+  const actions = el('div', { className: 'venue-inline-actions' })
+  const openButton = el('button', { className: 'button-secondary', text: 'Открыть заведение' }) as HTMLButtonElement
+  const bookButton = el('button', { className: 'button-secondary', text: 'Забронировать' }) as HTMLButtonElement
+  const askButton = el('button', { className: 'button-secondary', text: 'Задать вопрос' }) as HTMLButtonElement
+  const removeButton = el('button', {
+    className: 'button-danger',
+    text: pending ? 'Удаляем...' : 'Удалить из избранного'
+  }) as HTMLButtonElement
+  removeButton.disabled = pending
+  append(actions, openButton, bookButton, askButton, removeButton)
+  append(card, title, meta, actions)
   return {
     card,
-    dispose: on(openButton, 'click', () => onOpenVenue(item.venueId))
+    dispose: () => {
+      const disposables = [
+        on(openButton, 'click', () => onOpenVenue(item.venueId)),
+        on(bookButton, 'click', () => onBookVenue(item.venueId)),
+        on(askButton, 'click', () => onAskVenue(item.venueId)),
+        on(removeButton, 'click', () => onRemove(item.venueId))
+      ]
+      return () => disposables.forEach((dispose) => dispose())
+    }
   }
-}
-
-function renderFavoriteItem(item: GuestFavoriteItemDto) {
-  const card = el('article', { className: 'card' })
-  const title = el('h3', { text: item.name })
-  const price = el('p', { className: 'venue-order-sub', text: formatPrice(item.priceMinor, item.currency) })
-  append(card, title, price)
-  return card
 }
 
 function renderFavoritesSection(
   root: HTMLElement,
   backendUrl: string,
   isDebug: boolean,
-  currentVenueId: number | null,
   onBack: () => void,
-  onOpenVenue: (venueId: number) => void
+  onOpenVenue: (venueId: number) => void,
+  onBookVenue: (venueId: number) => void,
+  onAskVenue: (venueId: number) => void
 ) {
   const controller = new AbortController()
-  renderLoading(root, 'Любимое')
+  renderLoading(root, 'Избранные заведения')
   const deps = requestDeps(isDebug)
-  let disposables: Array<() => void> = []
+  let staticDisposables: Array<() => void> = []
+  let cardDisposables: Array<() => void> = []
   let errorDispose: (() => void) | null = null
+  let disposed = false
+  let venues: GuestFavoriteVenueDto[] = []
+  const pendingVenueIds = new Set<number>()
+  const mutationControllers = new Set<AbortController>()
+  const wrapper = el('div', { className: 'venue-settings' })
+  const list = el('div', { className: 'favorite-venue-list' })
+  const message = el('p', { className: 'status', text: '' })
 
-  void Promise.all([
-    guestGetFavoriteVenues(backendUrl, deps, controller.signal),
-    currentVenueId ? guestGetFavoriteItems(backendUrl, currentVenueId, deps, controller.signal) : Promise.resolve(null)
-  ]).then(([venuesResult, itemsResult]) => {
+  const renderList = () => {
+    cardDisposables.forEach((dispose) => dispose())
+    cardDisposables = []
+    list.replaceChildren()
+    if (venues.length === 0) {
+      append(
+        list,
+        el('section', {
+          className: 'card',
+          text: 'Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.'
+        })
+      )
+      return
+    }
+    venues.forEach((venue) => {
+      const rendered = renderFavoriteVenue(
+        venue,
+        pendingVenueIds.has(venue.venueId),
+        onOpenVenue,
+        onBookVenue,
+        onAskVenue,
+        (venueId) => void removeFavorite(venueId)
+      )
+      append(list, rendered.card)
+      cardDisposables.push(rendered.dispose())
+    })
+  }
+
+  const removeFavorite = async (venueId: number) => {
+    if (disposed || pendingVenueIds.has(venueId)) return
+    pendingVenueIds.add(venueId)
+    message.textContent = ''
+    renderList()
+    const mutationController = new AbortController()
+    mutationControllers.add(mutationController)
+    const result = await guestRemoveFavoriteVenue(backendUrl, venueId, deps, mutationController.signal)
+    mutationControllers.delete(mutationController)
+    if (disposed || (!result.ok && result.error.code === REQUEST_ABORTED_CODE)) return
+    pendingVenueIds.delete(venueId)
+    if (result.ok) {
+      venues = venues.filter((venue) => venue.venueId !== venueId)
+    } else {
+      message.textContent = 'Не удалось изменить избранное.'
+    }
+    renderList()
+  }
+
+  void guestGetFavoriteVenues(backendUrl, deps, controller.signal).then((venuesResult) => {
+    if (disposed) return
     if (!venuesResult.ok) {
       if (venuesResult.error.code === REQUEST_ABORTED_CODE) return
-      errorDispose = renderErrorSection(root, 'Любимое', errorText(venuesResult.error), onBack)
-      return
-    }
-    if (itemsResult && !itemsResult.ok) {
-      if (itemsResult.error.code === REQUEST_ABORTED_CODE) return
-      errorDispose = renderErrorSection(root, 'Любимое', errorText(itemsResult.error), onBack)
+      errorDispose = renderErrorSection(root, 'Избранные заведения', errorText(venuesResult.error), onBack)
       return
     }
 
-    const wrapper = el('div', { className: 'venue-settings' })
     const header = el('section', { className: 'card' })
-    const heading = el('h2', { text: 'Любимое' })
+    const heading = el('h2', { text: 'Избранные заведения' })
     const body = el('p', {
       className: 'venue-order-sub',
-      text: currentVenueId
-        ? 'Любимые заведения и позиции текущего заведения.'
-        : 'Любимые позиции отображаются после открытия заведения или QR стола.'
+      text: 'Список синхронизирован с избранным в Telegram-боте.'
     })
     const backButton = el('button', { text: 'К профилю' }) as HTMLButtonElement
     append(header, heading, body, backButton)
-    append(wrapper, header)
-    disposables = [on(backButton, 'click', onBack)]
-
-    const venues = venuesResult.data.venues
-    if (venues.length > 0) {
-      append(wrapper, el('h3', { text: 'Заведения' }))
-      venues.forEach((venue) => {
-        const rendered = renderFavoriteVenue(venue, onOpenVenue)
-        append(wrapper, rendered.card)
-        disposables.push(rendered.dispose)
-      })
-    } else {
-      append(wrapper, el('section', { className: 'card', text: 'Любимых заведений пока нет.' }))
-    }
-
-    const favoriteItems = itemsResult?.ok ? itemsResult.data.items : []
-    if (currentVenueId) {
-      append(wrapper, el('h3', { text: 'Позиции' }))
-      if (favoriteItems.length > 0) {
-        favoriteItems.forEach((item) => append(wrapper, renderFavoriteItem(item)))
-      } else {
-        append(wrapper, el('section', { className: 'card', text: 'Любимых позиций в этом заведении пока нет.' }))
-      }
-    }
-
+    append(wrapper, header, message, list)
+    staticDisposables = [on(backButton, 'click', onBack)]
+    venues = venuesResult.data.venues
+    renderList()
     root.replaceChildren(wrapper)
   })
 
   return () => {
+    disposed = true
     controller.abort()
+    mutationControllers.forEach((mutationController) => mutationController.abort())
     errorDispose?.()
-    disposables.forEach((dispose) => dispose())
+    cardDisposables.forEach((dispose) => dispose())
+    staticDisposables.forEach((dispose) => dispose())
   }
 }
 
@@ -680,11 +724,12 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
     root,
     backendUrl,
     isDebug,
-    currentVenueId,
     hasTableContext,
     onBack,
     onOpenBookings,
     onOpenVenue,
+    onBookVenue,
+    onAskVenue,
     onOpenBot,
     onInternalBackStateChange
   } = options
@@ -711,7 +756,15 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
         break
       case 'favorites':
         onInternalBackStateChange?.(goHome)
-        currentDispose = renderFavoritesSection(root, backendUrl, isDebug, currentVenueId, goHome, onOpenVenue)
+        currentDispose = renderFavoritesSection(
+          root,
+          backendUrl,
+          isDebug,
+          goHome,
+          onOpenVenue,
+          onBookVenue,
+          onAskVenue
+        )
         break
       case 'promotions':
         onInternalBackStateChange?.(goHome)

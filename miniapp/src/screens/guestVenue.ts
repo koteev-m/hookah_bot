@@ -2,10 +2,12 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  guestAddFavoriteVenue,
   guestGetStaffCallStatus,
   guestGetVenue,
   guestGetVenueInfoSections,
   guestGetVenueMenu,
+  guestRemoveFavoriteVenue,
   guestStaffCall
 } from '../shared/api/guestApi'
 import type {
@@ -71,6 +73,7 @@ type VenueRefs = {
   venueSchedule: HTMLParagraphElement
   routeLink: HTMLAnchorElement
   copyAddressButton: HTMLButtonElement
+  favoriteButton: HTMLButtonElement
   bookingButton: HTMLButtonElement
   questionButton: HTMLButtonElement
   extensionSlot: HTMLDivElement
@@ -159,9 +162,14 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     text: 'Скопировать адрес'
   }) as HTMLButtonElement
   copyAddressButton.hidden = true
+  const favoriteButton = el('button', {
+    className: 'button-secondary button-small favorite-toggle',
+    text: 'В избранное'
+  }) as HTMLButtonElement
+  favoriteButton.setAttribute('aria-pressed', 'false')
   const bookingButton = el('button', { className: 'button-secondary button-small', text: 'Забронировать' }) as HTMLButtonElement
   const questionButton = el('button', { className: 'button-small', text: '💬 Задать вопрос' }) as HTMLButtonElement
-  append(header, venueTitle, venueLocation, venueSchedule, routeLink, copyAddressButton, bookingButton, questionButton)
+  append(header, venueTitle, venueLocation, venueSchedule, routeLink, copyAddressButton, favoriteButton, bookingButton, questionButton)
 
   const status = el('p', { className: 'status', text: '' })
   const message = el('p', { className: 'status menu-message', text: '' })
@@ -241,6 +249,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     venueSchedule,
     routeLink,
     copyAddressButton,
+    favoriteButton,
     bookingButton,
     questionButton,
     extensionSlot,
@@ -616,11 +625,14 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
   let disposed = false
   let menuAbort: AbortController | null = null
+  let favoriteAbort: AbortController | null = null
   let staffAbort: AbortController | null = null
   let staffStatusAbort: AbortController | null = null
   let staffStatusTimer: number | null = null
   let staffStatusLoadedForKey: string | null = null
   let isStaffCalling = false
+  let isFavoriteMutationPending = false
+  let currentIsFavorite = false
   let staffComposeOpen = false
   let staffOpenRequested = options.openStaffCall === true
   let latestStaffCall: StaffCallStatusDto | null = null
@@ -680,6 +692,38 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         messageTimer = null
       }, 2500)
     }
+  }
+
+  const updateFavoriteButton = () => {
+    refs.favoriteButton.textContent = currentIsFavorite ? 'В избранном' : 'В избранное'
+    refs.favoriteButton.dataset.favorite = String(currentIsFavorite)
+    refs.favoriteButton.setAttribute('aria-pressed', String(currentIsFavorite))
+    refs.favoriteButton.disabled = !venueId || isFavoriteMutationPending
+  }
+
+  const handleFavoriteToggle = async () => {
+    if (!venueId || isFavoriteMutationPending) return
+    const previousState = currentIsFavorite
+    currentIsFavorite = !previousState
+    isFavoriteMutationPending = true
+    setMessage('')
+    updateFavoriteButton()
+
+    const controller = new AbortController()
+    favoriteAbort = controller
+    const result = currentIsFavorite
+      ? await guestAddFavoriteVenue(backendUrl, venueId, buildApiDeps(isDebug), controller.signal)
+      : await guestRemoveFavoriteVenue(backendUrl, venueId, buildApiDeps(isDebug), controller.signal)
+    if (disposed || favoriteAbort !== controller) return
+    favoriteAbort = null
+    isFavoriteMutationPending = false
+    if (!result.ok) {
+      currentIsFavorite = previousState
+      if (result.error.code !== REQUEST_ABORTED_CODE) {
+        setMessage('Не удалось изменить избранное.')
+      }
+    }
+    updateFavoriteButton()
   }
 
   const setStaffMessage = (text: string, tone: 'default' | 'success' = 'default') => {
@@ -954,6 +998,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const renderVenueInfo = (venue: VenueDto) => {
+    currentIsFavorite = venue.isFavorite
+    updateFavoriteButton()
     refs.venueTitle.textContent = venue.name
     const fallbackParts = [venue.city, venue.address].filter(Boolean)
     const displayAddress = venue.displayAddress?.trim() || (fallbackParts.length ? fallbackParts.join(', ') : '')
@@ -1521,6 +1567,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   })
 
   disposables.push(
+    on(refs.favoriteButton, 'click', () => void handleFavoriteToggle()),
     on(refs.bookingButton, 'click', () => {
       if (venueId) {
         onBookVenue?.(venueId)
@@ -1563,6 +1610,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     latestStaffCall = null
     dispatchStaffActionState()
     menuAbort?.abort()
+    favoriteAbort?.abort()
     staffAbort?.abort()
     staffStatusAbort?.abort()
     stopStaffStatusPolling()

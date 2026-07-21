@@ -84,6 +84,59 @@ class GuestVenueRoutesTest {
         }
 
     @Test
+    fun `catalog and detail expose favorites only for current user`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-catalog-favorites")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venues = seedVenues(jdbcUrl)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                insertUser(connection, TELEGRAM_USER_ID)
+                insertUser(connection, OTHER_TELEGRAM_USER_ID)
+                connection.prepareStatement(
+                    "INSERT INTO guest_favorite_venues (user_id, venue_id) VALUES (?, ?)",
+                ).use { statement ->
+                    statement.setLong(1, TELEGRAM_USER_ID)
+                    statement.setLong(2, venues.publishedId)
+                    statement.executeUpdate()
+                }
+            }
+            val favoriteToken = issueToken(config, TELEGRAM_USER_ID)
+            val otherToken = issueToken(config, OTHER_TELEGRAM_USER_ID)
+
+            val favoriteCatalog =
+                client.get("/api/guest/catalog") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $favoriteToken") }
+                }
+            val favoriteDetail =
+                client.get("/api/guest/venue/${venues.publishedId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $favoriteToken") }
+                }
+            val otherCatalog =
+                client.get("/api/guest/catalog") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $otherToken") }
+                }
+            val otherDetail =
+                client.get("/api/guest/venue/${venues.publishedId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $otherToken") }
+                }
+
+            val favoriteCatalogPayload =
+                json.decodeFromString(CatalogResponse.serializer(), favoriteCatalog.bodyAsText())
+            val favoriteDetailPayload = json.decodeFromString(VenueResponse.serializer(), favoriteDetail.bodyAsText())
+            val otherCatalogPayload = json.decodeFromString(CatalogResponse.serializer(), otherCatalog.bodyAsText())
+            val otherDetailPayload = json.decodeFromString(VenueResponse.serializer(), otherDetail.bodyAsText())
+            assertTrue(favoriteCatalogPayload.venues.single().isFavorite)
+            assertTrue(favoriteDetailPayload.venue.isFavorite)
+            assertFalse(otherCatalogPayload.venues.single().isFavorite)
+            assertFalse(otherDetailPayload.venue.isFavorite)
+        }
+
+    @Test
     fun `catalog hides blocked subscriptions`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-catalog-blocked")
@@ -867,9 +920,26 @@ class GuestVenueRoutesTest {
         return MapApplicationConfig(*entries.toTypedArray())
     }
 
-    private fun issueToken(config: MapApplicationConfig): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long = TELEGRAM_USER_ID,
+    ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
-        return service.issueToken(TELEGRAM_USER_ID).token
+        return service.issueToken(userId).token
+    }
+
+    private fun insertUser(
+        connection: java.sql.Connection,
+        userId: Long,
+    ) {
+        connection.prepareStatement(
+            "INSERT INTO users (telegram_user_id, username, first_name) VALUES (?, ?, ?)",
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.setString(2, "user$userId")
+            statement.setString(3, "User $userId")
+            statement.executeUpdate()
+        }
     }
 
     private fun seedVenues(jdbcUrl: String): SeededVenues {
@@ -1187,5 +1257,6 @@ class GuestVenueRoutesTest {
 
     private companion object {
         const val TELEGRAM_USER_ID: Long = 777L
+        const val OTHER_TELEGRAM_USER_ID: Long = 778L
     }
 }

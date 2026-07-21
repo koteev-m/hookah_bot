@@ -12,6 +12,7 @@ Current practice:
 - CI is split into smaller backend jobs, Mini App build/e2e, compose and Docker image checks.
 - Local broad Gradle wildcards can hit heap/runtime limits; prefer focused selectors first.
 - Manual real Telegram/staff-chat smoke remains required for bot/staff-chat behavior changes.
+- Guest Favorites Phase 1 is `DONE / MVP / LOCAL SMOKE PASSED`: focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full e2e smoke `62/62` passed locally. This is local evidence, not a replacement for CI/staging release gates.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -305,6 +306,16 @@ Post-Visit Feedback:
 - `VisitFeedbackWorker`, scheduled Telegram feedback prompts, marketing push and automatic Yandex redirect remain disabled;
 - booking-only `SEATED` feedback keeps `Можно оценить бронь, встречу и обслуживание.` and non-seated booking outcomes remain ineligible.
 
+Guest Favorites Phase 1:
+- add favorite from catalog;
+- add favorite from venue detail;
+- remove favorite and verify the selected state updates;
+- Account shows the venue-only `Избранные заведения` list;
+- empty state shows `Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.`;
+- two authenticated users have isolated favorite state;
+- hidden/suspended or subscription-blocked venue is filtered without disclosing its card data, while the favorite row survives temporary unavailability;
+- Bot-created and Mini App-created favorites are visible through the shared source of truth.
+
 Platform/support:
 - Platform sees support tickets;
 - Platform does not see ordinary `VENUE_CHAT`;
@@ -334,7 +345,7 @@ Telegram/staff-chat:
 - Real Telegram fallback order smoke remains required for release confidence.
 - Platform Owner guest QR test escape remains open/needs verification.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
-- Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP is staging-smoke-passed and stays in regression.
+- Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP is staging-smoke-passed and venue-only Guest Favorites Phase 1 is local-smoke-passed; both stay in regression. Favorite menu items, recommendations/frequent items, repeat and notifications remain future.
 - Menu shift check and per-venue `staff_stoplist_enabled` remain future.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.

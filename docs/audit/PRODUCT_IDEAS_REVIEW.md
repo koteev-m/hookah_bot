@@ -10,7 +10,7 @@
 >
 > Current docs correction as of 2026-07-06: Platform cockpit status is consolidated in `docs/PLATFORM_COCKPIT.md`. Manual billing and support-ticket center are closed as MVPs; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle state normalization remain future/partial.
 >
-> Current docs correction as of 2026-07-21: Guest growth/retention status is consolidated in `docs/GROWTH_RETENTION.md`. Guest History Foundation and Post-Visit Feedback MVP are DONE / MVP / staging-smoke-passed. Manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; automated review prompts/public review automation and Platform feedback dashboard remain future/disabled. Favorite venues, repeat as a template, simple promotions/banners and opt-in notifications remain future. Promo codes, loyalty stamps/points, referrals, segmentation, paid placement/boosting and recommendations remain future.
+> Current docs correction as of 2026-07-21: Guest growth/retention status is consolidated in `docs/GROWTH_RETENTION.md`. Guest History Foundation and Post-Visit Feedback MVP are DONE / MVP / staging-smoke-passed. Guest Favorites Phase 1 is DONE / MVP / LOCAL SMOKE PASSED for venue favorites only: catalog/detail add/remove, Account list, current-user isolation, unavailable-venue filtering and shared Bot/Mini App source are closed locally. Favorite menu items, recommendations/frequent items, repeat as a template, simple promotions/banners and notifications remain future. Promo codes, loyalty stamps/points, referrals, segmentation and paid placement/boosting remain future.
 >
 > Current docs correction as of 2026-07-09: Order/session/tab core status is consolidated in `docs/ORDER_SESSION_TAB_CORE.md`. Current docs say the old active-order-by-physical-table risk is closed through table-session/tab scoping and Guest History Foundation MVP is staging-smoked; the canonical model now defines `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, lifecycle, privacy/RBAC and visit-history dependencies. Force-close reason/audit, repeat/feedback/loyalty/preorder, some DB-level uniqueness nuances and analytics events remain future/partial.
 >
@@ -28,7 +28,7 @@
 >
 > Current correction as of 2026-07-08: Staff-call lifecycle finishing patch is CLOSED / staging smoke passed. Guest status now includes `NEW`, `ACK`, `DONE` and `CANCELLED` for the current guest and current `tableSessionId`; `CANCELLED` uses `Вызов отменён`; Venue active queue remains `NEW` / `ACK`. Manual cancel UI, quick replies and row-level actor/timestamp columns remain future.
 >
-> Current correction as of 2026-07-09: Guest History Foundation MVP staging bugfix is CLOSED / staging smoke passed. History list/detail show closed-order visits and booking-only `SEATED` visits, hide `CANCELED` / `NO_SHOW` / `EXPIRED` / `PENDING` / `CHANGED` bookings as visits, preserve but filter legacy invalid rows, open old closed-order details without required `promotionDiscounts`/options/notes, keep `Не удалось загрузить детали истории.` for real errors, provide `← Назад к истории`, return Telegram BackButton from detail to History list, and preserve foreign-detail 404 plus personal/shared tab privacy. No migration was added. Favorites, repeat templates, post-visit feedback, simple promotions, loyalty, tips, preorder and marketing notifications remain future.
+> Historical correction as of 2026-07-09: Guest History Foundation MVP staging bugfix is CLOSED / staging smoke passed. History list/detail show closed-order visits and booking-only `SEATED` visits, hide `CANCELED` / `NO_SHOW` / `EXPIRED` / `PENDING` / `CHANGED` bookings as visits, preserve but filter legacy invalid rows, open old closed-order details without required `promotionDiscounts`/options/notes, keep `Не удалось загрузить детали истории.` for real errors, provide `← Назад к истории`, return Telegram BackButton from detail to History list, and preserve foreign-detail 404 plus personal/shared tab privacy. No migration was added. Its then-current future list is superseded by the 2026-07-21 correction above.
 >
 > Current correction as of 2026-07-21: Post-Visit Feedback MVP and latest smoke-fix are CLOSED / staging smoke passed. Feedback is manual from own completed History detail, including booking-only `SEATED`; Owner/Manager sees own-venue feedback; Staff denied. Owner-only `Ссылка для отзывов` is shared by Bot/Mini App. Manual `5/5` may show a safe configured Yandex CTA on explicit click; low `1..3` follow-up opens exact `VENUE_CHAT` with context and no automatic Owner message, support ticket or staff-chat notification. `VisitFeedbackWorker`, scheduled Telegram prompts and auto-redirect remain disabled.
 >
@@ -40,9 +40,9 @@
 
 Из нового списка уже частично реализованы: базовые брони, Telegram `/my` для активных броней/заказов, Guest Mini App `Мои брони`, venue-side booking queue/lifecycle API, booking hold settings with persisted `arrival_deadline_at`, owner venue description sections, простой guest catalog, multi-venue membership в БД, Mini App venue selector and Telegram selected-venue context, staff chat notifications для новых order batches, order close/table session cleanup как техническая основа visit retention.
 
-Частично, но с заметными gap: booking lifecycle, Mini App surfaces and M7c core reminder flow are now much stronger, but preorder, automatic expiry/no-show automation, broader reminder rollout and broader retention remain later; каталог без server-side search/filter/map/geo; Guest History Foundation is staging-smoke-passed but repeat templates, feedback and broader retention remain later; discount существует как ручной percent на item в счёте, но не как complete growth/promo/loyalty system.
+Частично, но с заметными gap: booking lifecycle, Mini App surfaces and M7c core reminder flow are now much stronger, but preorder, automatic expiry/no-show automation, broader reminder rollout and broader retention remain later; каталог без server-side search/filter/map/geo; Guest History Foundation and Post-Visit Feedback are staging-smoke-passed, venue favorites are local-smoke-passed, while favorite menu items, repeat templates and broader retention remain later; discount существует как ручной percent на item в счёте, но не как complete growth/promo/loyalty system.
 
-Отсутствует или не launch-complete как full product flow: automated review prompts/public review automation, Platform feedback dashboard, paid placement, promotion boosting, repeat templates, preorder, cashback/points/flexible loyalty rules, promo-code limits/accounting, referrals, segmentation/campaigns, hookah master subrole/profile/shift schedule, network/group entity for venue chains. Guest History and Post-Visit Feedback are smoked; favorites and promotions may have foundations but should be tracked through `docs/GROWTH_RETENTION.md` until smoked. M7c reminder rollout remains opt-in disabled, not absent.
+Отсутствует или не launch-complete как full product flow: favorite menu items, recommendations/frequent items, automated review prompts/public review automation, Platform feedback dashboard, paid placement, promotion boosting, repeat templates, notifications, preorder, cashback/points/flexible loyalty rules, promo-code limits/accounting, referrals, segmentation/campaigns, hookah master subrole/profile/shift schedule, network/group entity for venue chains. Guest History and Post-Visit Feedback are staging-smoked; venue favorites are local-smoke-passed. M7c reminder rollout remains opt-in disabled, not absent.
 
 Главные зависимости:
 - Core order/session/tab scoping is no longer the old April P0; current code scopes active orders by table session/tab, PostgreSQL has the intended active-order and active personal-tab uniqueness constraints, and H2 now mirrors those predicates for local/test schema fidelity.
@@ -56,7 +56,7 @@
 - `docs/TESTING_QA_SMOKE_STRATEGY.md` is the current source for validation commands, CI expectations, staging policy, failure reporting and manual smoke suite decisions; do not infer QA/release strategy from this historical audit alone.
 - `docs/DEPLOYMENT_RUNBOOK.md` is the current source for release/deploy model, staging command, environment inventory, migrations, rollback, troubleshooting, incident response and Codex/ChatGPT handoff; do not infer operations readiness from this historical audit alone.
 - P1 ops: table-context exit, guest/staff bill display parity, bill request/payment method UX, staff-chat activity card, guest-visible staff-call `CANCELLED`, manual platform billing cockpit, renewal/courtesy, staff invite sharing, Platform cockpit documentation and support/tickets MVP are now staging/smoke-closed or docs-closed; provider payment decision is the next launch-commercial gap before broad growth.
-- P2 growth: Post-Visit Feedback is closed; favorites, repeat templates, simple promotions and opt-in notifications can build on stable Guest History, but each needs its own implementation/smoke.
+- P2 growth: Post-Visit Feedback and venue-only Guest Favorites Phase 1 are closed by their stated evidence level. Favorite menu items, recommendations/frequent items, repeat templates, simple promotions and notifications remain separately scoped future work.
 - P3 monetization: catalog paid placement and promotion boosting need platform billing/moderation/analytics and clear advertising labels.
 
 ## Таблица статусов
@@ -74,7 +74,7 @@
 | 9. Мульти-venue owner / сеть | PARTIAL | `venue_members` PK `(venue_id,user_id)`; `VenueAccessRepository.listVenueMemberships`; `venueApp.ts` selector; `telegram_venue_context`; Telegram selector callbacks/tests | One user can belong to many venues; Mini App selector; Telegram selected-venue context | Network/group entity; consolidated stats; runtime smoke for multi-venue roles | Keep selector in regression; later design chain/network entity | Wrong venue actions if selected context regresses | P3 for networks; selector is implemented/regression |
 | 10. Staff/order notifications | PARTIAL / CORE CLOSED | `StaffChatNotifier.notifyNewBatch`; `TelegramOutboxWorker`; `GuestBookingRoutes.notifyVenueStaffAboutBooking`; bot `notifyStaffChat`; M5/M6 staging smoke | Staff chat new order/reorder, bot and Mini App staff calls lifecycle, booking create/update/cancel messages, staff-chat diagnostics/unlink | Personal staff notifications, unified event policy, richer delivery history | Keep M5/M6 in regression; add personal subscriptions only after core smoke stays green | Telegram sound constraints, disabled chat, missing staff chat link | P2 after launch core |
 | 11. История заказов гостя | DONE / MVP / STAGING-SMOKE-PASSED | Guest History Foundation list/detail exists; closed-order visits and booking-only `SEATED` visits are visible; non-seated bookings are filtered; legacy invalid rows are hidden; old closed-order details open safely | Current-user scoped History list/detail with privacy filters and merge/dedup | Keep `VISIT_HISTORY` / `ORDER_HISTORY` in regression; broader `BOOKING_HISTORY` polish and repeat remain future | History from completed closed orders and booking `SEATED`; non-seated bookings are not visits | Privacy regression, legacy optional fields, duplicate visits | Regression / then P2 follow-ups |
-| 12. Избранное / любимые / repeat | SPEC UPDATED / PARTIAL-FUTURE | See `docs/GROWTH_RETENTION.md`; baselines require smoke before DONE | Account/favorites/history baseline where available; local cart draft per table token | `FAVORITE_VENUE`, `REPEAT_TEMPLATE`, frequent items | Favorite venues; repeat as template only in next active table context | Reordering unavailable/stopped items; accidental order creation without table context | P2 |
+| 12. Избранное / любимые / repeat | FAVORITE VENUES DONE / MVP / LOCAL SMOKE PASSED; broader scope FUTURE | See `docs/GROWTH_RETENTION.md`; existing `guest_favorite_venues`, shared repository/routes and Mini App catalog/detail/Account surfaces | Venue favorite add/remove/list, current-user isolation, unavailable filtering and Bot/Mini App shared source | Favorite menu items, recommendations/frequent items, `REPEAT_TEMPLATE`, notifications | Keep venue favorites in regression; scope repeat only after Order Session Tab Core Hardening | Reordering unavailable/stopped items; accidental order creation without table context | Regression / future P2 |
 | 13. Предзаказ для постоянных | MISSING | Booking comment mentions "предзаказ"; no preorder model found | Booking exists; orders exist | Preorder settings, eligibility, cutoff, staff queue | `venue_preorder_settings`, `preorders` linked to confirmed booking | Requires reliable visit_count and booking lifecycle | P3 after visit history |
 | 14. Loyalty/cashback/discounts | FUTURE BEYOND MANUAL DISCOUNTS | `V58__order_batch_item_discounts.sql`; manual bill discount flow | Manual item discount percent in bill | Promo codes, cashback, points, tier discounts, category discounts, guest-specific discounts | Start only after financial model and discount accounting are correct | Financial correctness and abuse | P3 |
 | 15. Promotion templates | MISSING | No promotion template model found | None | Template catalog for common promos | Static templates in owner UI creating `venue_promotions` | Template flexibility vs complexity | P2/P3 |
@@ -759,7 +759,7 @@ Tests/smoke checks:
 Риски:
 - Current order/session/tab scoping issues can leak or mix history.
 
-Рекомендованный приоритет: History and Post-Visit Feedback are DONE; next Growth recommendation is **Guest Favorites Phase 1: favorite venues only**.
+Рекомендованный приоритет: History, Post-Visit Feedback and venue-only Guest Favorites Phase 1 are DONE at their documented evidence levels. Do not move directly to repeat/promotions; next runtime recommendation is **Order Session Tab Core Hardening**.
 
 Что делать не сейчас: analytics-heavy personalization before growth analytics events and safe aggregation are verified.
 
@@ -768,55 +768,49 @@ Tests/smoke checks:
 Продуктовая цель: reduce guest ordering friction on repeat visits.
 
 Текущее состояние в коде:
-- No favorites tables/routes/screens found.
-- Cart draft persists only local current table token in `miniapp/src/shared/state/cartStore.ts`.
-- No frequent-items aggregation.
+- Guest Favorites Phase 1 is DONE / MVP / LOCAL SMOKE PASSED for favorite venues only.
+- Existing `guest_favorite_venues` storage and `GuestFavoritesRepository` are the shared Bot/Mini App source of truth; no new migration was required.
+- Guest can add/remove from catalog and venue detail and open the venue-only Account list.
+- Catalog/detail expose current-user `isFavorite`; unavailable venues are filtered without disclosure and temporary hide/suspend preserves the favorite row.
+- Favorite menu items, frequent-items aggregation, recommendations and repeat remain absent/future.
 
 Evidence:
-- `cartStore.ts` localStorage draft prefix `hookah_guest_cart_draft:`.
-- `rg` found no product favorite/favourite files.
+- Focused backend favorites tests passed together with `compileKotlin` and `ktlintCheck`.
+- Mini App build passed; full browser e2e smoke passed `62/62`.
+- Bot and Mini App use the same repository/source.
 
-Расхождение с концепцией:
-- Spec Block 15 requires favorites and repeat template.
+Phase 1 DONE scope:
+- favorite venues;
+- catalog/detail actions;
+- Account favorites list and empty state;
+- current-user isolation;
+- hidden/suspended/subscription-blocked venue filtering without row deletion.
 
-MVP дизайн:
-- Favorite menu item and favorite venue.
-- Repeat last order into cart when guest has table context.
-- "Часто берёте" can be computed from order history later.
+Future scope:
+- favorite menu items;
+- recommendations and `Часто берёте`;
+- repeat order/template;
+- notifications.
 
 Расширенный дизайн:
 - Cross-venue recommendations, flavor preferences, smart bundles.
 
-Технические изменения:
-- Favorites repository/routes.
-- Repeat service filters unavailable items.
-
-Миграции БД:
-- `guest_favorite_venues(user_id, venue_id, created_at)`.
-- `guest_favorite_items(user_id, venue_id, menu_item_id, created_at)`.
-- Optional `guest_repeat_templates`.
-
-API/routes:
-- `POST/DELETE /api/guest/favorites/venues/{id}`
-- `POST/DELETE /api/guest/favorites/items/{id}`
-- `POST /api/guest/repeat-last`.
-
-Telegram bot changes:
-- Inline favorite/repeat buttons in menu/order.
-
-Mini App changes:
-- Favorite icons and repeat block in cart/table context.
-
 Tests/smoke checks:
-- Cannot repeat unavailable item.
-- Favorites hidden if venue suspended.
+- Add favorite from catalog.
+- Add favorite from venue detail.
+- Remove favorite.
+- Verify Account venue-only list and empty state.
+- Verify two-user isolation.
+- Verify hidden/suspended/subscription-blocked filtering while the row survives.
+- Verify Bot/Mini App shared source.
 
 Риски:
-- Repeat without active table context could imply preorder accidentally.
+- Personalized `isFavorite` must never leak through a shared catalog cache.
+- Future repeat without active table context could imply preorder accidentally.
 
-Рекомендованный приоритет: **P2**.
+Рекомендованный приоритет: keep Phase 1 in regression; next runtime block is **Order Session Tab Core Hardening**.
 
-Что делать не сейчас: repeat/favorites shortcuts that bypass current availability handling or table-context rules.
+Что делать не сейчас: favorite menu items, recommendations/frequent items, repeat or notification shortcuts. Repeat must not be started before active-order/session/tab privacy hardening is complete.
 
 ### 13. Предзаказ для постоянных гостей
 
@@ -1133,7 +1127,7 @@ Tests/smoke checks:
 - Use `docs/GROWTH_RETENTION.md` before opening Growth/retention tasks; keep current implementation versus MVP versus future status explicit.
 
 Отложить до стабилизации post-platform-owner launch core:
-- Visit_count, favorites, repeat template, simple promotions and preorder eligibility until their own rules are stable. Guest History and Post-Visit Feedback are stable; recommended next is Guest Favorites Phase 1.
+- Visit_count, favorite menu items, recommendations/frequent items, repeat template, simple promotions, notifications and preorder eligibility until their own rules are stable. Guest History, Post-Visit Feedback and venue favorites are stable at their documented evidence levels.
 
 Отложить до real provider billing/analytics:
 - Catalog paid placement, promotion boosting, campaign budgets, impressions/clicks.
@@ -1161,13 +1155,14 @@ No current P0 is selected from this historical list. The original P0 order/sessi
 
 ### P2 Growth/retention
 
-1. Guest Favorites Phase 1: add/remove favorite venue, current-user list and safe hidden/suspended filtering.
-2. Repeat templates that require next table context.
-3. Simple venue promotions/announcements with terms, period, status and opt-in-safe notifications.
-4. Visit_count / owner retention summaries after valid visit counting is explicitly designed.
-5. Catalog server search/filter by name/city/address/district.
-6. Hookah master guest-visible display profile.
-7. Promotion templates as non-executable templates.
+1. Order Session Tab Core Hardening before the next Growth runtime slice: one active order per `table_session_id`, tab-scoped order views and privacy regression.
+2. Favorite menu items and recommendations/frequent items only as a separately scoped future block.
+3. Repeat templates that require next table context; do not start directly after Favorites.
+4. Simple venue promotions/announcements with terms, period, status and opt-in-safe notifications; do not start directly after Favorites.
+5. Visit_count / owner retention summaries after valid visit counting is explicitly designed.
+6. Catalog server search/filter by name/city/address/district.
+7. Hookah master guest-visible display profile.
+8. Promotion templates as non-executable templates.
 
 ### P3 Advanced monetization/ads/loyalty
 

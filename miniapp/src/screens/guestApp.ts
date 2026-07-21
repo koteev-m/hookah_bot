@@ -264,13 +264,18 @@ function renderRouteContent(
         root: screenRoot,
         backendUrl,
         isDebug,
-        currentVenueId: tableSnapshot.status === 'resolved' ? tableSnapshot.venueId : route.venueId,
         hasTableContext,
         onBack: onNavigateCatalog,
         onOpenBookings: () => {
           window.location.hash = '#/bookings'
         },
         onOpenVenue,
+        onBookVenue: (venueId) => {
+          window.location.hash = `#/bookings?venueId=${venueId}`
+        },
+        onAskVenue: (venueId) => {
+          window.location.hash = `#/messages?venueId=${venueId}`
+        },
         onOpenBot: onOpenSupportBot,
         onInternalBackStateChange
       })

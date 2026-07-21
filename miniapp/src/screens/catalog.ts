@@ -1,7 +1,7 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestGetCatalog } from '../shared/api/guestApi'
+import { guestAddFavoriteVenue, guestGetCatalog, guestRemoveFavoriteVenue } from '../shared/api/guestApi'
 import type { CatalogVenueDto, VenueTodayScheduleDto } from '../shared/api/guestDtos'
 import type { ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
@@ -97,6 +97,8 @@ function renderCatalogList(
   onOpenVenue: (venueId: number) => void,
   onBookVenue: ((venueId: number) => void) | undefined,
   onAskVenue: ((venueId: number) => void) | undefined,
+  pendingFavoriteVenueIds: ReadonlySet<number>,
+  onToggleFavorite: (venue: CatalogVenueDto) => void,
   refs: CatalogRefs,
   emptyMessage: string
 ) {
@@ -133,6 +135,14 @@ function renderCatalogList(
 
     const actions = document.createElement('div')
     actions.className = 'order-actions'
+    const favoriteButton = document.createElement('button')
+    favoriteButton.className = 'button-small favorite-toggle'
+    favoriteButton.dataset.favorite = String(venue.isFavorite)
+    favoriteButton.setAttribute('aria-pressed', String(venue.isFavorite))
+    favoriteButton.textContent = venue.isFavorite ? 'В избранном' : 'В избранное'
+    favoriteButton.disabled = pendingFavoriteVenueIds.has(venue.id)
+    favoriteButton.addEventListener('click', () => onToggleFavorite(venue))
+    actions.appendChild(favoriteButton)
     const button = document.createElement('button')
     button.className = 'button-small'
     button.textContent = 'Открыть карточку'
@@ -167,6 +177,8 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   let disposed = false
   let catalogAbort: AbortController | null = null
   let venues: CatalogVenueDto[] = []
+  const pendingFavoriteVenueIds = new Set<number>()
+  const favoriteMutationControllers = new Set<AbortController>()
   const disposables: Array<() => void> = []
 
   const setStatus = (text: string) => {
@@ -214,7 +226,41 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     const emptyMessage = venues.length
       ? 'Ничего не найдено по заданному фильтру.'
       : 'Пока нет доступных заведений.'
-    renderCatalogList(filtered, onOpenVenue, onBookVenue, onAskVenue, refs, emptyMessage)
+    renderCatalogList(
+      filtered,
+      onOpenVenue,
+      onBookVenue,
+      onAskVenue,
+      pendingFavoriteVenueIds,
+      (venue) => void toggleFavorite(venue),
+      refs,
+      emptyMessage
+    )
+  }
+
+  async function toggleFavorite(venue: CatalogVenueDto) {
+    if (disposed || pendingFavoriteVenueIds.has(venue.id)) return
+    const previousState = venue.isFavorite
+    venue.isFavorite = !previousState
+    pendingFavoriteVenueIds.add(venue.id)
+    setStatus('')
+    applyFilter()
+
+    const controller = new AbortController()
+    favoriteMutationControllers.add(controller)
+    const result = venue.isFavorite
+      ? await guestAddFavoriteVenue(backendUrl, venue.id, buildApiDeps(isDebug), controller.signal)
+      : await guestRemoveFavoriteVenue(backendUrl, venue.id, buildApiDeps(isDebug), controller.signal)
+    favoriteMutationControllers.delete(controller)
+    if (disposed || (!result.ok && result.error.code === REQUEST_ABORTED_CODE)) {
+      return
+    }
+    pendingFavoriteVenueIds.delete(venue.id)
+    if (!result.ok) {
+      venue.isFavorite = previousState
+      setStatus('Не удалось изменить избранное.')
+    }
+    applyFilter()
   }
 
   async function loadCatalog() {
@@ -257,6 +303,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   return () => {
     disposed = true
     catalogAbort?.abort()
+    favoriteMutationControllers.forEach((controller) => controller.abort())
     disposables.forEach((dispose) => dispose())
   }
 }

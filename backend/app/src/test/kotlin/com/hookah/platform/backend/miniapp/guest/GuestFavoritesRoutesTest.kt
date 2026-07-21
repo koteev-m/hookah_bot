@@ -39,6 +39,7 @@ class GuestFavoritesRoutesTest {
             client.get("/health")
             val fixture = seedFixture(jdbcUrl)
             val token = issueToken(config, GUEST_ONE)
+            val otherToken = issueToken(config, GUEST_TWO)
 
             val postResponse =
                 client.post("/api/guest/favorites/venues/${fixture.visibleVenueId}") {
@@ -63,11 +64,26 @@ class GuestFavoritesRoutesTest {
                 venues.first().jsonObject.getValue("venueId").jsonPrimitive.content.toLong(),
             )
 
+            val otherUserListResponse =
+                client.get("/api/guest/favorites/venues") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $otherToken") }
+                }
+            val otherUserVenues =
+                json.parseToJsonElement(
+                    otherUserListResponse.bodyAsText(),
+                ).jsonObject.getValue("venues").jsonArray
+            assertEquals(0, otherUserVenues.size)
+
             val deleteResponse =
                 client.delete("/api/guest/favorites/venues/${fixture.visibleVenueId}") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
+            val secondDeleteResponse =
+                client.delete("/api/guest/favorites/venues/${fixture.visibleVenueId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
             assertEquals(HttpStatusCode.OK, deleteResponse.status)
+            assertEquals(HttpStatusCode.OK, secondDeleteResponse.status)
 
             val emptyResponse =
                 client.get("/api/guest/favorites/venues") {
@@ -78,6 +94,26 @@ class GuestFavoritesRoutesTest {
                     emptyResponse.bodyAsText(),
                 ).jsonObject.getValue("venues").jsonArray
             assertEquals(0, emptyVenues.size)
+        }
+
+    @Test
+    fun `favorite venue routes require authentication`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-favorites-auth")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val fixture = seedFixture(jdbcUrl)
+
+            val listResponse = client.get("/api/guest/favorites/venues")
+            val addResponse = client.post("/api/guest/favorites/venues/${fixture.visibleVenueId}")
+            val deleteResponse = client.delete("/api/guest/favorites/venues/${fixture.visibleVenueId}")
+
+            listOf(listResponse, addResponse, deleteResponse).forEach { response ->
+                assertEquals(HttpStatusCode.Unauthorized, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.UNAUTHORIZED)
+            }
         }
 
     @Test

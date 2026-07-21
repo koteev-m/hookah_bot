@@ -100,7 +100,7 @@ private fun parseFavoritesLimit(raw: String?): Int =
     raw
         ?.toIntOrNull()
         ?.takeIf { it in 1..50 }
-        ?: 20
+        ?: 50
 
 private fun FavoriteVenue.toDto(): GuestFavoriteVenueDto =
     GuestFavoriteVenueDto(

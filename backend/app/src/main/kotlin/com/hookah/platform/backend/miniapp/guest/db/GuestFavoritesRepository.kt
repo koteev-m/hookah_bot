@@ -82,9 +82,49 @@ class GuestFavoritesRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findFavoriteVenueIds(
+        userId: Long,
+        venueIds: Collection<Long>,
+    ): Set<Long> {
+        val ids = venueIds.distinct()
+        if (ids.isEmpty()) {
+            return emptySet()
+        }
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val placeholders = ids.joinToString(",") { "?" }
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT venue_id
+                        FROM guest_favorite_venues
+                        WHERE user_id = ?
+                          AND venue_id IN ($placeholders)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, userId)
+                        ids.forEachIndexed { index, venueId ->
+                            statement.setLong(index + 2, venueId)
+                        }
+                        statement.executeQuery().use { rs ->
+                            buildSet {
+                                while (rs.next()) {
+                                    add(rs.getLong("venue_id"))
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun listFavoriteVenues(
         userId: Long,
-        limit: Int = 20,
+        limit: Int = 50,
     ): List<FavoriteVenue> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val blockedStatuses = SubscriptionStatus.blockedDbValues

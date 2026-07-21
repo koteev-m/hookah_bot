@@ -700,6 +700,11 @@ async function mockGuestApi(
     activeOrder?: ActiveOrderFixtureOptions | null
     todayStaff?: Array<Record<string, unknown>>
     visitHistory?: GuestVisitHistoryFixture
+    initialFavoriteVenueIds?: number[]
+    favoriteMutationDelayMs?: number
+    favoriteMutationFailureOnce?: boolean
+    isolateFavoriteUsers?: boolean
+    venueAvailable?: boolean
   } = {}
 ) {
   let structuredMenuCalls = 0
@@ -720,6 +725,12 @@ async function mockGuestApi(
   let activeOrderOptions: ActiveOrderFixtureOptions | null = options.activeOrder === undefined ? {} : options.activeOrder
   const todayStaff = options.todayStaff ?? []
   const visitHistory = options.visitHistory ?? { items: [], details: {} }
+  const defaultFavoriteToken = options.isolateFavoriteUsers ? 'favorite-user-123456789' : 'e2e-session-token'
+  const favoriteVenueIdsByToken = new Map<string, Set<number>>([
+    [defaultFavoriteToken, new Set(options.initialFavoriteVenueIds ?? [])]
+  ])
+  let favoriteMutationFailureOnce = options.favoriteMutationFailureOnce === true
+  let venueAvailable = options.venueAvailable !== false
   let createExtensionRequestCalls = 0
   let nextBookingId = 9000
   let activeOrderServiceCharges: ServiceCharge[] = []
@@ -787,13 +798,35 @@ async function mockGuestApi(
   }
 
   await page.route('**/api/auth/telegram', async (route) => {
-    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+    if (!options.isolateFavoriteUsers) {
+      await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+      return
+    }
+    const body = (await route.request().postDataJSON()) as { initData?: string }
+    const rawUser = new URLSearchParams(body.initData ?? '').get('user')
+    const userId = rawUser ? Number((JSON.parse(rawUser) as { id?: number }).id) : 0
+    const token = `favorite-user-${userId}`
+    if (!favoriteVenueIdsByToken.has(token)) {
+      favoriteVenueIdsByToken.set(token, new Set())
+    }
+    await route.fulfill(jsonResponse({ token, expiresAtEpochSeconds: sessionExpiresAt }))
   })
 
+  const favoriteIdsForRequest = (request: { headers(): Record<string, string> }) => {
+    const token = request.headers().authorization?.replace(/^Bearer\s+/i, '') ?? defaultFavoriteToken
+    let ids = favoriteVenueIdsByToken.get(token)
+    if (!ids) {
+      ids = new Set()
+      favoriteVenueIdsByToken.set(token, ids)
+    }
+    return ids
+  }
+
   await page.route('**/api/guest/catalog', async (route) => {
+    const favoriteIds = favoriteIdsForRequest(route.request())
     await route.fulfill(
       jsonResponse({
-        venues: [
+        venues: venueAvailable ? [
           {
             id: 1,
             name: 'Микс',
@@ -803,6 +836,7 @@ async function mockGuestApi(
             displayAddress: 'Москва, Пилотная, 1',
             routeUrl: buildTextRouteUrl('Микс', 'RU', 'Москва', 'Пилотная, 1'),
             cardDescription: 'Тестовая карточка',
+            isFavorite: favoriteIds.has(1),
             todaySchedule: {
               date: '2030-01-10',
               isConfigured: false,
@@ -812,12 +846,21 @@ async function mockGuestApi(
               timeLabel: null
             }
           }
-        ]
+        ] : []
       })
     )
   })
 
   await page.route('**/api/guest/venue/1', async (route) => {
+    if (!venueAvailable) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found' } })
+      })
+      return
+    }
+    const favoriteIds = favoriteIdsForRequest(route.request())
     await route.fulfill(
       jsonResponse({
         venue: {
@@ -839,10 +882,50 @@ async function mockGuestApi(
             timeLabel: null
           },
           todayStaff,
-          status: 'PUBLISHED'
+          status: 'PUBLISHED',
+          isFavorite: favoriteIds.has(1)
         }
       })
     )
+  })
+
+  await page.route('**/api/guest/favorites/venues**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const favoriteIds = favoriteIdsForRequest(request)
+    if (path === '/api/guest/favorites/venues' && request.method() === 'GET') {
+      await route.fulfill(
+        jsonResponse({
+          venues: venueAvailable && favoriteIds.has(1)
+            ? [{ venueId: 1, name: 'Микс', city: 'Москва', address: 'Пилотная, 1' }]
+            : []
+        })
+      )
+      return
+    }
+    const venueMatch = path.match(/^\/api\/guest\/favorites\/venues\/(\d+)$/)
+    if (venueMatch && (request.method() === 'POST' || request.method() === 'DELETE')) {
+      if (options.favoriteMutationDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.favoriteMutationDelayMs))
+      }
+      if (favoriteMutationFailureOnce) {
+        favoriteMutationFailureOnce = false
+        await route.fulfill(
+          jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Failed' } }, 500)
+        )
+        return
+      }
+      const venueId = Number(venueMatch[1])
+      if (request.method() === 'POST' && venueAvailable) {
+        favoriteIds.add(venueId)
+      }
+      if (request.method() === 'DELETE') {
+        favoriteIds.delete(venueId)
+      }
+      await route.fulfill(jsonResponse({ ok: true }))
+      return
+    }
+    await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
   })
 
   await page.route('**/api/guest/venue/1/info-sections', async (route) => {
@@ -1360,6 +1443,17 @@ async function mockGuestApi(
     },
     setActiveOrder: (order: ActiveOrderFixtureOptions | null) => {
       activeOrderOptions = order
+    },
+    setVenueAvailable: (available: boolean) => {
+      venueAvailable = available
+    },
+    setFavoriteVenueIds: (userId: number, venueIds: number[]) => {
+      const token = options.isolateFavoriteUsers ? `favorite-user-${userId}` : defaultFavoriteToken
+      favoriteVenueIdsByToken.set(token, new Set(venueIds))
+    },
+    getFavoriteVenueIds: (userId: number) => {
+      const token = options.isolateFavoriteUsers ? `favorite-user-${userId}` : defaultFavoriteToken
+      return Array.from(favoriteVenueIdsByToken.get(token) ?? [])
     }
   }
 }
@@ -3642,6 +3736,104 @@ test('guest venue card shows today staff without private linkage fields', async 
     return Boolean(info && today && (info.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING))
   })
   expect(todayStaffAfterInfo).toBe(true)
+})
+
+test('guest favorite venues stay consistent across catalog venue detail and account', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { favoriteMutationDelayMs: 250 })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  const catalogFavorite = page.getByRole('button', { name: 'В избранное' })
+  await expect(catalogFavorite).toHaveAttribute('aria-pressed', 'false')
+  await catalogFavorite.click()
+  await expect(page.getByRole('button', { name: 'В избранном' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'В избранном' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'В избранном' })).toBeEnabled()
+  expect(
+    await page.getByRole('button', { name: 'В избранном' }).evaluate((button) => getComputedStyle(button).backgroundColor)
+  ).not.toBe('rgb(255, 255, 255)')
+
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  const detailFavorite = page.getByRole('button', { name: 'В избранном' })
+  await expect(detailFavorite).toHaveAttribute('aria-pressed', 'true')
+  await detailFavorite.click()
+  await expect(page.getByRole('button', { name: 'В избранное' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'В избранное' })).toBeEnabled()
+  await page.getByRole('button', { name: 'В избранное' }).click()
+  await expect(page.getByRole('button', { name: 'В избранном' })).toBeEnabled()
+
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await expect(page.getByRole('heading', { name: 'Избранные заведения' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Открыть заведение' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Забронировать' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Открыть заведение' }).click()
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/venue/1')
+  await page.evaluate(() => { window.location.hash = '#/account' })
+  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await page.getByRole('button', { name: 'Забронировать' }).click()
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/bookings?venueId=1')
+  await page.evaluate(() => { window.location.hash = '#/account' })
+  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await page.getByRole('button', { name: 'Задать вопрос' }).click()
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/messages?venueId=1')
+
+  await page.evaluate(() => { window.location.hash = '#/account' })
+  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await page.getByRole('button', { name: 'Удалить из избранного' }).click()
+  await expect(page.locator('.favorite-venue-list .button-danger')).toBeDisabled()
+  await expect(page.getByText('Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.')).toBeVisible()
+
+  api.setFavoriteVenueIds(123456789, [1])
+  api.setVenueAvailable(false)
+  await page.reload()
+  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await expect(page.getByText('Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.')).toBeVisible()
+  api.setVenueAvailable(true)
+  await page.reload()
+  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
+})
+
+test('guest favorite mutation rolls back and shows safe error', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { favoriteMutationDelayMs: 150, favoriteMutationFailureOnce: true })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'В избранное' }).click()
+  await expect(page.getByRole('button', { name: 'В избранном' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'В избранное' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'В избранное' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByText('Не удалось изменить избранное.')).toBeVisible()
+})
+
+test('guest favorite venues are isolated between accounts', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { isolateFavoriteUsers: true })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'В избранное' }).click()
+  await expect(page.getByRole('button', { name: 'В избранном' })).toBeEnabled()
+  expect(api.getFavoriteVenueIds(123456789)).toEqual([1])
+
+  await page.evaluate(({ userId, initData }) => {
+    window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
+    window.localStorage.setItem('__e2e_telegram_init_data', initData)
+    window.location.hash = '#/catalog'
+  }, { userId: 987654321, initData: otherMockInitData })
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'В избранное' })).toHaveAttribute('aria-pressed', 'false')
+  expect(api.getFavoriteVenueIds(987654321)).toEqual([])
+
+  await page.evaluate(({ userId, initData }) => {
+    window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
+    window.localStorage.setItem('__e2e_telegram_init_data', initData)
+  }, { userId: 123456789, initData: mockInitData })
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'В избранном' })).toHaveAttribute('aria-pressed', 'true')
 })
 
 test('guest booking closed date shows human message and keeps selected date', async ({ page }) => {

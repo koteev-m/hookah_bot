@@ -20,6 +20,7 @@ import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionMediaDto
 import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionsResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueTodayScheduleDto
+import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
@@ -32,6 +33,7 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 import com.hookah.platform.backend.miniapp.venue.containsOpenInstant
 import com.hookah.platform.backend.miniapp.venue.formatScheduleRange
 import com.hookah.platform.backend.miniapp.venue.formatScheduleTime
+import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.staff.PublicVenueStaffToday
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
 import com.hookah.platform.backend.telegram.TelegramDownloadedFile
@@ -53,6 +55,7 @@ import java.time.LocalDateTime
 
 fun Route.guestVenueRoutes(
     guestVenueRepository: GuestVenueRepository,
+    guestFavoritesRepository: GuestFavoritesRepository,
     guestMenuRepository: GuestMenuRepository,
     venueStaffProfileRepository: VenueStaffProfileRepository,
     venueInfoSectionsRepository: VenueInfoSectionsRepository,
@@ -62,7 +65,13 @@ fun Route.guestVenueRoutes(
     venueSettingsRepository: VenueSettingsRepository,
 ) {
     get("/catalog") {
+        val userId = call.requireUserId()
         val venues = guestVenueRepository.listCatalogVenues()
+        val favoriteVenueIds =
+            guestFavoritesRepository.findFavoriteVenueIds(
+                userId = userId,
+                venueIds = venues.map { it.id },
+            )
         val schedules =
             venues.associate { venue ->
                 venue.id to
@@ -72,13 +81,19 @@ fun Route.guestVenueRoutes(
                         venueSettingsRepository = venueSettingsRepository,
                     )
             }
-        call.respond(CatalogResponse(venues = venues.map { it.toCatalogDto(schedules[it.id]) }))
+        call.respond(
+            CatalogResponse(
+                venues = venues.map { it.toCatalogDto(schedules[it.id], it.id in favoriteVenueIds) },
+            ),
+        )
     }
 
     get("/venue/{id}") {
+        val userId = call.requireUserId()
         val rawId = call.parameters["id"] ?: throw InvalidInputException("id is required")
         val venueId = rawId.toLongOrNull() ?: throw InvalidInputException("id must be a number")
         val venue = ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
+        val isFavorite = guestFavoritesRepository.isVenueFavorite(userId = userId, venueId = venueId)
         val todaySchedule =
             buildGuestTodaySchedule(
                 venueId = venue.id,
@@ -91,7 +106,7 @@ fun Route.guestVenueRoutes(
                 venueStaffProfileRepository = venueStaffProfileRepository,
                 venueSettingsRepository = venueSettingsRepository,
             )
-        call.respond(VenueResponse(venue = venue.toVenueDto(todaySchedule, todayStaff)))
+        call.respond(VenueResponse(venue = venue.toVenueDto(todaySchedule, todayStaff, isFavorite)))
     }
 
     get("/venue/{id}/today-staff") {
@@ -213,7 +228,10 @@ private suspend fun buildGuestTodaySchedule(
     )
 }
 
-private fun VenueShort.toCatalogDto(todaySchedule: VenueTodayScheduleDto?): CatalogVenueDto =
+private fun VenueShort.toCatalogDto(
+    todaySchedule: VenueTodayScheduleDto?,
+    isFavorite: Boolean,
+): CatalogVenueDto =
     CatalogVenueDto(
         id = id,
         name = name,
@@ -228,11 +246,13 @@ private fun VenueShort.toCatalogDto(todaySchedule: VenueTodayScheduleDto?): Cata
         guestContact = guestContact,
         cardDescription = cardDescription,
         todaySchedule = todaySchedule,
+        isFavorite = isFavorite,
     )
 
 private fun VenueShort.toVenueDto(
     todaySchedule: VenueTodayScheduleDto?,
     todayStaff: List<GuestTodayStaffDto> = emptyList(),
+    isFavorite: Boolean,
 ): VenueDto =
     VenueDto(
         id = id,
@@ -250,6 +270,7 @@ private fun VenueShort.toVenueDto(
         todaySchedule = todaySchedule,
         todayStaff = todayStaff,
         status = status.dbValue,
+        isFavorite = isFavorite,
     )
 
 private fun VenueShort.displayAddress(): String? = formatVenueDisplayAddress(locationDisplay())

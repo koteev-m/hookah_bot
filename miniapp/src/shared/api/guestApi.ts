@@ -19,6 +19,7 @@ import type {
   GuestBillRequestRequest,
   GuestBillRequestResponse,
   GuestFavoriteItemsResponse,
+  GuestFavoriteMutationResponse,
   GuestFavoriteVenuesResponse,
   GuestShiftExtensionOptionsResponse,
   GuestTodayStaffResponse,
@@ -847,6 +848,40 @@ export async function guestGetFavoriteVenues(
   signal?: AbortSignal
 ): Promise<ApiResult<GuestFavoriteVenuesResponse>> {
   return requestApi<GuestFavoriteVenuesResponse>(backendUrl, '/api/guest/favorites/venues', { signal }, deps)
+}
+
+export async function guestAddFavoriteVenue(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestFavoriteMutationResponse>> {
+  if (!Number.isFinite(venueId) || !Number.isInteger(venueId) || venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  return requestApi<GuestFavoriteMutationResponse>(
+    backendUrl,
+    `/api/guest/favorites/venues/${encodeURIComponent(String(venueId))}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function guestRemoveFavoriteVenue(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestFavoriteMutationResponse>> {
+  if (!Number.isFinite(venueId) || !Number.isInteger(venueId) || venueId <= 0) {
+    return invalidPositiveIdResult('venueId')
+  }
+  return requestApi<GuestFavoriteMutationResponse>(
+    backendUrl,
+    `/api/guest/favorites/venues/${encodeURIComponent(String(venueId))}`,
+    { method: 'DELETE', signal },
+    deps
+  )
 }
 
 export async function guestGetFavoriteItems(

@@ -6,8 +6,11 @@ import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.PreparedStatement
 import java.sql.Statement
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
+import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -55,6 +58,115 @@ class GuestFavoritesRepositoryTest {
             val venues = repository.listFavoriteVenues(GUEST_ONE)
 
             assertEquals(listOf(fixture.visibleVenueId), venues.map { it.venueId })
+        }
+
+    @Test
+    fun `venue favorites reject every unavailable lifecycle and blocked subscription status`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("fav-venues-all-blocked")
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                insertUser(connection, GUEST_ONE)
+            }
+            val repository = GuestFavoritesRepository(dataSource(jdbcUrl))
+            val unavailableVenueIds = mutableListOf<Long>()
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                VenueStatus.entries
+                    .filterNot { it == VenueStatus.PUBLISHED }
+                    .forEach { status ->
+                        val venueId = insertVenue(connection, "Venue ${status.name}", status.dbValue)
+                        assertFalse(repository.addVenueFavorite(GUEST_ONE, venueId), status.name)
+                        insertVenueFavorite(connection, GUEST_ONE, venueId)
+                        unavailableVenueIds.add(venueId)
+                    }
+                listOf("CANCELED", "SUSPENDED", "SUSPENDED_BY_PLATFORM").forEach { status ->
+                    val venueId = insertVenue(connection, "Subscription $status", VenueStatus.PUBLISHED.dbValue)
+                    insertSubscription(connection, venueId, status)
+                    assertFalse(repository.addVenueFavorite(GUEST_ONE, venueId), status)
+                    insertVenueFavorite(connection, GUEST_ONE, venueId)
+                    unavailableVenueIds.add(venueId)
+                }
+            }
+
+            assertEquals(emptyList(), repository.listFavoriteVenues(GUEST_ONE))
+            unavailableVenueIds.forEach { venueId ->
+                assertTrue(repository.isVenueFavorite(GUEST_ONE, venueId))
+            }
+        }
+
+    @Test
+    fun `favorite row survives temporary unavailability and returns after republish`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("fav-venues-republish")
+            val fixture = seedFavoritesFixture(jdbcUrl)
+            val repository = GuestFavoritesRepository(dataSource(jdbcUrl))
+
+            assertTrue(repository.addVenueFavorite(GUEST_ONE, fixture.visibleVenueId))
+            updateVenueStatus(jdbcUrl, fixture.visibleVenueId, VenueStatus.HIDDEN.dbValue)
+            assertEquals(emptyList(), repository.listFavoriteVenues(GUEST_ONE))
+            assertTrue(repository.isVenueFavorite(GUEST_ONE, fixture.visibleVenueId))
+
+            updateVenueStatus(jdbcUrl, fixture.visibleVenueId, VenueStatus.PUBLISHED.dbValue)
+            insertSubscription(jdbcUrl, fixture.visibleVenueId, "SUSPENDED_BY_PLATFORM")
+            assertEquals(emptyList(), repository.listFavoriteVenues(GUEST_ONE))
+            assertTrue(repository.isVenueFavorite(GUEST_ONE, fixture.visibleVenueId))
+
+            insertSubscription(jdbcUrl, fixture.visibleVenueId, "ACTIVE")
+            assertEquals(listOf(fixture.visibleVenueId), repository.listFavoriteVenues(GUEST_ONE).map { it.venueId })
+        }
+
+    @Test
+    fun `physical venue deletion cascades favorite row`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("fav-venues-delete-cascade")
+            val fixture = seedFavoritesFixture(jdbcUrl)
+            val repository = GuestFavoritesRepository(dataSource(jdbcUrl))
+
+            assertTrue(repository.addVenueFavorite(GUEST_ONE, fixture.visibleVenueId))
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement("DELETE FROM venues WHERE id = ?").use { statement ->
+                    statement.setLong(1, fixture.visibleVenueId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+                connection.prepareStatement(
+                    "SELECT COUNT(*) FROM guest_favorite_venues WHERE user_id = ? AND venue_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, GUEST_ONE)
+                    statement.setLong(2, fixture.visibleVenueId)
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        assertEquals(0, rs.getInt(1))
+                    }
+                }
+            }
+        }
+
+    @Test
+    fun `catalog favorite ids are resolved with one batch query`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("fav-venues-batch")
+            val fixture = seedFavoritesFixture(jdbcUrl)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                insertVenueFavorite(connection, GUEST_ONE, fixture.visibleVenueId)
+            }
+            val queryCount = AtomicInteger()
+            val repository =
+                GuestFavoritesRepository(
+                    CountingDataSource(dataSource(jdbcUrl)) { sql ->
+                        if (sql.contains("FROM guest_favorite_venues") && sql.contains("venue_id IN")) {
+                            queryCount.incrementAndGet()
+                        }
+                    },
+                )
+
+            val ids =
+                repository.findFavoriteVenueIds(
+                    userId = GUEST_ONE,
+                    venueIds = listOf(fixture.visibleVenueId, fixture.hiddenVenueId, fixture.blockedVenueId),
+                )
+
+            assertEquals(setOf(fixture.visibleVenueId), ids)
+            assertEquals(1, queryCount.get())
         }
 
     @Test
@@ -184,6 +296,30 @@ class GuestFavoritesRepositoryTest {
         }
     }
 
+    private fun insertSubscription(
+        jdbcUrl: String,
+        venueId: Long,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            insertSubscription(connection, venueId, status)
+        }
+    }
+
+    private fun updateVenueStatus(
+        jdbcUrl: String,
+        venueId: Long,
+        status: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("UPDATE venues SET status = ? WHERE id = ?").use { statement ->
+                statement.setString(1, status)
+                statement.setLong(2, venueId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun insertCategory(
         connection: Connection,
         venueId: Long,
@@ -270,6 +406,28 @@ class GuestFavoritesRepositoryTest {
         val hiddenVenueItemId: Long,
         val otherVenueItemId: Long,
     )
+
+    private class CountingDataSource(
+        private val delegate: DataSource,
+        private val onPrepare: (String) -> Unit,
+    ) : DataSource by delegate {
+        override fun getConnection(): Connection = CountingConnection(delegate.connection, onPrepare)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = CountingConnection(delegate.getConnection(username, password), onPrepare)
+    }
+
+    private class CountingConnection(
+        private val delegate: Connection,
+        private val onPrepare: (String) -> Unit,
+    ) : Connection by delegate {
+        override fun prepareStatement(sql: String): PreparedStatement {
+            onPrepare(sql)
+            return delegate.prepareStatement(sql)
+        }
+    }
 
     private companion object {
         const val GUEST_ONE = 1001L

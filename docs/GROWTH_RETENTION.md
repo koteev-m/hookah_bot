@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-21.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются закрытыми, пока для них нет backend/Mini App/Bot evidence и staging smoke. Guest visit/order history foundation and Post-Visit Feedback MVP are **DONE / MVP / staging-smoke-passed**; broader retention loops remain partial/future. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation and Post-Visit Feedback MVP are **DONE / MVP / staging-smoke-passed**. Guest Favorites Phase 1 is **DONE / MVP / LOCAL SMOKE PASSED**; broader retention loops remain partial/future. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
 
 ## Core Rule
 
@@ -35,8 +35,11 @@ Current implementation is **partial**:
 - Closed order detail opens for the current guest, including old closed orders that do not have `promotionDiscounts`, options, notes or complete item fields. Backend returns `promotionDiscounts: []`; Mini App tolerates missing optional `promotionDiscounts`, `items`, `itemName`/`itemId`/`qty`, options and notes.
 - History detail keeps the safe error state `Не удалось загрузить детали истории.` for real 404/errors, has `← Назад к истории`, and Telegram BackButton inside detail returns to the History list instead of app home.
 - Privacy filters remain strict: foreign visit detail returns 404, another guest's personal tab/order detail is hidden, and shared-tab-only members do not see чужие personal/order details.
-- Account favorites and broader retention loops still require separate implementation/smoke before being marked complete.
-- Booking `SEATED`, order close and table-session close signals exist as foundations for visit history; no-show remains a non-visit booking outcome. Completed repeat/favorites/promotion loops are not closed.
+- Guest Favorites Phase 1 is implemented and locally validated for favorite venues only: authenticated catalog/detail DTOs expose current-user `isFavorite`; catalog resolves favorite IDs in one batch query; Mini App catalog, venue detail and Account add/remove/read the shared `GuestFavoritesRepository` source used by Telegram bot.
+- Favorites preserve current-user isolation and idempotency. Only guest-available `PUBLISHED` venues are addable/listed; hidden, paused, suspended, archived, deleted and subscription-blocked venues disclose no favorite card data. The row survives temporary unavailability and returns after republish; physical venue deletion keeps the existing cascade behavior.
+- Account shows only `Избранные заведения` in Phase 1, with open/book/ask/remove actions and the specified empty state. Legacy favorite-item storage/routes remain compatible but are not exposed in this UI.
+- Guest Favorites Phase 1 local closure is backed by focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full browser e2e smoke `62/62`. CI and staging remain release gates for this runtime change, not part of the local closure claim.
+- Booking `SEATED`, order close and table-session close signals exist as foundations for visit history; no-show remains a non-visit booking outcome.
 - Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
   campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
@@ -47,7 +50,7 @@ Current implementation is **partial**:
 
 | Term | Meaning | Status |
 | --- | --- | --- |
-| `FAVORITE_VENUE` | Guest saves/removes a venue and can list favorite venues. | MVP target; current baseline needs verification before DONE. |
+| `FAVORITE_VENUE` | Guest saves/removes a venue and can list favorite venues. | DONE / MVP / LOCAL SMOKE PASSED for venue-only Phase 1. |
 | `VISIT_HISTORY` | Guest-visible history of confirmed visits derived from table session, booking `SEATED` and closed order signals. | DONE / MVP / staging-smoke-passed for completed visits and booking-only seated visits. |
 | `ORDER_HISTORY` | Closed orders shown to the guest with safe venue/date/total/context data. | DONE / MVP / staging-smoke-passed for closed-order visit detail; repeat templates remain future. |
 | `BOOKING_HISTORY` | Past and upcoming bookings shown in account/history context. | Partial foundation; keep booking MVP in regression. |
@@ -62,8 +65,20 @@ Current implementation is **partial**:
 
 ## MVP Scope
 
-MVP includes:
-- Favorites for venues in catalog and venue card.
+Guest Favorites Phase 1 DONE scope:
+- favorite venues only, backed by the existing `guest_favorite_venues` storage and shared Bot/Mini App repository;
+- add/remove actions in catalog and venue detail;
+- Account list `Избранные заведения`, including open/book/ask/remove actions and empty state;
+- current-user isolation with `user_id` derived only from the authenticated session;
+- unavailable venue filtering without disclosing a hidden/blocked favorite venue; temporary hide/suspend keeps the row so the venue returns after restoration.
+
+Future Favorites/retention scope:
+- favorite menu items;
+- recommendations and frequent items;
+- repeat order/templates;
+- notifications, including any marketing or favorite-related sends.
+
+Broader Growth MVP target includes:
 - Visit history based on `table_session` + booking + closed order, only after the visit/order model is stable.
 - Repeat as template: selecting a past order creates a template for the next table context; it does not create an order without QR/table context, selected tab and current menu validation.
 - Post-visit feedback: 1-5 rating, tags and optional comment; only after a confirmed visit.
@@ -119,7 +134,7 @@ Platform may moderate growth monetization later, but it is not required for MVP:
 ## Dependencies And Blockers
 
 - Growth implementation depends on stable visit/order history.
-- Visit/order history foundation is stable enough for follow-on Growth MVP blocks; repeat/favorites/history still depend on active order scoped by `table_session` / `tab` according to `docs/ORDER_SESSION_TAB_CORE.md`.
+- Visit/order history foundation is stable enough for follow-on Growth MVP blocks; repeat/history still depend on active order scoped by `table_session` / `tab` according to `docs/ORDER_SESSION_TAB_CORE.md`. Favorite venues do not require table context.
 - Repeat templates depend on current menu availability, stop-list and selected-option validation.
 - Feedback depended on a correct close visit/order signal; that dependency is satisfied by the staging-smoked History visit model and remains regression-critical.
 - Preorder depends on booking lifecycle from `docs/BOOKING_LIFECYCLE.md` and reliable `visit_count`.
@@ -135,7 +150,7 @@ Target growth events after implementation:
 - `promotion_viewed`;
 - `promo_code_copied` / `promo_code_redeemed`.
 
-These events are future/partial until the corresponding growth features are implemented and smoked. `feedback_submitted` is the implemented History-only exception; `feedback_requested` stays disabled/future.
+These events are future/partial until the corresponding growth features are implemented and smoked. Favorites events remain a follow-up because the current idempotent repository contract does not prove a real insert/delete transition without refactoring; duplicate mutations must not emit false events. `feedback_submitted` is the implemented History-only exception; `feedback_requested` stays disabled/future.
 
 ## Privacy And Anti-Abuse
 
@@ -181,19 +196,28 @@ These events are future/partial until the corresponding growth features are impl
 12. Feedback submit/follow-up creates no support ticket and no staff-chat notification.
 13. `VisitFeedbackWorker`, scheduled Telegram prompts, marketing push and automatic Yandex redirect remain disabled.
 
-## Future Acceptance / Smoke Checklist
+## Acceptance / Smoke Checklist
 
-1. Guest can favorite and unfavorite a venue.
-2. Guest sees favorite venues.
-3. Guest history regression checklist above remains green.
-4. Repeat template requires table context before creating an order.
-5. Repeat template skips or clearly marks unavailable/stopped items.
-6. Post-Visit Feedback regression checklist above remains green.
-7. Promotion is visible only during its active period.
-8. Suspended/hidden venue promotions are not visible.
-9. Notifications require opt-in and can be disabled.
-10. Staff does not manage growth campaigns.
-11. Paid placement label is visible if/when paid placement is implemented.
+Guest Favorites Phase 1 local smoke:
+1. Add favorite from catalog.
+2. Add favorite from venue detail.
+3. Remove favorite and confirm the selected state updates.
+4. Account shows the venue-only `Избранные заведения` list.
+5. Empty favorites shows `Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.`
+6. Two authenticated users have isolated favorite state.
+7. Hidden/suspended or subscription-blocked venue disappears without disclosure while its favorite row is preserved.
+8. Bot-created and Mini App-created favorites use the same source and are mutually visible.
+
+Broader Growth smoke remains future:
+1. Guest history regression checklist above remains green.
+2. Repeat template requires table context before creating an order.
+3. Repeat template skips or clearly marks unavailable/stopped items.
+4. Post-Visit Feedback regression checklist above remains green.
+5. Promotion is visible only during its active period.
+6. Suspended/hidden venue promotions are not visible.
+7. Notifications require opt-in and can be disabled.
+8. Staff does not manage growth campaigns.
+9. Paid placement label is visible if/when paid placement is implemented.
 
 ## Status Summary
 
@@ -201,7 +225,8 @@ These events are future/partial until the corresponding growth features are impl
 - Visit/order history foundation: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - History detail legacy order compatibility: `DONE`.
 - Full base item historical snapshotting: `FUTURE/FOLLOW-UP` if a later audit still finds gaps beyond the current safe rendering.
-- Favorites/repeat: `FUTURE/PARTIAL FOUNDATION` until implementation smoke proves the end-to-end flows.
+- Favorite venues Phase 1: `DONE / MVP / LOCAL SMOKE PASSED`; favorite menu items remain `FUTURE`.
+- Repeat templates: `FUTURE/PARTIAL FOUNDATION`.
 - Promotions: `PLACEHOLDER/PARTIAL FOUNDATION` unless backend + Guest/Venue surfaces are verified for the simple promotion MVP.
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
@@ -212,14 +237,11 @@ These events are future/partial until the corresponding growth features are impl
 
 ## Recommended Next Runtime Block
 
-Recommended next bounded runtime block: **Guest Favorites Phase 1: favorite venues only**.
+Guest Favorites Phase 1 is closed locally. Do not move directly from Favorites to repeat or promotions.
 
-Why:
-- It builds directly on the catalog and venue-detail surfaces and adds a concrete retention loop without payment/legal decisions.
-- It can stay bounded to add/remove favorite venue, list favorites and safely filter hidden/suspended venues.
-- It does not materially change the table/order flow.
+Recommended next runtime block: **Order Session Tab Core Hardening**:
+- enforce and regress one active order per `table_session_id`;
+- verify tab-scoped order views across personal/shared tabs;
+- run privacy regression for current user, second guest and cross-session access.
 
-Trade-offs against other candidates:
-- `REPEAT_TEMPLATE` is useful, but it touches cart reconstruction, current menu/stop-list availability, selected options and verified table/tab context.
-- Simple promotions are useful, but they also require Venue promotion management, active-period/status rules and honest terms before guest exposure.
-- Loyalty, tips, online payments, Telegram Stars and crypto are not the next Growth block.
+`REPEAT_TEMPLATE`, frequent items, recommendations, promotions and notifications remain separately scoped future Growth work. Loyalty, tips, online payments, Telegram Stars and crypto are not part of the next runtime block.

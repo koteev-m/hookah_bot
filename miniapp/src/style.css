@@ -177,6 +177,36 @@ button:disabled {
   background-color: #e2e8f0;
 }
 
+.favorite-toggle {
+  border: 1px solid #a5b4fc;
+  font-weight: 700;
+}
+
+.favorite-toggle[data-favorite='false'] {
+  background-color: #ffffff;
+  color: #4338ca;
+}
+
+.favorite-toggle[data-favorite='false']:hover {
+  background-color: #eef2ff;
+}
+
+.favorite-toggle[data-favorite='true'] {
+  background-color: #f59e0b;
+  border-color: #d97706;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+  color: #422006;
+}
+
+.favorite-toggle[data-favorite='true']:hover {
+  background-color: #d97706;
+}
+
+.favorite-toggle[data-favorite='true']:disabled {
+  background-color: #f59e0b;
+  color: #422006;
+}
+
 .feedback-rating-button,
 .feedback-tag-button {
   border: 1px solid #cbd5e1;

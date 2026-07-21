@@ -17,6 +17,7 @@ export type CatalogVenueDto = {
   guestContact?: string | null
   cardDescription?: string | null
   todaySchedule?: VenueTodayScheduleDto | null
+  isFavorite: boolean
 }
 
 export type VenueResponse = {
@@ -39,6 +40,7 @@ export type VenueDto = {
   todaySchedule?: VenueTodayScheduleDto | null
   todayStaff?: GuestTodayStaffDto[]
   status: string
+  isFavorite: boolean
 }
 
 export type GuestTodayStaffResponse = {
@@ -579,6 +581,10 @@ export type GuestVisitPromotionDiscountDto = {
 
 export type GuestFavoriteVenuesResponse = {
   venues: GuestFavoriteVenueDto[]
+}
+
+export type GuestFavoriteMutationResponse = {
+  ok: boolean
 }
 
 export type GuestFavoriteVenueDto = {

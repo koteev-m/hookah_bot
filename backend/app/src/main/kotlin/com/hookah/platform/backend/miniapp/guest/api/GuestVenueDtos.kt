@@ -20,6 +20,7 @@ data class CatalogVenueDto(
     val guestContact: String? = null,
     val cardDescription: String? = null,
     val todaySchedule: VenueTodayScheduleDto? = null,
+    val isFavorite: Boolean,
 )
 
 @Serializable
@@ -42,6 +43,7 @@ data class VenueDto(
     val todaySchedule: VenueTodayScheduleDto? = null,
     val todayStaff: List<GuestTodayStaffDto> = emptyList(),
     val status: String,
+    val isFavorite: Boolean,
 )
 
 @Serializable

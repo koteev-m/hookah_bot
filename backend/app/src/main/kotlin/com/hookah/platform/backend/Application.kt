@@ -1059,6 +1059,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 route("/guest") {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
+                        guestFavoritesRepository = guestFavoritesRepository,
                         guestMenuRepository = guestMenuRepository,
                         venueStaffProfileRepository = venueStaffProfileRepository,
                         venueInfoSectionsRepository = venueInfoSectionsRepository,
