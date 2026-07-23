@@ -13,6 +13,7 @@ Current practice:
 - Local broad Gradle wildcards can hit heap/runtime limits; prefer focused selectors first.
 - Manual real Telegram/staff-chat smoke remains required for bot/staff-chat behavior changes.
 - Guest Favorites Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full e2e smoke `62/62` passed locally; GitHub Actions were green and manual staging smoke covered Mini App, Telegram parity, isolation and availability restoration.
+- Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`. Its environment-dependent production-readiness scenarios remain `BLOCKED_BY_ENVIRONMENT` in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001); this does not mark them passed or block independent bounded development.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -107,6 +108,22 @@ Rules:
 - Do not include `scripts/dev/` in routine feature/doc commits.
 - If `scripts/dev/` becomes intentional project tooling later, create a separate task/commit and document ownership, purpose and validation.
 - Until then, stage explicit files only and verify `git status --short` before final response/commit.
+
+## Deferred Environment-Dependent Manual Smoke
+
+[`docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md`](DEFERRED_MANUAL_SMOKE_BACKLOG.md) is the
+canonical backlog for mandatory manual checks that cannot currently run because required
+environments, data, external integrations or physical prerequisites are missing.
+
+Rules:
+
+- keep exact prerequisites, steps, expected behavior, cleanup and result placeholders in that
+  backlog instead of duplicating them across strategy/audit/roadmap docs;
+- never translate automated evidence into `PASSED` for an environment-dependent manual check;
+- a deferred check keeps its feature-specific production-readiness gate open but does not block
+  unrelated bounded implementation work;
+- move a check to `READY_TO_RUN` only after all prerequisites are confirmed;
+- use `PASSED` only after the recorded closure criteria and cleanup are complete.
 
 ## Standard Validation Command Catalog
 
@@ -347,7 +364,7 @@ Telegram/staff-chat:
 - Real Telegram fallback order smoke remains required for release confidence.
 - Platform Owner guest QR test escape remains open/needs verification.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
-- Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Favorite menu items/options, recommendations/frequent items, repeat templates, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
+- Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
 - Menu shift check and per-venue `staff_stoplist_enabled` remain future.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
