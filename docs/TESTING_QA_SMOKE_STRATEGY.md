@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-23.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -12,7 +12,7 @@ Current practice:
 - CI is split into smaller backend jobs, Mini App build/e2e, compose and Docker image checks.
 - Local broad Gradle wildcards can hit heap/runtime limits; prefer focused selectors first.
 - Manual real Telegram/staff-chat smoke remains required for bot/staff-chat behavior changes.
-- Guest Favorites Phase 1 is `DONE / MVP / LOCAL SMOKE PASSED`: focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full e2e smoke `62/62` passed locally. This is local evidence, not a replacement for CI/staging release gates.
+- Guest Favorites Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full e2e smoke `62/62` passed locally; GitHub Actions were green and manual staging smoke covered Mini App, Telegram parity, isolation and availability restoration.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -307,14 +307,16 @@ Post-Visit Feedback:
 - booking-only `SEATED` feedback keeps `Можно оценить бронь, встречу и обслуживание.` and non-seated booking outcomes remain ineligible.
 
 Guest Favorites Phase 1:
-- add favorite from catalog;
-- add favorite from venue detail;
-- remove favorite and verify the selected state updates;
-- Account shows the venue-only `Избранные заведения` list;
+- add/remove favorite from catalog;
+- add/remove favorite from venue detail;
+- Account shows the venue-only `Избранные заведения` list and open/book/ask/remove actions;
 - empty state shows `Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.`;
 - two authenticated users have isolated favorite state;
 - hidden/suspended or subscription-blocked venue is filtered without disclosing its card data, while the favorite row survives temporary unavailability;
-- Bot-created and Mini App-created favorites are visible through the shared source of truth.
+- restored/republished venue reappears from the preserved row;
+- Bot-created favorite is visible in Mini App and Mini App-created favorite is visible in Bot;
+- Telegram Profile and Catalog entrypoints open the shared current-user list;
+- Back from Profile-opened favorites returns to Profile, and Back from Catalog-opened favorites returns to Catalog.
 
 Platform/support:
 - Platform sees support tickets;
@@ -345,7 +347,7 @@ Telegram/staff-chat:
 - Real Telegram fallback order smoke remains required for release confidence.
 - Platform Owner guest QR test escape remains open/needs verification.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
-- Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP is staging-smoke-passed and venue-only Guest Favorites Phase 1 is local-smoke-passed; both stay in regression. Favorite menu items, recommendations/frequent items, repeat and notifications remain future.
+- Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Favorite menu items/options, recommendations/frequent items, repeat templates, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
 - Menu shift check and per-venue `staff_stoplist_enabled` remain future.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.

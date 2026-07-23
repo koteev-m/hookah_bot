@@ -1,8 +1,8 @@
 # Guest Growth And Retention Model
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-23.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation and Post-Visit Feedback MVP are **DONE / MVP / staging-smoke-passed**. Guest Favorites Phase 1 is **DONE / MVP / LOCAL SMOKE PASSED**; broader retention loops remain partial/future. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP and Guest Favorites Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**; broader retention loops remain partial/future. Этот документ описывает целевую модель, MVP-границы, зависимости и privacy rules для гостевого удержания.
 
 ## Core Rule
 
@@ -35,10 +35,11 @@ Current implementation is **partial**:
 - Closed order detail opens for the current guest, including old closed orders that do not have `promotionDiscounts`, options, notes or complete item fields. Backend returns `promotionDiscounts: []`; Mini App tolerates missing optional `promotionDiscounts`, `items`, `itemName`/`itemId`/`qty`, options and notes.
 - History detail keeps the safe error state `Не удалось загрузить детали истории.` for real 404/errors, has `← Назад к истории`, and Telegram BackButton inside detail returns to the History list instead of app home.
 - Privacy filters remain strict: foreign visit detail returns 404, another guest's personal tab/order detail is hidden, and shared-tab-only members do not see чужие personal/order details.
-- Guest Favorites Phase 1 is implemented and locally validated for favorite venues only: authenticated catalog/detail DTOs expose current-user `isFavorite`; catalog resolves favorite IDs in one batch query; Mini App catalog, venue detail and Account add/remove/read the shared `GuestFavoritesRepository` source used by Telegram bot.
+- Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for favorite venues only: authenticated catalog/detail DTOs expose current-user `isFavorite`; catalog resolves favorite IDs in one batch query; Mini App catalog, venue detail and Account add/remove/read the shared `GuestFavoritesRepository` source used by Telegram bot.
 - Favorites preserve current-user isolation and idempotency. Only guest-available `PUBLISHED` venues are addable/listed; hidden, paused, suspended, archived, deleted and subscription-blocked venues disclose no favorite card data. The row survives temporary unavailability and returns after republish; physical venue deletion keeps the existing cascade behavior.
 - Account shows only `Избранные заведения` in Phase 1, with open/book/ask/remove actions and the specified empty state. Legacy favorite-item storage/routes remain compatible but are not exposed in this UI.
-- Guest Favorites Phase 1 local closure is backed by focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full browser e2e smoke `62/62`. CI and staging remain release gates for this runtime change, not part of the local closure claim.
+- Telegram Bot exposes the same venue favorites from both Catalog and Profile. Back navigation is source-aware: a Catalog-opened list returns to Catalog and a Profile-opened list returns to Profile.
+- Closure evidence includes focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build, full browser e2e smoke `62/62`, green GitHub Actions and manual staging smoke for catalog/detail/Account, two-user isolation, unavailable filtering/restoration, Bot/Mini App synchronization and both Telegram entrypoints.
 - Booking `SEATED`, order close and table-session close signals exist as foundations for visit history; no-show remains a non-visit booking outcome.
 - Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
@@ -50,7 +51,7 @@ Current implementation is **partial**:
 
 | Term | Meaning | Status |
 | --- | --- | --- |
-| `FAVORITE_VENUE` | Guest saves/removes a venue and can list favorite venues. | DONE / MVP / LOCAL SMOKE PASSED for venue-only Phase 1. |
+| `FAVORITE_VENUE` | Guest saves/removes a venue and can list favorite venues. | DONE / MVP / STAGING-SMOKE-PASSED for venue-only Phase 1. |
 | `VISIT_HISTORY` | Guest-visible history of confirmed visits derived from table session, booking `SEATED` and closed order signals. | DONE / MVP / staging-smoke-passed for completed visits and booking-only seated visits. |
 | `ORDER_HISTORY` | Closed orders shown to the guest with safe venue/date/total/context data. | DONE / MVP / staging-smoke-passed for closed-order visit detail; repeat templates remain future. |
 | `BOOKING_HISTORY` | Past and upcoming bookings shown in account/history context. | Partial foundation; keep booking MVP in regression. |
@@ -70,13 +71,17 @@ Guest Favorites Phase 1 DONE scope:
 - add/remove actions in catalog and venue detail;
 - Account list `Избранные заведения`, including open/book/ask/remove actions and empty state;
 - current-user isolation with `user_id` derived only from the authenticated session;
-- unavailable venue filtering without disclosing a hidden/blocked favorite venue; temporary hide/suspend keeps the row so the venue returns after restoration.
+- unavailable venue filtering without disclosing a hidden/blocked favorite venue; temporary hide/suspend keeps the row so the venue returns after restoration;
+- Telegram Catalog and Profile entrypoints to the same list, with Back returning to the originating screen.
 
 Future Favorites/retention scope:
 - favorite menu items;
+- favorite menu options;
 - recommendations and frequent items;
 - repeat order/templates;
-- notifications, including any marketing or favorite-related sends.
+- notification opt-in and any marketing or favorite-related sends;
+- favorites-based promotions;
+- loyalty.
 
 Broader Growth MVP target includes:
 - Visit history based on `table_session` + booking + closed order, only after the visit/order model is stable.
@@ -198,15 +203,18 @@ These events are future/partial until the corresponding growth features are impl
 
 ## Acceptance / Smoke Checklist
 
-Guest Favorites Phase 1 local smoke:
-1. Add favorite from catalog.
-2. Add favorite from venue detail.
-3. Remove favorite and confirm the selected state updates.
-4. Account shows the venue-only `Избранные заведения` list.
-5. Empty favorites shows `Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.`
-6. Two authenticated users have isolated favorite state.
-7. Hidden/suspended or subscription-blocked venue disappears without disclosure while its favorite row is preserved.
-8. Bot-created and Mini App-created favorites use the same source and are mutually visible.
+Guest Favorites Phase 1 staging smoke (`PASSED`):
+1. Add/remove favorite from Mini App catalog.
+2. Add/remove favorite from Mini App venue detail.
+3. Account shows the venue-only `Избранные заведения` list and open/book/ask/remove actions.
+4. Empty favorites shows `Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.`
+5. Two authenticated accounts have isolated favorite state.
+6. Hidden/suspended or subscription-blocked venue disappears without disclosure while its favorite row is preserved.
+7. Republished/restored venue reappears without recreating the favorite row.
+8. Bot-created favorite is visible in Mini App and Mini App-created favorite is visible in Bot.
+9. Telegram Profile entrypoint opens the current user's favorites; empty state works.
+10. Existing Telegram Catalog entrypoint opens the same list.
+11. Back returns to Profile or Catalog according to the entrypoint.
 
 Broader Growth smoke remains future:
 1. Guest history regression checklist above remains green.
@@ -225,7 +233,7 @@ Broader Growth smoke remains future:
 - Visit/order history foundation: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - History detail legacy order compatibility: `DONE`.
 - Full base item historical snapshotting: `FUTURE/FOLLOW-UP` if a later audit still finds gaps beyond the current safe rendering.
-- Favorite venues Phase 1: `DONE / MVP / LOCAL SMOKE PASSED`; favorite menu items remain `FUTURE`.
+- Favorite venues Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; favorite menu items/options remain `FUTURE`.
 - Repeat templates: `FUTURE/PARTIAL FOUNDATION`.
 - Promotions: `PLACEHOLDER/PARTIAL FOUNDATION` unless backend + Guest/Venue surfaces are verified for the simple promotion MVP.
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
@@ -237,11 +245,13 @@ Broader Growth smoke remains future:
 
 ## Recommended Next Runtime Block
 
-Guest Favorites Phase 1 is closed locally. Do not move directly from Favorites to repeat or promotions.
+Guest Favorites Phase 1 is staging-closed. Read-only code verification also shows that the previously recommended Order Session Tab Core Hardening is already represented by current table-session active-order uniqueness, tab-scoped guest routes and regression coverage; do not reopen it without concrete regression evidence.
 
-Recommended next runtime block: **Order Session Tab Core Hardening**:
-- enforce and regress one active order per `table_session_id`;
-- verify tab-scoped order views across personal/shared tabs;
-- run privacy regression for current user, second guest and cross-session access.
+Recommended next runtime block: **Repeat as Template Phase 1**:
+- select one completed own visit/order from History;
+- build a transient repeat template from current item ids without creating an order;
+- require the same venue's active table context and selected authorized tab before applying it to the cart;
+- resolve current menu items/options/prices, skip unavailable lines and show a clear summary;
+- submit only through the existing preview/add-batch path, preserving server-side availability, pricing, session and tab checks.
 
-`REPEAT_TEMPLATE`, frequent items, recommendations, promotions and notifications remain separately scoped future Growth work. Loyalty, tips, online payments, Telegram Stars and crypto are not part of the next runtime block.
+The existing Telegram repeat flow, current-user History detail, Mini App cart and server-owned preview/add-batch validation make this a bounded parity slice. Favorite menu items/options, recommendations/frequent items, promotions, notifications, loyalty, tips, online payments, Telegram Stars and crypto are not part of it.
