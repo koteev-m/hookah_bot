@@ -4,6 +4,8 @@ const sessionExpiresAt = Math.floor(Date.now() / 1000) + 3600
 const tableToken = 'TABLE-SMOKE-1'
 const mockInitData = 'query_id=e2e-smoke&user=%7B%22id%22%3A123456789%7D&hash=test'
 const otherMockInitData = 'query_id=e2e-smoke-other&user=%7B%22id%22%3A987654321%7D&hash=test'
+const promotionVenueTimezone = 'Europe/Moscow'
+const promotionVenueUtcOffset = '+03:00'
 const transparentPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/luzRygAAAABJRU5ErkJggg==',
   'base64'
@@ -247,6 +249,8 @@ type VenuePromotionFixture = {
   endsAt: string
   status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
 }
+
+type GuestVenuePromotionFixture = Omit<VenuePromotionFixture, 'status'>
 
 type BillingInvoiceFixture = {
   id: number
@@ -2287,6 +2291,7 @@ async function mockVenuePromotionsApi(
   options: {
     role?: 'OWNER' | 'MANAGER' | 'STAFF'
     promotions?: VenuePromotionFixture[]
+    nowEpochMs?: number
   } = {}
 ) {
   const role = options.role ?? 'OWNER'
@@ -2333,7 +2338,7 @@ async function mockVenuePromotionsApi(
   })
 
   await page.route('**/api/guest/venue/1', async (route) => {
-    const now = Date.now()
+    const now = options.nowEpochMs ?? Date.now()
     const visiblePromotions = promotions
       .filter(
         (item) =>
@@ -2349,7 +2354,7 @@ async function mockVenuePromotionsApi(
           name: 'Микс',
           city: 'Москва',
           address: 'Пилотная, 1',
-          timezone: 'Europe/Moscow',
+          timezone: promotionVenueTimezone,
           promotions: visiblePromotions,
           status: 'PUBLISHED',
           isFavorite: false
@@ -2372,12 +2377,16 @@ async function mockVenuePromotionsApi(
     const statusMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)\/status$/)
     const itemMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)$/)
     if (path === '/api/venue/1/promotions' && request.method() === 'GET') {
-      await route.fulfill(jsonResponse({ venueId: 1, timezone: 'Europe/Moscow', items: promotions }))
+      await route.fulfill(jsonResponse({ venueId: 1, timezone: promotionVenueTimezone, items: promotions }))
       return
     }
     if (path === '/api/venue/1/promotions' && request.method() === 'POST') {
       const body = (await request.postDataJSON()) as Omit<VenuePromotionFixture, 'id' | 'status'>
-      const promotion: VenuePromotionFixture = { id: nextId++, status: 'DRAFT', ...body }
+      const promotion: VenuePromotionFixture = {
+        id: nextId++,
+        status: 'DRAFT',
+        ...normalizePromotionMutation(body)
+      }
       promotions = [promotion, ...promotions]
       mutations.push('create')
       await route.fulfill(jsonResponse({ promotion }))
@@ -2394,7 +2403,8 @@ async function mockVenuePromotionsApi(
     if (itemMatch && request.method() === 'PUT') {
       const promotionId = Number(itemMatch[1])
       const body = (await request.postDataJSON()) as Omit<VenuePromotionFixture, 'id' | 'status'>
-      promotions = promotions.map((item) => (item.id === promotionId ? { ...item, ...body } : item))
+      const normalizedBody = normalizePromotionMutation(body)
+      promotions = promotions.map((item) => (item.id === promotionId ? { ...item, ...normalizedBody } : item))
       mutations.push('update')
       await route.fulfill(jsonResponse({ promotion: promotions.find((item) => item.id === promotionId) }))
       return
@@ -2413,6 +2423,25 @@ async function mockVenuePromotionsApi(
     getPromotions: () => promotions,
     getMutations: () => mutations
   }
+}
+
+function normalizePromotionMutation(
+  body: Omit<VenuePromotionFixture, 'id' | 'status'>
+): Omit<VenuePromotionFixture, 'id' | 'status'> {
+  return {
+    ...body,
+    startsAt: normalizePromotionDateTime(body.startsAt),
+    endsAt: normalizePromotionDateTime(body.endsAt)
+  }
+}
+
+function normalizePromotionDateTime(value: string): string {
+  const hasOffset = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
+  const instant = new Date(hasOffset ? value : `${value}${promotionVenueUtcOffset}`)
+  if (Number.isNaN(instant.getTime())) {
+    throw new Error(`Invalid promotion datetime: ${value}`)
+  }
+  return instant.toISOString()
 }
 
 function buildBillingOverview(overrides: Partial<BillingOverviewFixture> = {}): BillingOverviewFixture {
@@ -6937,8 +6966,20 @@ test('venue owner sees statistics section', async ({ page }) => {
 })
 
 test('venue owner creates edits activates and pauses informational promotion', async ({ page }) => {
+  const referenceInstant = '2020-06-15T12:00:00.000Z'
+  const referenceEpochMs = Date.parse(referenceInstant)
+  const localPeriod = {
+    startsAt: '2020-06-14T15:00',
+    endsAt: '2020-06-16T15:00'
+  }
+  const expectedPeriod = {
+    startsAt: '2020-06-14T12:00:00.000Z',
+    endsAt: '2020-06-16T12:00:00.000Z'
+  }
+
+  await page.clock.setFixedTime(referenceInstant)
   await installTelegramWebApp(page, 123456789)
-  const api = await mockVenuePromotionsApi(page, { role: 'OWNER' })
+  const api = await mockVenuePromotionsApi(page, { role: 'OWNER', nowEpochMs: referenceEpochMs })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Акции', exact: true }).click()
@@ -6949,16 +6990,6 @@ test('venue owner creates edits activates and pauses informational promotion', a
 
   await page.getByRole('button', { name: 'Создать акцию' }).click()
   const form = page.locator('.venue-promotion-form')
-  const localPeriod = await page.evaluate(() => {
-    const format = (date: Date) => {
-      const part = (value: number) => String(value).padStart(2, '0')
-      return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}T${part(date.getHours())}:${part(date.getMinutes())}`
-    }
-    return {
-      startsAt: format(new Date(Date.now() - 30 * 60 * 1000)),
-      endsAt: format(new Date(Date.now() + 90 * 60 * 1000))
-    }
-  })
   await form.getByLabel('Название акции', { exact: true }).fill('Вечер для друзей')
   await form.getByLabel('Описание', { exact: true }).fill('Специальное предложение для компаний.')
   await form.getByLabel(/^Условия/).fill('Подробности уточняйте у персонала.')
@@ -6973,6 +7004,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await expect(form).toBeHidden()
   await expect(page.locator('.venue-promotion-card').filter({ hasText: 'Вечер для друзей' })).toContainText('Черновик')
   expect(api.getMutations()).toEqual(['create'])
+  expect(api.getPromotions()[0]).toMatchObject({ status: 'DRAFT', ...expectedPeriod })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
@@ -6991,9 +7023,32 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await form.getByRole('button', { name: 'Сохранить изменения' }).click()
   await expect(page.getByText('Изменения сохранены.')).toBeVisible()
   await expect(page.locator('.venue-promotion-card').filter({ hasText: 'Обновлённый вечер' })).toBeVisible()
+  expect(api.getMutations()).toEqual(['create', 'active', 'update'])
+  const updatedPromotion = api.getPromotions()[0]
+  expect(updatedPromotion).toMatchObject({
+    title: 'Обновлённый вечер',
+    status: 'ACTIVE',
+    ...expectedPeriod
+  })
+  expect(Date.parse(updatedPromotion.startsAt)).toBeLessThan(referenceEpochMs)
+  expect(Date.parse(updatedPromotion.endsAt)).toBeGreaterThan(referenceEpochMs)
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  const guestVenueResponsePromise = page.waitForResponse((response) => {
+    return response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/guest/venue/1'
+  })
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  const guestVenueResponse = await guestVenueResponsePromise
+  expect(guestVenueResponse.ok()).toBe(true)
+  const guestVenueBody = (await guestVenueResponse.json()) as {
+    venue: { promotions: GuestVenuePromotionFixture[] }
+  }
+  expect(guestVenueBody.venue.promotions).toEqual([
+    expect.objectContaining({
+      title: 'Обновлённый вечер',
+      ...expectedPeriod
+    })
+  ])
   await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённый вечер')
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
