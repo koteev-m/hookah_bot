@@ -14,6 +14,11 @@ Current practice:
 - Manual real Telegram/staff-chat smoke remains required for bot/staff-chat behavior changes.
 - Guest Favorites Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full e2e smoke `62/62` passed locally; GitHub Actions were green and manual staging smoke covered Mini App, Telegram parity, isolation and availability restoration.
 - Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`. Its environment-dependent production-readiness scenarios remain `BLOCKED_BY_ENVIRONMENT` in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001); this does not mark them passed or block independent bounded development.
+- Simple Venue Promotions Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: GitHub Actions
+  were green and manual staging smoke covered Owner/Manager/Staff RBAC, current-period Guest
+  visibility, unavailable-venue filtering, informational-only totals and Telegram/Mini App state.
+- Executable Promotions Phase 2 is `AUDIT / IMPLEMENTATION PLAN REQUIRED`; no broader executable
+  behavior is release-ready from the current audit alone.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -30,6 +35,38 @@ Target QA model:
 | D. Mini App checks | Prove production bundle and browser smoke. | `npm --prefix miniapp run build` and e2e smoke for frontend/user-flow changes. |
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
+
+## Executable Promotions Phase 2 Quality Gate
+
+The first runtime slice must prove one shared Bot/Mini App calculation path; parallel client-side
+discount engines are a release blocker.
+
+Required backend coverage:
+
+- venue timezone, date range, every weekday boundary, multiple per-day windows and invalid/overnight
+  schedule policy;
+- item/category eligibility, unavailable item/option, current item price and selected-option delta;
+- identical preview and submit result when state is unchanged, and safe recalculation when time,
+  price, availability or cart composition changes;
+- no stacking, explicit manual-discount conflict policy, zero lower bound and excluded,
+  canceled/rejected line handling;
+- immutable application/rule/version and affected-line snapshots in active order, bill and History;
+- idempotent add-batch replay creates no duplicate application, adjustment or reward;
+- personal/shared tab membership and cross-venue isolation remain unchanged.
+
+Required parity coverage:
+
+- the same request fixture produces the same rule id/version, eligible lines, adjustment and final
+  total through Bot and Mini App adapters;
+- both clients display ordinary price, named promotion adjustment and final amount before normal
+  confirmation;
+- neither preview creates an order or batch, and neither client submits trusted prices/discounts;
+- stale schedule/availability/price is rejected or recalculated by the shared server path;
+- staff-chat receives the persisted order facts only and never evaluates promotions.
+
+Gift, BOGO and free-option tests are not part of the selected Happy Hours percentage first slice.
+They require their own later contract, including explicit guest choice and unavailable-reward
+behavior, before Mini App parity can be claimed.
 
 ## GitHub Actions Expectations
 

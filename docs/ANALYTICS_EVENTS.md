@@ -1,6 +1,6 @@
 # Analytics And Events Model
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-23.
 
 Статус: **current product reference / SPEC UPDATED**. Analytics implementation is **PARTIAL / needs verification** unless a specific repository, migration, dashboard or smoke result is cited by an implementation task. This document defines target events, KPI formulas, dashboards, audit boundaries and privacy rules for Telegram bot + Mini App.
 
@@ -179,8 +179,18 @@ Growth:
 - `feedback_requested` (future/disabled while automated prompts are disabled)
 - `feedback_submitted`
 - `promotion_viewed`
+- `promotion_previewed`
+- `promotion_applied`
+- `promotion_recalculated`
 - `promo_code_copied`
 - `promo_code_redeemed`
+
+Executable promotion events are future until Phase 2 implementation proves authoritative
+server-side emission. Their properties may include opaque promotion/rule/version ids, reward type,
+affected-line count, discount amount/currency and recalculation reason. They must not contain raw
+cart payloads, trusted client discount values, message text, Telegram payloads or unrelated PII.
+The persisted promotion application remains financial/order history truth; analytics never
+recalculates eligibility or discounts.
 
 Staff profiles / today shift / staff tips:
 - `staff_profile_viewed`
@@ -228,6 +238,7 @@ Audit required for:
 - menu option schema changed;
 - menu media removed;
 - mass stop-list update;
+- promotion schedule/eligibility/reward/status changed;
 - staff stop-list toggle where Staff availability management is allowed;
 - shift check completed where implemented;
 - table QR token rotated;

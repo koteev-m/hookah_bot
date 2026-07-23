@@ -43,7 +43,7 @@
 - Post-Visit Feedback MVP plus public-review/follow-up smoke-fix: CLOSED / staging smoke passed. Guest submits only from own completed History detail; booking-only `SEATED` remains eligible; manual `5/5` can show a configured safe Yandex CTA; Owner/Manager sees feedback and opens exact low-rating `VENUE_CHAT` with context; Staff denied; no automatic message, support ticket, staff-chat notification, worker prompt or auto-redirect.
 - Guest Favorites Phase 1: DONE / MVP / STAGING-SMOKE-PASSED. Venue-only favorites support catalog/detail add/remove and Account `Избранные заведения`; current-user isolation, unavailable filtering/restoration, Bot/Mini App shared storage, Telegram Profile/Catalog entrypoints and source-aware Back are covered. Favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future.
 - Repeat as Template Phase 1: MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE. Guest History exposes one action per completed order, Mini App shows current-price eligible/skipped preview, and explicit confirmation adds only eligible quantity/options/note to the local cart. The authenticated repeat-plan API and Telegram share one `RepeatOrderResolver`; same-venue active table context, authorized personal/joined shared tab, current menu/options/availability/prices and venue availability are server-enforced. No persistent template, order, batch or staff-chat notification is created. Environment-dependent checks remain `BLOCKED_BY_ENVIRONMENT` in [`REPEAT-MANUAL-001`](../DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001).
-- Simple Venue Promotions Phase 1: MVP IMPLEMENTED / LOCAL VALIDATION PASSED. Venue Owner/Manager can list, create, edit, activate, pause and archive informational promotions; Staff cannot see/open the section and is denied by the API. Guest venue detail shows only current `ACTIVE` promotions for a guest-available venue. Telegram and Mini App share `VenuePromotionRepository`; no migration, discount engine or notification path was added. Staging smoke is still required.
+- Simple Venue Promotions Phase 1: DONE / MVP / STAGING-SMOKE-PASSED. Venue Owner/Manager can list, create, edit, activate, pause and archive informational promotions; Staff cannot see/open the section and is denied by the API. Guest venue detail shows only current `ACTIVE` promotions for a guest-available venue. Telegram and Mini App share `VenuePromotionRepository`; no migration, discount engine or notification path was added. GitHub Actions were green, staging deploy completed and manual smoke passed.
 - Order/session/tab core docs: `docs/ORDER_SESSION_TAB_CORE.md` is the source of truth for `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are closed; Repeat Phase 1 is local-smoke-passed; force-close reason/audit, broader loyalty/preorder and analytics remain future/partial.
 - Analytics/events docs: `docs/ANALYTICS_EVENTS.md` is the source of truth for analytics events, KPI formulas, dashboards, audit/event boundaries and payload privacy rules. Implementation remains partial/needs verification; client events must not drive money, access, billing or order state.
 - Security/RBAC docs: `docs/SECURITY_RBAC_MATRIX.md` is the source of truth for roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist. Permission parity and dangerous-action audit remain partial unless route tests/smoke prove them.
@@ -116,7 +116,7 @@ Remaining:
 - invoice void/reissue for courtesy conflicts with already-open future invoices remains a follow-up;
 - billing-created versus manual `SUSPENDED_BY_PLATFORM` distinction remains a follow-up before broader auto-reactivation;
 - Support/Tickets MVP beyond booking threads is closed and stays in regression; SLA automation, auto-escalation, macros, attachments, CSAT, diagnostics and support analytics remain future work;
-- guest growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` overall in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are closed/staging-smoked; Repeat as Template Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; Simple Venue Promotions Phase 1 is implemented/local-validation-passed with staging smoke pending. Favorite menu items/options, recommendations/frequent items, persistent templates, notification opt-in, favorites-based promotions and loyalty remain future smoke targets;
+- guest growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` overall in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are closed/staging-smoked; Repeat as Template Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; Executable Promotions Phase 2 is `AUDIT / IMPLEMENTATION PLAN REQUIRED`. Favorite menu items/options, recommendations/frequent items, persistent templates, notification opt-in, favorites-based promotions and loyalty remain future smoke targets;
 - platform analytics dashboards remain future work;
 - P1 follow-up: paid venue/shift extension is implemented in backend, Guest/Venue Mini App, Guest Bot entry and staff-chat action path; remaining parity is Owner/Manager Bot settings smoke/closure where still needed by roadmap;
 - P1 CLOSED: Guest/Menu Options & Flavors parity staging smoke passed. Guest Bot and Guest Mini App both submit structured selected options; Venue Mini App supports item-scoped hookah flavor CRUD, `Добавить базовые вкусы`, item-level stop-list and flavor-level stop-list. Keep this covered by regression tests for item scoping, unavailable option rejection and line-level preference notes.
@@ -607,7 +607,7 @@ Use this checklist after any order/session/tab, bill, tab, staff-chat order-card
 
 ## 11. Guest History And Future Growth/Retention Smoke Checklist
 
-Use the History, Feedback, Favorites and Promotions sections after changes to their implemented slices. Current overall status is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`, with Guest History Foundation, Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 already `DONE / STAGING-SMOKE-PASSED`. Repeat is locally validated, but its environment-dependent manual scenarios are not passed. Simple Venue Promotions Phase 1 is locally validated, but staging smoke has not passed.
+Use the History, Feedback, Favorites and Promotions sections after changes to their implemented slices. Current overall status is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`, with Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 already `DONE / STAGING-SMOKE-PASSED`. Repeat is locally validated, but its environment-dependent manual scenarios are not passed. Executable Promotions Phase 2 is audit/plan only.
 
 History regression:
 1. New guest sees empty History state.
@@ -659,7 +659,7 @@ Repeat as Template Phase 1:
   [`REPEAT-MANUAL-001`](../DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001);
 - do not use `STAGING-SMOKE-PASSED` until that record is closed.
 
-Simple Venue Promotions Phase 1 (`MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; staging smoke pending):
+Simple Venue Promotions Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`; keep in regression):
 
 1. Owner opens Venue Mode → `Акции`, creates a dated draft and sees it in `Черновики`.
 2. Draft is absent from Guest venue detail.
@@ -671,6 +671,29 @@ Simple Venue Promotions Phase 1 (`MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; st
 8. Hidden/paused/suspended/archived/deleted or subscription-blocked venues disclose no promotion data.
 9. Mini App-created promotion is visible through the existing Telegram guest flow; Telegram-created informational `TEXT_ONLY` promotion is visible in Venue Mini App and Guest venue detail. Rule-backed templates remain managed by their existing Telegram flows.
 10. No order total, automatic discount, batch, staff-chat message or marketing notification is created.
+
+Executable Promotions Phase 2 (`AUDIT / IMPLEMENTATION PLAN REQUIRED`; future smoke):
+
+1. Bot and Mini App call one shared backend resolver and receive the same rule/version, affected
+   lines, adjustment and total for the same cart fixture.
+2. Venue date range, timezone, weekdays and different per-day time windows are evaluated
+   server-side at preview and submit.
+3. Current menu item/category eligibility, availability, selected-option price delta and current
+   price are revalidated; the client submits no trusted discount amount.
+4. Guest sees ordinary price, named promotion adjustment and final total before explicit
+   confirmation; preview creates no order or batch.
+5. A time, availability, price or cart change between preview and submit causes a safe recalculation.
+6. One non-stackable percentage promotion is applied; manual discount does not stack without an
+   explicit tested policy; total cannot become negative.
+7. The persisted application snapshots promotion/rule/version and affected-line original,
+   adjustment and final amounts; History remains stable after later config/menu edits.
+8. Repeated idempotent submit creates no second application or discount.
+9. Excluded, canceled and rejected lines do not retain an executable promotion; personal/shared
+   tab and cross-venue privacy remain intact.
+10. Staff-chat displays persisted order facts but contains no eligibility or pricing calculation.
+
+Gift choice, BOGO, second-item-free, free option/refill, special fixed price and multiple stacking
+remain outside this first smoke target.
 
 Remaining Future Growth:
 1. Favorite menu items/options, recommendations and frequent items remain absent.
@@ -867,7 +890,7 @@ Canonical model: `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## 21. Next Implementation Smoke Target
 
-Simple Venue Promotions Phase 1 is MVP IMPLEMENTED / LOCAL VALIDATION PASSED; focused backend coverage, compile/lint, Mini App build and full e2e smoke `68/68` passed locally. Its next release gate is staging smoke for Owner/Manager/Staff RBAC, active-period/venue-availability filtering and Telegram ↔ Mini App state parity; do not mark it `STAGING-SMOKE-PASSED` yet. Repeat as Template Phase 1 remains MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE, and `REPEAT-MANUAL-001` remains open unchanged. Existing order/session/tab uniqueness and privacy behavior stays in regression rather than being reopened without evidence; M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, rollout-gated M7c, M8b-Free, M9a, M9b/M9b.1/M9b.2/M9b.3, Guest History, Post-Visit Feedback and Favorites stay in regression smoke.
+Simple Venue Promotions Phase 1 is DONE / MVP / STAGING-SMOKE-PASSED; focused local checks, green GitHub Actions, staging deploy and manual Owner/Manager/Staff, Guest visibility, unavailable-venue and Telegram ↔ Mini App parity smoke passed. The next selected runtime target is Executable Promotions Phase 2, verdict `IMPLEMENT_PROMOTION_ENGINE_PARITY_NOW`, bounded to shared Happy Hours + percentage discount with persisted snapshots and no stacking. Repeat as Template Phase 1 remains MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE, and `REPEAT-MANUAL-001` remains open unchanged. Existing order/session/tab uniqueness and privacy behavior stays in regression rather than being reopened without evidence; M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, rollout-gated M7c, M8b-Free, M9a, M9b/M9b.1/M9b.2/M9b.3, Guest History, Post-Visit Feedback and Favorites stay in regression smoke.
 
 Manual M9b Venue Working Hours and Date Exceptions regression smoke (passed once on staging after M9b.3; keep in regression):
 1. OWNER opens Venue Mini App `Настройки`.

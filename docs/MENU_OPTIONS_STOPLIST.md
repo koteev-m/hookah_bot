@@ -1,6 +1,6 @@
 # Menu / Options / Stop-List Model
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-07-23.
 
 Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow, but the broader menu constructor, media/top-list governance, shift check, audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
@@ -61,6 +61,11 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
   - item and option prices are snapshotted server-side.
 - If item/option availability changes between cart and submit, guest copy should be safe: `Позиция или выбранный вариант больше недоступны. Удалите из корзины или выберите замену.`
 - Suggested replacements are future/optional and must not silently substitute an item or option.
+- Executable promotions use the same server-owned item/option availability and current-price
+  validation at preview and submit. A selected option may affect the eligible line amount, but it
+  cannot become an eligibility target until the rule schema and tests explicitly support it.
+- An unavailable gift item or option is not substituted silently. A selectable reward requires an
+  explicit guest choice from a server-provided allowlist before final submit.
 
 ## Order Snapshot Rules
 
@@ -80,6 +85,8 @@ Rules:
 - Batch totals are calculated server-side.
 - Price/name/option edits after checkout do not change existing order, bill or history snapshots.
 - Archiving an item/option must not break old order history or bill display.
+- Promotion-affected and gift lines preserve original price, option delta, promotion adjustment and
+  final amount alongside the promotion rule/version snapshot.
 - Growth `REPEAT_TEMPLATE` must revalidate current availability, current prices and current option rules before applying; it must not create an order without active table context.
 
 ## Permissions

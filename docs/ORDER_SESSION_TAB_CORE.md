@@ -1,6 +1,6 @@
 # Order / Session / Tab Core Model
 
-Дата актуализации: 2026-07-09.
+Дата актуализации: 2026-07-23.
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
 
@@ -33,6 +33,13 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - Batch creation is idempotent by client idempotency key.
 - Item name, price, selected options/flavors and price deltas are snapshotted at order time according to `docs/MENU_OPTIONS_STOPLIST.md`.
 - Stop-listed or unavailable items/options are rejected server-side at preview/submit.
+- Executable promotion eligibility, prices and adjustments are server-owned and recalculated at
+  preview and final submit; clients never submit trusted discount amounts.
+- A promotion does not mutate menu base price. Its name, rule identity/version, original amount,
+  adjustment and final amount are stored as an immutable application snapshot.
+- Idempotent batch replay cannot create a second promotion application/reward. Canceled, rejected
+  and excluded lines receive no promotion, and a payable amount cannot become negative.
+- Manual staff discount and promotion do not stack without an explicit deterministic policy.
 - Personal tab is default; shared tab requires invite/consent.
 - Closed/paid tabs cannot receive new batches unless an allowed role explicitly reopens them with audit.
 - Staff chat is a notification/radar/shortcut surface, not the source of truth.
@@ -84,6 +91,8 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - Transfer item to another personal tab requires explicit confirmation and permission.
 - Shared tab membership is required for read/write.
 - Closed/paid tab cannot receive new batches unless an allowed role reopens it with audit.
+- Promotion evaluation remains batch/item-scoped inside the authorized tab unless a later rule
+  explicitly defines a broader scope; a table/session/tab token never grants discount authority.
 
 ## Target State Machines
 

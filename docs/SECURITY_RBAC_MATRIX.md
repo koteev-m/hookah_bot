@@ -1,6 +1,6 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-23.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/today-shift/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -66,6 +66,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Guest | `booking.create_own`, `booking.view_own` | Own bookings | Current. Status/action availability depends on booking lifecycle. |
 | Guest | `feedback.submit_own_completed_visit`, `feedback.view_own` | Own visible completed History visit | DONE / MVP / staging-smoke-passed. `ORDER_CLOSED`, booking `SEATED` and merged visits only; duplicate submit does not overwrite. |
 | Guest | `order_batch.create_own_in_session` | Current table session + own/joined tab | Current target/core. Requires active table context, selected tab and menu/stop-list validation. |
+| Guest | `promotion.preview_own_cart`, `promotion.apply_via_submit` | Current table session + own/joined tab | Phase 2 target. Server derives eligibility, current prices and adjustments; Guest cannot supply a trusted discount. |
 | Guest | `tab.view_own`, `tab.join_shared_by_invite` | Own personal tab or joined shared tab | Current target/core; two-guest privacy remains smoke-critical. |
 | Guest | `staff_call.create_in_session` | Current table session | Current. Staff call is operational, not support. |
 | Tab Host | `shared_tab.invite`, `shared_tab.revoke_invite`, `shared_tab.view`, `shared_tab.add_batch` | Hosted shared tab | Target/current where shared tab flow is implemented; member management beyond invite/revoke needs verification. |
@@ -77,12 +78,14 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own draft fields only, cannot self-publish or enable guest visibility. Photo upload remains future. |
 | Staff | `support_ticket.none`, `venue_chat.none`, `feedback.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
+| Staff | `promotion.manage.none`, `promotion.calculate.none` | All scopes | Phase 1/2 rule. Staff may see persisted order facts but does not configure or calculate promotions. |
 | Venue Manager | `order_queue.view`, `order_batch.status_update`, `order_batch.reject` | Own venue | Current where route permissions allow. |
 | Venue Manager | `booking.manage`, `staff_call.manage` | Own venue | Current. |
 | Venue Manager | `menu.view`, `menu.manage`, `stop_list.manage` | Own venue | Current with policy caveats by route. Conservative target keeps Manager to stop-list/shift check/basic availability unless broad `MENU_MANAGE` is explicitly retained; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Venue Manager | `table.view`, limited `table.manage` | Own venue | Current where backend permission allows; owner-only QR actions must stay denied if configured so. |
 | Venue Manager | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current support/chat MVP. Venue cannot reply when support ticket is assigned to Platform unless product policy explicitly allows it. |
 | Venue Manager | `feedback.view_own_venue`, `feedback.follow_up_low` | Own venue only | Current MVP. Read-only aggregate/list; rating `1..3` follow-up opens exact `VENUE_CHAT`. Public review link edit denied. |
+| Venue Manager | `promotion.manage` | Own venue only | Current for informational Phase 1; Phase 2 target for schedule/eligibility/reward/status through server-validated routes. |
 | Venue Manager | `staff_invite.create_staff_only` | Own venue | Current conservative policy where route allows; cannot create Owner/Platform access. |
 | Venue Manager | `staff_shift.manage_today` | Own venue | Current conservative Phase 1. Manager marks today shift state, but does not approve public profiles or future tip methods by default. |
 | Venue Manager | `billing.none`, dangerous lifecycle none | Billing/platform/lifecycle | Current product rule. |
@@ -92,6 +95,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Owner | `billing.view/pay` | Own venue subscription/payment state | Current manual billing MVP for view/pay surfaces; Platform-only mark-paid/courtesy remain denied. |
 | Venue Owner | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current. Can transfer support tickets to Platform. |
 | Venue Owner | `feedback.view_own_venue`, `feedback.follow_up_low`, `public_review_url.manage` | Own venue only | Current MVP. Public review URL setting is Owner-only and shared by Bot/Mini App. |
+| Venue Owner | `promotion.manage` | Own venue only | Current for informational Phase 1; Phase 2 target includes executable rules with safe preview and audit. |
 | Venue Owner | `venue.lifecycle.request_pause/archive/delete` | Own venue | Target only if product implements owner-requested lifecycle; Platform lifecycle remains Platform Owner. |
 | Platform Owner | `platform.venues.manage`, `platform.lifecycle.manage`, `platform.owner_access.manage` | Platform | Current for implemented cockpit/lifecycle/owner access. |
 | Platform Owner | `platform.billing.manage`, `platform.support.manage_all`, `platform.analytics.view`, `platform.audit.view`, `platform.settings.manage` | Platform | Billing/support MVP current; analytics/audit explorer partial/future. |
@@ -109,6 +113,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Post-visit feedback | No automated prompt; public review setting uses the same backend source as Mini App. | Submit only from own completed History detail; optional explicit Yandex CTA after `5/5`. | Owner/Manager read list and open low-rating exact `VENUE_CHAT`; Owner edits public review URL; Staff denied. | Feedback analytics dashboard future. | Never. | No auto support ticket, Owner message, Telegram prompt or public redirect. |
 | Booking chats | Booking action `Открыть переписку`. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Notification mirror only where existing policy allows. | Must not become support queue. |
 | Menu/stop-list | Bot owner/manager/staff paths where implemented. | Guest read/order only after QR. | Owner/Manager manage; Staff availability only. | No ordinary menu management. | No source-of-truth edits. | Price/content edits are dangerous and audited where implemented. |
+| Promotions | Owner/Manager management exists for current Telegram templates. | Informational Phase 1 read plus future server-owned executable preview/submit. | Owner/Manager manage; Staff denied. | No ordinary venue promotion management. | Persisted order facts only. | One backend engine; Bot/Mini App clients never calculate trusted discounts. |
 | Tables/QR | Bot management where implemented. | QR context only. | Owner/Manager table/QR where allowed; Staff read-only. | No ordinary venue table management unless platform support policy says so. | No. | QR token is context pointer. |
 | Staff invites | Bot invite acceptance. | No. | Owner/Manager invite where allowed. | OWNER invite/revoke. | No. | Last-owner protection server-side. |
 | Settings | Bot owner/manager setup where implemented. | No management. | Owner/Manager settings where allowed; Staff none. | Platform settings for platform scope. | No. | UI hiding is not enough. |
@@ -127,6 +132,7 @@ These actions require server-side authorization and should require confirmation,
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
 | Staff chat linked/unlinked/tested | Confirmation for unlink; audit/link evidence without raw secrets. |
 | Menu price changed; item archived; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. |
+| Promotion schedule, eligibility, reward, status or stacking policy changed | Owner/Manager own venue only; audit safe old/new rule/version and actor. |
 | Order force closed; tab reopened | Reason and audit; preserve session/tab boundaries. |
 | Invoice manually marked paid; subscription override changed; billing provider config changed | Platform Owner only, explicit action, reason where needed and safe audit. |
 | Support ticket transferred/closed/assignee changed | Audit status/scope/actor/source; no message text/raw Telegram payloads. |
