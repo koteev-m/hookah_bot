@@ -1779,3 +1779,76 @@ input[type="number"] {
   gap: 0.5rem;
   color: #475569;
 }
+.venue-promotions,
+.venue-promotion-groups,
+.venue-promotion-list,
+.guest-venue-promotion-list {
+  display: grid;
+  gap: 12px;
+}
+
+.venue-promotions-header,
+.venue-promotion-form,
+.venue-promotion-card,
+.guest-venue-promotions {
+  display: grid;
+  gap: 10px;
+}
+
+.venue-promotion-notice {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.venue-promotion-field {
+  display: grid;
+  gap: 6px;
+}
+
+.venue-promotion-field input,
+.venue-promotion-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.venue-promotion-field small,
+.venue-promotion-terms,
+.guest-venue-promotion-period,
+.guest-venue-promotion-terms {
+  color: #64748b;
+}
+
+.venue-promotion-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.venue-promotion-card-heading h4,
+.guest-venue-promotion h5,
+.guest-venue-promotion p {
+  margin: 0;
+}
+
+.venue-promotion-status {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.guest-venue-promotion {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid #dfe3eb;
+}
+
+.guest-venue-promotion:first-child {
+  padding-top: 0;
+  border-top: 0;
+}

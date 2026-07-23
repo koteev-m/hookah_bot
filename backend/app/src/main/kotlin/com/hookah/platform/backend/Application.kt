@@ -79,6 +79,7 @@ import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
+import com.hookah.platform.backend.miniapp.venue.promotions.venuePromotionRoutes
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
@@ -1077,6 +1078,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         subscriptionRepository = subscriptionRepository,
                         venueBookingHoursRepository = venueBookingHoursRepository,
                         venueSettingsRepository = venueSettingsRepository,
+                        venuePromotionRepository = venuePromotionRepository,
                     )
                     guestFavoritesRoutes(
                         guestFavoritesRepository = guestFavoritesRepository,
@@ -1211,6 +1213,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueMenuRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueMenuRepository = venueMenuRepository,
+                )
+                venuePromotionRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    venuePromotionRepository = venuePromotionRepository,
+                    venueSettingsRepository = venueSettingsRepository,
                 )
                 venueOrderRoutes(
                     venueAccessRepository = venueAccessRepository,

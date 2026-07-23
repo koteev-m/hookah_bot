@@ -238,6 +238,16 @@ type VenueFeedbackResponse = {
   items: Array<Record<string, unknown>>
 }
 
+type VenuePromotionFixture = {
+  id: number
+  title: string
+  description: string
+  terms: string | null
+  startsAt: string
+  endsAt: string
+  status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
+}
+
 type BillingInvoiceFixture = {
   id: number
   periodStart: string
@@ -700,6 +710,7 @@ async function mockGuestApi(
     tableSessionEndResponse?: TableSessionEndResponseFixture
     activeOrder?: ActiveOrderFixtureOptions | null
     todayStaff?: Array<Record<string, unknown>>
+    promotions?: Array<Omit<VenuePromotionFixture, 'status'>>
     visitHistory?: GuestVisitHistoryFixture
     initialFavoriteVenueIds?: number[]
     favoriteMutationDelayMs?: number
@@ -725,6 +736,7 @@ async function mockGuestApi(
     }
   let activeOrderOptions: ActiveOrderFixtureOptions | null = options.activeOrder === undefined ? {} : options.activeOrder
   const todayStaff = options.todayStaff ?? []
+  const promotions = options.promotions ?? []
   const visitHistory = options.visitHistory ?? { items: [], details: {} }
   const defaultFavoriteToken = options.isolateFavoriteUsers ? 'favorite-user-123456789' : 'e2e-session-token'
   const favoriteVenueIdsByToken = new Map<string, Set<number>>([
@@ -887,6 +899,8 @@ async function mockGuestApi(
             timeLabel: null
           },
           todayStaff,
+          timezone: 'Europe/Moscow',
+          promotions,
           status: 'PUBLISHED',
           isFavorite: favoriteIds.has(1)
         }
@@ -2265,6 +2279,139 @@ async function mockVenueStatsApi(
   return {
     getPeriods: () => periods,
     getFollowUpCalls: () => followUpCalls
+  }
+}
+
+async function mockVenuePromotionsApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    promotions?: VenuePromotionFixture[]
+  } = {}
+) {
+  const role = options.role ?? 'OWNER'
+  let promotions = [...(options.promotions ?? [])]
+  let nextId = Math.max(0, ...promotions.map((item) => item.id)) + 1
+  const mutations: string[] = []
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/guest/catalog', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venues: [
+          {
+            id: 1,
+            name: 'Микс',
+            city: 'Москва',
+            address: 'Пилотная, 1',
+            isFavorite: false
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role,
+            permissions: role === 'STAFF' ? ['ORDER_QUEUE_VIEW'] : []
+          }
+        ]
+      })
+    )
+  })
+
+  await page.route('**/api/guest/venue/1', async (route) => {
+    const now = Date.now()
+    const visiblePromotions = promotions
+      .filter(
+        (item) =>
+          item.status === 'ACTIVE' &&
+          new Date(item.startsAt).getTime() <= now &&
+          new Date(item.endsAt).getTime() >= now
+      )
+      .map(({ status: _status, ...item }) => item)
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 1,
+          name: 'Микс',
+          city: 'Москва',
+          address: 'Пилотная, 1',
+          timezone: 'Europe/Moscow',
+          promotions: visiblePromotions,
+          status: 'PUBLISHED',
+          isFavorite: false
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/guest/venue/1/info-sections', async (route) => {
+    await route.fulfill(jsonResponse({ venueId: 1, sections: [] }))
+  })
+
+  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/promotions**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const statusMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)\/status$/)
+    const itemMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)$/)
+    if (path === '/api/venue/1/promotions' && request.method() === 'GET') {
+      await route.fulfill(jsonResponse({ venueId: 1, timezone: 'Europe/Moscow', items: promotions }))
+      return
+    }
+    if (path === '/api/venue/1/promotions' && request.method() === 'POST') {
+      const body = (await request.postDataJSON()) as Omit<VenuePromotionFixture, 'id' | 'status'>
+      const promotion: VenuePromotionFixture = { id: nextId++, status: 'DRAFT', ...body }
+      promotions = [promotion, ...promotions]
+      mutations.push('create')
+      await route.fulfill(jsonResponse({ promotion }))
+      return
+    }
+    if (statusMatch && request.method() === 'POST') {
+      const promotionId = Number(statusMatch[1])
+      const body = (await request.postDataJSON()) as { status: 'ACTIVE' | 'PAUSED' }
+      promotions = promotions.map((item) => (item.id === promotionId ? { ...item, status: body.status } : item))
+      mutations.push(body.status.toLowerCase())
+      await route.fulfill(jsonResponse({ promotion: promotions.find((item) => item.id === promotionId) }))
+      return
+    }
+    if (itemMatch && request.method() === 'PUT') {
+      const promotionId = Number(itemMatch[1])
+      const body = (await request.postDataJSON()) as Omit<VenuePromotionFixture, 'id' | 'status'>
+      promotions = promotions.map((item) => (item.id === promotionId ? { ...item, ...body } : item))
+      mutations.push('update')
+      await route.fulfill(jsonResponse({ promotion: promotions.find((item) => item.id === promotionId) }))
+      return
+    }
+    if (itemMatch && request.method() === 'DELETE') {
+      const promotionId = Number(itemMatch[1])
+      promotions = promotions.map((item) => (item.id === promotionId ? { ...item, status: 'ARCHIVED' } : item))
+      mutations.push('archive')
+      await route.fulfill(jsonResponse({ promotion: promotions.find((item) => item.id === promotionId) }))
+      return
+    }
+    await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
+  })
+
+  return {
+    getPromotions: () => promotions,
+    getMutations: () => mutations
   }
 }
 
@@ -3770,6 +3917,33 @@ test('guest venue card shows today staff without private linkage fields', async 
     return Boolean(info && today && (info.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING))
   })
   expect(todayStaffAfterInfo).toBe(true)
+})
+
+test('guest venue detail shows active promotion content and omits an empty block', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const now = Date.now()
+  await mockGuestApi(page, {
+    promotions: [
+      {
+        id: 41,
+        title: 'Вечер для друзей',
+        description: 'Специальное предложение для компаний.',
+        terms: 'Подробности уточняйте у персонала.',
+        startsAt: new Date(now - 60 * 60 * 1000).toISOString(),
+        endsAt: new Date(now + 60 * 60 * 1000).toISOString()
+      }
+    ]
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+
+  const promotions = page.locator('.guest-venue-promotions')
+  await expect(promotions.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
+  await expect(promotions).toContainText('Вечер для друзей')
+  await expect(promotions).toContainText('Специальное предложение для компаний.')
+  await expect(promotions).toContainText('Подробности уточняйте у персонала.')
+  await expect(promotions).toContainText(/с .* по /)
 })
 
 test('guest favorite venues stay consistent across catalog venue detail and account', async ({ page }) => {
@@ -6762,6 +6936,94 @@ test('venue owner sees statistics section', async ({ page }) => {
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Средний чек' })).toContainText(/1\s*250/)
 })
 
+test('venue owner creates edits activates and pauses informational promotion', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, { role: 'OWNER' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Акция носит информационный характер. Скидки и промокоды автоматически к заказу не применяются.')
+  ).toBeVisible()
+
+  await page.getByRole('button', { name: 'Создать акцию' }).click()
+  const form = page.locator('.venue-promotion-form')
+  const localPeriod = await page.evaluate(() => {
+    const format = (date: Date) => {
+      const part = (value: number) => String(value).padStart(2, '0')
+      return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}T${part(date.getHours())}:${part(date.getMinutes())}`
+    }
+    return {
+      startsAt: format(new Date(Date.now() - 30 * 60 * 1000)),
+      endsAt: format(new Date(Date.now() + 90 * 60 * 1000))
+    }
+  })
+  await form.getByLabel('Название акции', { exact: true }).fill('Вечер для друзей')
+  await form.getByLabel('Описание', { exact: true }).fill('Специальное предложение для компаний.')
+  await form.getByLabel(/^Условия/).fill('Подробности уточняйте у персонала.')
+  await form.getByLabel('Начало', { exact: true }).fill(localPeriod.endsAt)
+  await form.getByLabel('Окончание', { exact: true }).fill(localPeriod.endsAt)
+  await form.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(form.getByText('Начало акции должно быть раньше окончания.')).toBeVisible()
+
+  await form.getByLabel('Начало', { exact: true }).fill(localPeriod.startsAt)
+  await form.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(page.getByText('Черновик акции создан.')).toBeVisible()
+  await expect(form).toBeHidden()
+  await expect(page.locator('.venue-promotion-card').filter({ hasText: 'Вечер для друзей' })).toContainText('Черновик')
+  expect(api.getMutations()).toEqual(['create'])
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  const draftCard = page.locator('.venue-promotion-card').filter({ hasText: 'Вечер для друзей' })
+  await draftCard.getByRole('button', { name: 'Опубликовать' }).click()
+  await expect(page.getByText('Акция опубликована.')).toBeVisible()
+  expect(api.getPromotions()[0].status).toBe('ACTIVE')
+
+  const activeCard = page.locator('.venue-promotion-card').filter({ hasText: 'Вечер для друзей' })
+  await activeCard.getByRole('button', { name: 'Редактировать' }).click()
+  await form.getByLabel('Название акции', { exact: true }).fill('Обновлённый вечер')
+  await form.getByRole('button', { name: 'Сохранить изменения' }).click()
+  await expect(page.getByText('Изменения сохранены.')).toBeVisible()
+  await expect(page.locator('.venue-promotion-card').filter({ hasText: 'Обновлённый вечер' })).toBeVisible()
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённый вечер')
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await page
+    .locator('.venue-promotion-card')
+    .filter({ hasText: 'Обновлённый вечер' })
+    .getByRole('button', { name: 'Приостановить' })
+    .click()
+  await expect(page.getByText('Акция приостановлена.')).toBeVisible()
+  expect(api.getPromotions()[0].status).toBe('PAUSED')
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  const pausedCard = page.locator('.venue-promotion-card').filter({ hasText: 'Обновлённый вечер' })
+  await pausedCard.getByRole('button', { name: 'Редактировать' }).click()
+  await form.getByLabel('Описание', { exact: true }).fill('Обновлённое предложение для компаний.')
+  await form.getByRole('button', { name: 'Сохранить изменения' }).click()
+  await pausedCard.getByRole('button', { name: 'Опубликовать' }).click()
+  await expect(page.getByText('Акция опубликована.')).toBeVisible()
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённое предложение для компаний.')
+})
+
 test('venue owner sees feedback section and staff does not', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueStatsApi(page, { role: 'OWNER', permissions: ['FEEDBACK_VIEW', 'SUPPORT_MANAGE'] })
@@ -6801,6 +7063,39 @@ test('venue staff does not see statistics section', async ({ page }) => {
     window.location.hash = '#/feedback'
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+})
+
+test('venue staff does not see or open promotions section', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenuePromotionsApi(page, { role: 'STAFF' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Акции', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/promotions'
+  })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+})
+
+test('venue manager can create promotions from the management section', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, { role: 'MANAGER' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Акции', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Создать акцию' }).click()
+  const form = page.locator('.venue-promotion-form')
+  await form.getByLabel('Название акции', { exact: true }).fill('Акция менеджера')
+  await form.getByLabel('Описание', { exact: true }).fill('Информационное предложение.')
+  await form.getByLabel('Начало', { exact: true }).fill('2030-05-10T18:00')
+  await form.getByLabel('Окончание', { exact: true }).fill('2030-05-10T22:00')
+  await form.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(page.getByText('Черновик акции создан.')).toBeVisible()
+  expect(api.getMutations()).toEqual(['create'])
 })
 
 test('venue manager manages menu item flavors from mini app', async ({ page }) => {

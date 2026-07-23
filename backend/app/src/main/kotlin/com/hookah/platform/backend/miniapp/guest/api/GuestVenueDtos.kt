@@ -42,8 +42,20 @@ data class VenueDto(
     val cardDescription: String? = null,
     val todaySchedule: VenueTodayScheduleDto? = null,
     val todayStaff: List<GuestTodayStaffDto> = emptyList(),
+    val timezone: String? = null,
+    val promotions: List<GuestVenuePromotionDto> = emptyList(),
     val status: String,
     val isFavorite: Boolean,
+)
+
+@Serializable
+data class GuestVenuePromotionDto(
+    val id: Long,
+    val title: String,
+    val description: String,
+    val terms: String? = null,
+    val startsAt: String? = null,
+    val endsAt: String? = null,
 )
 
 @Serializable

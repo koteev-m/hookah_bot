@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-23.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP and Guest Favorites Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Broader retention loops remain partial/future.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP and Guest Favorites Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Simple Venue Promotions Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; staging smoke is still required. Broader retention loops remain partial/future.
 
 ## Core Rule
 
@@ -45,7 +45,9 @@ Current implementation is **partial**:
 - Telegram Bot exposes the same venue favorites from both Catalog and Profile. Back navigation is source-aware: a Catalog-opened list returns to Catalog and a Profile-opened list returns to Profile.
 - Closure evidence includes focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build, full browser e2e smoke `62/62`, green GitHub Actions and manual staging smoke for catalog/detail/Account, two-user isolation, unavailable filtering/restoration, Bot/Mini App synchronization and both Telegram entrypoints.
 - Booking `SEATED`, order close and table-session close signals exist as foundations for visit history; no-show remains a non-visit booking outcome.
-- Promotions/loyalty/bill breakdown foundations may exist in backend/bot surfaces, but simple venue promotions as a guest retention product are not launch-complete across Bot + Mini App.
+- Simple Venue Promotions Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Venue Owner/Manager use the Venue Mini App to list, create, edit, activate, pause and archive informational `TEXT_ONLY` promotions; Staff is hidden and denied server-side. Rule-backed promotion templates remain in their existing Telegram flows and cannot be mutated through this focused API.
+- Guest venue detail shows only `ACTIVE` promotions inside their current period after the existing `PUBLISHED` venue and guest/subscription availability checks. Draft, paused, archived, future and expired promotions are not disclosed.
+- Mini App and Telegram reuse the existing `venue_promotions` schema and `VenuePromotionRepository`; no migration, parallel model or discount engine was added. Informational promotions do not change order totals or send marketing notifications.
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
   campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
   are future and must not be treated as guest order online payment.
@@ -61,7 +63,7 @@ Current implementation is **partial**:
 | `BOOKING_HISTORY` | Past and upcoming bookings shown in account/history context. | Partial foundation; keep booking MVP in regression. |
 | `REPEAT_TEMPLATE` | A transient repeat plan for one past completed order, re-resolved against current menu state and applied only to the current cart. It is not saved as a library object. | MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE. |
 | `POST_VISIT_FEEDBACK` | 1-5 rating, tags and optional comment submitted from completed History detail only; internal venue signal. A configured safe public review URL may be offered only after manual `5/5` submit and explicit guest click. | DONE / MVP / staging-smoke-passed. |
-| `VENUE_PROMOTION` | Simple venue banner/announcement with title, description, period, terms and visibility. | MVP target/future implementation unless current code is verified and smoked. |
+| `VENUE_PROMOTION` | Simple informational venue announcement with title, description, required period, optional terms and lifecycle status. | MVP IMPLEMENTED / LOCAL VALIDATION PASSED; staging smoke pending. |
 | `PROMO_CODE` | Code-based discount/reward with limits and accounting. | After MVP. |
 | `LOYALTY_STAMP` | Simple stamp-card loyalty model. | Future. |
 | `LOYALTY_POINTS` | Points/cashback-style ledger and redemption model. | Future; requires financial model. |
@@ -115,7 +117,7 @@ Guest surfaces should present:
 
 ## Venue UX
 
-Venue Owner/Manager may eventually manage `Акции и удержание`:
+Venue Owner/Manager manage `Акции`:
 - create simple `VENUE_PROMOTION` records with title, description, period, terms, visibility/status;
 - pause/archive promotions;
 - see only honest status/copy for promotions that are informational only.
@@ -229,13 +231,19 @@ Repeat as Template Phase 1:
   [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001);
 - do not use `STAGING-SMOKE-PASSED` until that record is closed.
 
+Simple Venue Promotions Phase 1 local validation:
+
+1. Owner/Manager management API and Mini App create/edit/status/archive flows use the existing repository.
+2. Staff and foreign-venue access are denied.
+3. Guest venue detail exposes only current `ACTIVE` promotions for an available venue.
+4. Draft, paused, archived, future and expired promotions remain hidden.
+5. Full Mini App e2e smoke passed `68/68`; staging cross-surface smoke is still required.
+
 Broader Growth smoke remains future:
+
 1. Post-Visit Feedback regression checklist above remains green.
-2. Promotion is visible only during its active period.
-3. Suspended/hidden venue promotions are not visible.
-4. Notifications require opt-in and can be disabled.
-5. Staff does not manage growth campaigns.
-6. Paid placement label is visible if/when paid placement is implemented.
+2. Notifications require opt-in and can be disabled.
+3. Paid placement label is visible if/when paid placement is implemented.
 
 ## Status Summary
 
@@ -245,7 +253,7 @@ Broader Growth smoke remains future:
 - Full base item historical snapshotting: `FUTURE/FOLLOW-UP` if a later audit still finds gaps beyond the current safe rendering.
 - Favorite venues Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; favorite menu items/options remain `FUTURE`.
 - Repeat as Template Phase 1: `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) remains open. Persistent template library remains `FUTURE`.
-- Promotions: `PLACEHOLDER/PARTIAL FOUNDATION` unless backend + Guest/Venue surfaces are verified for the simple promotion MVP.
+- Simple Venue Promotions Phase 1: `MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; staging smoke pending.
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
 - Low-rating manual follow-up through exact `VENUE_CHAT`: `DONE / MVP`; Platform feedback analytics dashboard remains `FUTURE`.
@@ -253,19 +261,18 @@ Broader Growth smoke remains future:
 - Paid placement/promotion boosting: `FUTURE`.
 - Visit history foundation: implemented on top of order/session/booking lifecycle; keep privacy, dedup and terminal-status tests in regression.
 
-## Recommended Next Runtime Block
+## Latest Bounded Runtime Block
 
 Guest Favorites Phase 1 is staging-closed. Repeat as Template Phase 1 is implemented and locally validated, while its environment-dependent smoke remains deferred in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001). That open feature-specific production-readiness gate does not block an independent bounded runtime block. Read-only code verification also shows that the previously recommended Order Session Tab Core Hardening is already represented by current table-session active-order uniqueness, tab-scoped guest routes and regression coverage; do not reopen it without concrete regression evidence.
 
-Recommended next bounded runtime block: **Simple Venue Promotions Phase 1**:
+Implemented bounded runtime block: **Simple Venue Promotions Phase 1** — `MVP IMPLEMENTED / LOCAL VALIDATION PASSED`:
 
-- expose the existing informational `venue_promotions` foundation through focused Owner/Manager Mini App management and Guest venue-detail reads;
-- limit Phase 1 to title, description, optional terms, starts/ends and draft/active/disabled lifecycle;
-- show only currently active promotions for a guest-available `PUBLISHED` venue;
+- exposes the existing informational `venue_promotions` foundation through focused Owner/Manager Mini App management and Guest venue-detail reads;
+- requires title, description, starts/ends, supports optional terms and keeps the existing `DRAFT` / `ACTIVE` / `PAUSED` / `ARCHIVED` lifecycle;
+- shows only currently active promotions for a guest-available `PUBLISHED` venue;
 - do not execute discounts, promo codes, loyalty, notifications, paid placement or boosting.
 
-This slice reuses current schema/repository/date/status filtering and closes a direct Bot/Mini App
-parity gap without depending on physical QR/table context. Staff schedule remains spec-first,
-staff photo upload requires consent/storage/moderation design, catalog already has basic client-side
-name/city search, and booking reminders are already implemented/test-backed with rollout kept
-separate.
+This slice reuses current schema/repository/date/status filtering and closes the direct Bot/Mini App
+parity gap without depending on physical QR/table context. Staging deploy and manual cross-surface
+smoke remain required before a staging-smoke-passed claim. A following runtime block is not selected
+by this implementation update.

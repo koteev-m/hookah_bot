@@ -39,8 +39,19 @@ export type VenueDto = {
   cardDescription?: string | null
   todaySchedule?: VenueTodayScheduleDto | null
   todayStaff?: GuestTodayStaffDto[]
+  timezone?: string | null
+  promotions?: GuestVenuePromotionDto[]
   status: string
   isFavorite: boolean
+}
+
+export type GuestVenuePromotionDto = {
+  id: number
+  title: string
+  description: string
+  terms?: string | null
+  startsAt?: string | null
+  endsAt?: string | null
 }
 
 export type GuestTodayStaffResponse = {

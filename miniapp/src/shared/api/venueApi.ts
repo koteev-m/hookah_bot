@@ -18,6 +18,10 @@ import type {
   VenueLocationResolveResponse,
   VenueLocationSuggestionKind,
   VenueLocationSuggestionsResponse,
+  VenuePromotionListResponse,
+  VenuePromotionMutationRequest,
+  VenuePromotionResponse,
+  VenuePromotionStatusRequest,
   VenueFeedbackFilter,
   VenueFeedbackFollowUpResponse,
   VenueFeedbackResponse,
@@ -94,6 +98,97 @@ export async function venueGetMe(
   signal?: AbortSignal
 ) {
   return requestApi<VenueMeResponse>(backendUrl, '/api/venue/me', { signal }, deps)
+}
+
+export async function venueGetPromotions(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePromotionListResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/promotions`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueCreatePromotion(
+  backendUrl: string,
+  venueId: number,
+  payload: VenuePromotionMutationRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePromotionResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/promotions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdatePromotion(
+  backendUrl: string,
+  venueId: number,
+  promotionId: number,
+  payload: VenuePromotionMutationRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePromotionResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/promotions/${promotionId}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueSetPromotionStatus(
+  backendUrl: string,
+  venueId: number,
+  promotionId: number,
+  payload: VenuePromotionStatusRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePromotionResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/promotions/${promotionId}/status`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueArchivePromotion(
+  backendUrl: string,
+  venueId: number,
+  promotionId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenuePromotionResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/promotions/${promotionId}`,
+    { method: 'DELETE', signal },
+    deps
+  )
 }
 
 export async function venueGetStats(

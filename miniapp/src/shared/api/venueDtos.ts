@@ -14,6 +14,40 @@ export type VenueMeResponse = {
   venues: VenueAccessDto[]
 }
 
+export type VenuePromotionStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
+
+export type VenuePromotionDto = {
+  id: number
+  title: string
+  description: string
+  terms?: string | null
+  startsAt?: string | null
+  endsAt?: string | null
+  status: VenuePromotionStatus
+}
+
+export type VenuePromotionListResponse = {
+  venueId: number
+  timezone: string
+  items: VenuePromotionDto[]
+}
+
+export type VenuePromotionResponse = {
+  promotion: VenuePromotionDto
+}
+
+export type VenuePromotionMutationRequest = {
+  title: string
+  description: string
+  terms?: string | null
+  startsAt: string
+  endsAt: string
+}
+
+export type VenuePromotionStatusRequest = {
+  status: 'ACTIVE' | 'PAUSED'
+}
+
 export type VenueStatsPeriod = 'today' | '7d' | '30d'
 
 export type VenueStatsTopItemDto = {

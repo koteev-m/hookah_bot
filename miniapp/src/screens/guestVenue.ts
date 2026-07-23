@@ -11,6 +11,7 @@ import {
   guestStaffCall
 } from '../shared/api/guestApi'
 import type {
+  GuestVenuePromotionDto,
   GuestTodayStaffDto,
   MenuCategoryDto,
   MenuItemDto,
@@ -77,6 +78,7 @@ type VenueRefs = {
   bookingButton: HTMLButtonElement
   questionButton: HTMLButtonElement
   extensionSlot: HTMLDivElement
+  promotionsSlot: HTMLDivElement
   todayStaffSlot: HTMLDivElement
   menuBody: HTMLDivElement
   message: HTMLParagraphElement
@@ -185,6 +187,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
   const staffSlot = el('div', { className: 'staff-call-slot' }) as HTMLDivElement
+  const promotionsSlot = el('div', { className: 'guest-venue-promotions-slot' }) as HTMLDivElement
   const todayStaffSlot = el('div', { className: 'guest-today-staff-slot' }) as HTMLDivElement
   const staffStatusCard = el('section', { className: 'card staff-call-status' })
   const staffStatusTitle = el('h4', { text: '' })
@@ -234,7 +237,19 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   const menuBody = el('div', { className: 'menu-body' })
   const extensionSlot = el('div', { className: 'shift-extension-slot' }) as HTMLDivElement
 
-  append(wrapper, header, staffSlot, status, message, retryButton, error, menuBody, todayStaffSlot, staffModalOverlay)
+  append(
+    wrapper,
+    header,
+    promotionsSlot,
+    staffSlot,
+    status,
+    message,
+    retryButton,
+    error,
+    menuBody,
+    todayStaffSlot,
+    staffModalOverlay
+  )
   root.replaceChildren(wrapper)
 
   return {
@@ -253,6 +268,7 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     bookingButton,
     questionButton,
     extensionSlot,
+    promotionsSlot,
     todayStaffSlot,
     menuBody,
     message,
@@ -278,6 +294,58 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     staffErrorDetails,
     staffDisabledReason
   }
+}
+
+function formatPromotionDateTime(value: string, timezone?: string | null): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  try {
+    return date.toLocaleString('ru-RU', {
+      ...(timezone ? { timeZone: timezone } : {}),
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  } catch {
+    return date.toLocaleString('ru-RU')
+  }
+}
+
+function promotionPeriodLabel(promotion: GuestVenuePromotionDto, timezone?: string | null): string | null {
+  if (promotion.startsAt && promotion.endsAt) {
+    return `с ${formatPromotionDateTime(promotion.startsAt, timezone)} по ${formatPromotionDateTime(promotion.endsAt, timezone)}`
+  }
+  if (promotion.endsAt) {
+    return `Действует до ${formatPromotionDateTime(promotion.endsAt, timezone)}`
+  }
+  if (promotion.startsAt) {
+    return `Действует с ${formatPromotionDateTime(promotion.startsAt, timezone)}`
+  }
+  return null
+}
+
+function renderGuestPromotions(promotions: GuestVenuePromotionDto[], timezone?: string | null): HTMLElement | null {
+  if (!promotions.length) return null
+  const section = el('section', { className: 'card guest-venue-promotions' })
+  section.appendChild(el('h4', { text: 'Акции' }))
+  const list = el('div', { className: 'guest-venue-promotion-list' })
+  promotions.forEach((promotion) => {
+    const card = el('article', { className: 'guest-venue-promotion' })
+    card.appendChild(el('h5', { text: promotion.title }))
+    card.appendChild(el('p', { text: promotion.description }))
+    const period = promotionPeriodLabel(promotion, timezone)
+    if (period) {
+      card.appendChild(el('p', { className: 'guest-venue-promotion-period', text: period }))
+    }
+    if (promotion.terms?.trim()) {
+      card.appendChild(el('p', { className: 'guest-venue-promotion-terms', text: `Условия: ${promotion.terms.trim()}` }))
+    }
+    list.appendChild(card)
+  })
+  section.appendChild(list)
+  return section
 }
 
 function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, MenuItemRefs>) {
@@ -1025,6 +1093,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       refs.routeLink.href = routeUrl
     } else {
       refs.routeLink.removeAttribute('href')
+    }
+    const promotions = renderGuestPromotions(venue.promotions ?? [], venue.timezone)
+    refs.promotionsSlot.replaceChildren()
+    refs.promotionsSlot.hidden = !promotions
+    if (promotions) {
+      refs.promotionsSlot.appendChild(promotions)
     }
     const todayStaff = renderTodayStaff(venue.todayStaff ?? [])
     refs.todayStaffSlot.replaceChildren()

@@ -10,6 +10,7 @@ import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.CatalogVenueDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestVenuePromotionDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuCategoryDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuItemDto
 import com.hookah.platform.backend.miniapp.guest.api.MenuItemOptionDto
@@ -42,6 +43,8 @@ import com.hookah.platform.backend.telegram.db.VenueInfoSection
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaAttachment
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -52,6 +55,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.ZoneId
 
 fun Route.guestVenueRoutes(
     guestVenueRepository: GuestVenueRepository,
@@ -63,6 +67,7 @@ fun Route.guestVenueRoutes(
     subscriptionRepository: SubscriptionRepository,
     venueBookingHoursRepository: VenueBookingHoursRepository,
     venueSettingsRepository: VenueSettingsRepository,
+    venuePromotionRepository: VenuePromotionRepository,
 ) {
     get("/catalog") {
         val userId = call.requireUserId()
@@ -106,7 +111,24 @@ fun Route.guestVenueRoutes(
                 venueStaffProfileRepository = venueStaffProfileRepository,
                 venueSettingsRepository = venueSettingsRepository,
             )
-        call.respond(VenueResponse(venue = venue.toVenueDto(todaySchedule, todayStaff, isFavorite)))
+        val timezone =
+            venueSettingsRepository.resolveZoneId(
+                venueId = venue.id,
+                fallback = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+            ).id
+        val promotions = venuePromotionRepository.listActivePromotionsForVenue(venue.id)
+        call.respond(
+            VenueResponse(
+                venue =
+                    venue.toVenueDto(
+                        todaySchedule = todaySchedule,
+                        todayStaff = todayStaff,
+                        timezone = timezone,
+                        promotions = promotions.map { it.toGuestDto() },
+                        isFavorite = isFavorite,
+                    ),
+            ),
+        )
     }
 
     get("/venue/{id}/today-staff") {
@@ -252,6 +274,8 @@ private fun VenueShort.toCatalogDto(
 private fun VenueShort.toVenueDto(
     todaySchedule: VenueTodayScheduleDto?,
     todayStaff: List<GuestTodayStaffDto> = emptyList(),
+    timezone: String? = null,
+    promotions: List<GuestVenuePromotionDto> = emptyList(),
     isFavorite: Boolean,
 ): VenueDto =
     VenueDto(
@@ -269,8 +293,20 @@ private fun VenueShort.toVenueDto(
         cardDescription = cardDescription,
         todaySchedule = todaySchedule,
         todayStaff = todayStaff,
+        timezone = timezone,
+        promotions = promotions,
         status = status.dbValue,
         isFavorite = isFavorite,
+    )
+
+private fun VenuePromotion.toGuestDto(): GuestVenuePromotionDto =
+    GuestVenuePromotionDto(
+        id = id,
+        title = title,
+        description = description,
+        terms = terms,
+        startsAt = startsAt?.toString(),
+        endsAt = endsAt?.toString(),
     )
 
 private fun VenueShort.displayAddress(): String? = formatVenueDisplayAddress(locationDisplay())
