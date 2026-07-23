@@ -289,6 +289,218 @@ class GuestVisitRoutesTest {
             assertEquals(HttpStatusCode.NotFound, sharedMemberDetail.status)
         }
 
+    @Test
+    fun `repeat plan uses current prices and skips unavailable or unsafe historical lines without mutation`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:guest-repeat-plan-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config = repeatTestConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val fixture = seedRepeatPlanFixture(jdbcUrl)
+            val token = issueToken(config, fixture.guestOne)
+            val ordersBefore = countRows(jdbcUrl, "orders")
+            val batchesBefore = countRows(jdbcUrl, "order_batches")
+            val response =
+                client.post("/api/guest/visits/${fixture.visitId}/repeat-plan") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "tableSessionId": ${fixture.currentTableSessionId},
+                          "tabId": ${fixture.personalTabId},
+                          "orderId": ${fixture.orderId}
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val payload = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            assertEquals(fixture.orderId, payload.getValue("sourceOrderId").jsonPrimitive.content.toLong())
+            assertEquals(fixture.venueId, payload.getValue("venueId").jsonPrimitive.content.toLong())
+            val eligible = payload.getValue("eligibleLines").jsonArray
+            assertEquals(1, eligible.size)
+            val line = eligible.single().jsonObject
+            assertEquals("Current Hookah", line.getValue("itemName").jsonPrimitive.content)
+            assertEquals(2, line.getValue("quantity").jsonPrimitive.content.toInt())
+            assertEquals("покрепче", line.getValue("preferenceNote").jsonPrimitive.content)
+            assertEquals(
+                150_000L,
+                line.getValue("currentItemPrice").jsonObject.getValue("amountMinor").jsonPrimitive.content.toLong(),
+            )
+            assertEquals(
+                175_000L,
+                line.getValue("currentUnitPrice").jsonObject.getValue("amountMinor").jsonPrimitive.content.toLong(),
+            )
+            assertEquals(
+                25_000L,
+                line
+                    .getValue("selectedOption")
+                    .jsonObject
+                    .getValue("currentPriceDelta")
+                    .jsonObject
+                    .getValue("amountMinor")
+                    .jsonPrimitive
+                    .content
+                    .toLong(),
+            )
+            assertEquals(
+                350_000L,
+                payload.getValue("currentTotal").jsonObject.getValue("amountMinor").jsonPrimitive.content.toLong(),
+            )
+            val skippedReasons =
+                payload
+                    .getValue("skippedLines")
+                    .jsonArray
+                    .map { item -> item.jsonObject.getValue("reason").jsonPrimitive.content }
+            assertEquals(
+                listOf("ITEM_UNAVAILABLE", "OPTION_UNAVAILABLE", "LEGACY_LINE_UNRESOLVED"),
+                skippedReasons,
+            )
+            val body = response.bodyAsText()
+            assertEquals(false, body.contains("Excluded Water"))
+            assertEquals(false, body.contains("Canceled Water"))
+            assertEquals(false, body.contains("Rejected Water"))
+            assertEquals(ordersBefore, countRows(jdbcUrl, "orders"))
+            assertEquals(batchesBefore, countRows(jdbcUrl, "order_batches"))
+        }
+
+    @Test
+    fun `repeat plan enforces visit ownership active same venue context and tab membership`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:guest-repeat-guards-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config = repeatTestConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val fixture = seedRepeatPlanFixture(jdbcUrl)
+            val guestOneToken = issueToken(config, fixture.guestOne)
+            val guestTwoToken = issueToken(config, fixture.guestTwo)
+
+            suspend fun postPlan(
+                token: String,
+                tableSessionId: Long,
+                tabId: Long,
+                visitId: Long = fixture.visitId,
+            ) = client.post("/api/guest/visits/$visitId/repeat-plan") {
+                headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """
+                    {
+                      "tableSessionId": $tableSessionId,
+                      "tabId": $tabId,
+                      "orderId": ${fixture.orderId}
+                    }
+                    """.trimIndent(),
+                )
+            }
+
+            assertEquals(
+                HttpStatusCode.OK,
+                postPlan(guestOneToken, fixture.currentTableSessionId, fixture.personalTabId).status,
+            )
+            assertEquals(
+                HttpStatusCode.OK,
+                postPlan(guestOneToken, fixture.currentTableSessionId, fixture.sharedTabId).status,
+            )
+            assertEquals(
+                HttpStatusCode.Forbidden,
+                postPlan(guestOneToken, fixture.currentTableSessionId, fixture.otherPersonalTabId).status,
+            )
+            assertEquals(
+                HttpStatusCode.NotFound,
+                postPlan(guestTwoToken, fixture.currentTableSessionId, fixture.otherPersonalTabId).status,
+            )
+            assertEquals(
+                HttpStatusCode.NotFound,
+                postPlan(guestOneToken, fixture.inactiveTableSessionId, fixture.inactiveTabId).status,
+            )
+            assertEquals(
+                HttpStatusCode.Forbidden,
+                postPlan(guestOneToken, fixture.wrongVenueTableSessionId, fixture.wrongVenueTabId).status,
+            )
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                postPlan(
+                    guestOneToken,
+                    fixture.currentTableSessionId,
+                    fixture.personalTabId,
+                    fixture.bookingOnlyVisitId,
+                ).status,
+            )
+        }
+
+    @Test
+    fun `repeat plan requires explicit order selection when a visit contains multiple completed orders`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:guest-repeat-order-selection-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config = repeatTestConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val fixture = seedRepeatPlanFixture(jdbcUrl, includeSecondOrder = true)
+            val token = issueToken(config, fixture.guestOne)
+            val withoutOrder =
+                client.post("/api/guest/visits/${fixture.visitId}/repeat-plan") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "tableSessionId": ${fixture.currentTableSessionId},
+                          "tabId": ${fixture.personalTabId}
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, withoutOrder.status)
+
+            val selected =
+                client.post("/api/guest/visits/${fixture.visitId}/repeat-plan") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "tableSessionId": ${fixture.currentTableSessionId},
+                          "tabId": ${fixture.personalTabId},
+                          "orderId": ${fixture.secondOrderId}
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, selected.status)
+            val payload = json.parseToJsonElement(selected.bodyAsText()).jsonObject
+            assertEquals(
+                fixture.secondOrderId,
+                payload.getValue("sourceOrderId").jsonPrimitive.content.toLong(),
+            )
+        }
+
+    private fun repeatTestConfig(jdbcUrl: String): MapApplicationConfig =
+        MapApplicationConfig(
+            "ktor.environment" to "test",
+            "db.jdbcUrl" to jdbcUrl,
+            "db.user" to "sa",
+            "db.password" to "",
+            "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+            "api.session.issuer" to "hookah",
+            "api.session.audience" to "miniapp",
+            "api.session.ttlSeconds" to "3600",
+        )
+
     private fun setPublicReviewUrl(
         jdbcUrl: String,
         venueId: Long,
@@ -691,6 +903,7 @@ class GuestVisitRoutesTest {
         batchItemId: Long,
         optionName: String,
         priceDeltaMinor: Long,
+        optionId: Long? = null,
     ) {
         connection.prepareStatement(
             """
@@ -700,12 +913,17 @@ class GuestVisitRoutesTest {
                 option_name_snapshot,
                 price_delta_minor_snapshot
             )
-            VALUES (?, NULL, ?, ?)
+            VALUES (?, ?, ?, ?)
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, batchItemId)
-            statement.setString(2, optionName)
-            statement.setLong(3, priceDeltaMinor)
+            if (optionId == null) {
+                statement.setNull(2, java.sql.Types.BIGINT)
+            } else {
+                statement.setLong(2, optionId)
+            }
+            statement.setString(3, optionName)
+            statement.setLong(4, priceDeltaMinor)
             statement.executeUpdate()
         }
     }
@@ -763,6 +981,377 @@ class GuestVisitRoutesTest {
                 keys.getLong(1)
             }
         }
+
+    private fun seedRepeatPlanFixture(
+        jdbcUrl: String,
+        includeSecondOrder: Boolean = false,
+    ): RepeatPlanFixture {
+        val guestOne = 3101L
+        val guestTwo = 3102L
+        val venueId = seedVenueAndUsers(jdbcUrl, guestOne, guestTwo)
+        val bookingOnlyVisitId = seedBookingVisit(jdbcUrl, venueId, guestOne, "SEATED")
+        return DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val categoryId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO menu_categories (venue_id, name, sort_order, is_active)
+                    VALUES (?, 'Repeat menu', 0, true)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            val currentItem = insertMenuItem(connection, venueId, categoryId, "Current Hookah", 150_000L)
+            val stoppedItem = insertMenuItem(connection, venueId, categoryId, "Stopped Water", 30_000L)
+            val optionItem = insertMenuItem(connection, venueId, categoryId, "Option Hookah", 100_000L)
+            val legacyItem = insertMenuItem(connection, venueId, categoryId, "Legacy Hookah", 90_000L)
+            val excludedItem = insertMenuItem(connection, venueId, categoryId, "Excluded Water", 10_000L)
+            val canceledItem = insertMenuItem(connection, venueId, categoryId, "Canceled Water", 10_000L)
+            val rejectedItem = insertMenuItem(connection, venueId, categoryId, "Rejected Water", 10_000L)
+            val currentOption = insertMenuOption(connection, venueId, currentItem, "Current Berry", 25_000L)
+            val unavailableOption = insertMenuOption(connection, venueId, optionItem, "Old Mint", 5_000L)
+
+            val historicalTableId = insertVenueTable(connection, venueId, 31)
+            val historicalSessionId =
+                insertTableSession(
+                    connection = connection,
+                    venueId = venueId,
+                    tableId = historicalTableId,
+                    active = false,
+                )
+            val orderId = insertClosedOrder(connection, venueId, historicalTableId, historicalSessionId, 301)
+            val historicalTabId = insertTab(connection, venueId, historicalSessionId, guestOne, "PERSONAL")
+            val mainBatch = insertBatch(connection, orderId, historicalTabId, guestOne)
+            val currentBatchItem = insertBatchItem(connection, mainBatch, currentItem, preferenceNote = "покрепче")
+            connection.prepareStatement("UPDATE order_batch_items SET qty = 2 WHERE id = ?").use { statement ->
+                statement.setLong(1, currentBatchItem)
+                statement.executeUpdate()
+            }
+            insertBatchItemOption(
+                connection = connection,
+                batchItemId = currentBatchItem,
+                optionName = "Historical Berry",
+                priceDeltaMinor = 10_000L,
+                optionId = currentOption,
+            )
+            insertBatchItem(connection, mainBatch, stoppedItem)
+            val unavailableOptionBatchItem = insertBatchItem(connection, mainBatch, optionItem)
+            insertBatchItemOption(
+                connection = connection,
+                batchItemId = unavailableOptionBatchItem,
+                optionName = "Old Mint",
+                priceDeltaMinor = 5_000L,
+                optionId = unavailableOption,
+            )
+            val legacyBatchItem = insertBatchItem(connection, mainBatch, legacyItem)
+            insertBatchItemOption(
+                connection = connection,
+                batchItemId = legacyBatchItem,
+                optionName = "Legacy option",
+                priceDeltaMinor = 3_000L,
+                optionId = null,
+            )
+            val excludedBatchItem = insertBatchItem(connection, mainBatch, excludedItem)
+            connection
+                .prepareStatement("UPDATE order_batch_items SET is_excluded = true WHERE id = ?")
+                .use { statement ->
+                    statement.setLong(1, excludedBatchItem)
+                    statement.executeUpdate()
+                }
+            val canceledBatchItem = insertBatchItem(connection, mainBatch, canceledItem)
+            connection
+                .prepareStatement("UPDATE order_batch_items SET item_status = 'CANCELED' WHERE id = ?")
+                .use { statement ->
+                    statement.setLong(1, canceledBatchItem)
+                    statement.executeUpdate()
+                }
+            insertGuestBatchIdempotency(
+                connection,
+                venueId,
+                historicalSessionId,
+                guestOne,
+                orderId,
+                mainBatch,
+                "repeat-main",
+            )
+            val rejectedBatch = insertBatch(connection, orderId, historicalTabId, guestOne)
+            insertBatchItem(connection, rejectedBatch, rejectedItem)
+            connection.prepareStatement("UPDATE order_batches SET status = 'REJECTED' WHERE id = ?").use { statement ->
+                statement.setLong(1, rejectedBatch)
+                statement.executeUpdate()
+            }
+            insertGuestBatchIdempotency(
+                connection,
+                venueId,
+                historicalSessionId,
+                guestOne,
+                orderId,
+                rejectedBatch,
+                "repeat-rejected",
+            )
+
+            val secondOrderId =
+                if (includeSecondOrder) {
+                    val nextOrderId =
+                        insertClosedOrder(connection, venueId, historicalTableId, historicalSessionId, 302)
+                    val nextBatch = insertBatch(connection, nextOrderId, historicalTabId, guestOne)
+                    insertBatchItem(connection, nextBatch, currentItem)
+                    insertGuestBatchIdempotency(
+                        connection,
+                        venueId,
+                        historicalSessionId,
+                        guestOne,
+                        nextOrderId,
+                        nextBatch,
+                        "repeat-second",
+                    )
+                    nextOrderId
+                } else {
+                    -1L
+                }
+
+            connection.prepareStatement("UPDATE menu_items SET is_available = false WHERE id = ?").use { statement ->
+                statement.setLong(1, stoppedItem)
+                statement.executeUpdate()
+            }
+            connection
+                .prepareStatement("UPDATE menu_item_options SET is_available = false WHERE id = ?")
+                .use { statement ->
+                    statement.setLong(1, unavailableOption)
+                    statement.executeUpdate()
+                }
+
+            val visitId =
+                seedVisit(
+                    connection = connection,
+                    venueId = venueId,
+                    userId = guestOne,
+                    source = "ORDER_CLOSED",
+                    tableSessionId = historicalSessionId,
+                    orderId = orderId,
+                )
+
+            val currentTableId = insertVenueTable(connection, venueId, 32)
+            val currentTableSessionId =
+                insertTableSession(
+                    connection = connection,
+                    venueId = venueId,
+                    tableId = currentTableId,
+                    active = true,
+                )
+            val personalTabId = insertTab(connection, venueId, currentTableSessionId, guestOne, "PERSONAL")
+            insertTabMember(connection, personalTabId, guestOne)
+            val otherPersonalTabId = insertTab(connection, venueId, currentTableSessionId, guestTwo, "PERSONAL")
+            insertTabMember(connection, otherPersonalTabId, guestTwo)
+            val sharedTabId = insertTab(connection, venueId, currentTableSessionId, guestTwo, "SHARED")
+            insertTabMember(connection, sharedTabId, guestTwo)
+            insertTabMember(connection, sharedTabId, guestOne)
+
+            val inactiveTableId = insertVenueTable(connection, venueId, 33)
+            val inactiveTableSessionId =
+                insertTableSession(
+                    connection = connection,
+                    venueId = venueId,
+                    tableId = inactiveTableId,
+                    active = false,
+                )
+            val inactiveTabId = insertTab(connection, venueId, inactiveTableSessionId, guestOne, "PERSONAL")
+            insertTabMember(connection, inactiveTabId, guestOne)
+
+            val wrongVenueId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venues (name, city, address, status)
+                    VALUES ('Wrong venue', 'Москва', 'Другая, 1', 'PUBLISHED')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            val wrongVenueTableId = insertVenueTable(connection, wrongVenueId, 1)
+            val wrongVenueTableSessionId =
+                insertTableSession(
+                    connection = connection,
+                    venueId = wrongVenueId,
+                    tableId = wrongVenueTableId,
+                    active = true,
+                )
+            val wrongVenueTabId =
+                insertTab(connection, wrongVenueId, wrongVenueTableSessionId, guestOne, "PERSONAL")
+            insertTabMember(connection, wrongVenueTabId, guestOne)
+
+            RepeatPlanFixture(
+                guestOne = guestOne,
+                guestTwo = guestTwo,
+                venueId = venueId,
+                visitId = visitId,
+                bookingOnlyVisitId = bookingOnlyVisitId,
+                orderId = orderId,
+                secondOrderId = secondOrderId,
+                currentTableSessionId = currentTableSessionId,
+                personalTabId = personalTabId,
+                otherPersonalTabId = otherPersonalTabId,
+                sharedTabId = sharedTabId,
+                inactiveTableSessionId = inactiveTableSessionId,
+                inactiveTabId = inactiveTabId,
+                wrongVenueTableSessionId = wrongVenueTableSessionId,
+                wrongVenueTabId = wrongVenueTabId,
+            )
+        }
+    }
+
+    private fun insertVenueTable(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableNumber: Int,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_tables (venue_id, table_number, is_active)
+            VALUES (?, ?, true)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setInt(2, tableNumber)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun insertTableSession(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableId: Long,
+        active: Boolean,
+    ): Long {
+        val now = Instant.now()
+        return connection.prepareStatement(
+            """
+            INSERT INTO table_sessions (
+                venue_id,
+                table_id,
+                started_at,
+                last_activity_at,
+                expires_at,
+                ended_at,
+                status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableId)
+            statement.setTimestamp(3, Timestamp.from(now.minusSeconds(3600)))
+            statement.setTimestamp(4, Timestamp.from(now))
+            statement.setTimestamp(5, Timestamp.from(if (active) now.plusSeconds(86_400) else now.minusSeconds(1)))
+            if (active) {
+                statement.setNull(6, java.sql.Types.TIMESTAMP_WITH_TIMEZONE)
+            } else {
+                statement.setTimestamp(6, Timestamp.from(now.minusSeconds(1)))
+            }
+            statement.setString(7, if (active) "ACTIVE" else "ENDED")
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+    }
+
+    private fun insertClosedOrder(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        displayNumber: Int,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO orders (venue_id, table_id, table_session_id, status, display_number, display_date)
+            VALUES (?, ?, ?, 'CLOSED', ?, ?)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableId)
+            statement.setLong(3, tableSessionId)
+            statement.setInt(4, displayNumber)
+            statement.setDate(5, Date.valueOf(LocalDate.now()))
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun insertMenuOption(
+        connection: java.sql.Connection,
+        venueId: Long,
+        itemId: Long,
+        name: String,
+        priceDeltaMinor: Long,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO menu_item_options (venue_id, item_id, name, price_delta_minor, is_available, sort_order)
+            VALUES (?, ?, ?, ?, true, 0)
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, itemId)
+            statement.setString(3, name)
+            statement.setLong(4, priceDeltaMinor)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                keys.next()
+                keys.getLong(1)
+            }
+        }
+
+    private fun countRows(
+        jdbcUrl: String,
+        tableName: String,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM $tableName").use { result ->
+                    result.next()
+                    result.getInt(1)
+                }
+            }
+        }
+
+    private data class RepeatPlanFixture(
+        val guestOne: Long,
+        val guestTwo: Long,
+        val venueId: Long,
+        val visitId: Long,
+        val bookingOnlyVisitId: Long,
+        val orderId: Long,
+        val secondOrderId: Long,
+        val currentTableSessionId: Long,
+        val personalTabId: Long,
+        val otherPersonalTabId: Long,
+        val sharedTabId: Long,
+        val inactiveTableSessionId: Long,
+        val inactiveTabId: Long,
+        val wrongVenueTableSessionId: Long,
+        val wrongVenueTabId: Long,
+    )
 
     private data class ClosedOrderVisitFixture(
         val guestOneVisitId: Long,

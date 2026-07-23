@@ -16,6 +16,12 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestVisitOrderDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitOrderItemDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitOrderItemOptionDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVisitPromotionDiscountDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitRepeatEligibleLineDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitRepeatMoneyDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitRepeatOptionDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitRepeatPlanRequest
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitRepeatPlanResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestVisitRepeatSkippedLineDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitBooking
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitDetail
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitHistoryItem
@@ -45,6 +51,7 @@ import java.util.Locale
 fun Route.guestVisitRoutes(
     visitRepository: VisitRepository,
     visitFeedbackRepository: VisitFeedbackRepository,
+    repeatOrderResolver: RepeatOrderResolver,
     analyticsEventRepository: AnalyticsEventRepository? = null,
     venueSettingsRepository: VenueSettingsRepository? = null,
 ) {
@@ -68,6 +75,32 @@ fun Route.guestVisitRoutes(
             val feedback = visitFeedbackRepository.findGuestFeedback(visitId = visitId, userId = userId)
             val publicReviewUrl = venueSettingsRepository.publicReviewUrlForRatingFive(feedback)
             call.respond(GuestVisitDetailResponse(visit = visit.toDto(feedback.toGuestFeedbackDto(publicReviewUrl))))
+        }
+
+        post("/{visitId}/repeat-plan") {
+            val userId = call.requireUserId()
+            val visitId =
+                call.parameters["visitId"]?.toLongOrNull()?.takeIf { it > 0 }
+                    ?: throw InvalidInputException("visitId must be a positive number")
+            val request = call.receive<GuestVisitRepeatPlanRequest>()
+            if (request.tableSessionId <= 0) {
+                throw InvalidInputException("tableSessionId must be positive")
+            }
+            if (request.tabId <= 0) {
+                throw InvalidInputException("tabId must be positive")
+            }
+            if (request.orderId != null && request.orderId <= 0) {
+                throw InvalidInputException("orderId must be positive")
+            }
+            val plan =
+                repeatOrderResolver.resolveForGuest(
+                    userId = userId,
+                    visitId = visitId,
+                    tableSessionId = request.tableSessionId,
+                    tabId = request.tabId,
+                    orderId = request.orderId,
+                )
+            call.respond(plan.toDto())
         }
 
         post("/{visitId}/feedback") {
@@ -227,4 +260,61 @@ private fun GuestVisitOrderItemOption.toDto(): GuestVisitOrderItemOptionDto =
     GuestVisitOrderItemOptionDto(
         name = name,
         priceDeltaMinor = priceDeltaMinor,
+    )
+
+private fun RepeatOrderPlan.toDto(): GuestVisitRepeatPlanResponse =
+    GuestVisitRepeatPlanResponse(
+        eligibleLines =
+            eligibleLines.map { line ->
+                GuestVisitRepeatEligibleLineDto(
+                    itemId = line.itemId,
+                    itemName = line.itemName,
+                    quantity = line.quantity,
+                    selectedOption =
+                        line.selectedOption?.let { option ->
+                            GuestVisitRepeatOptionDto(
+                                optionId = option.optionId,
+                                name = option.name,
+                                currentPriceDelta =
+                                    GuestVisitRepeatMoneyDto(
+                                        amountMinor = option.priceDeltaMinor,
+                                        currency = line.currency,
+                                    ),
+                            )
+                        },
+                    preferenceNote = line.preferenceNote,
+                    currentItemPrice =
+                        GuestVisitRepeatMoneyDto(
+                            amountMinor = line.currentItemPriceMinor,
+                            currency = line.currency,
+                        ),
+                    currentUnitPrice =
+                        GuestVisitRepeatMoneyDto(
+                            amountMinor = line.currentUnitPriceMinor,
+                            currency = line.currency,
+                        ),
+                    currentLineTotal =
+                        GuestVisitRepeatMoneyDto(
+                            amountMinor = line.currentLineTotalMinor,
+                            currency = line.currency,
+                        ),
+                )
+            },
+        skippedLines =
+            skippedLines.map { line ->
+                GuestVisitRepeatSkippedLineDto(
+                    itemName = line.itemName,
+                    quantity = line.quantity,
+                    selectedOptionName = line.selectedOptionName,
+                    reason = line.reason.name,
+                    message = line.reason.message,
+                )
+            },
+        currentTotal =
+            GuestVisitRepeatMoneyDto(
+                amountMinor = currentTotalMinor,
+                currency = currency,
+            ),
+        sourceOrderId = sourceOrderId,
+        venueId = venueId,
     )

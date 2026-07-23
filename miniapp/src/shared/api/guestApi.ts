@@ -26,6 +26,8 @@ import type {
   GuestShiftExtensionRequest,
   GuestVisitFeedbackSubmitRequest,
   GuestVisitFeedbackSubmitResponse,
+  GuestVisitRepeatPlanRequest,
+  GuestVisitRepeatPlanResponse,
   GuestTabResponse,
   GuestTabsResponse,
   GuestVisitDetailResponse,
@@ -815,6 +817,45 @@ export async function guestGetVisitDetail(
     backendUrl,
     `/api/guest/visits/${encodeURIComponent(String(visitId))}`,
     { signal },
+    deps
+  )
+}
+
+export async function guestBuildVisitRepeatPlan(
+  backendUrl: string,
+  visitId: number,
+  payload: GuestVisitRepeatPlanRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestVisitRepeatPlanResponse>> {
+  if (!Number.isFinite(visitId) || !Number.isInteger(visitId) || visitId <= 0) {
+    return invalidPositiveIdResult('visitId')
+  }
+  if (
+    !Number.isFinite(payload.tableSessionId) ||
+    !Number.isInteger(payload.tableSessionId) ||
+    payload.tableSessionId <= 0
+  ) {
+    return invalidPositiveIdResult('tableSessionId')
+  }
+  if (!Number.isFinite(payload.tabId) || !Number.isInteger(payload.tabId) || payload.tabId <= 0) {
+    return invalidPositiveIdResult('tabId')
+  }
+  if (
+    payload.orderId != null &&
+    (!Number.isFinite(payload.orderId) || !Number.isInteger(payload.orderId) || payload.orderId <= 0)
+  ) {
+    return invalidPositiveIdResult('orderId')
+  }
+  return requestApi<GuestVisitRepeatPlanResponse>(
+    backendUrl,
+    `/api/guest/visits/${encodeURIComponent(String(visitId))}/repeat-plan`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
     deps
   )
 }

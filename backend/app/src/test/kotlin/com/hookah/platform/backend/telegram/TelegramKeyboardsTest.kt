@@ -174,6 +174,23 @@ class TelegramKeyboardsTest {
     }
 
     @Test
+    fun `guest visit detail actions require explicit order selection for multiple orders`() {
+        val buttons =
+            TelegramKeyboards
+                .inlineGuestVisitDetailActions(
+                    visitId = 10L,
+                    repeatOrders = listOf(20L to "заказ №20", 21L to "заказ №21"),
+                ).inlineKeyboard
+                .flatten()
+
+        assertEquals("🔁 Повторить заказ №20", buttons[0].text)
+        assertEquals("visit_repeat_ask:10:20", buttons[0].callbackData)
+        assertEquals("🔁 Повторить заказ №21", buttons[1].text)
+        assertEquals("visit_repeat_ask:10:21", buttons[1].callbackData)
+        assertEquals("visit_history_back", buttons[2].callbackData)
+    }
+
+    @Test
     fun `guest visit repeat confirmation actions add or return to visit`() {
         val buttons = TelegramKeyboards.inlineGuestVisitRepeatConfirmActions(visitId = 10L).inlineKeyboard.flatten()
 

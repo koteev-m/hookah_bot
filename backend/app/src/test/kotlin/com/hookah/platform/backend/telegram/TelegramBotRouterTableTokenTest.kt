@@ -9602,9 +9602,9 @@ class TelegramBotRouterTableTokenTest {
                     match { text ->
                         text.contains("Повторить заказ?") &&
                             text.contains("• Кальян обычный ×1 — 1 100 ₽") &&
-                            text.contains("Цены актуальные на сейчас.") &&
+                            text.contains("Добавим доступные позиции в корзину по текущим ценам.") &&
                             text.contains("Не сможем повторить:") &&
-                            text.contains("• Вода ×1 — сейчас недоступно")
+                            text.contains("• Вода ×1 — Позиция больше недоступна.")
                     },
                     match {
                         it is InlineKeyboardMarkup &&
@@ -9647,7 +9647,7 @@ class TelegramBotRouterTableTokenTest {
                         it.contains("✅ Добавили в корзину.") &&
                             it.contains("Проверьте состав и оформите заказ.") &&
                             it.contains("Не сможем повторить:") &&
-                            it.contains("• Вода ×1 — сейчас недоступно")
+                            it.contains("• Вода ×1 — Позиция больше недоступна.")
                     },
                     null,
                 )

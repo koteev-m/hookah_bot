@@ -96,6 +96,7 @@ type ActiveOrderFixtureOptions = {
 type GuestVisitHistoryFixture = {
   items: Array<Record<string, unknown>>
   details: Record<number, Record<string, unknown>>
+  repeatPlans?: Record<number, Record<number, Record<string, unknown>>>
 }
 
 type ShiftExtensionSettings = {
@@ -743,6 +744,10 @@ async function mockGuestApi(
     contentType: string | undefined
     body: { tableToken: string; tableSessionId: number }
   }> = []
+  const repeatPlanRequests: Array<{
+    visitId: number
+    body: { tableSessionId: number; tabId: number; orderId?: number | null }
+  }> = []
   let submittedOrderItems: AddBatchItemPayload[] = []
   let activeBillRequestId: number | null = null
   const bookingUpdateRequests: Array<{ venueId: number; bookingId: number; scheduledAt: string; partySize?: number | null; comment?: string | null }> = []
@@ -1085,6 +1090,34 @@ async function mockGuestApi(
       return
     }
 
+    const repeatPlanMatch = path.match(/^\/api\/guest\/visits\/(\d+)\/repeat-plan$/)
+    if (repeatPlanMatch && request.method() === 'POST') {
+      const visitId = Number(repeatPlanMatch[1])
+      const body = (await request.postDataJSON()) as {
+        tableSessionId: number
+        tabId: number
+        orderId?: number | null
+      }
+      repeatPlanRequests.push({ visitId, body })
+      const visitPlans = visitHistory.repeatPlans?.[visitId]
+      const plan =
+        body.orderId != null
+          ? visitPlans?.[body.orderId]
+          : Object.values(visitPlans ?? {}).length === 1
+            ? Object.values(visitPlans ?? {})[0]
+            : undefined
+      if (plan) {
+        await route.fulfill(jsonResponse(plan))
+      } else {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Repeat plan not found' } })
+        })
+      }
+      return
+    }
+
     const detailMatch = path.match(/^\/api\/guest\/visits\/(\d+)$/)
     if (detailMatch && request.method() === 'GET') {
       const visitId = Number(detailMatch[1])
@@ -1418,6 +1451,7 @@ async function mockGuestApi(
     getAddBatchRequests: () => addBatchRequests,
     getBillRequestRequests: () => billRequestRequests,
     getTableSessionEndRequests: () => tableSessionEndRequests,
+    getRepeatPlanRequests: () => repeatPlanRequests,
     getStaffCallRequests: () => staffCallRequests,
     setStaffCallStatuses: (items: typeof staffCallStatuses) => {
       staffCallStatuses = items
@@ -4273,6 +4307,7 @@ test('guest history shows completed visits and safe closed order detail', async 
 
   await bookingOnlyVisit.getByRole('button', { name: 'Подробнее' }).click()
   await expect(page.getByText('Посещение по брони. Заказов в этом визите нет.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Повторить заказ' })).toHaveCount(0)
   await expect(page.getByText('Можно оценить бронь, встречу и обслуживание.')).toBeVisible()
   await page.getByRole('button', { name: 'Оценить визит' }).click()
   await expect(page.getByText('Можно оценить бронь, встречу и обслуживание.')).toBeVisible()
@@ -4307,6 +4342,11 @@ test('guest history shows completed visits and safe closed order detail', async 
   await expect(closedOrderVisit).toBeVisible()
 
   await closedOrderVisit.getByRole('button', { name: 'Подробнее' }).click()
+  await expect(page.getByRole('button', { name: 'Повторить заказ' })).toBeVisible()
+  await page.getByRole('button', { name: 'Повторить заказ' }).click()
+  await expect(
+    page.getByText('Чтобы повторить заказ, отсканируйте QR на столе в этом заведении.')
+  ).toBeVisible()
   await page.getByRole('button', { name: 'Оценить визит' }).click()
   const closedFeedbackSubmit = page.getByRole('button', { name: 'Сохранить отзыв' })
   await expect(closedFeedbackSubmit).toBeDisabled()
@@ -4364,6 +4404,210 @@ test('guest history shows completed visits and safe closed order detail', async 
   await expect(page.getByText('Загружаем данные...')).toHaveCount(0)
   await page.getByRole('button', { name: '← Назад к истории' }).click()
   await expect(missingDetailVisit).toBeVisible()
+})
+
+test('guest repeats eligible history lines into the current cart only after confirmation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    menuCategories: [
+      {
+        id: 20,
+        name: 'Кальянное меню',
+        categoryType: 'HOOKAH',
+        items: [
+          {
+            id: 200,
+            name: 'Double Apple',
+            priceMinor: 150000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'HOOKAH',
+            options: [
+              {
+                id: 301,
+                name: 'Ягодный',
+                priceDeltaMinor: 25000,
+                isAvailable: true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    visitHistory: {
+      items: [
+        {
+          visitId: 21,
+          venueId: 1,
+          venueName: 'Микс',
+          occurredAt: '2030-02-01T18:30:00Z',
+          source: 'order_closed',
+          totalMinor: 260000,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№55']
+        }
+      ],
+      details: {
+        21: {
+          visitId: 21,
+          venueId: 1,
+          venueName: 'Микс',
+          occurredAt: '2030-02-01T18:30:00Z',
+          source: 'order_closed',
+          booking: null,
+          orders: [
+            {
+              orderId: 904,
+              displayNumber: 55,
+              items: [
+                {
+                  itemId: 200,
+                  itemName: 'Double Apple',
+                  qty: 2,
+                  selectedOption: { name: 'Старый ягодный', priceDeltaMinor: 10000 },
+                  preferenceNote: 'покрепче',
+                  priceMinor: 130000,
+                  currency: 'RUB',
+                  totalMinor: 260000
+                }
+              ],
+              totalMinor: 260000,
+              currency: 'RUB',
+              promotionDiscounts: []
+            }
+          ],
+          totalMinor: 260000,
+          currency: 'RUB',
+          feedback: { eligible: false, submitted: false }
+        }
+      },
+      repeatPlans: {
+        21: {
+          904: {
+            eligibleLines: [
+              {
+                itemId: 200,
+                itemName: 'Double Apple',
+                quantity: 2,
+                selectedOption: {
+                  optionId: 301,
+                  name: 'Ягодный',
+                  currentPriceDelta: { amountMinor: 25000, currency: 'RUB' }
+                },
+                preferenceNote: 'покрепче',
+                currentItemPrice: { amountMinor: 150000, currency: 'RUB' },
+                currentUnitPrice: { amountMinor: 175000, currency: 'RUB' },
+                currentLineTotal: { amountMinor: 350000, currency: 'RUB' }
+              }
+            ],
+            skippedLines: [
+              {
+                itemName: 'Вода',
+                quantity: 1,
+                selectedOptionName: null,
+                reason: 'ITEM_UNAVAILABLE',
+                message: 'Позиция больше недоступна.'
+              }
+            ],
+            currentTotal: { amountMinor: 350000, currency: 'RUB' },
+            sourceOrderId: 904,
+            venueId: 1
+          }
+        }
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'Подробнее' }).click()
+
+  const repeatButton = page.getByRole('button', { name: 'Повторить заказ' })
+  await expect(repeatButton).toBeVisible()
+  await repeatButton.evaluate((button: HTMLButtonElement) => {
+    button.click()
+    button.click()
+  })
+
+  await expect(page.getByText('Добавим доступные позиции в корзину по текущим ценам.')).toBeVisible()
+  await expect(page.getByText(/Double Apple · Ягодный · Пожелание: покрепче ×2/)).toBeVisible()
+  await expect(page.getByText(/Вода ×1 — Позиция больше недоступна\./)).toBeVisible()
+  await expect(page.getByText(/Итого по текущим ценам:/)).toContainText(/3[\s\u00a0]500/)
+  expect(api.getRepeatPlanRequests()).toEqual([
+    {
+      visitId: 21,
+      body: { tableSessionId: 77, tabId: 88 }
+    }
+  ])
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+
+  const addButton = page.getByRole('button', { name: 'Добавить в корзину' })
+  await addButton.click()
+  await addButton.click({ force: true })
+  await expect(page.getByText('Доступные позиции добавлены в корзину.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Корзина (2)' })).toBeVisible()
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+
+  await page.getByRole('button', { name: 'Перейти в корзину' }).click()
+  const repeatedLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Ягодный' })
+  await expect(repeatedLine).toContainText('Пожелание: покрепче')
+  await expect(repeatedLine.locator('input')).toHaveValue('2')
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+})
+
+test('guest repeat blocks a current table context from another venue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    visitHistory: {
+      items: [
+        {
+          visitId: 22,
+          venueId: 2,
+          venueName: 'Другое место',
+          occurredAt: '2030-02-02T18:30:00Z',
+          source: 'order_closed',
+          totalMinor: 100000,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№56']
+        }
+      ],
+      details: {
+        22: {
+          visitId: 22,
+          venueId: 2,
+          venueName: 'Другое место',
+          occurredAt: '2030-02-02T18:30:00Z',
+          source: 'order_closed',
+          orders: [
+            {
+              orderId: 905,
+              displayNumber: 56,
+              items: [{ itemId: 200, itemName: 'Кальян', qty: 1 }],
+              promotionDiscounts: []
+            }
+          ],
+          feedback: { eligible: false, submitted: false }
+        }
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'Подробнее' }).click()
+  await page.getByRole('button', { name: 'Повторить заказ' }).click()
+
+  await expect(page.getByText('Этот заказ можно повторить только в том же заведении.')).toBeVisible()
+  expect(api.getRepeatPlanRequests()).toHaveLength(0)
+  expect(api.getAddBatchRequests()).toHaveLength(0)
 })
 
 test('table context with active order opens category-first order menu and hides pre-visit actions', async ({ page }) => {

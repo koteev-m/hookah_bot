@@ -83,6 +83,7 @@ data class GuestVisitPromotionDiscount(
 )
 
 data class GuestVisitOrderItemOption(
+    val optionId: Long? = null,
     val name: String,
     val priceDeltaMinor: Long,
 )
@@ -545,6 +546,7 @@ class VisitRepository(private val dataSource: DataSource?) {
             SELECT obi.menu_item_id,
                    COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
                    SUM(obi.qty) AS qty,
+                   obiop.menu_item_option_id,
                    obiop.option_name_snapshot,
                    obiop.price_delta_minor_snapshot,
                    obi.preference_note,
@@ -574,6 +576,7 @@ class VisitRepository(private val dataSource: DataSource?) {
                      mi.name,
                      mi.price_minor,
                      mi.currency,
+                     obiop.menu_item_option_id,
                      obiop.option_name_snapshot,
                      obiop.price_delta_minor_snapshot,
                      obi.preference_note,
@@ -614,6 +617,7 @@ class VisitRepository(private val dataSource: DataSource?) {
     private fun java.sql.ResultSet.toGuestVisitOrderItemOption(): GuestVisitOrderItemOption? {
         val name = getString("option_name_snapshot")?.takeIf { it.isNotBlank() } ?: return null
         return GuestVisitOrderItemOption(
+            optionId = getLong("menu_item_option_id").let { if (wasNull()) null else it },
             name = name,
             priceDeltaMinor = getLong("price_delta_minor_snapshot"),
         )

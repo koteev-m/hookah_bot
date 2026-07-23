@@ -37,9 +37,9 @@
 - Venue Mini App booking card opens a persisted booking conversation thread: venue messages, Guest Bot replies and Guest Mini App replies share one source of truth; staff chat remains a notification mirror. M4A staging smoke passed after UX polish. M4B/M4C unified `Сообщения` inbox and resolve/reopen lifecycle are CLOSED after staging smoke: thread cards show context/status/last message/unread, active/resolved filters work, and explicit resolve/reopen does not mutate booking lifecycle.
 - Guest Communication UX / Support Tickets MVP is CLOSED after smoke: canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Guest nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` remains `BOOKING_CHAT`; Support tickets are separated through `SUPPORT_TICKET`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; table context keeps `Вызвать персонал` as the live operational flow; support/venue chat creation and replies do not post to staff-chat and guest create/reply routes are rate-limited.
 - Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; onboarding/placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
-- Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are DONE / MVP / staging-smoke-passed. Favorites covers catalog/detail mutations, Account list, current-user isolation, unavailable filtering/restoration, shared Bot/Mini App storage, Telegram Profile/Catalog entrypoints and source-aware Back. The manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; favorite menu items/options, recommendations/frequent items, repeat templates, simple promotions, notification opt-in, favorites-based promotions, loyalty and broader analytics remain future/partial.
+- Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are DONE / MVP / staging-smoke-passed. Repeat as Template Phase 1 is DONE / MVP / LOCAL SMOKE PASSED and awaits CI/staging closure. Favorites covers catalog/detail mutations, Account list, current-user isolation, unavailable filtering/restoration, shared Bot/Mini App storage, Telegram Profile/Catalog entrypoints and source-aware Back. The manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; persistent templates, favorite menu items/options, recommendations/frequent items, simple promotions, notification opt-in, favorites-based promotions, loyalty and broader analytics remain future/partial.
 - Staff profiles, today shift and future staff tips are canonical in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: Phase 1 `STAFF_PROFILE + SHIFT_TODAY` is done/local-smoke-passed with no payments; Phase 2 may add external staff tip link + `staff_tip_intent`; provider/direct payout, Telegram Stars and crypto are not MVP.
-- Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed; force-close policy/audit, some DB-level uniqueness nuances, repeat/loyalty/preorder and broader analytics remain partial/future.
+- Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is local-smoke-passed; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
 - Security/RBAC docs are current in `docs/SECURITY_RBAC_MATRIX.md`: roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a product role.
 - Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity is smoke-closed; broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
@@ -170,7 +170,7 @@ Done:
 
 Remaining P1/P2:
 
-- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: favorite menu items/options, recommendations/frequent items, repeat templates, simple venue promotions, notification opt-in, favorites-based promotions and loyalty; venue favorites, visit/order history and Post-Visit Feedback are DONE / staging-smoke-passed and stay in regression;
+- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 awaits CI/staging closure; favorite menu items/options, recommendations/frequent items, persistent templates, simple venue promotions, notification opt-in, favorites-based promotions and loyalty remain future; venue favorites, visit/order history and Post-Visit Feedback are DONE / staging-smoke-passed and stay in regression;
 - richer profile/promotions/loyalty polish in Mini App only after the underlying product/accounting rules are implemented and smoked;
 - richer active order display with totals/promo/loyalty parity where needed;
 - booking create/confirm/change/cancel smoke passed for current staging MVP; keep it in regression smoke after future booking changes.
@@ -698,14 +698,15 @@ Recently closed:
 - Staff/Manager invite deep-link sharing polish: **CLOSED / staging smoke passed**. Telegram invite messages use accepted `staff_invite_<code>` deep-link payloads and copy-text buttons where supported; Venue Mini App invite result has one selectable link field, copy-link and Telegram-share actions, a secondary fallback command and no risky self-open action; Manager/Staff acceptance and billing-control denial smoke passed.
 - Guest Communication UX / Support Tickets MVP: **CLOSED / smoke passed**. `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate; guest `Чаты` / `Помощь` labels are live; catalog/venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; support tickets have Guest/Venue/Platform routing, Staff denial, staff-chat exclusion and guest rate limits.
 - Booking Arrival Guard / Staff-Chat Booking Buttons: **CLOSED / staging smoke passed**. Arrival terminal actions are visible/accepted only from `CONFIRMED`; `PENDING`, `CHANGED` and terminal statuses do not show or accept seat/no-show; staff-chat booking notifications are state-aware; stale/no-permission callbacks answer safely; `BOOKING_CHAT` replies do not post to staff-chat.
+- Repeat as Template Phase 1: **DONE / MVP / LOCAL SMOKE PASSED; CI/STAGING PENDING**. One shared `RepeatOrderResolver` serves Guest Mini App and Telegram, builds a transient plan for one own completed order, requires an active same-venue table session plus an authorized personal/joined shared tab, re-resolves current item/option availability and prices, and adds eligible lines only to the local cart after explicit confirmation. No persistent template, order, batch or staff-chat notification is created.
 
-Recommended next runtime block:
+Recommended next release gate:
 
-1. **Repeat as Template Phase 1**.
-   - Select one completed own visit/order and build a transient repeat plan.
-   - Do not create an order without the same venue's active table context and selected authorized tab.
-   - Re-resolve current items/options/prices, skip unavailable lines with clear copy and add only eligible lines to the current cart.
-   - Keep final preview/submit on the existing server-owned order path.
+1. **Repeat as Template Phase 1 CI and staging smoke**.
+   - Keep the local backend gate, compile, ktlint, Mini App build and full browser e2e `64/64` green in Actions.
+   - Smoke own/foreign History, booking-only and multi-order selection, no-context/wrong-venue denial, personal/shared/unauthorized tabs and unavailable/legacy option skips.
+   - Confirm current prices/options/quantity/note in preview/cart and verify that repeat creates no order, batch or staff-chat event.
+   - Re-smoke Telegram repeat parity against the shared resolver.
 
 Guest Favorites Phase 1 is staging-closed. Current code also shows the former Order Session Tab Core Hardening recommendation is already covered by table-session active-order uniqueness, tab-scoped Guest order routes and privacy regression foundations. Do not reopen that closed core without concrete regression evidence.
 
@@ -726,7 +727,7 @@ Not selected as implementation right now:
 
 - remaining booking regression smoke, including real two-account Guest Mini App isolation and schedule validation;
 - remaining backend-backed venue settings slices beyond booking hold, shift extension, public card/location and schedule;
-- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 is the selected next bounded slice; favorite menu items/options, recommendations/frequent items, simple venue promotions, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
+- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 is local-smoke-passed and awaits CI/staging closure; favorite menu items/options, recommendations/frequent items, simple venue promotions, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option snapshots and stale availability validation in regression, and resolve broader menu constructor/media/top-list/shift-check/audit coverage before calling menu complete;
 - Venue Mode operating model from `docs/VENUE_OPERATIONS.md`: keep orders, bill/tabs, staff calls, bookings, stop-list, staff-chat source-of-truth policy and role-specific nav/API denial in regression before adding new venue screens;
 - Booking lifecycle model from `docs/BOOKING_LIFECYCLE.md`: keep booking create/list, Venue queue actions, confirmed-only Staff arrival/no-show split, hold/deadline display, booking chat separation, support routing and reminder opt-in behavior in regression before adding preorder/history/loyalty.
@@ -924,27 +925,29 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 ## 12. Next Development Block
 
-Latest closed blocks: Staff profiles + today on shift Phase 1; Staff-call guest-visible CANCELLED finishing patch; Booking Arrival Guard / Staff-Chat Booking Buttons; Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish; Guest Communication UX / Support Tickets MVP; Guest History Foundation MVP; Post-Visit Feedback MVP plus public-review/follow-up smoke-fix; Guest Favorites Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`).
+Latest closed blocks: Staff profiles + today on shift Phase 1; Staff-call guest-visible CANCELLED finishing patch; Booking Arrival Guard / Staff-Chat Booking Buttons; Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish; Guest Communication UX / Support Tickets MVP; Guest History Foundation MVP; Post-Visit Feedback MVP plus public-review/follow-up smoke-fix; Guest Favorites Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`). Repeat as Template Phase 1 is implemented with `LOCAL SMOKE PASSED`, but remains open for CI/staging release closure.
 
-Recommended next bounded milestone: **Repeat as Template Phase 1**. Reuse the existing Telegram repeat flow and current-user History detail, expose a shared safe repeat plan to Mini App, require the same venue's active table context plus selected authorized tab, re-resolve current items/options/prices and add only eligible lines to the cart. No order is created until the existing preview/add-batch flow is used.
+Recommended next bounded milestone: **Repeat as Template Phase 1 CI/staging closure**. The shared resolver, authenticated repeat-plan API, Mini App preview/cart UX and Telegram parity are implemented. No order is created until the existing preview/add-batch flow is used.
 
 Why not reopen full bill / display order number in Mini App:
 - Guest Bill / Display-Number / Full-Bill Parity is already CLOSED / staging smoke passed in current roadmap and Venue Operations docs;
 - old audit rows that still say full bill/display/discounts/exclusions are partial are historical notes, not current backlog;
 - keep bill/display-number in regression and reopen only on concrete regression evidence.
 
-Why Repeat is bounded now:
-- current Telegram runtime already reads the current user's visit, requires the same venue's active table context, re-resolves current menu items/prices, skips unavailable items and adds eligible lines to a draft cart;
-- Mini App History already exposes own completed order lines, while its cart supports item/option/note identities;
-- existing preview/add-batch routes enforce active `tableSessionId`, tab membership, venue availability, current item/option validity and server-owned pricing;
+Implemented Repeat boundaries:
+- `POST /api/guest/visits/{visitId}/repeat-plan` accepts only `tableSessionId`, `tabId` and optional `orderId`; authenticated user identity and current prices remain server-owned;
+- current Telegram and Mini App flows share `RepeatOrderResolver`, including item/option availability and conservative whole-line skip rules;
+- Mini App History keeps multiple orders explicit, previews eligible/skipped lines and adds only confirmed eligible item/option/note identities to the local cart;
+- existing preview/add-batch routes remain the later order-creation boundary and revalidate active `tableSessionId`, tab membership, venue availability, current item/option validity and server-owned pricing;
 - the old active-order-by-table risk and H2/PostgreSQL active-order/personal-tab uniqueness fidelity are closed; keep them in regression instead of reopening them.
 
-Acceptance target for Repeat as Template Phase 1:
+Local acceptance evidence for Repeat as Template Phase 1:
 - only the current user's completed visit/order can become a template;
 - without same-venue active table context and selected authorized tab, no cart/order mutation occurs;
 - current unavailable/stopped items or invalid options are skipped with human copy; current prices are shown;
 - eligible lines are added to the current cart, and order creation remains behind existing preview/add-batch confirmation;
-- current order/session/tab, Favorites, History and Post-Visit Feedback privacy/RBAC regressions remain green.
+- current order/session/tab, Favorites, History and Post-Visit Feedback privacy/RBAC regressions remain green;
+- focused backend tests, compile, ktlint, Mini App build and full browser e2e `64/64` passed locally. Green Actions and staging smoke are still required.
 
 Not included: persistent repeat-template storage, favorite menu items/options, frequent-item aggregation, recommendations, substitutions, promotions, notifications, loyalty, preorder or automatic order creation.
 

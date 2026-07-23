@@ -10,6 +10,8 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
+import com.hookah.platform.backend.miniapp.guest.RepeatOrderPlan
+import com.hookah.platform.backend.miniapp.guest.RepeatOrderResolver
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
@@ -270,6 +272,12 @@ class TelegramBotRouter(
     private val shiftExtensionRepository: ShiftExtensionRepository = ShiftExtensionRepository(null),
     private val supportThreadRepository: SupportThreadRepository? = null,
     private val bookingRemindersEnabled: Boolean = true,
+    private val repeatOrderResolver: RepeatOrderResolver =
+        RepeatOrderResolver(
+            visitRepository = visitRepository,
+            guestMenuRepository = guestMenuRepository,
+            guestTabsRepository = guestTabsRepository,
+        ),
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val aiTelegramHandler =
@@ -437,28 +445,11 @@ class TelegramBotRouter(
         val name: String,
         val optionId: Long?,
         val optionName: String?,
+        val preferenceNote: String?,
         val priceMinor: Long,
         val currency: String,
         val qty: Int,
         val orderSeq: Long,
-    )
-
-    private data class GuestVisitRepeatPlan(
-        val repeatableItems: List<GuestVisitRepeatItem>,
-        val unavailableItems: List<GuestVisitRepeatUnavailableItem>,
-    )
-
-    private data class GuestVisitRepeatItem(
-        val itemId: Long,
-        val name: String,
-        val qty: Int,
-        val priceMinor: Long,
-        val currency: String,
-    )
-
-    private data class GuestVisitRepeatUnavailableItem(
-        val name: String,
-        val reason: String,
     )
 
     private data class BotBookingDraft(
@@ -3417,21 +3408,35 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Визит не найден.")
             return
         }
-        val repeatPlan = loadGuestVisitRepeatPlanOrNull(detail)
-        val canRepeat =
-            repeatPlan?.repeatableItems?.isNotEmpty() == true &&
-                resolveRepeatGuestContext(
-                    chatId = chatId,
-                    userId = userId,
-                    visitVenueId = detail.venueId,
-                    notify = false,
-                ) != null
+        val repeatPlans = loadGuestVisitRepeatPlansOrEmpty(detail)
+        val repeatContextAvailable =
+            resolveRepeatGuestContext(
+                chatId = chatId,
+                userId = userId,
+                visitVenueId = detail.venueId,
+                notify = false,
+            ) != null
+        val repeatOrders =
+            if (repeatContextAvailable) {
+                repeatPlans
+                    .filter { plan -> plan.eligibleLines.isNotEmpty() }
+                    .map { plan ->
+                        val sourceOrder = detail.orders.first { order -> order.orderId == plan.sourceOrderId }
+                        val repeatOrderLabel =
+                            sourceOrder.displayNumber?.let { number -> "заказ №$number" }
+                                ?: "заказ #${plan.sourceOrderId}"
+                        plan.sourceOrderId to
+                            repeatOrderLabel
+                    }
+            } else {
+                emptyList()
+            }
         enqueueMessage(
             chatId,
             buildGuestVisitDetailText(detail, resolveVenueZoneId(detail.venueId)),
             TelegramKeyboards.inlineGuestVisitDetailActions(
                 visitId = detail.visitId,
-                canRepeat = canRepeat,
+                repeatOrders = repeatOrders,
             ),
         )
     }
@@ -3441,11 +3446,12 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val visitId = data.removePrefix("visit_repeat_ask:").toLongOrNull()
-        if (visitId == null) {
+        val selection = parseGuestVisitRepeatSelection(data, "visit_repeat_ask:")
+        if (selection == null) {
             enqueueMessage(chatId, "Не удалось повторить заказ. Попробуйте ещё раз.")
             return
         }
+        val (visitId, orderId) = selection
         val detail = loadGuestVisitDetailForRepeat(chatId, userId, visitId) ?: return
         val context =
             resolveRepeatGuestContext(
@@ -3457,13 +3463,19 @@ class TelegramBotRouter(
         resolveCurrentBotTab(chatId, context) ?: return
         val repeatPlan =
             try {
-                loadGuestVisitRepeatPlan(detail)
+                repeatOrderResolver.resolveOrder(detail, orderId)
+            } catch (e: InvalidInputException) {
+                enqueueMessage(chatId, "Выберите один завершённый заказ из этого визита.")
+                return
+            } catch (e: NotFoundException) {
+                enqueueMessage(chatId, "Заказ не найден.")
+                return
             } catch (e: DatabaseUnavailableException) {
                 logger.warn("failed to load repeat plan for visit_id={} user_id={}", visitId, userId, e)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (repeatPlan.repeatableItems.isEmpty()) {
+        if (repeatPlan.eligibleLines.isEmpty()) {
             enqueueMessage(
                 chatId,
                 buildGuestVisitRepeatUnavailableText(repeatPlan),
@@ -3474,7 +3486,7 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             buildGuestVisitRepeatAskText(repeatPlan),
-            TelegramKeyboards.inlineGuestVisitRepeatConfirmActions(detail.visitId),
+            TelegramKeyboards.inlineGuestVisitRepeatConfirmActions(detail.visitId, orderId),
         )
     }
 
@@ -3483,11 +3495,12 @@ class TelegramBotRouter(
         userId: Long,
         data: String,
     ) {
-        val visitId = data.removePrefix("visit_repeat_confirm:").toLongOrNull()
-        if (visitId == null) {
+        val selection = parseGuestVisitRepeatSelection(data, "visit_repeat_confirm:")
+        if (selection == null) {
             enqueueMessage(chatId, "Не удалось повторить заказ. Попробуйте ещё раз.")
             return
         }
+        val (visitId, orderId) = selection
         val detail = loadGuestVisitDetailForRepeat(chatId, userId, visitId) ?: return
         val context =
             resolveRepeatGuestContext(
@@ -3499,13 +3512,19 @@ class TelegramBotRouter(
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
         val repeatPlan =
             try {
-                loadGuestVisitRepeatPlan(detail)
+                repeatOrderResolver.resolveOrder(detail, orderId)
+            } catch (e: InvalidInputException) {
+                enqueueMessage(chatId, "Выберите один завершённый заказ из этого визита.")
+                return
+            } catch (e: NotFoundException) {
+                enqueueMessage(chatId, "Заказ не найден.")
+                return
             } catch (e: DatabaseUnavailableException) {
                 logger.warn("failed to load repeat plan for visit_id={} user_id={}", visitId, userId, e)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (repeatPlan.repeatableItems.isEmpty()) {
+        if (repeatPlan.eligibleLines.isEmpty()) {
             enqueueMessage(
                 chatId,
                 buildGuestVisitRepeatUnavailableText(repeatPlan),
@@ -3513,8 +3532,8 @@ class TelegramBotRouter(
             )
             return
         }
-        repeatPlan.repeatableItems.forEach { item ->
-            repeat(item.qty.coerceAtLeast(0)) {
+        repeatPlan.eligibleLines.forEach { item ->
+            repeat(item.quantity.coerceAtLeast(0)) {
                 val added =
                     addItemToBotDraftCart(
                         chatId = chatId,
@@ -3524,12 +3543,16 @@ class TelegramBotRouter(
                         item =
                             MenuItemModel(
                                 id = item.itemId,
-                                name = item.name,
-                                priceMinor = item.priceMinor,
+                                name = item.itemName,
+                                priceMinor = item.currentItemPriceMinor,
                                 currency = item.currency,
                                 isAvailable = true,
                                 sortOrder = 0,
                             ),
+                        optionId = item.selectedOption?.optionId,
+                        optionName = item.selectedOption?.name,
+                        optionPriceDeltaMinor = item.selectedOption?.priceDeltaMinor ?: 0L,
+                        preferenceNote = item.preferenceNote,
                     )
                 if (!added) {
                     warnBotDraftCartScopeMismatch(chatId)
@@ -3629,104 +3652,79 @@ class TelegramBotRouter(
         }
     }
 
-    private suspend fun loadGuestVisitRepeatPlanOrNull(detail: GuestVisitDetail): GuestVisitRepeatPlan? =
+    private suspend fun loadGuestVisitRepeatPlansOrEmpty(detail: GuestVisitDetail): List<RepeatOrderPlan> =
         try {
-            loadGuestVisitRepeatPlan(detail)
+            repeatOrderResolver.resolveOrders(detail)
         } catch (e: DatabaseUnavailableException) {
-            null
+            emptyList()
         }
 
-    private suspend fun loadGuestVisitRepeatPlan(detail: GuestVisitDetail): GuestVisitRepeatPlan {
-        val currentItemsById =
-            guestMenuRepository
-                .getMenu(detail.venueId)
-                .categories
-                .flatMap { category -> category.items }
-                .associateBy { item -> item.id }
-        return buildGuestVisitRepeatPlan(detail, currentItemsById)
-    }
-
-    private fun buildGuestVisitRepeatPlan(
-        detail: GuestVisitDetail,
-        currentItemsById: Map<Long, MenuItemModel>,
-    ): GuestVisitRepeatPlan {
-        val historicalItems =
-            detail.orders.flatMap {
-                    order ->
-                order.items
-            }.filterNot { item -> item.isPromotionReward }
-        if (historicalItems.isEmpty()) {
-            return GuestVisitRepeatPlan(repeatableItems = emptyList(), unavailableItems = emptyList())
-        }
-        val repeatableItems = mutableListOf<GuestVisitRepeatItem>()
-        val unavailableItems = mutableListOf<GuestVisitRepeatUnavailableItem>()
-        historicalItems
-            .groupBy { item -> item.itemId }
-            .forEach { (itemId, items) ->
-                val qty = items.sumOf { item -> item.qty }
-                val currentItem = currentItemsById[itemId]
-                if (currentItem == null) {
-                    unavailableItems +=
-                        GuestVisitRepeatUnavailableItem(
-                            name = formatGuestVisitRepeatItemName(items.first().itemName, qty),
-                            reason = "сейчас недоступно",
-                        )
-                } else {
-                    repeatableItems +=
-                        GuestVisitRepeatItem(
-                            itemId = currentItem.id,
-                            name = currentItem.name,
-                            qty = qty,
-                            priceMinor = currentItem.priceMinor,
-                            currency = currentItem.currency,
-                        )
-                }
-            }
-        return GuestVisitRepeatPlan(
-            repeatableItems = repeatableItems,
-            unavailableItems = unavailableItems,
-        )
-    }
-
-    private fun buildGuestVisitRepeatAskText(plan: GuestVisitRepeatPlan): String =
+    private fun buildGuestVisitRepeatAskText(plan: RepeatOrderPlan): String =
         buildString {
             append("Повторить заказ?")
             append("\n\n")
-            plan.repeatableItems.forEach { item ->
-                append("• ${formatGuestVisitRepeatItemName(item.name, item.qty)} — ")
-                append(formatGuestVisitMoney(item.priceMinor * item.qty.toLong(), item.currency))
+            plan.eligibleLines.forEach { item ->
+                append("• ${formatGuestVisitRepeatItemName(item.itemName, item.quantity)}")
+                item.selectedOption?.let { option -> append(" · ${option.name}") }
+                item.preferenceNote?.let { note -> append(" · пожелание: $note") }
+                append(" — ")
+                append(formatGuestVisitMoney(item.currentLineTotalMinor, item.currency))
                 append("\n")
             }
-            append("\nЦены актуальные на сейчас.")
-            if (plan.unavailableItems.isNotEmpty()) {
+            append("\nДобавим доступные позиции в корзину по текущим ценам.")
+            if (plan.skippedLines.isNotEmpty()) {
                 append("\n\nНе сможем повторить:")
-                plan.unavailableItems.forEach { item ->
-                    append("\n• ${item.name} — ${item.reason}")
+                plan.skippedLines.forEach { item ->
+                    append(
+                        "\n• ${formatGuestVisitRepeatItemName(item.itemName, item.quantity)} — " +
+                            item.reason.message,
+                    )
                 }
             }
         }
 
-    private fun buildGuestVisitRepeatUnavailableText(plan: GuestVisitRepeatPlan): String =
+    private fun buildGuestVisitRepeatUnavailableText(plan: RepeatOrderPlan): String =
         buildString {
-            append("В этом визите нет позиций, которые можно повторить сейчас.")
-            if (plan.unavailableItems.isNotEmpty()) {
+            append("Сейчас ни одну позицию из этого заказа повторить нельзя.")
+            if (plan.skippedLines.isNotEmpty()) {
                 append("\n\nНе сможем повторить:")
-                plan.unavailableItems.forEach { item ->
-                    append("\n• ${item.name} — ${item.reason}")
+                plan.skippedLines.forEach { item ->
+                    append(
+                        "\n• ${formatGuestVisitRepeatItemName(item.itemName, item.quantity)} — " +
+                            item.reason.message,
+                    )
                 }
             }
         }
 
-    private fun buildGuestVisitRepeatAddedToCartText(plan: GuestVisitRepeatPlan): String =
+    private fun buildGuestVisitRepeatAddedToCartText(plan: RepeatOrderPlan): String =
         buildString {
             append("✅ Добавили в корзину.\nПроверьте состав и оформите заказ.")
-            if (plan.unavailableItems.isNotEmpty()) {
+            if (plan.skippedLines.isNotEmpty()) {
                 append("\n\nНе сможем повторить:")
-                plan.unavailableItems.forEach { item ->
-                    append("\n• ${item.name} — ${item.reason}")
+                plan.skippedLines.forEach { item ->
+                    append(
+                        "\n• ${formatGuestVisitRepeatItemName(item.itemName, item.quantity)} — " +
+                            item.reason.message,
+                    )
                 }
             }
         }
+
+    private fun parseGuestVisitRepeatSelection(
+        data: String,
+        prefix: String,
+    ): Pair<Long, Long?>? {
+        val parts = data.removePrefix(prefix).split(":", limit = 2)
+        val visitId = parts.getOrNull(0)?.toLongOrNull()?.takeIf { it > 0 } ?: return null
+        val orderId =
+            parts
+                .getOrNull(1)
+                ?.toLongOrNull()
+                ?.takeIf { it > 0 }
+        if (parts.size > 1 && orderId == null) return null
+        return visitId to orderId
+    }
 
     private fun formatGuestVisitRepeatItemName(
         name: String,
@@ -27839,6 +27837,7 @@ class TelegramBotRouter(
                             itemId = item.itemId,
                             qty = item.qty,
                             selectedOptionId = item.optionId,
+                            preferenceNote = item.preferenceNote,
                         )
                     },
                 selectedGiftChoices = botGiftChoices[key].orEmpty(),
@@ -28536,6 +28535,7 @@ class TelegramBotRouter(
         optionId: Long? = null,
         optionName: String? = null,
         optionPriceDeltaMinor: Long = 0L,
+        preferenceNote: String? = null,
     ): Boolean {
         val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
         val targetScope = BotDraftCartScope(tableSessionId = tableSessionId, tabId = tabId)
@@ -28549,7 +28549,9 @@ class TelegramBotRouter(
         botSkippedGiftRules.remove(key)
         val existingEntry =
             cart.entries.firstOrNull { (_, existing) ->
-                existing.itemId == item.id && existing.optionId == optionId
+                existing.itemId == item.id &&
+                    existing.optionId == optionId &&
+                    existing.preferenceNote == preferenceNote
             }
         if (existingEntry != null) {
             val existing = existingEntry.value
@@ -28570,6 +28572,7 @@ class TelegramBotRouter(
                 name = displayName,
                 optionId = optionId,
                 optionName = optionName,
+                preferenceNote = preferenceNote,
                 priceMinor = item.priceMinor + optionPriceDeltaMinor,
                 currency = item.currency,
                 qty = 1,

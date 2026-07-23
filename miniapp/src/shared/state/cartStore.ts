@@ -8,6 +8,11 @@ export type CartLineOptionInput = {
   preferenceNote?: string | null
 }
 
+export type CartLineAddition = CartLineOptionInput & {
+  itemId: number
+  qty: number
+}
+
 export type CartLine = {
   key: string
   itemId: number
@@ -381,6 +386,37 @@ export function addToCart(itemId: number, option?: CartLineOptionInput | null): 
   } else {
     items.set(key, buildLine(itemId, nextQty, option, currentLine))
   }
+  updateTotals()
+  persistActiveDraft()
+  notify()
+  return { ok: true }
+}
+
+export function addLinesToCart(additions: CartLineAddition[]): SetQtyResult {
+  const nextItems = new Map<string, CartLine>(
+    Array.from(items.entries()).map(([key, line]): [string, CartLine] => [key, { ...line }])
+  )
+  for (const addition of additions) {
+    if (!isValidItemId(addition.itemId)) {
+      return { ok: false, reason: 'invalid' }
+    }
+    const quantity = normalizeQty(addition.qty)
+    if (quantity <= 0 || quantity !== addition.qty) {
+      return { ok: false, reason: 'invalid' }
+    }
+    const key = buildCartLineKey(addition.itemId, addition.selectedOptionId, addition.preferenceNote)
+    const currentLine = nextItems.get(key)
+    if (!currentLine && nextItems.size >= MAX_DISTINCT) {
+      return { ok: false, reason: 'limit' }
+    }
+    const currentQty = normalizeQty(currentLine?.qty ?? 0)
+    const nextQty = currentQty + quantity
+    if (nextQty > MAX_QTY) {
+      return { ok: false, reason: 'limit' }
+    }
+    nextItems.set(key, buildLine(addition.itemId, nextQty, addition, currentLine))
+  }
+  items = nextItems
   updateTotals()
   persistActiveDraft()
   notify()

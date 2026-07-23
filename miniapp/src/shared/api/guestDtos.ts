@@ -573,6 +573,50 @@ export type GuestVisitOrderItemOptionDto = {
   priceDeltaMinor: number
 }
 
+export type GuestVisitRepeatPlanRequest = {
+  tableSessionId: number
+  tabId: number
+  orderId?: number | null
+}
+
+export type GuestVisitRepeatPlanResponse = {
+  eligibleLines: GuestVisitRepeatEligibleLineDto[]
+  skippedLines: GuestVisitRepeatSkippedLineDto[]
+  currentTotal: GuestVisitRepeatMoneyDto
+  sourceOrderId: number
+  venueId: number
+}
+
+export type GuestVisitRepeatEligibleLineDto = {
+  itemId: number
+  itemName: string
+  quantity: number
+  selectedOption?: GuestVisitRepeatOptionDto | null
+  preferenceNote?: string | null
+  currentItemPrice: GuestVisitRepeatMoneyDto
+  currentUnitPrice: GuestVisitRepeatMoneyDto
+  currentLineTotal: GuestVisitRepeatMoneyDto
+}
+
+export type GuestVisitRepeatOptionDto = {
+  optionId: number
+  name: string
+  currentPriceDelta: GuestVisitRepeatMoneyDto
+}
+
+export type GuestVisitRepeatSkippedLineDto = {
+  itemName: string
+  quantity: number
+  selectedOptionName?: string | null
+  reason: string
+  message: string
+}
+
+export type GuestVisitRepeatMoneyDto = {
+  amountMinor: number
+  currency: string
+}
+
 export type GuestVisitPromotionDiscountDto = {
   label: string
   discountMinor: number

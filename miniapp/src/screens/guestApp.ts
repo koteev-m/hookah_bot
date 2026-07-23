@@ -265,6 +265,7 @@ function renderRouteContent(
         backendUrl,
         isDebug,
         hasTableContext,
+        tableContext: tableSnapshot,
         onBack: onNavigateCatalog,
         onOpenBookings: () => {
           window.location.hash = '#/bookings'
@@ -277,6 +278,9 @@ function renderRouteContent(
           window.location.hash = `#/messages?venueId=${venueId}`
         },
         onOpenBot: onOpenSupportBot,
+        onNavigateCart: () => {
+          window.location.hash = '#/cart'
+        },
         onInternalBackStateChange
       })
     case 'messages':

@@ -2,7 +2,9 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  guestBuildVisitRepeatPlan,
   guestGetFavoriteVenues,
+  guestGetTabs,
   guestRemoveFavoriteVenue,
   guestGetVisitDetail,
   guestGetVisits,
@@ -13,9 +15,14 @@ import type {
   GuestVisitFeedbackDto,
   GuestVisitDetailDto,
   GuestVisitListItemDto,
-  GuestVisitOrderDto
+  GuestVisitOrderDto,
+  GuestVisitRepeatPlanResponse
 } from '../shared/api/guestDtos'
 import type { ApiErrorInfo } from '../shared/api/types'
+import { addLinesToCart } from '../shared/state/cartStore'
+import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { updateItemCache } from '../shared/state/itemCache'
+import type { TableContextSnapshot } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
 
@@ -38,12 +45,14 @@ export type GuestAccountScreenOptions = {
   backendUrl: string
   isDebug: boolean
   hasTableContext: boolean
+  tableContext: TableContextSnapshot
   onBack: () => void
   onOpenBookings: () => void
   onOpenVenue: (venueId: number) => void
   onBookVenue: (venueId: number) => void
   onAskVenue: (venueId: number) => void
   onOpenBot: () => OpenBotResult
+  onNavigateCart: () => void
   onInternalBackStateChange?: (handler: (() => void) | null) => void
 }
 
@@ -244,6 +253,238 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
   })
   append(card, title, meta, itemList, discountList)
   return card
+}
+
+function renderVisitRepeatBlock(
+  visit: GuestVisitDetailDto,
+  order: GuestVisitOrderDto,
+  backendUrl: string,
+  isDebug: boolean,
+  signal: AbortSignal,
+  tableContext: TableContextSnapshot,
+  onNavigateCart: () => void
+) {
+  const section = el('section', { className: 'card visit-repeat-card' })
+  const title = el('h3', { text: 'Повторить заказ' })
+  const message = el('p', { className: 'status', text: '' })
+  const repeatButton = el('button', { className: 'button-secondary', text: 'Повторить заказ' }) as HTMLButtonElement
+  let planPending = false
+  let added = false
+  const disposables: Array<() => void> = []
+
+  const showContextError = (): boolean => {
+    const activeTable =
+      tableContext.status === 'resolved' &&
+      tableContext.tableSessionActive &&
+      tableContext.tableSessionId != null &&
+      tableContext.venueId != null
+    if (!activeTable) {
+      message.textContent = 'Чтобы повторить заказ, отсканируйте QR на столе в этом заведении.'
+      return true
+    }
+    if (tableContext.venueId !== visit.venueId) {
+      message.textContent = 'Этот заказ можно повторить только в том же заведении.'
+      return true
+    }
+    if (!tableContext.orderAllowed) {
+      message.textContent = 'Заведение сейчас недоступно для заказа.'
+      return true
+    }
+    return false
+  }
+
+  const renderPlan = (plan: GuestVisitRepeatPlanResponse) => {
+    const content: Node[] = [
+      title,
+      el('p', {
+        className: 'venue-order-sub',
+        text: 'Добавим доступные позиции в корзину по текущим ценам.'
+      })
+    ]
+    if (plan.eligibleLines.length > 0) {
+      const eligibleTitle = el('h4', { text: 'Доступно' })
+      const eligibleList = el('div', { className: 'venue-order-items repeat-eligible-lines' })
+      plan.eligibleLines.forEach((line) => {
+        const details = [
+          line.itemName,
+          line.selectedOption?.name ?? null,
+          line.preferenceNote ? `Пожелание: ${line.preferenceNote}` : null
+        ].filter((value): value is string => Boolean(value))
+        append(
+          eligibleList,
+          el('p', {
+            className: 'venue-order-sub',
+            text: `${details.join(' · ')} ×${line.quantity} — ${formatPrice(
+              line.currentLineTotal.amountMinor,
+              line.currentLineTotal.currency
+            )}`
+          })
+        )
+      })
+      content.push(eligibleTitle, eligibleList)
+    }
+    if (plan.skippedLines.length > 0) {
+      const skippedTitle = el('h4', { text: 'Не получится повторить' })
+      const skippedList = el('div', { className: 'venue-order-items repeat-skipped-lines' })
+      plan.skippedLines.forEach((line) => {
+        const option = line.selectedOptionName ? ` · ${line.selectedOptionName}` : ''
+        append(
+          skippedList,
+          el('p', {
+            className: 'venue-order-sub',
+            text: `${line.itemName}${option} ×${line.quantity} — ${line.message}`
+          })
+        )
+      })
+      content.push(skippedTitle, skippedList)
+    }
+    if (plan.eligibleLines.length === 0) {
+      content.push(
+        el('p', {
+          className: 'status',
+          text: 'Сейчас ни одну позицию из этого заказа повторить нельзя.'
+        })
+      )
+      section.replaceChildren(...content)
+      return
+    }
+
+    content.push(
+      el('p', {
+        className: 'visit-repeat-total',
+        text: `Итого по текущим ценам: ${formatPrice(plan.currentTotal.amountMinor, plan.currentTotal.currency)}`
+      })
+    )
+    const addButton = el('button', { text: 'Добавить в корзину' }) as HTMLButtonElement
+    const addMessage = el('p', { className: 'status', text: '' })
+    const cartButton = el('button', {
+      className: 'button-secondary',
+      text: 'Перейти в корзину'
+    }) as HTMLButtonElement
+    cartButton.hidden = true
+    disposables.push(
+      on(addButton, 'click', () => {
+        if (added || addButton.disabled) return
+        addButton.disabled = true
+        updateItemCache(
+          plan.eligibleLines.map((line) => ({
+            itemId: line.itemId,
+            name: line.itemName,
+            priceMinor: line.currentItemPrice.amountMinor,
+            currency: line.currentItemPrice.currency,
+            options: line.selectedOption
+              ? [
+                  {
+                    id: line.selectedOption.optionId,
+                    name: line.selectedOption.name,
+                    priceDeltaMinor: line.selectedOption.currentPriceDelta.amountMinor
+                  }
+                ]
+              : []
+          }))
+        )
+        const result = addLinesToCart(
+          plan.eligibleLines.map((line) => ({
+            itemId: line.itemId,
+            qty: line.quantity,
+            selectedOptionId: line.selectedOption?.optionId ?? null,
+            selectedOptionName: line.selectedOption?.name ?? null,
+            priceDeltaMinor: line.selectedOption?.currentPriceDelta.amountMinor ?? null,
+            preferenceNote: line.preferenceNote ?? null
+          }))
+        )
+        if (!result.ok) {
+          addButton.disabled = false
+          addMessage.textContent =
+            result.reason === 'limit'
+              ? 'В корзине недостаточно места для этих позиций.'
+              : 'Не удалось добавить позиции в корзину.'
+          return
+        }
+        added = true
+        addMessage.textContent = 'Доступные позиции добавлены в корзину.'
+        cartButton.hidden = false
+      }),
+      on(cartButton, 'click', onNavigateCart)
+    )
+    content.push(addButton, cartButton, addMessage)
+    section.replaceChildren(...content)
+  }
+
+  disposables.push(
+    on(repeatButton, 'click', async () => {
+      if (planPending || added || showContextError()) return
+      const tableSessionId = tableContext.tableSessionId
+      if (!tableSessionId) return
+      planPending = true
+      repeatButton.disabled = true
+      repeatButton.textContent = 'Готовим preview...'
+      message.textContent = ''
+      const deps = requestDeps(isDebug)
+      const tabsResult = await guestGetTabs(backendUrl, tableSessionId, deps, signal)
+      if (!tabsResult.ok) {
+        planPending = false
+        repeatButton.disabled = false
+        repeatButton.textContent = 'Повторить заказ'
+        if (tabsResult.error.code !== REQUEST_ABORTED_CODE) {
+          message.textContent = 'Не удалось проверить выбранный счёт. Попробуйте ещё раз.'
+        }
+        return
+      }
+      const activeTabs = tabsResult.data.tabs.filter(
+        (tab) => tab.status === 'ACTIVE' && tab.tableSessionId === tableSessionId
+      )
+      const storedTabId = getSelectedGuestTabId(tableSessionId)
+      const selectedTab =
+        activeTabs.find((tab) => tab.id === storedTabId) ??
+        activeTabs.find((tab) => tab.type === 'PERSONAL') ??
+        activeTabs[0]
+      if (!selectedTab) {
+        planPending = false
+        repeatButton.disabled = false
+        repeatButton.textContent = 'Повторить заказ'
+        message.textContent = 'Выберите доступный счёт для текущего стола.'
+        return
+      }
+      setSelectedGuestTabId(tableSessionId, selectedTab.id)
+      const result = await guestBuildVisitRepeatPlan(
+        backendUrl,
+        visit.visitId,
+        {
+          tableSessionId,
+          tabId: selectedTab.id,
+          orderId: visit.orders.length > 1 ? order.orderId : undefined
+        },
+        deps,
+        signal
+      )
+      planPending = false
+      if (!result.ok) {
+        repeatButton.disabled = false
+        repeatButton.textContent = 'Повторить заказ'
+        if (result.error.code !== REQUEST_ABORTED_CODE) {
+          message.textContent =
+            result.error.status === 403
+              ? 'Этот счёт недоступен для повторения заказа.'
+              : 'Не удалось подготовить повтор заказа. Попробуйте ещё раз.'
+        }
+        return
+      }
+      if (result.data.venueId !== visit.venueId || result.data.sourceOrderId !== order.orderId) {
+        repeatButton.disabled = false
+        repeatButton.textContent = 'Повторить заказ'
+        message.textContent = 'Не удалось безопасно проверить повтор заказа.'
+        return
+      }
+      renderPlan(result.data)
+    })
+  )
+
+  append(section, title, repeatButton, message)
+  return {
+    element: section,
+    dispose: () => disposables.forEach((dispose) => dispose())
+  }
 }
 
 function renderSubmittedFeedback(section: HTMLElement, feedback: GuestVisitFeedbackDto, successText?: string) {
@@ -461,6 +702,8 @@ function renderVisitDetail(
   backendUrl: string,
   isDebug: boolean,
   signal: AbortSignal,
+  tableContext: TableContextSnapshot,
+  onNavigateCart: () => void,
   onBack: () => void
 ) {
   const wrapper = el('div', { className: 'venue-settings' })
@@ -480,7 +723,19 @@ function renderVisitDetail(
   if (!feedbackBlock.hidden) {
     append(wrapper, feedbackBlock.element)
   }
-  visit.orders.forEach((order) => append(wrapper, renderVisitOrder(order)))
+  const repeatBlocks = visit.orders.map((order) => {
+    const repeatBlock = renderVisitRepeatBlock(
+      visit,
+      order,
+      backendUrl,
+      isDebug,
+      signal,
+      tableContext,
+      onNavigateCart
+    )
+    append(wrapper, renderVisitOrder(order), repeatBlock.element)
+    return repeatBlock
+  })
   if (visit.orders.length === 0) {
     const emptyText = visit.booking
       ? 'Посещение по брони. Заказов в этом визите нет.'
@@ -492,6 +747,7 @@ function renderVisitDetail(
   return () => {
     dispose()
     feedbackBlock.dispose()
+    repeatBlocks.forEach((block) => block.dispose())
   }
 }
 
@@ -499,6 +755,8 @@ function renderHistorySection(
   root: HTMLElement,
   backendUrl: string,
   isDebug: boolean,
+  tableContext: TableContextSnapshot,
+  onNavigateCart: () => void,
   onBack: () => void,
   onInternalBackStateChange?: (handler: (() => void) | null) => void
 ) {
@@ -558,9 +816,18 @@ function renderHistorySection(
         })
         return
       }
-      nestedDispose = renderVisitDetail(root, result.data.visit, backendUrl, isDebug, controller.signal, () => {
-        void loadList()
-      })
+      nestedDispose = renderVisitDetail(
+        root,
+        result.data.visit,
+        backendUrl,
+        isDebug,
+        controller.signal,
+        tableContext,
+        onNavigateCart,
+        () => {
+          void loadList()
+        }
+      )
     } catch {
       nestedDispose = renderHistoryDetailError(root, () => {
         void loadList()
@@ -725,12 +992,14 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
     backendUrl,
     isDebug,
     hasTableContext,
+    tableContext,
     onBack,
     onOpenBookings,
     onOpenVenue,
     onBookVenue,
     onAskVenue,
     onOpenBot,
+    onNavigateCart,
     onInternalBackStateChange
   } = options
   if (!root) return () => undefined
@@ -752,7 +1021,15 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
         )
         break
       case 'history':
-        currentDispose = renderHistorySection(root, backendUrl, isDebug, goHome, onInternalBackStateChange)
+        currentDispose = renderHistorySection(
+          root,
+          backendUrl,
+          isDebug,
+          tableContext,
+          onNavigateCart,
+          goHome,
+          onInternalBackStateChange
+        )
         break
       case 'favorites':
         onInternalBackStateChange?.(goHome)

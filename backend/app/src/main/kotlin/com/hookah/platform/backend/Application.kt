@@ -44,6 +44,7 @@ import com.hookah.platform.backend.miniapp.guest.BookingReminderWorker
 import com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
+import com.hookah.platform.backend.miniapp.guest.RepeatOrderResolver
 import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
@@ -347,6 +348,14 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val guestTabsRepository = GuestTabsRepository(dataSource)
     val analyticsEventRepository = AnalyticsEventRepository(dataSource)
     val subscriptionRepository = SubscriptionRepository(dataSource, analyticsEventRepository)
+    val repeatOrderResolver =
+        RepeatOrderResolver(
+            visitRepository = visitRepository,
+            guestMenuRepository = guestMenuRepository,
+            guestTabsRepository = guestTabsRepository,
+            guestVenueRepository = guestVenueRepository,
+            subscriptionRepository = subscriptionRepository,
+        )
     val venuePromotionRepository = VenuePromotionRepository(dataSource)
     val venuePromotionMediaRepository = VenuePromotionMediaRepository(dataSource)
     val venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource)
@@ -660,6 +669,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 shiftExtensionRepository = shiftExtensionRepository,
                 supportThreadRepository = supportThreadRepository,
                 bookingRemindersEnabled = bookingReminderWorkerConfig.enabled,
+                repeatOrderResolver = repeatOrderResolver,
             )
 
         if (dataSource != null) {
@@ -1127,6 +1137,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     guestVisitRoutes(
                         visitRepository = visitRepository,
                         visitFeedbackRepository = visitFeedbackRepository,
+                        repeatOrderResolver = repeatOrderResolver,
                         analyticsEventRepository = analyticsEventRepository,
                         venueSettingsRepository = venueSettingsRepository,
                     )

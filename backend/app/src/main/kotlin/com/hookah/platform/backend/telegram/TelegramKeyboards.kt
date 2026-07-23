@@ -6471,11 +6471,34 @@ object TelegramKeyboards {
     fun inlineGuestVisitDetailActions(
         visitId: Long? = null,
         canRepeat: Boolean = false,
+        repeatOrders: List<Pair<Long, String>> = emptyList(),
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 buildList {
-                    if (canRepeat && visitId != null) {
+                    if (repeatOrders.isNotEmpty() && visitId != null) {
+                        repeatOrders.forEach { (orderId, orderLabel) ->
+                            val singleOrder = repeatOrders.size == 1
+                            add(
+                                listOf(
+                                    InlineKeyboardButton(
+                                        text =
+                                            if (singleOrder) {
+                                                "🔁 Повторить заказ"
+                                            } else {
+                                                "🔁 Повторить $orderLabel"
+                                            },
+                                        callbackData =
+                                            if (singleOrder) {
+                                                "visit_repeat_ask:$visitId"
+                                            } else {
+                                                "visit_repeat_ask:$visitId:$orderId"
+                                            },
+                                    ),
+                                ),
+                            )
+                        }
+                    } else if (canRepeat && visitId != null) {
                         add(
                             listOf(
                                 InlineKeyboardButton(
@@ -6496,14 +6519,22 @@ object TelegramKeyboards {
                 },
         )
 
-    fun inlineGuestVisitRepeatConfirmActions(visitId: Long): InlineKeyboardMarkup =
+    fun inlineGuestVisitRepeatConfirmActions(
+        visitId: Long,
+        orderId: Long? = null,
+    ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 listOf(
                     listOf(
                         InlineKeyboardButton(
                             text = "✅ Добавить в корзину",
-                            callbackData = "visit_repeat_confirm:$visitId",
+                            callbackData =
+                                if (orderId == null) {
+                                    "visit_repeat_confirm:$visitId"
+                                } else {
+                                    "visit_repeat_confirm:$visitId:$orderId"
+                                },
                         ),
                     ),
                     listOf(

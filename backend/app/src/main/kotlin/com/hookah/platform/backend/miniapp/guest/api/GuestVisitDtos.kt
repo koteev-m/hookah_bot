@@ -110,3 +110,53 @@ data class GuestVisitOrderItemDto(
     val discountPercent: Int? = null,
     val totalMinor: Long? = null,
 )
+
+@Serializable
+data class GuestVisitRepeatPlanRequest(
+    val tableSessionId: Long,
+    val tabId: Long,
+    val orderId: Long? = null,
+)
+
+@Serializable
+data class GuestVisitRepeatPlanResponse(
+    val eligibleLines: List<GuestVisitRepeatEligibleLineDto>,
+    val skippedLines: List<GuestVisitRepeatSkippedLineDto>,
+    val currentTotal: GuestVisitRepeatMoneyDto,
+    val sourceOrderId: Long,
+    val venueId: Long,
+)
+
+@Serializable
+data class GuestVisitRepeatEligibleLineDto(
+    val itemId: Long,
+    val itemName: String,
+    val quantity: Int,
+    val selectedOption: GuestVisitRepeatOptionDto? = null,
+    val preferenceNote: String? = null,
+    val currentItemPrice: GuestVisitRepeatMoneyDto,
+    val currentUnitPrice: GuestVisitRepeatMoneyDto,
+    val currentLineTotal: GuestVisitRepeatMoneyDto,
+)
+
+@Serializable
+data class GuestVisitRepeatOptionDto(
+    val optionId: Long,
+    val name: String,
+    val currentPriceDelta: GuestVisitRepeatMoneyDto,
+)
+
+@Serializable
+data class GuestVisitRepeatSkippedLineDto(
+    val itemName: String,
+    val quantity: Int,
+    val selectedOptionName: String? = null,
+    val reason: String,
+    val message: String,
+)
+
+@Serializable
+data class GuestVisitRepeatMoneyDto(
+    val amountMinor: Long,
+    val currency: String,
+)
