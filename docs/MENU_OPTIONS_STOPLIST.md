@@ -1,6 +1,6 @@
 # Menu / Options / Stop-List Model
 
-Дата актуализации: 2026-07-23.
+Дата актуализации: 2026-07-27.
 
 Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow, but the broader menu constructor, media/top-list governance, shift check, audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
@@ -66,6 +66,9 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
   cannot become an eligibility target until the rule schema and tests explicitly support it.
 - An unavailable gift item or option is not substituted silently. A selectable reward requires an
   explicit guest choice from a server-provided allowlist before final submit.
+- A gift allowlist entry identifies a reward menu item, not a `menu_item_option`. If a reward item
+  requires an option/modifier that the gift contract cannot explicitly select and validate, that
+  reward is ineligible; the backend must not insert it with a missing or stale required option.
 
 ## Order Snapshot Rules
 

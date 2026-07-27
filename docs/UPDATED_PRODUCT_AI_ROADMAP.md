@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-07-23.
+Дата обновления: 2026-07-27.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -37,7 +37,7 @@
 - Venue Mini App booking card opens a persisted booking conversation thread: venue messages, Guest Bot replies and Guest Mini App replies share one source of truth; staff chat remains a notification mirror. M4A staging smoke passed after UX polish. M4B/M4C unified `Сообщения` inbox and resolve/reopen lifecycle are CLOSED after staging smoke: thread cards show context/status/last message/unread, active/resolved filters work, and explicit resolve/reopen does not mutate booking lifecycle.
 - Guest Communication UX / Support Tickets MVP is CLOSED after smoke: canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Guest nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` remains `BOOKING_CHAT`; Support tickets are separated through `SUPPORT_TICKET`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; table context keeps `Вызвать персонал` as the live operational flow; support/venue chat creation and replies do not post to staff-chat and guest create/reply routes are rate-limited.
 - Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; onboarding/placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
-- Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are DONE / MVP / staging-smoke-passed. Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) without blocking independent bounded development. Executable Promotions Phase 2 is `AUDIT / IMPLEMENTATION PLAN REQUIRED`. Favorites covers catalog/detail mutations, Account list, current-user isolation, unavailable filtering/restoration, shared Bot/Mini App storage, Telegram Profile/Catalog entrypoints and source-aware Back. The manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions, loyalty and broader analytics remain future/partial.
+- Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are DONE / MVP / staging-smoke-passed. Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) without blocking independent bounded development. Executable Promotions Phase 2 / Happy Hours Percent is `DONE / STAGING-SMOKE-PASSED`; the next bounded slice is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / READ-ONLY AUDIT AND IMPLEMENTATION PLAN`. Favorites covers catalog/detail mutations, Account list, current-user isolation, unavailable filtering/restoration, shared Bot/Mini App storage, Telegram Profile/Catalog entrypoints and source-aware Back. The manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions, loyalty and broader analytics remain future/partial.
 - Staff profiles, today shift and future staff tips are canonical in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: Phase 1 `STAFF_PROFILE + SHIFT_TODAY` is done/local-smoke-passed with no payments; Phase 2 may add external staff tip link + `staff_tip_intent`; provider/direct payout, Telegram Stars and crypto are not MVP.
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is locally validated with deferred environment-dependent manual smoke; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
@@ -144,7 +144,7 @@ Launch focus:
 - webhook/outbox/staff notification monitoring;
 - fallback/error paths;
 - pilot venue runbook.
-- growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` overall in `docs/GROWTH_RETENTION.md`; History, Post-Visit Feedback, venue-only Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are closed slices, Repeat remains local-validation-passed with deferred manual smoke, and Executable Promotions Phase 2 is audit/plan only. This is not evidence that favorite menu items, persistent repeat templates or loyalty are done.
+- growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` overall in `docs/GROWTH_RETENTION.md`; History, Post-Visit Feedback, venue-only Guest Favorites Phase 1, Simple Venue Promotions Phase 1 and Happy Hours Percent are closed slices, Repeat remains local-validation-passed with deferred manual smoke, and Gift Bot/Mini App parity is read-only audit/plan only. This is not evidence that gift parity, favorite menu items, persistent repeat templates or loyalty are done.
 
 ### Guest Flow
 
@@ -170,7 +170,7 @@ Done:
 
 Remaining P1/P2:
 
-- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; Simple Venue Promotions Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`; Executable Promotions Phase 2 is `AUDIT / IMPLEMENTATION PLAN REQUIRED`; favorite menu items/options, recommendations/frequent items, persistent templates, notification opt-in, favorites-based promotions and loyalty remain future; venue favorites, visit/order history and Post-Visit Feedback are DONE / staging-smoke-passed and stay in regression;
+- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; Simple Venue Promotions Phase 1 and Happy Hours Percent are `DONE / STAGING-SMOKE-PASSED`; `GIFT_WITH_ITEM BOT/MINIAPP PARITY` is the next read-only-audited implementation slice; favorite menu items/options, recommendations/frequent items, persistent templates, notification opt-in, favorites-based promotions and loyalty remain future; venue favorites, visit/order history and Post-Visit Feedback are DONE / staging-smoke-passed and stay in regression;
 - richer profile/promotions/loyalty polish in Mini App only after the underlying product/accounting rules are implemented and smoked;
 - richer active order display with totals/promo/loyalty parity where needed;
 - booking create/confirm/change/cancel smoke passed for current staging MVP; keep it in regression smoke after future booking changes.
@@ -261,6 +261,7 @@ Current foundation:
 - Post-Visit Feedback MVP is DONE / MVP / staging-smoke-passed: one manual rating/tags/comment from own completed History detail; booking-only `SEATED` remains eligible; Owner/Manager reads own-venue feedback; Staff denied; manual `5/5` may show a safe configured public review URL; low `1..3` follow-up opens exact `VENUE_CHAT` with context and no automatic message, support ticket or staff-chat notification;
 - Guest Favorites Phase 1 is DONE / MVP / STAGING-SMOKE-PASSED: venue favorites only, catalog/detail actions, Account list, current-user isolation, unavailable-venue filtering/restoration, shared Bot/Mini App source, Telegram Profile/Catalog entrypoints and source-aware Back;
 - Simple Venue Promotions Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: Owner/Manager management and current-active Guest venue-detail rendering reuse `venue_promotions` and `VenuePromotionRepository`; green Actions, staging deploy and manual smoke are confirmed;
+- Executable Promotions Phase 2 / Happy Hours Percent is `DONE / STAGING-SMOKE-PASSED`; Gift Bot/Mini App parity is the next read-only-audited bounded slice;
 - transactional booking reminders are not marketing notifications.
 
 MVP target:
@@ -371,7 +372,7 @@ Milestones:
 
 | Priority | Block | Current evidence | Product target | Recommended action |
 | --- | --- | --- | --- | --- |
-| P1 ACTIVE | Bot-to-Mini-App Parity Program | Bot selected-venue hub already has sections `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`; Venue Mini App has M1 IA shell, M2 read-only `Статистика`, M3 booking queue/lifecycle, M4A booking conversation threads, M4B/M4C inbox lifecycle, M5 staff-call lifecycle plus ACK/DONE audit hardening, M6 staff-chat diagnostics/unlink and M7a booking hold settings closed. Guest Mini App M7b `Мои брони` is implemented with code/test/e2e evidence and staging visual parity for Bot `/my` label/time/deadline; real two-account Telegram isolation remains unverified. M7c adaptive reminders passed a controlled real Telegram staging smoke and are still disabled by default for rollout. M8a/M8b-Free structured public profile/card settings is CLOSED after provider-free staging smoke; Yandex adapters remain disabled and optional. M9b schedule parity plus M9b.1/M9b.2/M9b.3 improvements are CLOSED / staging smoke passed. Simple Venue Promotions Phase 1 is DONE / MVP / STAGING-SMOKE-PASSED; Executable Promotions Phase 2 is audit/plan only. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack and Guest Communication UX / Support Tickets MVP are CLOSED / validated. Full map is in `docs/audit/VENUE_BOT_TO_MINIAPP_PARITY_PROGRAM.md`. | Bot and Mini App are two clients over one backend; required core surfaces must be aligned or documented as intentional exceptions. Mini App should show only backend-backed functionality. Functional correctness stays ahead of broad visual redesign while core blocks are still being closed. | Keep M7b two-account isolation, M7c reminder flow, M8b public card/location settings, M9b schedule validation, owner invite, owner revoke, H2 uniqueness fidelity, Mini App mutation/fallback payload, staff-call ACK/DONE actor audit evidence, communication split/support-ticket routing and promotion cross-surface parity in regression. Keep structured venue-initiated reschedule proposals, media sections, advanced support automation/diagnostics and `Предпросмотр` out of nav until real routes/screens exist. |
+| P1 ACTIVE | Bot-to-Mini-App Parity Program | Bot selected-venue hub already has sections `Работа смены`, `Настройка заведения`, `Статистика`, `Продвижение`, `Предпросмотр для гостя`; Venue Mini App has M1 IA shell, M2 read-only `Статистика`, M3 booking queue/lifecycle, M4A booking conversation threads, M4B/M4C inbox lifecycle, M5 staff-call lifecycle plus ACK/DONE audit hardening, M6 staff-chat diagnostics/unlink and M7a booking hold settings closed. Guest Mini App M7b `Мои брони` is implemented with code/test/e2e evidence and staging visual parity for Bot `/my` label/time/deadline; real two-account Telegram isolation remains unverified. M7c adaptive reminders passed a controlled real Telegram staging smoke and are still disabled by default for rollout. M8a/M8b-Free structured public profile/card settings is CLOSED after provider-free staging smoke; Yandex adapters remain disabled and optional. M9b schedule parity plus M9b.1/M9b.2/M9b.3 improvements are CLOSED / staging smoke passed. Simple Venue Promotions Phase 1 and Executable Promotions Phase 2 / Happy Hours Percent are DONE / STAGING-SMOKE-PASSED; `GIFT_WITH_ITEM BOT/MINIAPP PARITY` is the next read-only-audited implementation slice. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack and Guest Communication UX / Support Tickets MVP are CLOSED / validated. Full map is in `docs/audit/VENUE_BOT_TO_MINIAPP_PARITY_PROGRAM.md`. | Bot and Mini App are two clients over one backend; required core surfaces must be aligned or documented as intentional exceptions. Mini App should show only backend-backed functionality. Functional correctness stays ahead of broad visual redesign while core blocks are still being closed. | Keep M7b two-account isolation, M7c reminder flow, M8b public card/location settings, M9b schedule validation, owner invite, owner revoke, H2 uniqueness fidelity, Mini App mutation/fallback payload, staff-call ACK/DONE actor audit evidence, communication split/support-ticket routing and promotion cross-surface parity in regression. Keep structured venue-initiated reschedule proposals, media sections, advanced support automation/diagnostics and `Предпросмотр` out of nav until real routes/screens exist. |
 | P1 CLOSED | Staff-chat main order vs doporders clarity | Product spec already models `order_batches` with statuses; Venue Mini App can show batches, and live staff-chat now separates the main order and doporders/add-batches in one message. Staging smoke passed: one live message, venue-local time without `UTC`, separate blocks and clear batch statuses/actions. | One live staff-chat message stays canonical, visually separates the main order and each doporder/add-batch, shows batch status, and applies action buttons to the correct operational context. | Keep in regression smoke. Preserve `OrderBillSnapshot` as money source. |
 | P1 CLOSED | Guest table session persistence/restore | Backend has authenticated `GET /api/guest/table/restore`; Mini App startup restores the latest safe active table context when no explicit QR token is present, and explicit QR/start token still wins. Automated coverage includes active restore, cross-user denial, closed-only denial, latest-context selection, browser startup restore and account-switch storage isolation. Staging smoke passed on 2026-06-08: reopen without QR restores table context, `Мой заказ` / menu / profile / support navigation keeps context, Telegram BackButton no longer loops, and root can close cleanly. | While an active table session/tab/order exists, returning guest re-enters table context safely without rescanning QR. Manual user-scoped exit now prevents restore until explicit QR re-entry. | Keep in regression smoke. Preserve QR/start-token priority, account-switch isolation and user-scoped exit markers. |
 | P1 CLOSED | Guest Table Context UX Cleanup / Feature-gated Extension Module | Real Telegram Mini App staging smoke confirmed active QR table context, no prominent route/copy address/booking actions in table context, preserved pre-visit venue-card address/route/copy/booking actions, and extension visibility tied to active order/bill availability. | Guests in table context see orderable actions only; `Продление работы заведения` appears only when the current active order/state makes it actionable and disappears after bill/order close. | Keep pre-QR vs table-context action separation and extension gating in regression. Do not expose extension as a menu/cart/order-batch item. |
@@ -731,7 +732,7 @@ Not selected as implementation right now:
 
 - remaining booking regression smoke, including real two-account Guest Mini App isolation and schedule validation;
 - remaining backend-backed venue settings slices beyond booking hold, shift extension, public card/location and schedule;
-- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 remains locally validated with deferred manual smoke; Simple Venue Promotions Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`; Executable Promotions Phase 2 is `AUDIT / IMPLEMENTATION PLAN REQUIRED`; favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
+- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 remains locally validated with deferred manual smoke; Simple Venue Promotions Phase 1 and Happy Hours Percent are `DONE / STAGING-SMOKE-PASSED`; Gift Bot/Mini App parity is the next bounded implementation slice; favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option snapshots and stale availability validation in regression, and resolve broader menu constructor/media/top-list/shift-check/audit coverage before calling menu complete;
 - Venue Mode operating model from `docs/VENUE_OPERATIONS.md`: keep orders, bill/tabs, staff calls, bookings, stop-list, staff-chat source-of-truth policy and role-specific nav/API denial in regression before adding new venue screens;
 - Booking lifecycle model from `docs/BOOKING_LIFECYCLE.md`: keep booking create/list, Venue queue actions, confirmed-only Staff arrival/no-show split, hold/deadline display, booking chat separation, support routing and reminder opt-in behavior in regression before adding preorder/history/loyalty.
@@ -931,7 +932,8 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 Latest closed blocks: Staff profiles + today on shift Phase 1; Staff-call guest-visible CANCELLED finishing patch; Booking Arrival Guard / Staff-Chat Booking Buttons; Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish; Guest Communication UX / Support Tickets MVP; Guest History Foundation MVP; Post-Visit Feedback MVP plus public-review/follow-up smoke-fix; Guest Favorites Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`). Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), but does not block an independent bounded block.
 
-Latest implemented bounded milestone: **Simple Venue Promotions Phase 1**.
+Latest informational promotion milestone: **Simple Venue Promotions Phase 1**. The later executable
+Happy Hours Percent milestone is recorded below as `DONE / STAGING-SMOKE-PASSED`.
 
 Status: `DONE / MVP / STAGING-SMOKE-PASSED`.
 
@@ -972,61 +974,85 @@ Closure evidence:
 
 ### Executable Promotions Phase 2
 
-Status: `AUDIT / IMPLEMENTATION PLAN REQUIRED`.
+Happy Hours Percent status: **DONE / STAGING-SMOKE-PASSED**.
 
-Read-only code audit verdict: **IMPLEMENT_PROMOTION_ENGINE_PARITY_NOW**.
+Next slice: **GIFT_WITH_ITEM BOT/MINIAPP PARITY / READ-ONLY AUDIT AND IMPLEMENTATION PLAN**.
 
-Current foundation to reuse:
+Product UX remains template-based over one Promotion Rules & Rewards Engine:
 
-- `VenuePromotionRepository` owns promotion lifecycle and guest availability filtering;
-- `VenuePromotionRuleRepository` persists `HAPPY_HOURS_PERCENT` and `GIFT_WITH_ITEM` rules;
-- `PromotionRuleEngine` evaluates both types with venue-local weekday/time checks;
-- `OrdersRepository` recalculates at preview and submit and persists
-  `order_promotion_applications`, item adjustments and reward-item links;
-- Telegram has Happy Hours/gift management and explicit gift choose/skip UX;
-- Guest Mini App displays promotion totals but does not expose the gift-choice contract;
-- staff-chat renders authoritative order facts and does not calculate promotions.
+1. Информационная акция.
+2. Скидка по расписанию.
+3. Подарок при покупке.
+4. Купи X — получи Y / 1+1 — later.
+5. Специальная цена — later.
+6. Бесплатная option/refill — later.
 
-Selected bounded slice: harden and expose **Happy Hours + percentage discount** through one shared
-backend resolver for Bot and Mini App. It includes venue date range/timezone, explicit weekday/time
-windows, eligible item/category, percentage discount, no stacking, current-price server
-calculation, explicit cart base/adjustment/final preview, final submit recalculation, persisted
-versioned application snapshot and normal confirmation before any order/batch creation.
+Happy Hours is a schedule-based percentage preset, not a universal reward form. Schedule,
+targets, no-stacking resolution, preview, submit recalculation, ledger and History stay shared.
 
-Required schema work:
+Happy Hours closure evidence includes staging creation/activation validation, weekday/time windows,
+item/category targets, current price and selected-option delta, cart preview, submit recalculation,
+persisted bill/History, no stacking, manual-discount rejection, Owner/Manager/Staff RBAC,
+Bot/Mini App parity and `TEXT_ONLY` regression.
 
-- normalize rule windows by weekday if different windows per day must be first-class rather than
-  modeled as duplicate rules;
-- add immutable rule version/config snapshot to each promotion application;
-- preserve auditable original unit/base amount, selected-option delta, adjustment and final amount
-  for affected lines;
-- encode an explicit manual-discount-versus-promotion policy; the first slice must not stack them.
+Gift audit verdict: **IMPLEMENT_GIFT_PARITY_NOW**.
 
-Known gaps that block a broader first slice:
+Current foundation and blocking gaps:
 
-- no selected-option, minimum eligible quantity/amount or explicit any-item/table-only condition;
-- no fixed-amount, BOGO, second-item-free, free-option/refill or special-fixed-price reward;
-- no Mini App selectable-gift UX/contract;
-- no proven post-submit trigger-to-gift recomputation after cancel/reject/exclude;
-- no complete promotion analytics/config audit trail.
+- `FIXED_ITEM` and `CHOICE_ITEMS` plus the reward-item allowlist already exist;
+- the engine shares lifecycle, schedule, trigger matching and conflict resolution with percentage
+  rules, while `OrdersRepository` persists the free reward line, 100% adjustment and
+  trigger/reward link;
+- Telegram offers choose/skip only for unresolved selectable gifts, but pending choice/skip lives
+  in process-memory maps; restart loses Bot cart and choice;
+- Guest Mini App DTOs omit gift offers and submit decisions, so selectable gifts have no parity and
+  fixed gifts lack dedicated confirmation;
+- Venue Mini App has no separate Gift template or activation-readiness contract, and unresolved
+  gift choice/skip is absent from the current pricing fingerprint;
+- unavailable choices are filtered and submit is recalculated, but the all-unavailable state is not
+  exposed explicitly;
+- one candidate is chosen per gift rule/first trigger, but `max_rewards_per_batch` is not a global
+  one-gift-per-batch policy and compatible rules can produce multiple gifts;
+- trigger removal before preview/submit is safe; individual trigger cancellation/exclusion after
+  persistence does not automatically invalidate the persisted reward;
+- reward menu price is refreshed, but winner selection plus insertion needs focused price-race
+  proof; reward `menu_item_options` are not supported.
 
-Exact first-slice out of scope: gift rewards, BOGO, second item free, free option/refill, special
-fixed price, fixed discount, loyalty/points/cashback, promo codes, birthday/visit-count rules,
-referrals, notifications, paid placement/boosting, recommendations, payments/Stars/crypto,
-arbitrary rule builder, multiple promotion stacking, automatic substitution and changes to
-`REPEAT-MANUAL-001`.
+Bounded implementation:
 
-Likely files:
+- add a separate Venue `Подарок при покупке` preset for item/category trigger, normalized schedule,
+  fixed reward or selectable menu-item allowlist and activation validation;
+- return a shared fixed/selectable/unavailable gift offer from preview;
+- require explicit accept/select or optional skip in both clients and carry the decision in
+  preview/submit requests for server-side stateless revalidation;
+- include offer identity, rule version and decision in stale-preview/idempotency fingerprints;
+- apply at most one gift to the submitted batch/tab, with no cross-batch accumulation and no
+  quantity-based multiplication;
+- reject or recalculate removed/inactive trigger, unavailable reward, stale allowlist choice,
+  changed price and invalid option state without silent substitution;
+- persist the reward line as original amount + 100% promotion adjustment + final zero, preserving
+  trigger/reward link and rule/version snapshots;
+- keep reward lines outside percentage eligibility and manual discount;
+- keep preview mutation-free and submit transactional/idempotent through the existing engine.
 
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/...PromotionRoutes.kt`
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/...PromotionDtos.kt`
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/guest/GuestVenueRoutes.kt`
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/guest/api/GuestVenueDtos.kt`
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/Application.kt`
-- existing `backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/db/VenuePromotionRepository.kt`
-- `miniapp/src/shared/api/venueApi.ts`, `venueDtos.ts`, `guestApi.ts`, `guestDtos.ts`
-- `miniapp/src/screens/venuePromotions.ts`, `venueApp.ts`, `guestVenue.ts`
-- focused venue/guest route tests and `miniapp/e2e/guest-smoke.spec.ts`
+Schema verdict: no migration is expected. Existing
+`promotion_rule_rewards`, `promotion_rule_reward_options`,
+`order_promotion_applications`, item adjustments and `order_promotion_reward_items` are sufficient
+if choice is statelessly revalidated and persisted only with the submitted batch.
+
+Likely runtime files for the future slice:
+
+- `PromotionRuleEngine.kt`, `VenuePromotionRuleRepository.kt`, `OrdersRepository.kt`;
+- `GuestOrderDtos.kt`, `GuestOrderRoutes.kt`;
+- Venue promotion DTO/routes plus `venuePromotions.ts` and venue API DTOs;
+- `TelegramBotRouter.kt` and `TelegramKeyboards.kt`;
+- Guest `guestDtos.ts`, `guestApi.ts`, `cartStore.ts`, `cart.ts` and focused styles;
+- `PromotionApplicationRepository.kt`, `VisitRepository.kt` and `VenueOrdersRepository.kt` only if
+  focused tests expose a missing persisted/read-model field.
+
+Exact out of scope: BOGO / X+Y, second-item-free, free option/refill, fixed discount, special
+price, cross-visit or cross-batch accumulation, loyalty, promo codes, notifications, paid
+placement, payments/Stars/crypto, arbitrary rule builder and changes to `REPEAT-MANUAL-001`.
 
 Why not reopen full bill / display order number in Mini App:
 - Guest Bill / Display-Number / Full-Bill Parity is already CLOSED / staging smoke passed in current roadmap and Venue Operations docs;

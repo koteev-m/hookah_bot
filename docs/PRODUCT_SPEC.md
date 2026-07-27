@@ -441,11 +441,13 @@ MUST:
 - `POST_VISIT_FEEDBACK`: rating 1-5, tags and optional comment only after a confirmed visit/order close signal. Automated Telegram/worker prompts and public review automation remain disabled/future.
 - `VENUE_PROMOTION`: informational Phase 1 remains `DONE / MVP / STAGING-SMOKE-PASSED`.
   The bounded Happy Hours percentage slice is
-  `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED`:
+  `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE / DONE / STAGING-SMOKE-PASSED`:
   Owner/Manager configure item/category targets, venue-timezone weekday windows, lifecycle and
   percentage through the existing promotion repositories; Bot and Mini App use one server-owned
-  preview/submit calculation and immutable application ledger. Other executable reward types,
-  promo codes, stacking, notifications and payments remain out of scope.
+  preview/submit calculation and immutable application ledger. The next bounded slice is
+  `GIFT_WITH_ITEM BOT/MINIAPP PARITY / READ-ONLY AUDIT AND IMPLEMENTATION PLAN`; it must reuse the
+  same engine while keeping gift UX separate from the Happy Hours preset. BOGO, free option/refill,
+  promo codes, notifications and payments remain out of scope.
 - `OPT_IN_NOTIFICATION`: retention/promo notifications require explicit guest opt-in, frequency limits and unsubscribe.
 SHOULD:
 - `PROMO_CODE` with limits/accounting, `LOYALTY_STAMP` / `LOYALTY_POINTS`, `REFERRAL`, segmentation/campaigns, paid placement/promotion boosting, flavor quiz and advanced recommendations remain future work.

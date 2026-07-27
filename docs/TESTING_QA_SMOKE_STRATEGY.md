@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-23.
+Дата актуализации: 2026-07-27.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -18,9 +18,9 @@ Current practice:
   were green and manual staging smoke covered Owner/Manager/Staff RBAC, current-period Guest
   visibility, unavailable-venue filtering, informational-only totals and Telegram/Mini App state.
 - Executable Promotions Phase 2 is
-  `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED`.
-  This is local evidence only; CI, PostgreSQL staging migration and real Telegram/staff-chat smoke
-  remain required before release.
+  `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE / DONE / STAGING-SMOKE-PASSED`.
+  The next bounded slice is
+  `GIFT_WITH_ITEM BOT/MINIAPP PARITY / READ-ONLY AUDIT AND IMPLEMENTATION PLAN`.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -66,11 +66,10 @@ Required parity coverage:
 - stale schedule/availability/price is rejected or recalculated by the shared server path;
 - staff-chat receives the persisted order facts only and never evaluates promotions.
 
-Gift, BOGO and free-option tests are not part of the selected Happy Hours percentage first slice.
-They require their own later contract, including explicit guest choice and unavailable-reward
-behavior, before Mini App parity can be claimed.
+Gift, BOGO and free-option tests were not part of the Happy Hours percentage closure. Happy Hours
+remains a percentage preset and must not absorb these reward mechanisms.
 
-Current local result for the bounded slice:
+Final result for the Happy Hours percentage slice:
 
 - required `*PromotionRuleEngine*`, `*VenuePromotionRepository*`, `*GuestOrderRoutes*`,
   `*VenueOrdersRepository*` and `*TelegramBotRouter*` selectors passed;
@@ -78,7 +77,66 @@ Current local result for the bounded slice:
   selectors passed;
 - `:backend:app:ktlintCheck`, `:backend:app:compileKotlin` and Mini App production build passed;
 - deterministic Mini App Playwright smoke passed `71/71`;
-- no staging deploy or staging smoke has been performed for this slice.
+- staging smoke passed creation and activation validation, weekday/time windows, item/category
+  targets, current price, selected-option delta, cart preview, submit recalculation, persisted
+  bill/History, no stacking, manual-discount rejection, Owner/Manager/Staff RBAC, Bot/Mini App
+  parity and `TEXT_ONLY` regression.
+
+### GIFT_WITH_ITEM Bot/Mini App parity next gate
+
+Status: `READ-ONLY AUDIT AND IMPLEMENTATION PLAN`. Verdict: `IMPLEMENT_GIFT_PARITY_NOW`.
+
+Required backend coverage:
+
+- fixed gift and selectable allowlist gift use the same schedule/date/weekday/time and item/category
+  target resolver as preview and submit;
+- preview emits explicit fixed/selectable/unavailable offer state without writes;
+- submit requires explicit accept/select or skip, ignores client prices/discounts and revalidates
+  rule/version, trigger, allowlist membership, current availability and current reward price;
+- trigger removed, rejected, canceled or excluded cannot create or retain an authoritative gift
+  adjustment; batch rejection and reward-line cancellation stay financially consistent;
+- unavailable fixed reward, stale selected reward, all-unavailable allowlist and unsupported
+  required reward option fail closed without silent substitution;
+- changed reward price recalculates through one current snapshot and preserves winner/conflict
+  policy;
+- at most one gift redemption is persisted for the current batch/tab; multiple trigger quantities
+  and multiple eligible gift rules do not multiply rewards;
+- reward line snapshots original amount, 100% adjustment and final zero; trigger/reward linkage,
+  selected reward item, rule/version and label remain immutable in active order, bill and History;
+- reward line receives neither percentage nor manual discount;
+- repeated idempotent submit changes no order, batch, application, adjustment or reward-link count;
+- gift offer identity, rule version and accept/select/skip decision participate in pricing
+  fingerprint/recalculation coverage.
+
+Required Bot/Mini App parity coverage:
+
+- the same preview fixture exposes the same offer/rule/version/trigger/allowlist through both
+  adapters;
+- fixed reward requires visible confirmation; selectable reward requires one explicit choice;
+- both clients support `Пропустить подарок`;
+- cart changes invalidate stale decisions and cause a new server preview;
+- restart/process-memory loss cannot create a gift from an unconfirmed decision: submit carries a
+  complete stateless decision and the server revalidates it;
+- both clients render gift original amount, named 100% adjustment and final zero, then show the same
+  persisted bill/History facts;
+- all-unavailable reward state uses explicit human copy instead of silently hiding or substituting
+  the gift.
+
+Required focused selectors for implementation:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*PromotionRuleEngine*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRepository*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRoutes*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderRoutes*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueOrdersRepository*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VisitRepository*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouter*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
 
 ## GitHub Actions Expectations
 
