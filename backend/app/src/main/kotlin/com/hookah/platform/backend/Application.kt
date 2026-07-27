@@ -1218,6 +1218,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     venuePromotionRepository = venuePromotionRepository,
                     venueSettingsRepository = venueSettingsRepository,
+                    venuePromotionRuleRepository = venuePromotionRuleRepository,
+                    venueMenuRepository = venueMenuRepository,
                 )
                 venueOrderRoutes(
                     venueAccessRepository = venueAccessRepository,

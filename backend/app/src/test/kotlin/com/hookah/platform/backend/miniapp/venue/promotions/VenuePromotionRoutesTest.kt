@@ -30,6 +30,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -171,24 +172,47 @@ class VenuePromotionRoutesTest {
 
             val venueId = seedVenueMembership(jdbcUrl, MANAGER_ID, "MANAGER")
             val foreignVenueId = seedVenueMembership(jdbcUrl, FOREIGN_ID, "OWNER")
+            val categoryId = insertMenuCategory(jdbcUrl, venueId, "Кальяны")
+            val itemId = insertMenuItem(jdbcUrl, venueId, categoryId, "Кальян")
             val managerToken = issueToken(config, MANAGER_ID)
             val createResponse =
                 client.post("/api/venue/$venueId/promotions") {
                     authenticated(managerToken)
                     contentType(ContentType.Application.Json)
-                    setBody(validCreateBody())
+                    setBody(happyHoursBody(menuItemId = itemId))
                 }
             assertEquals(HttpStatusCode.OK, createResponse.status)
-            val promotionId =
-                json.decodeFromString(VenuePromotionResponse.serializer(), createResponse.bodyAsText()).promotion.id
+            val created =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    createResponse.bodyAsText(),
+                ).promotion
+            val promotionId = created.id
+            assertEquals("HAPPY_HOURS_PERCENT", created.templateType)
+            assertEquals(1, assertNotNull(created.rule).version)
 
             val updateResponse =
                 client.put("/api/venue/$venueId/promotions/$promotionId") {
                     authenticated(managerToken)
                     contentType(ContentType.Application.Json)
-                    setBody(validCreateBody(title = "Менеджер обновил"))
+                    setBody(
+                        happyHoursBody(
+                            title = "Менеджер обновил",
+                            menuCategoryId = categoryId,
+                            discountPercent = 35,
+                        ),
+                    )
                 }
             assertEquals(HttpStatusCode.OK, updateResponse.status)
+            val updated =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    updateResponse.bodyAsText(),
+                ).promotion
+            assertEquals("Менеджер обновил", updated.title)
+            assertEquals(2, assertNotNull(updated.rule).version)
+            assertEquals("MENU_CATEGORY", updated.rule?.target?.type)
+            assertEquals(categoryId, updated.rule?.target?.menuCategoryId)
 
             val archiveResponse =
                 client.delete("/api/venue/$venueId/promotions/$promotionId") {
@@ -204,12 +228,39 @@ class VenuePromotionRoutesTest {
             assertEquals(HttpStatusCode.Forbidden, staffResponse.status)
             assertApiErrorEnvelope(staffResponse, ApiErrorCodes.FORBIDDEN)
 
+            val staffCreateResponse =
+                client.post("/api/venue/$venueId/promotions") {
+                    authenticated(managerToken)
+                    contentType(ContentType.Application.Json)
+                    setBody(happyHoursBody(menuItemId = itemId))
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffCreateResponse.status)
+            assertApiErrorEnvelope(staffCreateResponse, ApiErrorCodes.FORBIDDEN)
+
+            val staffUpdateResponse =
+                client.put("/api/venue/$venueId/promotions/$promotionId") {
+                    authenticated(managerToken)
+                    contentType(ContentType.Application.Json)
+                    setBody(happyHoursBody(menuItemId = itemId))
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffUpdateResponse.status)
+            assertApiErrorEnvelope(staffUpdateResponse, ApiErrorCodes.FORBIDDEN)
+
             val foreignResponse =
                 client.get("/api/venue/$venueId/promotions") {
                     authenticated(issueToken(config, FOREIGN_ID))
                 }
             assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
             assertApiErrorEnvelope(foreignResponse, ApiErrorCodes.FORBIDDEN)
+
+            val foreignCreateResponse =
+                client.post("/api/venue/$venueId/promotions") {
+                    authenticated(issueToken(config, FOREIGN_ID))
+                    contentType(ContentType.Application.Json)
+                    setBody(happyHoursBody(menuItemId = itemId))
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignCreateResponse.status)
+            assertApiErrorEnvelope(foreignCreateResponse, ApiErrorCodes.FORBIDDEN)
 
             val crossVenuePromotionResponse =
                 client.get("/api/venue/$foreignVenueId/promotions") {
@@ -255,27 +306,34 @@ class VenuePromotionRoutesTest {
         }
 
     @Test
-    fun `simple management API does not expose or mutate rule backed promotion templates`() =
+    fun `invalid happy hours target is rejected without orphan promotion`() =
         testApplication {
-            val jdbcUrl = buildJdbcUrl("venue-promotion-simple-scope")
+            val jdbcUrl = buildJdbcUrl("venue-promotion-invalid-target")
             val config = buildConfig(jdbcUrl)
             environment { this.config = config }
             application { module() }
             client.get("/health")
 
             val venueId = seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER")
-            val token = issueToken(config, OWNER_ID)
-            val now = Instant.now()
-            val promotionId =
-                insertPromotion(
+            val foreignVenueId = seedVenueMembership(jdbcUrl, FOREIGN_ID, "OWNER")
+            val foreignCategoryId = insertMenuCategory(jdbcUrl, foreignVenueId, "Чужая категория")
+            val foreignItemId =
+                insertMenuItem(
                     jdbcUrl = jdbcUrl,
-                    venueId = venueId,
-                    title = "Скидочный шаблон",
-                    status = "DRAFT",
-                    startsAt = now.minusSeconds(3_600),
-                    endsAt = now.plusSeconds(3_600),
-                    templateType = "HAPPY_HOURS_PERCENT",
+                    venueId = foreignVenueId,
+                    categoryId = foreignCategoryId,
+                    name = "Чужая позиция",
                 )
+            val token = issueToken(config, OWNER_ID)
+
+            val response =
+                client.post("/api/venue/$venueId/promotions") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(happyHoursBody(menuItemId = foreignItemId))
+                }
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
 
             val listResponse =
                 client.get("/api/venue/$venueId/promotions") {
@@ -288,14 +346,239 @@ class VenuePromotionRoutesTest {
                     listResponse.bodyAsText(),
                 ).items.isEmpty(),
             )
+        }
+
+    @Test
+    fun `invalid happy hours update rolls back parent and rule changes`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-promotion-update-rollback")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER")
+            val categoryId = insertMenuCategory(jdbcUrl, venueId, "Кальяны")
+            val itemId = insertMenuItem(jdbcUrl, venueId, categoryId, "Кальян")
+            val foreignVenueId = seedVenueMembership(jdbcUrl, FOREIGN_ID, "OWNER")
+            val foreignCategoryId = insertMenuCategory(jdbcUrl, foreignVenueId, "Чужая категория")
+            val foreignItemId = insertMenuItem(jdbcUrl, foreignVenueId, foreignCategoryId, "Чужая позиция")
+            val token = issueToken(config, OWNER_ID)
+
+            val createResponse =
+                client.post("/api/venue/$venueId/promotions") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        happyHoursBody(
+                            title = "Исходная акция",
+                            menuItemId = itemId,
+                            discountPercent = 50,
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val promotionId =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    createResponse.bodyAsText(),
+                ).promotion.id
 
             val updateResponse =
                 client.put("/api/venue/$venueId/promotions/$promotionId") {
                     authenticated(token)
                     contentType(ContentType.Application.Json)
-                    setBody(validCreateBody())
+                    setBody(
+                        happyHoursBody(
+                            title = "Не должна сохраниться",
+                            menuItemId = foreignItemId,
+                            discountPercent = 25,
+                            windows =
+                                """
+                                [
+                                  {"weekday":6,"startLocal":"14:00","endLocal":"17:00"}
+                                ]
+                                """.trimIndent(),
+                        ),
+                    )
                 }
-            assertEquals(HttpStatusCode.NotFound, updateResponse.status)
+            assertEquals(HttpStatusCode.BadRequest, updateResponse.status)
+            assertApiErrorEnvelope(updateResponse, ApiErrorCodes.INVALID_INPUT)
+
+            val listResponse =
+                client.get("/api/venue/$venueId/promotions") {
+                    authenticated(token)
+                }
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val persisted =
+                json.decodeFromString(
+                    VenuePromotionListResponse.serializer(),
+                    listResponse.bodyAsText(),
+                ).items.single()
+            assertEquals("Исходная акция", persisted.title)
+            val persistedRule = assertNotNull(persisted.rule)
+            assertEquals(1, persistedRule.version)
+            assertEquals(50, persistedRule.discountPercent)
+            assertEquals("MENU_ITEM", persistedRule.target?.type)
+            assertEquals(itemId, persistedRule.target?.menuItemId)
+            assertEquals(
+                listOf(
+                    VenuePromotionWeekdayWindowDto(weekday = 1, startLocal = "12:00", endLocal = "18:00"),
+                    VenuePromotionWeekdayWindowDto(weekday = 5, startLocal = "12:00", endLocal = "16:00"),
+                ),
+                persistedRule.windows,
+            )
+        }
+
+    @Test
+    fun `owner creates updates and activates happy hours promotion`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-promotion-happy-hours")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER")
+            val categoryId = insertMenuCategory(jdbcUrl, venueId, "Кальяны")
+            val itemId = insertMenuItem(jdbcUrl, venueId, categoryId, "Кальян классический")
+            val token = issueToken(config, OWNER_ID)
+
+            val createResponse =
+                client.post("/api/venue/$venueId/promotions") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        happyHoursBody(
+                            title = "Счастливые часы",
+                            menuItemId = itemId,
+                            discountPercent = 50,
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val created =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    createResponse.bodyAsText(),
+                ).promotion
+            assertEquals("DRAFT", created.status)
+            assertEquals("HAPPY_HOURS_PERCENT", created.templateType)
+            val createdRule = assertNotNull(created.rule)
+            assertEquals(1, createdRule.version)
+            assertEquals(50, createdRule.discountPercent)
+            assertEquals(
+                listOf(
+                    VenuePromotionWeekdayWindowDto(weekday = 1, startLocal = "12:00", endLocal = "18:00"),
+                    VenuePromotionWeekdayWindowDto(weekday = 5, startLocal = "12:00", endLocal = "16:00"),
+                ),
+                createdRule.windows,
+            )
+            assertEquals("MENU_ITEM", createdRule.target?.type)
+            assertEquals(itemId, createdRule.target?.menuItemId)
+            assertTrue(createdRule.readyForActivation)
+
+            val listResponse =
+                client.get("/api/venue/$venueId/promotions") {
+                    authenticated(token)
+                }
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val list =
+                json.decodeFromString(
+                    VenuePromotionListResponse.serializer(),
+                    listResponse.bodyAsText(),
+                )
+            assertEquals(listOf(created.id), list.items.map { it.id })
+            assertEquals(listOf(categoryId), list.menuCategories.map { it.id })
+            assertEquals(listOf(itemId), list.menuItems.map { it.id })
+
+            val updateResponse =
+                client.put("/api/venue/$venueId/promotions/${created.id}") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        happyHoursBody(
+                            title = "Счастливые часы выходного дня",
+                            menuCategoryId = categoryId,
+                            discountPercent = 25,
+                            windows =
+                                """
+                                [
+                                  {"weekday":6,"startLocal":"14:00","endLocal":"17:00"},
+                                  {"weekday":7,"startLocal":"14:00","endLocal":"17:00"}
+                                ]
+                                """.trimIndent(),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, updateResponse.status)
+            val updated =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    updateResponse.bodyAsText(),
+                ).promotion
+            assertEquals("Счастливые часы выходного дня", updated.title)
+            val updatedRule = assertNotNull(updated.rule)
+            assertEquals(2, updatedRule.version)
+            assertEquals(25, updatedRule.discountPercent)
+            assertEquals("MENU_CATEGORY", updatedRule.target?.type)
+            assertEquals(categoryId, updatedRule.target?.menuCategoryId)
+            assertTrue(updatedRule.readyForActivation)
+
+            val activateResponse =
+                client.post("/api/venue/$venueId/promotions/${created.id}/status") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"ACTIVE"}""")
+                }
+            assertEquals(HttpStatusCode.OK, activateResponse.status)
+            val activated =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    activateResponse.bodyAsText(),
+                ).promotion
+            assertEquals("ACTIVE", activated.status)
+            assertEquals("HAPPY_HOURS_PERCENT", activated.templateType)
+            assertTrue(assertNotNull(activated.rule).readyForActivation)
+        }
+
+    @Test
+    fun `incomplete happy hours promotion cannot activate and remains draft`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-promotion-incomplete-happy-hours")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER")
+            val token = issueToken(config, OWNER_ID)
+            val now = Instant.now()
+            val promotionId =
+                insertPromotion(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    title = "Неполная акция",
+                    status = "DRAFT",
+                    startsAt = now.minusSeconds(3_600),
+                    endsAt = now.plusSeconds(3_600),
+                    templateType = "HAPPY_HOURS_PERCENT",
+                )
+
+            val listBeforeActivation =
+                client.get("/api/venue/$venueId/promotions") {
+                    authenticated(token)
+                }
+            assertEquals(HttpStatusCode.OK, listBeforeActivation.status)
+            val incomplete =
+                json.decodeFromString(
+                    VenuePromotionListResponse.serializer(),
+                    listBeforeActivation.bodyAsText(),
+                ).items.single()
+            assertEquals(promotionId, incomplete.id)
+            assertEquals("HAPPY_HOURS_PERCENT", incomplete.templateType)
+            assertEquals("DRAFT", incomplete.status)
+            assertNull(incomplete.rule)
 
             val statusResponse =
                 client.post("/api/venue/$venueId/promotions/$promotionId/status") {
@@ -303,13 +586,21 @@ class VenuePromotionRoutesTest {
                     contentType(ContentType.Application.Json)
                     setBody("""{"status":"ACTIVE"}""")
                 }
-            assertEquals(HttpStatusCode.NotFound, statusResponse.status)
+            assertEquals(HttpStatusCode.BadRequest, statusResponse.status)
+            assertApiErrorEnvelope(statusResponse, ApiErrorCodes.INVALID_INPUT)
 
-            val archiveResponse =
-                client.delete("/api/venue/$venueId/promotions/$promotionId") {
+            val listAfterActivation =
+                client.get("/api/venue/$venueId/promotions") {
                     authenticated(token)
                 }
-            assertEquals(HttpStatusCode.NotFound, archiveResponse.status)
+            assertEquals(HttpStatusCode.OK, listAfterActivation.status)
+            assertEquals(
+                "DRAFT",
+                json.decodeFromString(
+                    VenuePromotionListResponse.serializer(),
+                    listAfterActivation.bodyAsText(),
+                ).items.single().status,
+            )
         }
 
     @Test
@@ -373,9 +664,10 @@ class VenuePromotionRoutesTest {
             val venue = json.decodeFromString(VenueResponse.serializer(), responseBody).venue
             assertEquals(listOf(visibleId), venue.promotions.map { it.id })
             assertEquals("Текущая акция", venue.promotions.single().title)
+            assertEquals("TEXT_ONLY", venue.promotions.single().templateType)
             assertFalse(venue.timezone.isNullOrBlank())
             assertFalse(responseBody.contains("createdBy"))
-            assertFalse(responseBody.contains("templateType"))
+            assertFalse(responseBody.contains("\"templateType\""))
 
             val hiddenResponse =
                 client.get("/api/guest/venue/$hiddenVenueId") {
@@ -466,6 +758,54 @@ class VenuePromotionRoutesTest {
             }
         }
 
+    private fun insertMenuCategory(
+        jdbcUrl: String,
+        venueId: Long,
+        name: String,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO menu_categories (venue_id, name, sort_order, is_active)
+                VALUES (?, ?, 0, true)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, name)
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    if (keys.next()) keys.getLong(1) else error("Failed to insert menu category")
+                }
+            }
+        }
+
+    private fun insertMenuItem(
+        jdbcUrl: String,
+        venueId: Long,
+        categoryId: Long,
+        name: String,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO menu_items (
+                    venue_id, category_id, name, price_minor, currency, is_available
+                )
+                VALUES (?, ?, ?, 200000, 'RUB', true)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, categoryId)
+                statement.setString(3, name)
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    if (keys.next()) keys.getLong(1) else error("Failed to insert menu item")
+                }
+            }
+        }
+
     private fun updateMembershipRole(
         jdbcUrl: String,
         venueId: Long,
@@ -549,6 +889,46 @@ class VenuePromotionRoutesTest {
           "endsAt": ${json.encodeToString(endsAt)}
         }
         """.trimIndent()
+
+    private fun happyHoursBody(
+        title: String = "Акция",
+        description: String = "Описание",
+        startsAt: String = "2030-05-10T18:00:00Z",
+        endsAt: String = "2030-05-10T22:00:00Z",
+        menuItemId: Long? = null,
+        menuCategoryId: Long? = null,
+        discountPercent: Int = 50,
+        windows: String =
+            """
+            [
+              {"weekday":1,"startLocal":"12:00","endLocal":"18:00"},
+              {"weekday":5,"startLocal":"12:00","endLocal":"16:00"}
+            ]
+            """.trimIndent(),
+    ): String {
+        require((menuItemId == null) != (menuCategoryId == null))
+        val target =
+            if (menuItemId != null) {
+                """{"type":"MENU_ITEM","menuItemId":$menuItemId}"""
+            } else {
+                """{"type":"MENU_CATEGORY","menuCategoryId":$menuCategoryId}"""
+            }
+        return """
+            {
+              "title": ${json.encodeToString(title)},
+              "description": ${json.encodeToString(description)},
+              "terms": "Только в указанные часы",
+              "startsAt": ${json.encodeToString(startsAt)},
+              "endsAt": ${json.encodeToString(endsAt)},
+              "templateType": "HAPPY_HOURS_PERCENT",
+              "rule": {
+                "windows": $windows,
+                "target": $target,
+                "discountPercent": $discountPercent
+              }
+            }
+            """.trimIndent()
+    }
 
     companion object {
         private const val OWNER_ID = 10101L

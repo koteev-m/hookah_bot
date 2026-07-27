@@ -247,7 +247,10 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
       discountList,
       el('p', {
         className: 'venue-order-sub',
-        text: `${discount.label}: −${formatPrice(discount.discountMinor, discount.currency)}`
+        text:
+          discount.originalAmountMinor != null && discount.finalAmountMinor != null
+            ? `${discount.label}: ${formatPrice(discount.originalAmountMinor, discount.currency)} − ${formatPrice(discount.discountMinor, discount.currency)} = ${formatPrice(discount.finalAmountMinor, discount.currency)}`
+            : `${discount.label}: −${formatPrice(discount.discountMinor, discount.currency)}`
       })
     )
   })

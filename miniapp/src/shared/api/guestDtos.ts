@@ -52,6 +52,7 @@ export type GuestVenuePromotionDto = {
   terms?: string | null
   startsAt?: string | null
   endsAt?: string | null
+  templateType?: 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT' | string
 }
 
 export type GuestTodayStaffResponse = {
@@ -246,6 +247,7 @@ export type AddBatchRequest = {
   tableSessionId: number
   tabId: number
   idempotencyKey: string
+  previewFingerprint?: string | null
   items: AddBatchItemDto[]
   comment?: string | null
 }
@@ -297,6 +299,8 @@ export type AddBatchItemDto = {
 export type AddBatchResponse = {
   orderId: number
   batchId: number
+  pricing: CartPreviewDto
+  recalculated: boolean
 }
 
 export type CartPreviewRequest = {
@@ -318,6 +322,7 @@ export type CartPreviewDto = {
   currency: string
   discounts: CartPreviewDiscountDto[]
   items: CartPreviewItemDto[]
+  pricingFingerprint: string
 }
 
 export type CartPreviewDiscountDto = {
@@ -325,6 +330,23 @@ export type CartPreviewDiscountDto = {
   discountMinor: number
   currency: string
   ruleType?: string | null
+  promotionId: number | null
+  ruleId: number | null
+  ruleVersion: number | null
+  originalAmountMinor: number | null
+  finalAmountMinor: number | null
+  eligibleLineIds: number[]
+}
+
+export type CartPreviewPromotionAdjustmentDto = {
+  promotionId: number | null
+  promotionTitle: string
+  ruleId: number
+  ruleVersion: number
+  ruleType: string
+  originalAmountMinor: number
+  discountMinor: number
+  finalAmountMinor: number
 }
 
 export type CartPreviewItemDto = {
@@ -339,6 +361,7 @@ export type CartPreviewItemDto = {
   discountMinor: number
   linePayableMinor: number
   isPromotionReward: boolean
+  promotionAdjustment?: CartPreviewPromotionAdjustmentDto | null
 }
 
 export type SelectedOrderItemOptionDto = {
@@ -632,6 +655,8 @@ export type GuestVisitPromotionDiscountDto = {
   label: string
   discountMinor: number
   currency: string
+  originalAmountMinor?: number | null
+  finalAmountMinor?: number | null
 }
 
 export type GuestFavoriteVenuesResponse = {

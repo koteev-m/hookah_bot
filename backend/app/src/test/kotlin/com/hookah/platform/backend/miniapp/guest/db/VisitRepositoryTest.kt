@@ -378,13 +378,81 @@ class VisitRepositoryTest {
 
             assertNotNull(detail)
             assertEquals(1800L, detail.totalMinor)
-            assertEquals(200L, detail.orders.single().items.single().promoDiscountMinor)
+            assertEquals(
+                200L,
+                detail.orders.single().items.single { item -> item.promoDiscountMinor > 0L }.promoDiscountMinor,
+            )
             assertEquals(
                 listOf("Счастливые часы" to 200L),
                 detail.orders.single().promotionDiscounts.map {
                     it.label to it.discountMinor
                 },
             )
+        }
+
+    @Test
+    fun `guest visit promotion totals include only active adjustment snapshots`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("visit-detail-active-promo-snapshots")
+            val fixture = seedBase(jdbcUrl)
+            val visitRepository = VisitRepository(dataSource(jdbcUrl))
+            val orderFixture = seedOrderShell(jdbcUrl, fixture)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                val guestTab =
+                    insertTab(connection, fixture.venueId, orderFixture.tableSessionId, GUEST_ONE, "PERSONAL")
+                val batchId = insertBatch(connection, orderFixture.orderId, guestTab, null, "MINIAPP")
+                val activeBatchItemId = insertBatchItem(connection, batchId, fixture.itemId)
+                val excludedBatchItemId = insertBatchItem(connection, batchId, fixture.itemId)
+                insertGuestBatchIdempotency(
+                    connection,
+                    fixture.venueId,
+                    orderFixture.tableSessionId,
+                    GUEST_ONE,
+                    orderFixture.orderId,
+                    batchId,
+                    "active-promo-snapshots",
+                )
+                insertPromotionApplicationWithSnapshots(
+                    connection = connection,
+                    fixture = fixture,
+                    orderId = orderFixture.orderId,
+                    batchId = batchId,
+                    lines =
+                        listOf(
+                            PromotionLineSnapshot(
+                                batchItemId = activeBatchItemId,
+                                originalAmountMinor = 1_000L,
+                                discountAmountMinor = 200L,
+                                finalAmountMinor = 800L,
+                            ),
+                            PromotionLineSnapshot(
+                                batchItemId = excludedBatchItemId,
+                                originalAmountMinor = 1_500L,
+                                discountAmountMinor = 300L,
+                                finalAmountMinor = 1_200L,
+                            ),
+                        ),
+                )
+                connection.prepareStatement(
+                    "UPDATE order_batch_items SET is_excluded = TRUE WHERE id = ?",
+                ).use { statement ->
+                    statement.setLong(1, excludedBatchItemId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+                markOrderClosed(connection, orderFixture.orderId)
+            }
+            visitRepository.recordOrderClosedVisits(orderFixture.orderId)
+
+            val visit = visitRepository.findRecentVisits(GUEST_ONE).single()
+            val detail = visitRepository.getGuestVisitDetail(GUEST_ONE, visit.id)
+
+            assertNotNull(detail)
+            assertEquals(1, detail.orders.single().items.size)
+            assertEquals(800L, detail.orders.single().totalMinor)
+            val promotion = detail.orders.single().promotionDiscounts.single()
+            assertEquals(1_000L, promotion.originalAmountMinor)
+            assertEquals(200L, promotion.discountMinor)
+            assertEquals(800L, promotion.finalAmountMinor)
         }
 
     @Test
@@ -1281,6 +1349,89 @@ class VisitRepositoryTest {
         }
     }
 
+    private fun insertPromotionApplicationWithSnapshots(
+        connection: java.sql.Connection,
+        fixture: BaseFixture,
+        orderId: Long,
+        batchId: Long,
+        lines: List<PromotionLineSnapshot>,
+    ) {
+        val ruleId = insertPromotionRule(connection, fixture.venueId)
+        val applicationId =
+            connection.prepareStatement(
+                """
+                INSERT INTO order_promotion_applications (
+                    order_id,
+                    batch_id,
+                    venue_id,
+                    user_id,
+                    promotion_id,
+                    rule_id,
+                    title_snapshot,
+                    rule_type,
+                    target_type,
+                    target_value,
+                    discount_percent,
+                    discount_total_minor,
+                    currency,
+                    dedupe_key,
+                    original_total_minor,
+                    final_total_minor
+                )
+                VALUES (?, ?, ?, ?, NULL, ?, 'Счастливые часы', 'HAPPY_HOURS_PERCENT',
+                        'CATEGORY_TYPE', 'HOOKAH', 20, ?, 'RUB', ?, ?, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.setLong(2, batchId)
+                statement.setLong(3, fixture.venueId)
+                statement.setLong(4, GUEST_ONE)
+                statement.setLong(5, ruleId)
+                statement.setLong(6, lines.sumOf { it.discountAmountMinor })
+                statement.setString(7, "visit-snapshot-test:$orderId")
+                statement.setLong(8, lines.sumOf { it.originalAmountMinor })
+                statement.setLong(9, lines.sumOf { it.finalAmountMinor })
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    keys.next()
+                    keys.getLong(1)
+                }
+            }
+        lines.forEach { line ->
+            connection.prepareStatement(
+                """
+                INSERT INTO order_batch_item_promotion_adjustments (
+                    application_id,
+                    order_batch_item_id,
+                    menu_item_id,
+                    discount_minor,
+                    discount_percent,
+                    original_price_minor,
+                    quantity,
+                    currency,
+                    item_name_snapshot,
+                    base_unit_price_minor,
+                    selected_option_delta_minor,
+                    original_amount_minor,
+                    final_amount_minor
+                )
+                VALUES (?, ?, ?, ?, 20, ?, 1, 'RUB', 'Кальян', ?, 0, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, applicationId)
+                statement.setLong(2, line.batchItemId)
+                statement.setLong(3, fixture.itemId)
+                statement.setLong(4, line.discountAmountMinor)
+                statement.setLong(5, line.originalAmountMinor)
+                statement.setLong(6, line.originalAmountMinor)
+                statement.setLong(7, line.originalAmountMinor)
+                statement.setLong(8, line.finalAmountMinor)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun insertPromotionRule(
         connection: java.sql.Connection,
         venueId: Long,
@@ -1333,6 +1484,13 @@ class VisitRepositoryTest {
     private data class OrderFixture(
         val orderId: Long,
         val tableSessionId: Long,
+    )
+
+    private data class PromotionLineSnapshot(
+        val batchItemId: Long,
+        val originalAmountMinor: Long,
+        val discountAmountMinor: Long,
+        val finalAmountMinor: Long,
     )
 
     private companion object {

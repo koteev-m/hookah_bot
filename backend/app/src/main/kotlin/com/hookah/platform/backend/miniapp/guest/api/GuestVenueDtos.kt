@@ -56,6 +56,7 @@ data class GuestVenuePromotionDto(
     val terms: String? = null,
     val startsAt: String? = null,
     val endsAt: String? = null,
+    val templateType: String = "TEXT_ONLY",
 )
 
 @Serializable

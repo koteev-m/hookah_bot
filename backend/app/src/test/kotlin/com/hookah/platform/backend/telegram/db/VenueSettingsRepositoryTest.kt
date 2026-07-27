@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.sql.DriverManager
@@ -77,6 +79,52 @@ class VenueSettingsRepositoryTest {
             val resolved = repository.resolveZoneId(10L, ZoneId.of("Europe/Moscow"))
 
             assertEquals(ZoneId.of("Europe/Moscow"), resolved)
+        }
+
+    @Test
+    fun `promotion timezone uses fallback only when venue timezone is absent`() =
+        runBlocking {
+            val dataSource = testDataSource()
+            seedVenue(dataSource, venueId = 10L)
+            val repository = VenueSettingsRepository(dataSource)
+
+            assertEquals(
+                ZoneId.of("Asia/Tomsk"),
+                repository.resolvePromotionZoneId(10L, ZoneId.of("Asia/Tomsk")),
+            )
+
+            insertSettings(dataSource, venueId = 10L, timezone = "Europe/Moscow")
+
+            assertEquals(
+                ZoneId.of("Europe/Moscow"),
+                repository.resolvePromotionZoneId(10L, ZoneId.of("Asia/Tomsk")),
+            )
+            Unit
+        }
+
+    @Test
+    fun `promotion timezone rejects invalid stored timezone`() =
+        runBlocking {
+            val dataSource = testDataSource()
+            seedVenue(dataSource, venueId = 10L)
+            insertSettings(dataSource, venueId = 10L, timezone = "Not/AZone")
+            val repository = VenueSettingsRepository(dataSource)
+
+            assertFailsWith<InvalidInputException> {
+                repository.resolvePromotionZoneId(10L, ZoneId.of("Europe/Moscow"))
+            }
+            Unit
+        }
+
+    @Test
+    fun `promotion timezone does not hide database unavailability`() =
+        runBlocking {
+            val repository = VenueSettingsRepository(dataSource = null)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.resolvePromotionZoneId(10L, ZoneId.of("Europe/Moscow"))
+            }
+            Unit
         }
 
     @Test

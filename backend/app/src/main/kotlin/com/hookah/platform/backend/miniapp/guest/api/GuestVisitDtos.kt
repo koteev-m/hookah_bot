@@ -90,6 +90,8 @@ data class GuestVisitPromotionDiscountDto(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String? = null,
+    val originalAmountMinor: Long? = null,
+    val finalAmountMinor: Long? = null,
 )
 
 @Serializable

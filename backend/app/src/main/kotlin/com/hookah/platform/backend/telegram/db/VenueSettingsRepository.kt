@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -253,6 +254,29 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                 logger.warn("Invalid venue timezone venue_id={} timezone={}", venueId, timezone)
             }
             .getOrDefault(fallback)
+    }
+
+    suspend fun resolvePromotionZoneId(
+        venueId: Long,
+        fallback: ZoneId = ZoneId.of(DEFAULT_AUTO_TIMEZONE),
+    ): ZoneId {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val raw =
+            try {
+                withContext(Dispatchers.IO) {
+                    ds.connection.use { connection ->
+                        selectSettings(connection, venueId)?.timezone
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        val timezone = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return fallback
+        return runCatching { ZoneId.of(timezone) }
+            .getOrElse {
+                logger.warn("Invalid promotion timezone venue_id={} timezone={}", venueId, timezone)
+                throw InvalidInputException("Часовой пояс заведения указан некорректно.")
+            }
     }
 
     suspend fun getPublicReviewUrl(venueId: Long): String? {

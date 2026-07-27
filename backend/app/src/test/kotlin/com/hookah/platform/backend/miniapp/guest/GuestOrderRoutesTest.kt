@@ -22,8 +22,11 @@ import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.StaffBillRequestNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
+import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.PromotionApplicationRepository
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
@@ -47,8 +50,11 @@ import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
@@ -459,6 +465,8 @@ class GuestOrderRoutesTest {
             assertTrue(firstNotification.isFirstBatch)
             assertEquals(OrderWorkflowStatus.NEW, firstNotification.status)
             assertNotNull(firstNotification.updatedAt)
+            assertEquals(firstPayload.pricing.finalPayableTotalMinor, firstNotification.totalPayableMinor)
+            assertEquals(firstPayload.pricing.currency, firstNotification.totalCurrency)
             assertEquals(1_000, firstNotification.bill?.finalPayableTotalMinor)
             assertEquals(1, firstNotification.batches.size)
             assertEquals(firstPayload.batchId, firstNotification.batches.single().batchId)
@@ -471,6 +479,8 @@ class GuestOrderRoutesTest {
             assertTrue(!secondNotification.isFirstBatch)
             assertEquals(OrderWorkflowStatus.NEW, secondNotification.status)
             assertNotNull(secondNotification.updatedAt)
+            assertEquals(secondPayload.pricing.finalPayableTotalMinor, secondNotification.totalPayableMinor)
+            assertEquals(secondPayload.pricing.currency, secondNotification.totalCurrency)
             assertEquals(3_000, secondNotification.bill?.finalPayableTotalMinor)
             assertEquals(2, secondNotification.batches.size)
             assertEquals("Основной заказ", secondNotification.batches[0].label)
@@ -1309,7 +1319,10 @@ class GuestOrderRoutesTest {
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             setMenuCategoryType(jdbcUrl, categoryId, "HOOKAH")
-            val hookahItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Promo hookah")
+            val hookahItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Promo hookah", priceMinor = 100)
+            val premiumHookahItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Premium promo hookah", priceMinor = 250)
             val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
             seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 20, status = "ACTIVE")
 
@@ -1320,7 +1333,11 @@ class GuestOrderRoutesTest {
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
                     idempotencyKey = "idem-promo-ledger",
-                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 2)),
+                    items =
+                        listOf(
+                            AddBatchItemDto(itemId = hookahItemId, qty = 2),
+                            AddBatchItemDto(itemId = premiumHookahItemId, qty = 3),
+                        ),
                     comment = null,
                 )
             val response =
@@ -1338,22 +1355,33 @@ class GuestOrderRoutesTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             assertEquals(HttpStatusCode.OK, replay.status)
+            val batchId = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText()).batchId
             val orderSummary =
                 OrdersRepository(h2DataSource(jdbcUrl))
                     .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
                     .single()
-            val summary =
-                orderSummary
-                    .items
-                    .single()
-            assertEquals(hookahItemId, summary.itemId)
-            assertEquals(40L, summary.promoDiscountMinor)
+            assertEquals(40L, orderSummary.items.single { it.itemId == hookahItemId }.promoDiscountMinor)
+            assertEquals(150L, orderSummary.items.single { it.itemId == premiumHookahItemId }.promoDiscountMinor)
             assertEquals(
-                listOf("Счастливые часы" to 40L),
+                listOf("Счастливые часы" to 190L),
                 orderSummary.promotionDiscounts.map { it.label to it.discountMinor },
             )
+            val persistedAdjustments =
+                PromotionApplicationRepository(h2DataSource(jdbcUrl))
+                    .findAdjustmentsByBatch(batchId)
+            assertEquals(1, persistedAdjustments.map { it.applicationId }.distinct().size)
+            assertEquals(
+                mapOf(
+                    hookahItemId to (200L to 160L),
+                    premiumHookahItemId to (750L to 600L),
+                ),
+                persistedAdjustments.associate { adjustment ->
+                    adjustment.menuItemId to
+                        (adjustment.originalAmountMinor to adjustment.finalAmountMinor)
+                },
+            )
             assertEquals(1, countPromotionApplications(jdbcUrl))
-            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+            assertEquals(2, countPromotionAdjustments(jdbcUrl))
         }
 
     @Test
@@ -1453,6 +1481,993 @@ class GuestOrderRoutesTest {
                 },
                 order.discounts.map { it.label to it.discountMinor },
             )
+        }
+
+    @Test
+    fun `telegram and mini app use the same promotion pricing fixture for preview submit and replay`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-bot-miniapp-promotion-parity")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 47)
+            seedTableToken(jdbcUrl, tableId, "promotion-parity-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId =
+                seedMenuItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    categoryId = categoryId,
+                    name = "Паритетный кальян",
+                    priceMinor = 2_000,
+                )
+            val optionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = itemId,
+                    name = "Премиальная чаша",
+                    priceDeltaMinor = 500,
+                )
+            val promotion =
+                seedHappyHoursItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    itemId = itemId,
+                    title = "Паритетные часы",
+                    discountPercent = 40,
+                )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val apiItems =
+                listOf(
+                    AddBatchItemDto(
+                        itemId = itemId,
+                        qty = 2,
+                        selectedOptionId = optionId,
+                    ),
+                )
+            val repositoryItems =
+                listOf(
+                    OrderBatchItemInput(
+                        itemId = itemId,
+                        qty = 2,
+                        selectedOptionId = optionId,
+                    ),
+                )
+            val dataSource = h2DataSource(jdbcUrl)
+            val sharedOrdersRepository =
+                OrdersRepository(
+                    dataSource = dataSource,
+                    promotionApplicationRepository = PromotionApplicationRepository(dataSource),
+                    venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource),
+                )
+
+            val botPreview =
+                assertNotNull(
+                    sharedOrdersRepository.previewGuestOrderBatch(
+                        venueId = venueId,
+                        userId = TELEGRAM_USER_ID,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                    ),
+                )
+            val miniPreviewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "promotion-parity-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = apiItems,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, miniPreviewResponse.status)
+            val miniPreview =
+                json.decodeFromString(CartPreviewResponse.serializer(), miniPreviewResponse.bodyAsText()).preview
+
+            assertEquals(5_000L, botPreview.grossTotalMinor)
+            assertEquals(2_000L, botPreview.promoDiscountTotalMinor)
+            assertEquals(3_000L, botPreview.finalPayableTotalMinor)
+            assertEquals(botPreview.grossTotalMinor, miniPreview.grossTotalMinor)
+            assertEquals(botPreview.promoDiscountTotalMinor, miniPreview.promoDiscountTotalMinor)
+            assertEquals(botPreview.finalPayableTotalMinor, miniPreview.finalPayableTotalMinor)
+            assertEquals(botPreview.pricingFingerprint, miniPreview.pricingFingerprint)
+            assertEquals(
+                botPreview.discounts.single().let {
+                    listOf(
+                        it.promotionId,
+                        it.ruleId,
+                        it.ruleVersion?.toLong(),
+                        it.originalAmountMinor,
+                        it.discountMinor,
+                        it.finalAmountMinor,
+                    )
+                },
+                miniPreview.discounts.single().let {
+                    listOf(
+                        it.promotionId,
+                        it.ruleId,
+                        it.ruleVersion?.toLong(),
+                        it.originalAmountMinor,
+                        it.discountMinor,
+                        it.finalAmountMinor,
+                    )
+                },
+            )
+            assertEquals(promotion.ruleId, botPreview.items.single().promotionAdjustment?.ruleId)
+            assertEquals(
+                botPreview.items.single().promotionAdjustment?.ruleId,
+                miniPreview.items.single().promotionAdjustment?.ruleId,
+            )
+            assertEquals(
+                botPreview.items.single().selectedOption?.priceDeltaMinor,
+                miniPreview.items.single().selectedOption?.priceDeltaMinor,
+            )
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+
+            val botSubmit =
+                assertNotNull(
+                    sharedOrdersRepository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "promotion-parity-bot-submit",
+                        tabId = personalTabId,
+                        comment = null,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        expectedPreviewFingerprint = botPreview.pricingFingerprint,
+                    ),
+                )
+            val miniSubmitRequest =
+                AddBatchRequest(
+                    tableToken = "promotion-parity-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "promotion-parity-mini-submit",
+                    items = apiItems,
+                    previewFingerprint = miniPreview.pricingFingerprint,
+                )
+            val miniSubmitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), miniSubmitRequest))
+                }
+            assertEquals(HttpStatusCode.OK, miniSubmitResponse.status)
+            val miniSubmit =
+                json.decodeFromString(AddBatchResponse.serializer(), miniSubmitResponse.bodyAsText())
+            val botPricing = assertNotNull(botSubmit.pricing)
+
+            assertFalse(botSubmit.recalculated)
+            assertFalse(miniSubmit.recalculated)
+            assertEquals(botPricing.grossTotalMinor, miniSubmit.pricing.grossTotalMinor)
+            assertEquals(botPricing.promoDiscountTotalMinor, miniSubmit.pricing.promoDiscountTotalMinor)
+            assertEquals(botPricing.finalPayableTotalMinor, miniSubmit.pricing.finalPayableTotalMinor)
+            assertEquals(
+                botSubmit.promotionDiscounts.single().ruleId,
+                miniSubmit.pricing.discounts.single().ruleId,
+            )
+            assertEquals(
+                botSubmit.promotionDiscounts.single().ruleVersion,
+                miniSubmit.pricing.discounts.single().ruleVersion,
+            )
+
+            val botReplay =
+                assertNotNull(
+                    sharedOrdersRepository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "promotion-parity-bot-submit",
+                        tabId = personalTabId,
+                        comment = null,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        expectedPreviewFingerprint = botPreview.pricingFingerprint,
+                    ),
+                )
+            val miniReplayResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), miniSubmitRequest))
+                }
+            assertEquals(HttpStatusCode.OK, miniReplayResponse.status)
+            val miniReplay =
+                json.decodeFromString(AddBatchResponse.serializer(), miniReplayResponse.bodyAsText())
+
+            assertTrue(botReplay.idempotencyReplay)
+            assertEquals(botSubmit.batchId, botReplay.batchId)
+            assertEquals(miniSubmit.batchId, miniReplay.batchId)
+            assertEquals(2, countPromotionApplications(jdbcUrl))
+            assertEquals(2, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `promotion uses current selected option delta and persists immutable pricing snapshots`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-option-snapshot")
+            val config = buildConfig(jdbcUrl)
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val notifications = mutableListOf<NewBatchNotification>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } answers {
+                notifications += invocation.args[0] as NewBatchNotification
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            }
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 41)
+            seedTableToken(jdbcUrl, tableId, "promo-option-snapshot-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId =
+                seedMenuItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    categoryId = categoryId,
+                    name = "Авторский кальян",
+                    priceMinor = 2_000,
+                )
+            val optionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = itemId,
+                    name = "Премиальная чаша",
+                    priceDeltaMinor = 500,
+                )
+            val promotion =
+                seedHappyHoursItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    itemId = itemId,
+                    title = "Счастливые часы на чашу",
+                    discountPercent = 50,
+                )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val items =
+                listOf(
+                    AddBatchItemDto(
+                        itemId = itemId,
+                        qty = 2,
+                        selectedOptionId = optionId,
+                    ),
+                )
+
+            val previewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "promo-option-snapshot-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, previewResponse.status)
+            val preview = json.decodeFromString(CartPreviewResponse.serializer(), previewResponse.bodyAsText()).preview
+            assertEquals(5_000L, preview.grossTotalMinor)
+            assertEquals(2_500L, preview.promoDiscountTotalMinor)
+            assertEquals(2_500L, preview.finalPayableTotalMinor)
+            val previewItem = preview.items.single()
+            assertEquals(2_000L, previewItem.baseUnitPriceMinor)
+            assertEquals(500L, previewItem.selectedOptionDeltaMinor)
+            assertEquals(2_500L, previewItem.priceMinor)
+            assertEquals(5_000L, previewItem.promotionAdjustment?.originalAmountMinor)
+            assertEquals(2_500L, previewItem.promotionAdjustment?.discountMinor)
+            assertEquals(2_500L, previewItem.promotionAdjustment?.finalAmountMinor)
+            assertEquals(promotion.ruleId, previewItem.promotionAdjustment?.ruleId)
+
+            val request =
+                AddBatchRequest(
+                    tableToken = "promo-option-snapshot-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-promo-option-snapshot",
+                    items = items,
+                    comment = null,
+                    previewFingerprint = preview.pricingFingerprint,
+                )
+            val submitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, submitResponse.status)
+            val submitted = json.decodeFromString(AddBatchResponse.serializer(), submitResponse.bodyAsText())
+            assertFalse(submitted.recalculated)
+            assertEquals(preview.pricingFingerprint, submitted.pricing.pricingFingerprint)
+            val adjustmentsBeforeEdit =
+                PromotionApplicationRepository(h2DataSource(jdbcUrl))
+                    .findAdjustmentsByBatch(submitted.batchId)
+            val adjustment = adjustmentsBeforeEdit.single()
+            assertEquals("Счастливые часы на чашу", adjustment.titleSnapshot)
+            assertEquals(1, adjustment.ruleVersion)
+            assertEquals("Авторский кальян", adjustment.itemNameSnapshot)
+            assertEquals(2_000L, adjustment.baseUnitPriceMinor)
+            assertEquals(500L, adjustment.selectedOptionDeltaMinor)
+            assertEquals(2, adjustment.quantity)
+            assertEquals(5_000L, adjustment.originalAmountMinor)
+            assertEquals(2_500L, adjustment.discountMinor)
+            assertEquals(2_500L, adjustment.finalAmountMinor)
+            assertEquals("Europe/Moscow", adjustment.venueTimezoneSnapshot)
+            assertNotNull(adjustment.appliedAt)
+            assertTrue(adjustment.scheduleSnapshotJson.orEmpty().contains("\"version\":1"))
+            assertTrue(adjustment.scheduleSnapshotJson.orEmpty().contains("\"priority\":100"))
+            assertTrue(adjustment.scheduleSnapshotJson.orEmpty().contains("\"stackable\":false"))
+            assertTrue(adjustment.scheduleSnapshotJson.orEmpty().contains("\"conflictGroup\":null"))
+            assertTrue(adjustment.scheduleSnapshotJson.orEmpty().contains("\"maxApplicationsPerItem\":1"))
+            assertTrue(adjustment.targetSnapshotJson.orEmpty().contains("\"menuItemId\":$itemId"))
+            val applicationBeforeEdit = fetchPromotionApplicationSnapshot(jdbcUrl, submitted.batchId)
+
+            setMenuItemAvailability(jdbcUrl, itemId, isAvailable = false)
+            setMenuOptionAvailability(jdbcUrl, optionId, isAvailable = false)
+            val replayResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, replayResponse.status)
+            val replay = json.decodeFromString(AddBatchResponse.serializer(), replayResponse.bodyAsText())
+            assertFalse(replay.recalculated)
+            assertEquals(submitted.batchId, replay.batchId)
+            assertEquals(submitted.pricing.pricingFingerprint, replay.pricing.pricingFingerprint)
+            assertEquals(submitted.pricing.grossTotalMinor, replay.pricing.grossTotalMinor)
+            assertEquals(submitted.pricing.promoDiscountTotalMinor, replay.pricing.promoDiscountTotalMinor)
+            assertEquals(submitted.pricing.finalPayableTotalMinor, replay.pricing.finalPayableTotalMinor)
+            assertEquals(2, notifications.size)
+            assertEquals(submitted.pricing.finalPayableTotalMinor, notifications.last().totalPayableMinor)
+            assertEquals(submitted.pricing.currency, notifications.last().totalCurrency)
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+
+            editPromotionRuleAndMenuAfterApplication(
+                jdbcUrl = jdbcUrl,
+                promotionId = promotion.promotionId,
+                ruleId = promotion.ruleId,
+                itemId = itemId,
+                optionId = optionId,
+            )
+
+            val adjustmentsAfterEdit =
+                PromotionApplicationRepository(h2DataSource(jdbcUrl))
+                    .findAdjustmentsByBatch(submitted.batchId)
+            assertEquals(adjustmentsBeforeEdit, adjustmentsAfterEdit)
+            assertEquals(applicationBeforeEdit, fetchPromotionApplicationSnapshot(jdbcUrl, submitted.batchId))
+            val activeOrderItem =
+                OrdersRepository(h2DataSource(jdbcUrl))
+                    .listActiveOrderSummariesForUser(TELEGRAM_USER_ID)
+                    .single()
+                    .items
+                    .single()
+            assertEquals("Авторский кальян", activeOrderItem.itemName)
+            assertEquals(2_500L, activeOrderItem.priceMinor)
+            assertEquals(2_500L, activeOrderItem.promoDiscountMinor)
+            assertEquals("Премиальная чаша", activeOrderItem.selectedOption?.name)
+            assertEquals(500L, activeOrderItem.selectedOption?.priceDeltaMinor)
+        }
+
+    @Test
+    fun `idempotent replay keeps persisted pricing for promoted and regular lines after menu edit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-mixed-replay-snapshot")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 46)
+            seedTableToken(jdbcUrl, tableId, "promo-mixed-replay-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val promotedItemId =
+                seedMenuItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    categoryId = categoryId,
+                    name = "Акционный кальян",
+                    priceMinor = 2_000,
+                )
+            val regularItemId =
+                seedMenuItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    categoryId = categoryId,
+                    name = "Обычный чай",
+                    priceMinor = 1_200,
+                )
+            seedHappyHoursItemRule(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = TELEGRAM_USER_ID,
+                itemId = promotedItemId,
+                title = "Скидка на кальян",
+                discountPercent = 50,
+            )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val request =
+                AddBatchRequest(
+                    tableToken = "promo-mixed-replay-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-promo-mixed-replay",
+                    items =
+                        listOf(
+                            AddBatchItemDto(itemId = promotedItemId, qty = 1),
+                            AddBatchItemDto(itemId = regularItemId, qty = 1),
+                        ),
+                    comment = null,
+                )
+
+            val submitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            assertEquals(HttpStatusCode.OK, submitResponse.status)
+            val submitted = json.decodeFromString(AddBatchResponse.serializer(), submitResponse.bodyAsText())
+            assertEquals(3_200L, submitted.pricing.grossTotalMinor)
+            assertEquals(1_000L, submitted.pricing.promoDiscountTotalMinor)
+            assertEquals(2_200L, submitted.pricing.finalPayableTotalMinor)
+
+            updateMenuItemNameAndPrice(jdbcUrl, promotedItemId, "Новый кальян", 9_000L)
+            updateMenuItemNameAndPrice(jdbcUrl, regularItemId, "Новый чай", 8_000L)
+
+            val replayResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            assertEquals(HttpStatusCode.OK, replayResponse.status)
+            val replay = json.decodeFromString(AddBatchResponse.serializer(), replayResponse.bodyAsText())
+
+            assertEquals(submitted.batchId, replay.batchId)
+            assertEquals(submitted.pricing, replay.pricing)
+            assertEquals(
+                listOf("Акционный кальян", "Обычный чай"),
+                replay.pricing.items.map { it.name },
+            )
+            assertEquals(listOf(2_000L, 1_200L), replay.pricing.items.map { it.baseUnitPriceMinor })
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `submit recalculates stale preview from current item price`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-stale-price")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 42)
+            seedTableToken(jdbcUrl, tableId, "promo-stale-price-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян", priceMinor = 1_000)
+            seedHappyHoursItemRule(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = TELEGRAM_USER_ID,
+                itemId = itemId,
+                title = "Скидка 20%",
+                discountPercent = 20,
+            )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val items = listOf(AddBatchItemDto(itemId = itemId, qty = 2))
+
+            val previewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "promo-stale-price-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, previewResponse.status)
+            val preview = json.decodeFromString(CartPreviewResponse.serializer(), previewResponse.bodyAsText()).preview
+            assertEquals(2_000L, preview.grossTotalMinor)
+            assertEquals(400L, preview.promoDiscountTotalMinor)
+
+            updateMenuItemPrice(jdbcUrl, itemId, priceMinor = 1_500)
+
+            val request =
+                AddBatchRequest(
+                    tableToken = "promo-stale-price-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-promo-stale-price",
+                    items = items,
+                    comment = null,
+                    previewFingerprint = preview.pricingFingerprint,
+                )
+            val submitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, submitResponse.status)
+            val submitted = json.decodeFromString(AddBatchResponse.serializer(), submitResponse.bodyAsText())
+            assertTrue(submitted.recalculated)
+            assertFalse(submitted.pricing.pricingFingerprint == preview.pricingFingerprint)
+            assertEquals(3_000L, submitted.pricing.grossTotalMinor)
+            assertEquals(600L, submitted.pricing.promoDiscountTotalMinor)
+            assertEquals(2_400L, submitted.pricing.finalPayableTotalMinor)
+            assertEquals(1_500L, submitted.pricing.items.single().baseUnitPriceMinor)
+            assertEquals(3_000L, submitted.pricing.items.single().promotionAdjustment?.originalAmountMinor)
+            assertEquals(600L, submitted.pricing.items.single().promotionAdjustment?.discountMinor)
+            assertEquals(1, countRows(jdbcUrl, "orders"))
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `submit recalculates stale preview after venue window ends`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-stale-window")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 45)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян", priceMinor = 1_000)
+            val promotion =
+                seedHappyHoursItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    itemId = itemId,
+                    title = "Обеденные часы",
+                    discountPercent = 50,
+                )
+            replacePromotionWindows(
+                jdbcUrl = jdbcUrl,
+                ruleId = promotion.ruleId,
+                weekday = 1,
+                startsMinute = 12 * 60,
+                endsMinute = 13 * 60,
+            )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val dataSource = h2DataSource(jdbcUrl)
+            val clock =
+                MutableClock(
+                    currentInstant = Instant.parse("2026-07-20T09:30:00Z"),
+                )
+            val ordersRepository =
+                OrdersRepository(
+                    dataSource = dataSource,
+                    promotionApplicationRepository = PromotionApplicationRepository(dataSource),
+                    venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource),
+                    clock = clock,
+                )
+            val venueZoneId = ZoneId.of("Europe/Moscow")
+            val items = listOf(OrderBatchItemInput(itemId = itemId, qty = 1))
+
+            val preview =
+                assertNotNull(
+                    ordersRepository.previewGuestOrderBatch(
+                        venueId = venueId,
+                        userId = TELEGRAM_USER_ID,
+                        items = items,
+                        venueZoneId = venueZoneId,
+                    ),
+                )
+            assertEquals(1_000L, preview.grossTotalMinor)
+            assertEquals(500L, preview.promoDiscountTotalMinor)
+            assertEquals(500L, preview.finalPayableTotalMinor)
+            assertEquals(promotion.ruleId, preview.items.single().promotionAdjustment?.ruleId)
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+
+            clock.currentInstant = Instant.parse("2026-07-20T10:00:00Z")
+
+            val submitted =
+                assertNotNull(
+                    ordersRepository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "idem-promo-stale-window",
+                        tabId = personalTabId,
+                        comment = null,
+                        items = items,
+                        venueZoneId = venueZoneId,
+                        expectedPreviewFingerprint = preview.pricingFingerprint,
+                    ),
+                )
+
+            val pricing = assertNotNull(submitted.pricing)
+            assertTrue(submitted.recalculated)
+            assertEquals(1_000L, pricing.grossTotalMinor)
+            assertEquals(0L, pricing.promoDiscountTotalMinor)
+            assertEquals(1_000L, pricing.finalPayableTotalMinor)
+            assertNull(pricing.items.single().promotionAdjustment)
+            assertFalse(pricing.pricingFingerprint == preview.pricingFingerprint)
+            assertEquals(1, countRows(jdbcUrl, "orders"))
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+            assertEquals(0, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `submit rejects cart when item became unavailable after preview without creating order`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-stale-availability")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 43)
+            seedTableToken(jdbcUrl, tableId, "promo-stale-availability-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян", priceMinor = 1_000)
+            seedHappyHoursItemRule(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = TELEGRAM_USER_ID,
+                itemId = itemId,
+                title = "Скидка 20%",
+                discountPercent = 20,
+            )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val items = listOf(AddBatchItemDto(itemId = itemId, qty = 1))
+
+            val previewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "promo-stale-availability-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, previewResponse.status)
+            val preview = json.decodeFromString(CartPreviewResponse.serializer(), previewResponse.bodyAsText()).preview
+            assertEquals(200L, preview.promoDiscountTotalMinor)
+
+            setMenuItemAvailability(jdbcUrl, itemId, isAvailable = false)
+
+            val submitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "promo-stale-availability-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "idem-promo-stale-availability",
+                                items = items,
+                                comment = null,
+                                previewFingerprint = preview.pricingFingerprint,
+                            ),
+                        ),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, submitResponse.status)
+            assertApiErrorEnvelope(submitResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countPromotionApplications(jdbcUrl))
+            assertEquals(0, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `different line promotions preserve mapping and fingerprint on idempotent replay`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-multi-line-replay")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 44)
+            seedTableToken(jdbcUrl, tableId, "promo-multi-line-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val firstItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Первый кальян", priceMinor = 1_000)
+            val secondItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Второй кальян", priceMinor = 2_000)
+            val firstPromotion =
+                seedHappyHoursItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    itemId = firstItemId,
+                    title = "Первая акция",
+                    discountPercent = 10,
+                )
+            val secondPromotion =
+                seedHappyHoursItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    itemId = secondItemId,
+                    title = "Вторая акция",
+                    discountPercent = 25,
+                )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val items =
+                listOf(
+                    AddBatchItemDto(itemId = firstItemId, qty = 2),
+                    AddBatchItemDto(itemId = secondItemId, qty = 1),
+                )
+
+            val previewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "promo-multi-line-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, previewResponse.status)
+            val preview = json.decodeFromString(CartPreviewResponse.serializer(), previewResponse.bodyAsText()).preview
+            assertEquals(
+                mapOf(
+                    firstItemId to firstPromotion.ruleId,
+                    secondItemId to secondPromotion.ruleId,
+                ),
+                preview.items.associate { it.itemId to it.promotionAdjustment?.ruleId },
+            )
+            assertEquals(
+                mapOf("Первая акция" to 200L, "Вторая акция" to 500L),
+                preview.discounts.associate { it.label to it.discountMinor },
+            )
+
+            val request =
+                AddBatchRequest(
+                    tableToken = "promo-multi-line-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-promo-multi-line",
+                    items = items,
+                    comment = null,
+                    previewFingerprint = preview.pricingFingerprint,
+                )
+
+            suspend fun submit() =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            val firstResponse = submit()
+            val replayResponse = submit()
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(HttpStatusCode.OK, replayResponse.status)
+            val first = json.decodeFromString(AddBatchResponse.serializer(), firstResponse.bodyAsText())
+            val replay = json.decodeFromString(AddBatchResponse.serializer(), replayResponse.bodyAsText())
+            assertEquals(first.batchId, replay.batchId)
+            assertFalse(first.recalculated)
+            assertFalse(replay.recalculated)
+            assertEquals(preview.pricingFingerprint, first.pricing.pricingFingerprint)
+            assertEquals(first.pricing.pricingFingerprint, replay.pricing.pricingFingerprint)
+            assertEquals(
+                mapOf(
+                    firstItemId to firstPromotion.ruleId,
+                    secondItemId to secondPromotion.ruleId,
+                ),
+                first.pricing.items.associate { it.itemId to it.promotionAdjustment?.ruleId },
+            )
+            assertEquals(
+                first.pricing.items.associate { it.itemId to it.promotionAdjustment?.ruleId },
+                replay.pricing.items.associate { it.itemId to it.promotionAdjustment?.ruleId },
+            )
+            assertEquals(2, countPromotionApplications(jdbcUrl))
+            assertEquals(2, countPromotionAdjustments(jdbcUrl))
+        }
+
+    @Test
+    fun `idempotent replay aggregates promotion snapshots only from active batch lines`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-promo-filtered-replay")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 46)
+            seedTableToken(jdbcUrl, tableId, "promo-filtered-replay-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, categoryId, "HOOKAH")
+            val excludedItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Исключённый кальян", priceMinor = 1_000)
+            val canceledItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Отменённый кальян", priceMinor = 2_000)
+            val activeItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Активный кальян", priceMinor = 4_000)
+            seedHappyHoursRule(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = TELEGRAM_USER_ID,
+                discountPercent = 50,
+                status = "ACTIVE",
+            )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val items =
+                listOf(
+                    AddBatchItemDto(itemId = excludedItemId, qty = 1),
+                    AddBatchItemDto(itemId = canceledItemId, qty = 1),
+                    AddBatchItemDto(itemId = activeItemId, qty = 1),
+                )
+
+            val previewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "promo-filtered-replay-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, previewResponse.status)
+            val preview = json.decodeFromString(CartPreviewResponse.serializer(), previewResponse.bodyAsText()).preview
+            assertEquals(7_000L, preview.grossTotalMinor)
+            assertEquals(3_500L, preview.promoDiscountTotalMinor)
+
+            val request =
+                AddBatchRequest(
+                    tableToken = "promo-filtered-replay-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "idem-promo-filtered-replay",
+                    items = items,
+                    comment = null,
+                    previewFingerprint = preview.pricingFingerprint,
+                )
+
+            suspend fun submit() =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            val firstResponse = submit()
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            val first = json.decodeFromString(AddBatchResponse.serializer(), firstResponse.bodyAsText())
+            val lineIds = fetchBatchItemIdsByMenuItem(jdbcUrl, first.batchId)
+            excludeBatchItem(jdbcUrl, lineIds.getValue(excludedItemId))
+            cancelBatchItem(jdbcUrl, lineIds.getValue(canceledItemId))
+
+            val replayResponse = submit()
+            assertEquals(HttpStatusCode.OK, replayResponse.status)
+            val replay = json.decodeFromString(AddBatchResponse.serializer(), replayResponse.bodyAsText())
+            assertTrue(replay.recalculated)
+            assertEquals(first.batchId, replay.batchId)
+            assertEquals(listOf(activeItemId), replay.pricing.items.map { it.itemId })
+            assertEquals(4_000L, replay.pricing.grossTotalMinor)
+            assertEquals(2_000L, replay.pricing.promoDiscountTotalMinor)
+            assertEquals(2_000L, replay.pricing.finalPayableTotalMinor)
+            val replayDiscount = replay.pricing.discounts.single()
+            assertEquals(4_000L, replayDiscount.originalAmountMinor)
+            assertEquals(2_000L, replayDiscount.discountMinor)
+            assertEquals(2_000L, replayDiscount.finalAmountMinor)
+            assertEquals(listOf(lineIds.getValue(activeItemId)), replayDiscount.eligibleLineIds)
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(3, countPromotionAdjustments(jdbcUrl))
         }
 
     @Test
@@ -1772,6 +2787,14 @@ class GuestOrderRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, response.status)
+            val submitted = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText())
+            val regularPricing = submitted.pricing.items.single { it.itemId == regularHookahId }
+            val loyaltyPricing = submitted.pricing.items.single { it.itemId == lightHookahId }
+            assertEquals(400L, regularPricing.promotionAdjustment?.discountMinor)
+            assertEquals("Счастливые часы", regularPricing.promotionAdjustment?.promotionTitle)
+            assertEquals(400L, regularPricing.discountMinor)
+            assertNull(loyaltyPricing.promotionAdjustment)
+            assertEquals(1_000L, loyaltyPricing.discountMinor)
             val summary =
                 OrdersRepository(h2DataSource(jdbcUrl))
                     .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
@@ -1787,7 +2810,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `add-batch persists only best non-stackable promotion but stacks explicit gift`() =
+    fun `add-batch persists only one promotion per line and keeps gift-only flow`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-promo-stackability")
             val config = buildConfig(jdbcUrl)
@@ -1908,8 +2931,8 @@ class GuestOrderRoutesTest {
                     .listActiveOrderSummariesForUser(userId = TELEGRAM_USER_ID, limit = 5)
                     .maxBy { it.orderId }
             assertEquals(
-                setOf("Счастливые часы" to 200L, "Сок в подарок" to 500L),
-                secondSummary.promotionDiscounts.map { it.label to it.discountMinor }.toSet(),
+                listOf("Сок в подарок" to 500L),
+                secondSummary.promotionDiscounts.map { it.label to it.discountMinor },
             )
         }
 
@@ -2416,6 +3439,115 @@ class GuestOrderRoutesTest {
             assertEquals(HttpStatusCode.OK, firstResponse.status)
             assertEquals(HttpStatusCode.TooManyRequests, secondResponse.status)
             assertApiErrorEnvelope(secondResponse, ApiErrorCodes.RATE_LIMITED)
+        }
+
+    @Test
+    fun `repository replays existing batch but rejects new write after order scope closes`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-transactional-scope")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 31)
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, categoryId, "HOOKAH")
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Scope guard hookah")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            seedHappyHoursRule(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = TELEGRAM_USER_ID,
+                discountPercent = 20,
+                status = "ACTIVE",
+            )
+            val dataSource = h2DataSource(jdbcUrl)
+            val repository =
+                OrdersRepository(
+                    dataSource = dataSource,
+                    promotionApplicationRepository = PromotionApplicationRepository(dataSource),
+                    venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource),
+                )
+            val items = listOf(OrderBatchItemInput(itemId = itemId, qty = 1))
+
+            val created =
+                assertNotNull(
+                    repository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "transactional-scope-created",
+                        tabId = personalTabId,
+                        comment = null,
+                        items = items,
+                    ),
+                )
+            assertFalse(created.idempotencyReplay)
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    UPDATE table_sessions
+                    SET status = 'ENDED',
+                        ended_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, tableSessionId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+                connection.prepareStatement(
+                    """
+                    UPDATE tab
+                    SET status = 'CLOSED'
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, personalTabId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+            }
+
+            val replay =
+                assertNotNull(
+                    repository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "transactional-scope-created",
+                        tabId = personalTabId,
+                        comment = null,
+                        items = items,
+                    ),
+                )
+            assertTrue(replay.idempotencyReplay)
+            assertEquals(created.batchId, replay.batchId)
+
+            val rejected =
+                repository.createGuestOrderBatch(
+                    tableId = tableId,
+                    venueId = venueId,
+                    tableSessionId = tableSessionId,
+                    userId = TELEGRAM_USER_ID,
+                    idempotencyKey = "transactional-scope-rejected",
+                    tabId = personalTabId,
+                    comment = null,
+                    items = items,
+                )
+            assertNull(rejected)
+            assertEquals(1, countRows(jdbcUrl, "orders"))
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
         }
 
     @Test
@@ -3105,6 +4237,58 @@ class GuestOrderRoutesTest {
         }
     }
 
+    private fun fetchBatchItemIdsByMenuItem(
+        jdbcUrl: String,
+        batchId: Long,
+    ): Map<Long, Long> {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT menu_item_id, id
+                FROM order_batch_items
+                WHERE order_batch_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchId)
+                statement.executeQuery().use { rs ->
+                    return buildMap {
+                        while (rs.next()) {
+                            put(rs.getLong("menu_item_id"), rs.getLong("id"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun excludeBatchItem(
+        jdbcUrl: String,
+        batchItemId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "UPDATE order_batch_items SET is_excluded = TRUE WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, batchItemId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun cancelBatchItem(
+        jdbcUrl: String,
+        batchItemId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "UPDATE order_batch_items SET item_status = 'CANCELED' WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, batchItemId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun setMenuCategoryType(
         jdbcUrl: String,
         categoryId: Long,
@@ -3194,6 +4378,295 @@ class GuestOrderRoutesTest {
         }
         error("Failed to insert promotion rule")
     }
+
+    private fun seedHappyHoursItemRule(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        itemId: Long,
+        title: String,
+        discountPercent: Int,
+    ): SeededPromotionRule {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            ensureUser(connection, userId)
+            val promotionId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_promotions (
+                        venue_id,
+                        title,
+                        description,
+                        terms,
+                        status,
+                        created_by_user_id,
+                        template_type
+                    )
+                    VALUES (?, ?, 'Скидка на позицию', NULL, 'ACTIVE', ?, 'HAPPY_HOURS_PERCENT')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setString(2, title)
+                    statement.setLong(3, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert promotion")
+                    }
+                }
+            val ruleId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO promotion_rules (
+                        promotion_id,
+                        venue_id,
+                        rule_type,
+                        target_type,
+                        target_value,
+                        discount_percent,
+                        starts_time,
+                        ends_time,
+                        days_of_week,
+                        status,
+                        priority,
+                        created_by_user_id,
+                        executable_target_type
+                    )
+                    VALUES (
+                        ?,
+                        ?,
+                        'HAPPY_HOURS_PERCENT',
+                        'CATEGORY_TYPE',
+                        'OTHER',
+                        ?,
+                        NULL,
+                        NULL,
+                        NULL,
+                        'ACTIVE',
+                        100,
+                        ?,
+                        'MENU_ITEM'
+                    )
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, promotionId)
+                    statement.setLong(2, venueId)
+                    statement.setInt(3, discountPercent)
+                    statement.setLong(4, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert promotion rule")
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
+                VALUES (?, 'MENU_ITEM', NULL, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.setLong(2, itemId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rule_weekday_windows (rule_id, weekday, starts_minute, ends_minute)
+                VALUES (?, ?, 0, 1440)
+                """.trimIndent(),
+            ).use { statement ->
+                (1..7).forEach { weekday ->
+                    statement.setLong(1, ruleId)
+                    statement.setInt(2, weekday)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
+            }
+            return SeededPromotionRule(promotionId = promotionId, ruleId = ruleId)
+        }
+    }
+
+    private fun updateMenuItemPrice(
+        jdbcUrl: String,
+        itemId: Long,
+        priceMinor: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("UPDATE menu_items SET price_minor = ? WHERE id = ?").use { statement ->
+                statement.setLong(1, priceMinor)
+                statement.setLong(2, itemId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun updateMenuItemNameAndPrice(
+        jdbcUrl: String,
+        itemId: Long,
+        name: String,
+        priceMinor: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection
+                .prepareStatement(
+                    "UPDATE menu_items SET name = ?, price_minor = ? WHERE id = ?",
+                ).use { statement ->
+                    statement.setString(1, name)
+                    statement.setLong(2, priceMinor)
+                    statement.setLong(3, itemId)
+                    statement.executeUpdate()
+                }
+        }
+    }
+
+    private fun replacePromotionWindows(
+        jdbcUrl: String,
+        ruleId: Long,
+        weekday: Int,
+        startsMinute: Int,
+        endsMinute: Int,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "DELETE FROM promotion_rule_weekday_windows WHERE rule_id = ?",
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rule_weekday_windows (rule_id, weekday, starts_minute, ends_minute)
+                VALUES (?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.setInt(2, weekday)
+                statement.setInt(3, startsMinute)
+                statement.setInt(4, endsMinute)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun setMenuItemAvailability(
+        jdbcUrl: String,
+        itemId: Long,
+        isAvailable: Boolean,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("UPDATE menu_items SET is_available = ? WHERE id = ?").use { statement ->
+                statement.setBoolean(1, isAvailable)
+                statement.setLong(2, itemId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun setMenuOptionAvailability(
+        jdbcUrl: String,
+        optionId: Long,
+        isAvailable: Boolean,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("UPDATE menu_item_options SET is_available = ? WHERE id = ?").use { statement ->
+                statement.setBoolean(1, isAvailable)
+                statement.setLong(2, optionId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun editPromotionRuleAndMenuAfterApplication(
+        jdbcUrl: String,
+        promotionId: Long,
+        ruleId: Long,
+        itemId: Long,
+        optionId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection
+                .prepareStatement("UPDATE venue_promotions SET title = 'Изменённая акция' WHERE id = ?")
+                .use { statement ->
+                    statement.setLong(1, promotionId)
+                    statement.executeUpdate()
+                }
+            connection.prepareStatement(
+                "UPDATE promotion_rules SET version = version + 1, discount_percent = 10 WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                """
+                UPDATE menu_items
+                SET name = 'Переименованный кальян',
+                    price_minor = 9000
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, itemId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                "UPDATE menu_item_options SET name = 'Другая чаша', price_delta_minor = 1000 WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, optionId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun fetchPromotionApplicationSnapshot(
+        jdbcUrl: String,
+        batchId: Long,
+    ): PromotionApplicationSnapshot =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT
+                    promotion_id,
+                    rule_id,
+                    title_snapshot,
+                    rule_type,
+                    target_type,
+                    target_value,
+                    discount_percent,
+                    discount_total_minor,
+                    rule_version,
+                    schedule_snapshot_json,
+                    target_snapshot_json,
+                    original_total_minor,
+                    final_total_minor,
+                    venue_timezone_snapshot,
+                    applied_at,
+                    dedupe_key
+                FROM order_promotion_applications
+                WHERE batch_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next(), "Expected promotion application for batch $batchId")
+                    PromotionApplicationSnapshot(
+                        promotionId = rs.getLong("promotion_id"),
+                        ruleId = rs.getLong("rule_id"),
+                        title = rs.getString("title_snapshot"),
+                        ruleType = rs.getString("rule_type"),
+                        targetType = rs.getString("target_type"),
+                        targetValue = rs.getString("target_value"),
+                        discountPercent = rs.getInt("discount_percent"),
+                        discountTotalMinor = rs.getLong("discount_total_minor"),
+                        ruleVersion = rs.getInt("rule_version"),
+                        scheduleSnapshotJson = rs.getString("schedule_snapshot_json"),
+                        targetSnapshotJson = rs.getString("target_snapshot_json"),
+                        originalTotalMinor = rs.getLong("original_total_minor"),
+                        finalTotalMinor = rs.getLong("final_total_minor"),
+                        venueTimezone = rs.getString("venue_timezone_snapshot"),
+                        appliedAt = rs.getTimestamp("applied_at").toInstant(),
+                        dedupeKey = rs.getString("dedupe_key"),
+                    )
+                }
+            }
+        }
 
     private fun seedGiftWithItemRule(
         jdbcUrl: String,
@@ -3601,4 +5074,39 @@ class GuestOrderRoutesTest {
         val name: String,
         val priceDeltaMinor: Long,
     )
+
+    private data class SeededPromotionRule(
+        val promotionId: Long,
+        val ruleId: Long,
+    )
+
+    private data class PromotionApplicationSnapshot(
+        val promotionId: Long,
+        val ruleId: Long,
+        val title: String,
+        val ruleType: String,
+        val targetType: String,
+        val targetValue: String,
+        val discountPercent: Int,
+        val discountTotalMinor: Long,
+        val ruleVersion: Int,
+        val scheduleSnapshotJson: String,
+        val targetSnapshotJson: String,
+        val originalTotalMinor: Long,
+        val finalTotalMinor: Long,
+        val venueTimezone: String,
+        val appliedAt: Instant,
+        val dedupeKey: String,
+    )
+
+    private class MutableClock(
+        var currentInstant: Instant,
+        private val clockZone: ZoneId = ZoneOffset.UTC,
+    ) : Clock() {
+        override fun getZone(): ZoneId = clockZone
+
+        override fun withZone(zone: ZoneId): Clock = MutableClock(currentInstant, zone)
+
+        override fun instant(): Instant = currentInstant
+    }
 }

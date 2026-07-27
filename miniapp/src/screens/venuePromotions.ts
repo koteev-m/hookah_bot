@@ -11,8 +11,13 @@ import {
 import type {
   VenueAccessDto,
   VenuePromotionDto,
+  VenuePromotionMenuCategoryDto,
+  VenuePromotionMenuItemDto,
   VenuePromotionMutationRequest,
-  VenuePromotionStatus
+  VenuePromotionStatus,
+  VenuePromotionTemplateType,
+  VenuePromotionTargetDto,
+  VenuePromotionWeekdayWindowDto
 } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
@@ -22,6 +27,20 @@ import { renderErrorDetails } from '../shared/ui/errorDetails'
 const TITLE_MAX_LENGTH = 80
 const DESCRIPTION_MAX_LENGTH = 1000
 const TERMS_MAX_LENGTH = 1000
+const DEFAULT_WEEKDAY_WINDOW: VenuePromotionWeekdayWindowDto = {
+  weekday: 1,
+  startLocal: '12:00',
+  endLocal: '18:00'
+}
+const WEEKDAYS = [
+  { value: 1, title: 'Понедельник', rangeTitle: 'понедельник' },
+  { value: 2, title: 'Вторник', rangeTitle: 'вторник' },
+  { value: 3, title: 'Среда', rangeTitle: 'среда' },
+  { value: 4, title: 'Четверг', rangeTitle: 'четверг' },
+  { value: 5, title: 'Пятница', rangeTitle: 'пятница' },
+  { value: 6, title: 'Суббота', rangeTitle: 'суббота' },
+  { value: 7, title: 'Воскресенье', rangeTitle: 'воскресенье' }
+] as const
 
 type VenuePromotionsOptions = {
   root: HTMLDivElement | null
@@ -41,6 +60,15 @@ type PromotionRefs = {
   termsInput: HTMLTextAreaElement
   startsAtInput: HTMLInputElement
   endsAtInput: HTMLInputElement
+  templateTypeSelect: HTMLSelectElement
+  happyHoursFields: HTMLElement
+  timezoneHint: HTMLParagraphElement
+  windowsList: HTMLDivElement
+  addWindowButton: HTMLButtonElement
+  targetTypeSelect: HTMLSelectElement
+  targetValueSelect: HTMLSelectElement
+  discountPercentInput: HTMLInputElement
+  ruleSummary: HTMLDivElement
   formError: HTMLParagraphElement
   saveButton: HTMLButtonElement
   cancelButton: HTMLButtonElement
@@ -82,14 +110,18 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   const title = el('h2', { text: 'Акции' })
   const subtitle = el('p', {
     className: 'venue-dashboard-subtitle',
-    text: 'Создавайте информационные акции и управляйте периодом их показа гостям.'
+    text: 'Создавайте информационные акции и автоматические скидки по расписанию.'
   })
   const notice = el('p', {
     className: 'venue-promotion-notice',
     text: 'Акция носит информационный характер. Скидки и промокоды автоматически к заказу не применяются.'
   })
+  const happyHoursNotice = el('p', {
+    className: 'venue-promotion-notice',
+    text: 'Для «Счастливых часов» скидка рассчитывается сервером по актуальным ценам при оформлении заказа.'
+  })
   const createButton = el('button', { text: 'Создать акцию' }) as HTMLButtonElement
-  append(header, title, subtitle, notice, createButton)
+  append(header, title, subtitle, notice, happyHoursNotice, createButton)
 
   const status = el('p', { className: 'status', text: '' })
   const error = el('div', { className: 'error-card' }) as HTMLDivElement
@@ -103,6 +135,9 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   const formCard = el('section', { className: 'card venue-promotion-form' })
   formCard.hidden = true
   const formTitle = el('h3', { text: 'Новая акция' })
+  const templateTypeSelect = document.createElement('select')
+  appendSelectOption(templateTypeSelect, 'TEXT_ONLY', 'Информационная акция')
+  appendSelectOption(templateTypeSelect, 'HAPPY_HOURS_PERCENT', 'Счастливые часы — скидка %')
   const titleInput = document.createElement('input')
   titleInput.type = 'text'
   titleInput.maxLength = TITLE_MAX_LENGTH
@@ -119,6 +154,45 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   startsAtInput.type = 'datetime-local'
   const endsAtInput = document.createElement('input')
   endsAtInput.type = 'datetime-local'
+  const happyHoursFields = el('section', { className: 'venue-promotion-rule-fields' })
+  happyHoursFields.hidden = true
+  const timezoneHint = el('p', {
+    className: 'venue-promotion-timezone',
+    text: ''
+  }) as HTMLParagraphElement
+  const windowsHeading = el('div', { className: 'venue-promotion-rule-heading' })
+  const addWindowButton = el('button', {
+    className: 'button-secondary button-small',
+    text: 'Добавить окно'
+  }) as HTMLButtonElement
+  append(windowsHeading, el('span', { className: 'field-label', text: 'Дни недели и временные окна' }), addWindowButton)
+  const windowsList = el('div', { className: 'venue-promotion-windows' }) as HTMLDivElement
+  const targetTypeSelect = document.createElement('select')
+  appendSelectOption(targetTypeSelect, 'MENU_CATEGORY', 'Категория')
+  appendSelectOption(targetTypeSelect, 'MENU_ITEM', 'Конкретная позиция')
+  const targetValueSelect = document.createElement('select')
+  const discountPercentInput = document.createElement('input')
+  discountPercentInput.type = 'number'
+  discountPercentInput.min = '1'
+  discountPercentInput.max = '100'
+  discountPercentInput.step = '1'
+  discountPercentInput.inputMode = 'numeric'
+  discountPercentInput.placeholder = 'Например, 50'
+  const ruleSummary = el('div', { className: 'venue-promotion-rule-summary' }) as HTMLDivElement
+  append(
+    happyHoursFields,
+    timezoneHint,
+    windowsHeading,
+    windowsList,
+    buildField('Скидка действует на', targetTypeSelect),
+    buildField('Категория или позиция', targetValueSelect),
+    buildField('Скидка, %', discountPercentInput),
+    el('p', {
+      className: 'venue-promotion-rule-helper',
+      text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
+    }),
+    ruleSummary
+  )
   const formError = el('p', { className: 'field-error', text: '' }) as HTMLParagraphElement
   formError.hidden = true
   const saveButton = el('button', { text: 'Сохранить черновик' }) as HTMLButtonElement
@@ -128,11 +202,13 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   append(
     formCard,
     formTitle,
+    buildField('Тип акции', templateTypeSelect),
     buildField('Название акции', titleInput),
     buildField('Описание', descriptionInput),
     buildField('Условия', termsInput, 'Необязательно'),
     buildField('Начало', startsAtInput),
     buildField('Окончание', endsAtInput),
+    happyHoursFields,
     formError,
     actions
   )
@@ -152,6 +228,15 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
     termsInput,
     startsAtInput,
     endsAtInput,
+    templateTypeSelect,
+    happyHoursFields,
+    timezoneHint,
+    windowsList,
+    addWindowButton,
+    targetTypeSelect,
+    targetValueSelect,
+    discountPercentInput,
+    ruleSummary,
     formError,
     saveButton,
     cancelButton,
@@ -165,6 +250,13 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   }
 }
 
+function appendSelectOption(select: HTMLSelectElement, value: string, label: string) {
+  const option = document.createElement('option')
+  option.value = value
+  option.textContent = label
+  select.appendChild(option)
+}
+
 function buildField(label: string, control: HTMLElement, helper?: string) {
   const field = el('label', { className: 'venue-promotion-field' })
   field.appendChild(el('span', { className: 'field-label', text: label }))
@@ -173,6 +265,52 @@ function buildField(label: string, control: HTMLElement, helper?: string) {
     field.appendChild(el('small', { text: helper }))
   }
   return field
+}
+
+function promotionTemplateType(promotion: VenuePromotionDto): VenuePromotionTemplateType | null {
+  const templateType = (promotion as VenuePromotionDto & { templateType?: string }).templateType
+  if (templateType === 'TEXT_ONLY' || templateType === 'HAPPY_HOURS_PERCENT') {
+    return templateType
+  }
+  return templateType == null ? 'TEXT_ONLY' : null
+}
+
+function weekdayTitle(weekday: number): string {
+  return WEEKDAYS.find((item) => item.value === weekday)?.title ?? `День ${weekday}`
+}
+
+function formatWeekdaySequence(days: number[]): string {
+  const sorted = [...new Set(days)].sort((left, right) => left - right)
+  const ranges: Array<[number, number]> = []
+  sorted.forEach((day) => {
+    const last = ranges[ranges.length - 1]
+    if (last && day === last[1] + 1) {
+      last[1] = day
+    } else {
+      ranges.push([day, day])
+    }
+  })
+  return ranges
+    .map(([start, end], index) => {
+      const startDay = WEEKDAYS.find((day) => day.value === start)
+      const endDay = WEEKDAYS.find((day) => day.value === end)
+      const startTitle = index === 0 ? startDay?.title : startDay?.rangeTitle
+      if (start === end) return startTitle ?? weekdayTitle(start)
+      return `${startTitle ?? weekdayTitle(start)}–${endDay?.rangeTitle ?? weekdayTitle(end).toLowerCase()}`
+    })
+    .join(', ')
+}
+
+function formatWindowSummary(windows: VenuePromotionWeekdayWindowDto[]): string[] {
+  const byTime = new Map<string, number[]>()
+  windows.forEach((window) => {
+    if (!window.startLocal || !window.endLocal) return
+    const key = `${window.startLocal}–${window.endLocal}`
+    const days = byTime.get(key) ?? []
+    days.push(window.weekday)
+    byTime.set(key, days)
+  })
+  return Array.from(byTime.entries()).map(([time, days]) => `${formatWeekdaySequence(days)}, ${time}`)
 }
 
 function formatDateTime(value: string | null | undefined, timezone: string): string {
@@ -283,9 +421,13 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
   let inFlight = false
   let mutationPending = false
   let items: VenuePromotionDto[] = []
+  let menuCategories: VenuePromotionMenuCategoryDto[] = []
+  let menuItems: VenuePromotionMenuItemDto[] = []
   let timezone = 'Europe/Moscow'
   let editingId: number | null = null
+  let weekdayWindows: VenuePromotionWeekdayWindowDto[] = [{ ...DEFAULT_WEEKDAY_WINDOW }]
   const cardDisposables: Array<() => void> = []
+  const dynamicFormDisposables: Array<() => void> = []
 
   const hideError = () => {
     refs.error.hidden = true
@@ -312,6 +454,136 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     refs.error.hidden = false
   }
 
+  const renderRuleSummary = () => {
+    refs.ruleSummary.replaceChildren(el('h4', { text: 'Краткое описание' }))
+    const windowSummaries = formatWindowSummary(weekdayWindows)
+    if (windowSummaries.length) {
+      windowSummaries.forEach((summary) => {
+        refs.ruleSummary.appendChild(el('p', { text: summary }))
+      })
+    } else {
+      refs.ruleSummary.appendChild(el('p', { text: 'Временные окна не настроены.' }))
+    }
+
+    const targetId = Number(refs.targetValueSelect.value)
+    if (refs.targetTypeSelect.value === 'MENU_ITEM') {
+      const item = menuItems.find((candidate) => candidate.id === targetId)
+      refs.ruleSummary.appendChild(el('p', { text: `Позиция: ${item?.name ?? 'не выбрана'}` }))
+    } else {
+      const category = menuCategories.find((candidate) => candidate.id === targetId)
+      refs.ruleSummary.appendChild(el('p', { text: `Категория: ${category?.name ?? 'не выбрана'}` }))
+    }
+    const discountPercent = Number(refs.discountPercentInput.value)
+    refs.ruleSummary.appendChild(
+      el('p', {
+        text:
+          Number.isInteger(discountPercent) && discountPercent >= 1 && discountPercent <= 100
+            ? `Скидка: ${discountPercent}%`
+            : 'Скидка: не указана'
+      })
+    )
+  }
+
+  const renderTargetOptions = (selectedId?: number | null) => {
+    const previousValue =
+      selectedId === undefined ? refs.targetValueSelect.value : selectedId == null ? '' : String(selectedId)
+    refs.targetValueSelect.replaceChildren()
+    const isItemTarget = refs.targetTypeSelect.value === 'MENU_ITEM'
+    appendSelectOption(
+      refs.targetValueSelect,
+      '',
+      isItemTarget ? 'Выберите позицию' : 'Выберите категорию'
+    )
+    if (isItemTarget) {
+      menuItems.forEach((item) => {
+        const category = menuCategories.find((candidate) => candidate.id === item.categoryId)
+        appendSelectOption(
+          refs.targetValueSelect,
+          String(item.id),
+          category ? `${item.name} · ${category.name}` : item.name
+        )
+      })
+    } else {
+      menuCategories.forEach((category) => {
+        appendSelectOption(refs.targetValueSelect, String(category.id), category.name)
+      })
+    }
+    if (Array.from(refs.targetValueSelect.options).some((option) => option.value === previousValue)) {
+      refs.targetValueSelect.value = previousValue
+    }
+    renderRuleSummary()
+  }
+
+  const renderWeekdayWindows = () => {
+    dynamicFormDisposables.splice(0).forEach((dispose) => dispose())
+    refs.windowsList.replaceChildren()
+    weekdayWindows.forEach((window, index) => {
+      const row = el('div', { className: 'venue-promotion-window' })
+      const weekdaySelect = document.createElement('select')
+      weekdaySelect.setAttribute('aria-label', `День недели, окно ${index + 1}`)
+      WEEKDAYS.forEach((weekday) => {
+        appendSelectOption(weekdaySelect, String(weekday.value), weekday.title)
+      })
+      weekdaySelect.value = String(window.weekday)
+
+      const startInput = document.createElement('input')
+      startInput.type = 'time'
+      startInput.value = window.startLocal
+      startInput.setAttribute('aria-label', `Начало окна ${index + 1}`)
+      const endInput = document.createElement('input')
+      endInput.type = 'text'
+      endInput.inputMode = 'numeric'
+      endInput.maxLength = 5
+      endInput.placeholder = 'ЧЧ:ММ'
+      endInput.value = window.endLocal
+      endInput.setAttribute('aria-label', `Окончание окна ${index + 1}`)
+      const removeButton = el('button', {
+        className: 'button-secondary button-small',
+        text: 'Удалить'
+      }) as HTMLButtonElement
+      removeButton.type = 'button'
+      removeButton.setAttribute('aria-label', `Удалить окно ${index + 1}`)
+      append(
+        row,
+        buildField('День', weekdaySelect),
+        buildField('С', startInput),
+        buildField('До', endInput),
+        removeButton
+      )
+      refs.windowsList.appendChild(row)
+
+      dynamicFormDisposables.push(
+        on(weekdaySelect, 'change', () => {
+          weekdayWindows[index].weekday = Number(weekdaySelect.value)
+          renderRuleSummary()
+        }),
+        on(startInput, 'input', () => {
+          weekdayWindows[index].startLocal = startInput.value
+          renderRuleSummary()
+        }),
+        on(endInput, 'input', () => {
+          weekdayWindows[index].endLocal = endInput.value
+          renderRuleSummary()
+        }),
+        on(removeButton, 'click', () => {
+          weekdayWindows.splice(index, 1)
+          renderWeekdayWindows()
+          renderRuleSummary()
+        })
+      )
+    })
+    renderRuleSummary()
+  }
+
+  const syncTemplateFields = () => {
+    const isHappyHours = refs.templateTypeSelect.value === 'HAPPY_HOURS_PERCENT'
+    refs.happyHoursFields.hidden = !isHappyHours
+    refs.timezoneHint.textContent = `Часовой пояс заведения: ${timezone}`
+    if (isHappyHours) {
+      renderRuleSummary()
+    }
+  }
+
   const resetForm = () => {
     editingId = null
     refs.formTitle.textContent = 'Новая акция'
@@ -321,6 +593,13 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     refs.termsInput.value = ''
     refs.startsAtInput.value = ''
     refs.endsAtInput.value = ''
+    refs.templateTypeSelect.value = 'TEXT_ONLY'
+    weekdayWindows = [{ ...DEFAULT_WEEKDAY_WINDOW }]
+    refs.targetTypeSelect.value = 'MENU_CATEGORY'
+    refs.discountPercentInput.value = ''
+    renderTargetOptions()
+    renderWeekdayWindows()
+    syncTemplateFields()
     refs.formError.textContent = ''
     refs.formError.hidden = true
     refs.formCard.hidden = true
@@ -333,6 +612,8 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
   }
 
   const openEditForm = (promotion: VenuePromotionDto) => {
+    const templateType = promotionTemplateType(promotion)
+    if (!templateType) return
     editingId = promotion.id
     refs.formTitle.textContent = 'Редактировать акцию'
     refs.saveButton.textContent = 'Сохранить изменения'
@@ -341,6 +622,16 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     refs.termsInput.value = promotion.terms ?? ''
     refs.startsAtInput.value = toVenueLocalInput(promotion.startsAt, timezone)
     refs.endsAtInput.value = toVenueLocalInput(promotion.endsAt, timezone)
+    refs.templateTypeSelect.value = templateType
+    const rule = promotion.rule
+    weekdayWindows = rule?.windows?.map((window) => ({ ...window })) ?? []
+    refs.targetTypeSelect.value = rule?.target?.type ?? 'MENU_CATEGORY'
+    const selectedTargetId =
+      rule?.target?.type === 'MENU_ITEM' ? rule.target.menuItemId : rule?.target?.menuCategoryId
+    renderTargetOptions(selectedTargetId)
+    refs.discountPercentInput.value = rule?.discountPercent == null ? '' : String(rule.discountPercent)
+    renderWeekdayWindows()
+    syncTemplateFields()
     refs.formError.textContent = ''
     refs.formError.hidden = true
     refs.formCard.hidden = false
@@ -353,6 +644,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     const terms = refs.termsInput.value.trim()
     const startsAt = refs.startsAtInput.value
     const endsAt = refs.endsAtInput.value
+    const templateType = refs.templateTypeSelect.value as VenuePromotionTemplateType
     let error = ''
     if (!title) {
       error = 'Введите название акции.'
@@ -362,11 +654,82 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       error = 'Укажите начало и окончание акции.'
     } else if (startsAt >= endsAt) {
       error = 'Начало акции должно быть раньше окончания.'
+    } else if (templateType === 'HAPPY_HOURS_PERCENT') {
+      const discountPercent = Number(refs.discountPercentInput.value)
+      const targetId = Number(refs.targetValueSelect.value)
+      const targetExists =
+        refs.targetTypeSelect.value === 'MENU_ITEM'
+          ? menuItems.some((item) => item.id === targetId)
+          : menuCategories.some((category) => category.id === targetId)
+      const startTimePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/
+      const endTimePattern = /^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/
+      const hasInvalidWindow = weekdayWindows.some(
+        (window) =>
+          !Number.isInteger(window.weekday) ||
+          window.weekday < 1 ||
+          window.weekday > 7 ||
+          !startTimePattern.test(window.startLocal) ||
+          !endTimePattern.test(window.endLocal) ||
+          window.startLocal >= window.endLocal
+      )
+      let overlappingDay: number | null = null
+      WEEKDAYS.forEach((weekday) => {
+        const windowsForDay = weekdayWindows
+          .filter((window) => window.weekday === weekday.value)
+          .sort((left, right) => left.startLocal.localeCompare(right.startLocal))
+        for (let index = 1; index < windowsForDay.length; index += 1) {
+          if (windowsForDay[index].startLocal < windowsForDay[index - 1].endLocal) {
+            overlappingDay = weekday.value
+            break
+          }
+        }
+      })
+      if (!weekdayWindows.length) {
+        error = 'Добавьте хотя бы одно временное окно.'
+      } else if (hasInvalidWindow) {
+        error = 'В каждом окне время начала должно быть раньше времени окончания.'
+      } else if (overlappingDay != null) {
+        error = `Окна в один день не должны пересекаться: ${weekdayTitle(overlappingDay)}.`
+      } else if (!targetExists) {
+        error =
+          refs.targetTypeSelect.value === 'MENU_ITEM'
+            ? 'Выберите позицию меню.'
+            : 'Выберите категорию меню.'
+      } else if (!Number.isInteger(discountPercent) || discountPercent < 1 || discountPercent > 100) {
+        error = 'Укажите целый процент скидки от 1 до 100.'
+      }
     }
     refs.formError.textContent = error
     refs.formError.hidden = !error
     if (error) return null
-    return { title, description, terms: terms || null, startsAt, endsAt }
+    if (templateType === 'TEXT_ONLY') {
+      return { title, description, terms: terms || null, startsAt, endsAt, templateType, rule: null }
+    }
+    const targetId = Number(refs.targetValueSelect.value)
+    const target: VenuePromotionTargetDto =
+      refs.targetTypeSelect.value === 'MENU_ITEM'
+        ? { type: 'MENU_ITEM', menuItemId: targetId }
+        : { type: 'MENU_CATEGORY', menuCategoryId: targetId }
+    return {
+      title,
+      description,
+      terms: terms || null,
+      startsAt,
+      endsAt,
+      templateType,
+      rule: {
+        windows: weekdayWindows
+          .map((window) => ({ ...window }))
+          .sort(
+            (left, right) =>
+              left.weekday - right.weekday ||
+              left.startLocal.localeCompare(right.startLocal) ||
+              left.endLocal.localeCompare(right.endLocal)
+          ),
+        target,
+        discountPercent: Number(refs.discountPercentInput.value)
+      }
+    }
   }
 
   const setMutationState = (pending: boolean) => {
@@ -393,8 +756,56 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     })
     const description = el('p', { text: promotion.description })
     append(card, heading, period, description)
+    const templateType = promotionTemplateType(promotion)
+    card.appendChild(
+      el('p', {
+        className: 'venue-promotion-template-label',
+        text: templateType === 'HAPPY_HOURS_PERCENT' ? 'Счастливые часы — скидка %' : 'Информационная акция'
+      })
+    )
     if (promotion.terms?.trim()) {
       card.appendChild(el('p', { className: 'venue-promotion-terms', text: `Условия: ${promotion.terms.trim()}` }))
+    }
+    if (templateType === 'HAPPY_HOURS_PERCENT') {
+      const rule = promotion.rule
+      const ruleSummary = el('div', { className: 'venue-promotion-card-rule' })
+      const windowSummaries = formatWindowSummary(rule?.windows ?? [])
+      windowSummaries.forEach((summary) => ruleSummary.appendChild(el('p', { text: summary })))
+      const target = rule?.target
+      if (target?.type === 'MENU_ITEM') {
+        const itemName = target.label ?? menuItems.find((item) => item.id === target.menuItemId)?.name
+        ruleSummary.appendChild(el('p', { text: `Позиция: ${itemName ?? 'не настроена'}` }))
+      } else if (target?.type === 'MENU_CATEGORY') {
+        const categoryName =
+          target.label ?? menuCategories.find((category) => category.id === target.menuCategoryId)?.name
+        ruleSummary.appendChild(el('p', { text: `Категория: ${categoryName ?? 'не настроена'}` }))
+      } else {
+        ruleSummary.appendChild(el('p', { text: 'Категория или позиция: не настроена' }))
+      }
+      ruleSummary.appendChild(
+        el('p', {
+          text: rule?.discountPercent == null ? 'Скидка: не настроена' : `Скидка: ${rule.discountPercent}%`
+        })
+      )
+      ruleSummary.appendChild(
+        el('small', {
+          text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
+        })
+      )
+      const issues = rule?.validationIssues?.filter(Boolean) ?? []
+      if (!rule?.readyForActivation || issues.length) {
+        ruleSummary.appendChild(
+          el('p', {
+            className: 'venue-promotion-validation',
+            text: !rule?.readyForActivation
+              ? issues.length
+                ? `Нужно исправить перед публикацией: ${issues.join('; ')}`
+                : 'Заполните расписание, категорию или позицию и процент перед публикацией.'
+              : issues.join('; ')
+          })
+        )
+      }
+      card.appendChild(ruleSummary)
     }
     if (promotion.status !== 'ARCHIVED') {
       const actions = el('div', { className: 'venue-inline-actions' })
@@ -469,7 +880,14 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       return
     }
     timezone = result.data.timezone || timezone
-    items = result.data.items
+    items = result.data.items.filter((promotion) => promotionTemplateType(promotion) != null)
+    menuCategories = result.data.menuCategories ?? []
+    menuItems = result.data.menuItems ?? []
+    refs.timezoneHint.textContent = `Часовой пояс заведения: ${timezone}`
+    if (!refs.formCard.hidden) {
+      renderTargetOptions()
+      renderRuleSummary()
+    }
     refs.status.textContent = ''
     renderList()
   }
@@ -569,7 +987,15 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
   const disposables = [
     on(refs.createButton, 'click', openCreateForm),
     on(refs.cancelButton, 'click', resetForm),
-    on(refs.saveButton, 'click', () => void save())
+    on(refs.saveButton, 'click', () => void save()),
+    on(refs.templateTypeSelect, 'change', syncTemplateFields),
+    on(refs.addWindowButton, 'click', () => {
+      weekdayWindows.push({ ...DEFAULT_WEEKDAY_WINDOW })
+      renderWeekdayWindows()
+    }),
+    on(refs.targetTypeSelect, 'change', () => renderTargetOptions(null)),
+    on(refs.targetValueSelect, 'change', renderRuleSummary),
+    on(refs.discountPercentInput, 'input', renderRuleSummary)
   ]
 
   void load()
@@ -579,6 +1005,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     loadAbort?.abort()
     mutationAbort?.abort()
     cardDisposables.splice(0).forEach((dispose) => dispose())
+    dynamicFormDisposables.splice(0).forEach((dispose) => dispose())
     disposables.forEach((dispose) => dispose())
   }
 }

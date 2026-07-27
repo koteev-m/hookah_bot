@@ -12,6 +12,7 @@ import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewDiscountDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewItemDto
+import com.hookah.platform.backend.miniapp.guest.api.CartPreviewPromotionAdjustmentDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewRequest
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
@@ -55,6 +56,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
 
 private const val ITEMS_MIN_SIZE = 1
@@ -193,7 +195,11 @@ fun Route.guestOrderRoutes(
                 venueId = table.venueId,
                 userId = userId,
                 items = normalizedItems,
-                venueZoneId = venueSettingsRepository.resolveZoneId(table.venueId),
+                venueZoneId =
+                    venueSettingsRepository.resolvePromotionZoneId(
+                        table.venueId,
+                        ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                    ),
             ) ?: throw NotFoundException()
         call.respond(CartPreviewResponse(preview = preview.toDto()))
     }
@@ -333,16 +339,6 @@ fun Route.guestOrderRoutes(
                 throw ForbiddenException("Tab access denied")
             }
 
-            val itemIds = normalizedItems.map { it.itemId }.toSet()
-            val availableItems =
-                guestMenuRepository.findAvailableItemIds(
-                    venueId = table.venueId,
-                    itemIds = itemIds,
-                )
-            if (availableItems.size != itemIds.size) {
-                throw InvalidInputException("Some items are unavailable")
-            }
-
             val batch =
                 ordersRepository.createGuestOrderBatch(
                     tableId = table.tableId,
@@ -353,7 +349,12 @@ fun Route.guestOrderRoutes(
                     tabId = tabId,
                     comment = comment,
                     items = normalizedItems,
-                    venueZoneId = venueSettingsRepository.resolveZoneId(table.venueId),
+                    venueZoneId =
+                        venueSettingsRepository.resolvePromotionZoneId(
+                            table.venueId,
+                            ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        ),
+                    expectedPreviewFingerprint = request.previewFingerprint?.trim()?.takeIf { it.isNotEmpty() },
                 ) ?: throw NotFoundException()
 
             notifyStaffChat(
@@ -372,6 +373,8 @@ fun Route.guestOrderRoutes(
                 AddBatchResponse(
                     orderId = batch.orderId,
                     batchId = batch.batchId,
+                    pricing = batch.pricing?.toDto() ?: throw NotFoundException(),
+                    recalculated = batch.recalculated,
                 ),
             )
         }
@@ -617,6 +620,7 @@ private fun GuestOrderCartPreview.toDto(): CartPreviewDto =
         finalPayableTotalMinor = finalPayableTotalMinor,
         currency = currency,
         discounts = discounts.map { it.toPreviewDto() },
+        pricingFingerprint = pricingFingerprint,
         items =
             items.map { item ->
                 CartPreviewItemDto(
@@ -631,6 +635,22 @@ private fun GuestOrderCartPreview.toDto(): CartPreviewDto =
                     discountMinor = item.discountMinor,
                     linePayableMinor = item.linePayableMinor,
                     isPromotionReward = item.isPromotionReward,
+                    baseUnitPriceMinor = item.baseUnitPriceMinor,
+                    selectedOptionDeltaMinor = item.selectedOptionDeltaMinor,
+                    promotionAdjustment =
+                        item.promotionAdjustment?.let { adjustment ->
+                            CartPreviewPromotionAdjustmentDto(
+                                promotionId = adjustment.promotionId,
+                                promotionTitle = adjustment.promotionTitle,
+                                ruleId = adjustment.ruleId,
+                                ruleVersion = adjustment.ruleVersion,
+                                ruleType = adjustment.ruleType,
+                                originalAmountMinor = adjustment.originalAmountMinor,
+                                discountMinor = adjustment.discountMinor,
+                                finalAmountMinor = adjustment.finalAmountMinor,
+                                currency = item.currency,
+                            )
+                        },
                 )
             },
     )
@@ -641,6 +661,12 @@ private fun CreatedOrderPromotionDiscount.toPreviewDto(): CartPreviewDiscountDto
         discountMinor = discountMinor,
         currency = currency,
         ruleType = ruleType,
+        promotionId = promotionId,
+        ruleId = ruleId,
+        ruleVersion = ruleVersion,
+        originalAmountMinor = originalAmountMinor,
+        finalAmountMinor = finalAmountMinor,
+        eligibleLineIds = eligibleLineIds,
     )
 
 private fun com.hookah.platform.backend.telegram.db.OrderBatchItemDetails.lineGrossMinor(): Long =
@@ -674,13 +700,8 @@ private suspend fun notifyStaffChat(
         return
     }
     val summary = staffChatCreatedBatchItemsSummary(batch, items, table.venueId, guestMenuRepository)
-    val totalCurrency = batch.items.firstOrNull()?.currency
-    val totalPayableMinor =
-        batch.items
-            .takeIf { it.isNotEmpty() }
-            ?.sumOf { item -> item.priceMinor * item.qty }
-            ?.let { gross -> gross - batch.promotionDiscounts.sumOf { it.discountMinor } }
-            ?.coerceAtLeast(0L)
+    val totalCurrency = batch.pricing?.currency
+    val totalPayableMinor = batch.pricing?.finalPayableTotalMinor
     val detail = runCatching { venueOrdersRepository.loadOrderDetail(table.venueId, batch.orderId) }.getOrNull()
     notifier.notifyNewBatchNow(
         NewBatchNotification(

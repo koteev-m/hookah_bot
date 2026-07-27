@@ -639,6 +639,26 @@ input[type="number"] {
   justify-items: end;
 }
 
+.cart-preview-lines {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.cart-preview-lines h4,
+.cart-preview-line h5 {
+  margin: 0;
+}
+
+.cart-preview-line {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #dfe3eb;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
 .qty-input {
   width: 3.5rem;
   padding: 0.35rem 0.4rem;
@@ -1807,9 +1827,71 @@ input[type="number"] {
 }
 
 .venue-promotion-field input,
-.venue-promotion-field textarea {
+.venue-promotion-field textarea,
+.venue-promotion-field select {
   width: 100%;
   box-sizing: border-box;
+}
+
+.venue-promotion-rule-fields,
+.venue-promotion-windows,
+.venue-promotion-card-rule,
+.venue-promotion-rule-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.venue-promotion-rule-fields {
+  padding-top: 4px;
+}
+
+.venue-promotion-rule-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.venue-promotion-window {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(84px, 1fr) minmax(84px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dfe3eb;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-promotion-rule-summary,
+.venue-promotion-card-rule {
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-promotion-rule-summary h4,
+.venue-promotion-rule-summary p,
+.venue-promotion-card-rule p {
+  margin: 0;
+}
+
+.venue-promotion-template-label {
+  margin: 0;
+  color: #334155;
+  font-weight: 600;
+}
+
+.venue-promotion-timezone,
+.venue-promotion-rule-helper,
+.venue-promotion-card-rule small {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.venue-promotion-validation {
+  color: #b45309;
 }
 
 .venue-promotion-field small,
@@ -1851,4 +1933,14 @@ input[type="number"] {
 .guest-venue-promotion:first-child {
   padding-top: 0;
   border-top: 0;
+}
+
+@media (max-width: 560px) {
+  .venue-promotion-window {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .venue-promotion-window .venue-promotion-field:first-child {
+    grid-column: 1 / -1;
+  }
 }

@@ -241,6 +241,8 @@ private fun GuestVisitPromotionDiscount.toDto(): GuestVisitPromotionDiscountDto 
         discountMinor = discountMinor,
         currency = currency,
         ruleType = ruleType,
+        originalAmountMinor = originalAmountMinor,
+        finalAmountMinor = finalAmountMinor,
     )
 
 private fun GuestVisitOrderItem.toDto(): GuestVisitOrderItemDto =

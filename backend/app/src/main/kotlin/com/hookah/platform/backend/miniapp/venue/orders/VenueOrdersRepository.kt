@@ -4,6 +4,7 @@ import com.hookah.platform.backend.analytics.AnalyticsEventRecord
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
@@ -389,14 +390,28 @@ class VenueOrdersRepository(
                                        SUM(
                                            (
                                                (
-                                                   COALESCE(mi_total.price_minor, 0)
-                                                   + COALESCE(obiop_total.price_delta_minor_snapshot, 0)
+                                                   COALESCE(
+                                                       promo.original_price_minor,
+                                                       COALESCE(
+                                                           obi_total.base_unit_price_minor_snapshot,
+                                                           mi_total.price_minor,
+                                                           0
+                                                       )
+                                                           + COALESCE(obiop_total.price_delta_minor_snapshot, 0)
+                                                   )
                                                ) * obi_total.qty
                                            )
                                            - (
                                                (
-                                                   COALESCE(mi_total.price_minor, 0)
-                                                   + COALESCE(obiop_total.price_delta_minor_snapshot, 0)
+                                                   COALESCE(
+                                                       promo.original_price_minor,
+                                                       COALESCE(
+                                                           obi_total.base_unit_price_minor_snapshot,
+                                                           mi_total.price_minor,
+                                                           0
+                                                       )
+                                                           + COALESCE(obiop_total.price_delta_minor_snapshot, 0)
+                                                   )
                                                ) * obi_total.qty * COALESCE(obi_total.discount_percent, 0) / 100
                                            )
                                            - COALESCE(promo.discount_minor, 0)
@@ -411,7 +426,9 @@ class VenueOrdersRepository(
                                LEFT JOIN order_batch_item_options obiop_total
                                  ON obiop_total.order_batch_item_id = obi_total.id
                                LEFT JOIN (
-                                   SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                                   SELECT order_batch_item_id,
+                                          SUM(discount_minor) AS discount_minor,
+                                          MAX(original_price_minor) AS original_price_minor
                                    FROM order_batch_item_promotion_adjustments
                                    GROUP BY order_batch_item_id
                                ) promo ON promo.order_batch_item_id = obi_total.id
@@ -424,10 +441,15 @@ class VenueOrdersRepository(
                                  AND COALESCE(obi_total.item_status, 'ACTIVE') = 'ACTIVE'
                            ) AS payable_minor,
                            (
-                               SELECT MIN(mi_total.currency)
+                               SELECT MIN(COALESCE(promo.currency, obi_total.currency_snapshot, mi_total.currency))
                                FROM order_batches ob_total
                                JOIN order_batch_items obi_total ON obi_total.order_batch_id = ob_total.id
                                LEFT JOIN menu_items mi_total ON mi_total.id = obi_total.menu_item_id
+                               LEFT JOIN (
+                                   SELECT order_batch_item_id, MAX(currency) AS currency
+                                   FROM order_batch_item_promotion_adjustments
+                                   GROUP BY order_batch_item_id
+                               ) promo ON promo.order_batch_item_id = obi_total.id
                                WHERE ob_total.order_id = o.id
                                  AND ob_total.status <> 'REJECTED'
                                  AND ob_total.status <> 'CLOSED'
@@ -1903,6 +1925,19 @@ class VenueOrdersRepository(
                             runCatching { connection.rollback() }
                             return@use false
                         }
+                        if (
+                            discountPercent > 0 &&
+                            hasPromotionAdjustment(
+                                connection = connection,
+                                venueId = venueId,
+                                orderId = orderId,
+                                batchItemId = batchItemId,
+                            )
+                        ) {
+                            throw InvalidInputException(
+                                "На эту позицию уже действует акция. Ручную скидку применить нельзя.",
+                            )
+                        }
                         val now = OffsetDateTime.now(ZoneOffset.UTC)
                         val updated =
                             connection.prepareStatement(
@@ -1962,6 +1997,30 @@ class VenueOrdersRepository(
             }
         }
     }
+
+    private fun hasPromotionAdjustment(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        batchItemId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM order_batch_item_promotion_adjustments adjustment
+            JOIN order_batch_items item ON item.id = adjustment.order_batch_item_id
+            JOIN order_batches batch ON batch.id = item.order_batch_id
+            JOIN orders order_record ON order_record.id = batch.order_id
+            WHERE adjustment.order_batch_item_id = ?
+              AND order_record.id = ?
+              AND order_record.venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchItemId)
+            statement.setLong(2, orderId)
+            statement.setLong(3, venueId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
 
     private fun resolveOrderWorkflowStatus(
         orderStatusRaw: String?,
@@ -2033,7 +2092,7 @@ class VenueOrdersRepository(
             """
             SELECT obi.id,
                    obi.order_batch_id,
-                   COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
+                   COALESCE(obi.item_name_snapshot, mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
                    obi.is_excluded,
                    COALESCE(obi.item_status, 'ACTIVE') AS item_status,
                    ob.status AS batch_status,
@@ -2103,20 +2162,28 @@ class VenueOrdersRepository(
                    obi.canceled_reason_text,
                    obi.canceled_at,
                    obi.canceled_by_user_id,
-                   mi.name,
+                   COALESCE(promo.item_name_snapshot, obi.item_name_snapshot, mi.name) AS name,
                    obiop.menu_item_option_id,
                    obiop.option_name_snapshot,
                    obiop.price_delta_minor_snapshot,
                    CASE
-                       WHEN mi.price_minor IS NULL THEN NULL
-                       ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                       WHEN promo.base_unit_price_minor IS NOT NULL
+                           THEN promo.base_unit_price_minor + COALESCE(promo.selected_option_delta_minor, 0)
+                       WHEN COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) IS NULL THEN NULL
+                       ELSE COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) +
+                           COALESCE(obiop.price_delta_minor_snapshot, 0)
                    END AS price_minor,
-                   mi.currency
+                   COALESCE(promo.currency, obi.currency_snapshot, mi.currency) AS currency
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
             LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
-                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                SELECT order_batch_item_id,
+                       SUM(discount_minor) AS discount_minor,
+                       MAX(item_name_snapshot) AS item_name_snapshot,
+                       MAX(base_unit_price_minor) AS base_unit_price_minor,
+                       MAX(selected_option_delta_minor) AS selected_option_delta_minor,
+                       MAX(currency) AS currency
                 FROM order_batch_item_promotion_adjustments
                 GROUP BY order_batch_item_id
             ) promo ON promo.order_batch_item_id = obi.id

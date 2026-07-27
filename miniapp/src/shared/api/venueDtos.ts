@@ -16,6 +16,31 @@ export type VenueMeResponse = {
 
 export type VenuePromotionStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
 
+export type VenuePromotionTemplateType = 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT'
+
+export type VenuePromotionWeekdayWindowDto = {
+  weekday: number
+  startLocal: string
+  endLocal: string
+}
+
+export type VenuePromotionTargetDto = {
+  type: 'MENU_ITEM' | 'MENU_CATEGORY'
+  menuItemId?: number | null
+  menuCategoryId?: number | null
+  label?: string | null
+}
+
+export type VenuePromotionRuleDto = {
+  id: number
+  version: number
+  windows: VenuePromotionWeekdayWindowDto[]
+  target?: VenuePromotionTargetDto | null
+  discountPercent?: number | null
+  readyForActivation: boolean
+  validationIssues: string[]
+}
+
 export type VenuePromotionDto = {
   id: number
   title: string
@@ -24,12 +49,27 @@ export type VenuePromotionDto = {
   startsAt?: string | null
   endsAt?: string | null
   status: VenuePromotionStatus
+  templateType: VenuePromotionTemplateType
+  rule?: VenuePromotionRuleDto | null
+}
+
+export type VenuePromotionMenuCategoryDto = {
+  id: number
+  name: string
+}
+
+export type VenuePromotionMenuItemDto = {
+  id: number
+  name: string
+  categoryId: number
 }
 
 export type VenuePromotionListResponse = {
   venueId: number
   timezone: string
   items: VenuePromotionDto[]
+  menuCategories: VenuePromotionMenuCategoryDto[]
+  menuItems: VenuePromotionMenuItemDto[]
 }
 
 export type VenuePromotionResponse = {
@@ -42,6 +82,14 @@ export type VenuePromotionMutationRequest = {
   terms?: string | null
   startsAt: string
   endsAt: string
+  templateType: VenuePromotionTemplateType
+  rule?: VenuePromotionRuleMutationRequest | null
+}
+
+export type VenuePromotionRuleMutationRequest = {
+  windows: VenuePromotionWeekdayWindowDto[]
+  target: VenuePromotionTargetDto
+  discountPercent: number
 }
 
 export type VenuePromotionStatusRequest = {

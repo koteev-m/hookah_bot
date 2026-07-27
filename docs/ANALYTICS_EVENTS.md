@@ -185,12 +185,16 @@ Growth:
 - `promo_code_copied`
 - `promo_code_redeemed`
 
-Executable promotion events are future until Phase 2 implementation proves authoritative
-server-side emission. Their properties may include opaque promotion/rule/version ids, reward type,
-affected-line count, discount amount/currency and recalculation reason. They must not contain raw
-cart payloads, trusted client discount values, message text, Telegram payloads or unrelated PII.
-The persisted promotion application remains financial/order history truth; analytics never
-recalculates eligibility or discounts.
+`promotion_applied` is emitted server-side in the same submit transaction as the persisted
+application. It carries venue/order/batch correlation plus opaque promotion/rule/version ids and
+uses the application dedupe reference as its analytics idempotency key. Preview does not emit it,
+and idempotent replay does not create a duplicate. Management create/update/status events and
+`promotion_previewed` / `promotion_recalculated` remain follow-ups unless they can reuse the
+existing audit/event infrastructure with a small change.
+
+Executable promotion analytics must not contain raw cart payloads, trusted client discount values,
+message text, Telegram payloads or unrelated PII. The persisted promotion application remains
+financial/order history truth; analytics never recalculates eligibility or discounts.
 
 Staff profiles / today shift / staff tips:
 - `staff_profile_viewed`

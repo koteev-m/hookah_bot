@@ -88,6 +88,7 @@ data class AddBatchRequest(
     val idempotencyKey: String,
     val items: List<AddBatchItemDto>,
     val comment: String? = null,
+    val previewFingerprint: String? = null,
 )
 
 @Serializable
@@ -102,6 +103,8 @@ data class AddBatchItemDto(
 data class AddBatchResponse(
     val orderId: Long,
     val batchId: Long,
+    val pricing: CartPreviewDto,
+    val recalculated: Boolean,
 )
 
 @Serializable
@@ -146,6 +149,7 @@ data class CartPreviewDto(
     val currency: String,
     val discounts: List<CartPreviewDiscountDto>,
     val items: List<CartPreviewItemDto>,
+    val pricingFingerprint: String,
 )
 
 @Serializable
@@ -154,6 +158,25 @@ data class CartPreviewDiscountDto(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String? = null,
+    val promotionId: Long? = null,
+    val ruleId: Long? = null,
+    val ruleVersion: Int? = null,
+    val originalAmountMinor: Long? = null,
+    val finalAmountMinor: Long? = null,
+    val eligibleLineIds: List<Long> = emptyList(),
+)
+
+@Serializable
+data class CartPreviewPromotionAdjustmentDto(
+    val promotionId: Long? = null,
+    val promotionTitle: String,
+    val ruleId: Long,
+    val ruleVersion: Int,
+    val ruleType: String,
+    val originalAmountMinor: Long,
+    val discountMinor: Long,
+    val finalAmountMinor: Long,
+    val currency: String,
 )
 
 @Serializable
@@ -169,4 +192,7 @@ data class CartPreviewItemDto(
     val discountMinor: Long,
     val linePayableMinor: Long,
     val isPromotionReward: Boolean = false,
+    val baseUnitPriceMinor: Long,
+    val selectedOptionDeltaMinor: Long,
+    val promotionAdjustment: CartPreviewPromotionAdjustmentDto? = null,
 )

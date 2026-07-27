@@ -335,6 +335,14 @@ function renderGuestPromotions(promotions: GuestVenuePromotionDto[], timezone?: 
     const card = el('article', { className: 'guest-venue-promotion' })
     card.appendChild(el('h5', { text: promotion.title }))
     card.appendChild(el('p', { text: promotion.description }))
+    if (promotion.templateType === 'HAPPY_HOURS_PERCENT') {
+      card.appendChild(
+        el('p', {
+          className: 'guest-venue-promotion-terms',
+          text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
+        })
+      )
+    }
     const period = promotionPeriodLabel(promotion, timezone)
     if (period) {
       card.appendChild(el('p', { className: 'guest-venue-promotion-period', text: period }))

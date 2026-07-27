@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-23.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 is **AUDIT / IMPLEMENTATION PLAN REQUIRED**. Broader retention loops remain partial/future.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 is **EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED**. Broader retention loops remain partial/future.
 
 ## Core Rule
 
@@ -48,6 +48,9 @@ Current implementation is **partial**:
 - Simple Venue Promotions Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED**. Venue Owner/Manager use the Venue Mini App to list, create, edit, activate, pause and archive informational `TEXT_ONLY` promotions; Staff is hidden and denied server-side. Rule-backed promotion templates remain in their existing Telegram flows and cannot be mutated through this focused API.
 - Guest venue detail shows only `ACTIVE` promotions inside their current period after the existing `PUBLISHED` venue and guest/subscription availability checks. Draft, paused, archived, future and expired promotions are not disclosed.
 - Mini App and Telegram reuse the existing `venue_promotions` schema and `VenuePromotionRepository`; no migration, parallel model or discount engine was added. Informational promotions do not change order totals or send marketing notifications.
+- The Happy Hours percentage Phase 2 slice is **EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED**. Owner/Manager can configure title, description, terms, parent date range, venue-timezone weekday windows, one item/category target, percentage `1..100` and lifecycle in Venue Mini App; Staff is hidden and denied.
+- Guest Mini App and Telegram route the same current-price cart through `OrdersRepository` and the shared `PromotionRuleEngine`. Preview is side-effect free; submit revalidates time, lifecycle, current menu/option prices and availability, session/tab authorization, persists one immutable application snapshot and is idempotent.
+- The slice applies at most one executable percentage promotion per line. Automatic promotion and manual item discount cannot coexist; persisted promotion facts drive Guest History, Venue bill and staff-chat. Gifts and the existing Telegram gift flows remain compatible but outside the new Mini App UX.
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
   campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
   are future and must not be treated as guest order online payment.
@@ -64,7 +67,7 @@ Current implementation is **partial**:
 | `REPEAT_TEMPLATE` | A transient repeat plan for one past completed order, re-resolved against current menu state and applied only to the current cart. It is not saved as a library object. | MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE. |
 | `POST_VISIT_FEEDBACK` | 1-5 rating, tags and optional comment submitted from completed History detail only; internal venue signal. A configured safe public review URL may be offered only after manual `5/5` submit and explicit guest click. | DONE / MVP / staging-smoke-passed. |
 | `VENUE_PROMOTION` | Simple informational venue announcement with title, description, required period, optional terms and lifecycle status. | DONE / MVP / STAGING-SMOKE-PASSED for informational Phase 1. |
-| `EXECUTABLE_PROMOTION` | A server-evaluated schedule + eligibility + reward rule with an immutable application snapshot in the order. | AUDIT / IMPLEMENTATION PLAN REQUIRED for Phase 2. |
+| `EXECUTABLE_PROMOTION` | A server-evaluated schedule + eligibility + reward rule with an immutable application snapshot in the order. | EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED. |
 | `PROMO_CODE` | Code-based discount/reward with limits and accounting. | After MVP. |
 | `LOYALTY_STAMP` | Simple stamp-card loyalty model. | Future. |
 | `LOYALTY_POINTS` | Points/cashback-style ledger and redemption model. | Future; requires financial model. |
@@ -255,7 +258,7 @@ Broader Growth smoke remains future:
 - Favorite venues Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; favorite menu items/options remain `FUTURE`.
 - Repeat as Template Phase 1: `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) remains open. Persistent template library remains `FUTURE`.
 - Simple Venue Promotions Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`.
-- Executable Promotions Phase 2: `AUDIT / IMPLEMENTATION PLAN REQUIRED`.
+- Executable Promotions Phase 2: `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED`; CI, PostgreSQL staging migration and real Bot/staff-chat staging smoke remain release gates.
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
 - Low-rating manual follow-up through exact `VENUE_CHAT`: `DONE / MVP`; Platform feedback analytics dashboard remains `FUTURE`.
@@ -280,51 +283,29 @@ rule-backed promotions.
 
 ## Executable Promotions Phase 2
 
-Status: **AUDIT / IMPLEMENTATION PLAN REQUIRED**.
+Status: **EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED**.
 
-The verified runtime already contains `HAPPY_HOURS_PERCENT` and `GIFT_WITH_ITEM` rule types, a shared
-`PromotionRuleEngine`, server-side preview/submit calculation and promotion application/adjustment
-tables. This is a foundation to reuse, not permission to create a second discount engine. Current
-limitations remain product-significant:
+Implemented bounded behavior:
 
-- one rule has one weekday set plus one common time window; different per-day windows require
-  multiple rules and are not represented as an explicit schedule model;
-- eligibility targets are menu item or semantic category; there is no explicit any-item,
-  selected-option, minimum-quantity, minimum-amount or table-context condition;
-- rewards are percentage discount or fixed/selectable gift; fixed-amount discount, BOGO, second
-  eligible item free, free option/refill and special fixed price are not implemented;
-- Telegram supports explicit gift choice/skip, while Mini App has no equivalent gift-choice
-  contract or UX;
-- manual discount and promotion currently reduce the same bill without an explicit conflict policy;
-- persisted applications have useful title/type/amount snapshots but no immutable rule version and
-  do not fully snapshot the eligibility configuration;
-- cancel/reject/exclude handling removes affected lines from totals, but the current runtime does
-  not prove that a gift is revoked/recomputed when its trigger line changes after submit.
+- existing `VenuePromotionRepository`, `VenuePromotionRuleRepository`, `PromotionRuleEngine`,
+  `PromotionApplicationRepository`, `OrdersRepository` and promotion ledger remain the only
+  calculation/persistence path; no second promotion engine was added;
+- one rule stores normalized weekday windows with inclusive start/exclusive end in the venue
+  timezone, alongside a versioned item/category target and percentage `1..100`;
+- activation is one server-side Owner/Manager validation for parent lifecycle, target ownership,
+  valid non-overlapping windows, percentage and timezone; Staff and foreign venue access are denied;
+- preview creates no order, batch, ledger or notification; submit re-resolves current item price,
+  selected-option deltas, availability and active session/tab authorization, then recalculates;
+- deterministic no-stacking selects one winner per line; a manual item discount is rejected when a
+  promotion adjustment exists, while exclusion remains a separate action;
+- successful submit stores title, rule/config/target/version, eligible-line pricing, amounts,
+  applied time, timezone and dedupe snapshots; replay cannot duplicate the application/adjustment;
+- Guest cart, History, Venue bill and staff-chat render persisted original/discount/final facts.
 
-Required financial and technical invariants:
-
-- the server is the only source of eligibility, current prices and discounts; clients never submit
-  trusted discount amounts;
-- preview and final add-batch/submit both evaluate the promotion, and any intervening time,
-  availability, price or cart change causes a safe recalculation;
-- promotions never mutate menu base prices; each application is stored separately with promotion
-  name, rule identity/version, original amount, adjustment and final amount;
-- gift lines preserve original price, discount adjustment and final amount; gifts and options are
-  never added or substituted silently;
-- idempotent replay cannot create a second reward or discount; canceled, rejected and excluded
-  lines do not receive promotions; totals are clamped at zero;
-- manual staff discount and promotion do not stack without an explicit policy; the first Phase 2
-  slice defaults to one non-stackable promotion unless deterministic priority is proven;
-- table/session/tab privacy remains unchanged, and staff-chat receives computed order facts only.
-
-Selected first runtime slice verdict: **IMPLEMENT_PROMOTION_ENGINE_PARITY_NOW**.
-
-The bounded outcome is Happy Hours + percentage discount parity over the existing engine: venue
-date range and timezone, explicit weekday/time windows, eligible item/category, one non-stackable
-percentage reward, current-price server preview and submit, visible base/adjustment/final totals,
-persisted versioned application snapshot and one shared Bot/Mini App resolver. Preview never creates
-an order. The slice should add a normalized per-day window representation and rule/application
-version snapshots if the existing schema cannot express/audit them cleanly.
+Local evidence covers required backend promotion/repository/routes/order/Telegram selectors,
+Kotlin compile/lint, Mini App production build and full deterministic Playwright smoke `71/71`.
+This is not a staging-smoke claim: GitHub Actions, PostgreSQL staging migration and real
+Telegram/staff-chat smoke remain required before release.
 
 Explicitly out of scope for this first slice: gifts, BOGO, second-item-free, free option/refill,
 special fixed price, fixed-amount discount, loyalty/points/cashback, promo codes, birthday and

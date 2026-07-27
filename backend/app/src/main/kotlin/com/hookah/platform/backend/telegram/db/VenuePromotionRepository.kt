@@ -92,6 +92,7 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
         endsAt: Instant? = null,
         templateType: VenuePromotionTemplateType = VenuePromotionTemplateType.TEXT_ONLY,
         createdByUserId: Long,
+        afterInsert: ((Connection, Long) -> Unit)? = null,
     ): VenuePromotion {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val normalizedTitle = requireText(title, "title")
@@ -100,35 +101,49 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val id =
-                        connection.prepareStatement(
-                            """
-                            INSERT INTO venue_promotions (
-                                venue_id, title, description, terms, starts_at, ends_at, status, template_type, created_by_user_id
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """.trimIndent(),
-                            Statement.RETURN_GENERATED_KEYS,
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.setString(2, normalizedTitle)
-                            statement.setString(3, normalizedDescription)
-                            statement.setString(4, normalizedTerms)
-                            setInstant(statement, 5, startsAt)
-                            setInstant(statement, 6, endsAt)
-                            statement.setString(7, VenuePromotionStatus.DRAFT.dbValue)
-                            statement.setString(8, templateType.dbValue)
-                            statement.setLong(9, createdByUserId)
-                            statement.executeUpdate()
-                            statement.generatedKeys.use { keys ->
-                                if (!keys.next()) {
-                                    throw SQLException("No generated key for venue promotion")
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val id =
+                            connection.prepareStatement(
+                                """
+                                INSERT INTO venue_promotions (
+                                    venue_id, title, description, terms, starts_at, ends_at, status, template_type,
+                                    created_by_user_id
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """.trimIndent(),
+                                Statement.RETURN_GENERATED_KEYS,
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.setString(2, normalizedTitle)
+                                statement.setString(3, normalizedDescription)
+                                statement.setString(4, normalizedTerms)
+                                setInstant(statement, 5, startsAt)
+                                setInstant(statement, 6, endsAt)
+                                statement.setString(7, VenuePromotionStatus.DRAFT.dbValue)
+                                statement.setString(8, templateType.dbValue)
+                                statement.setLong(9, createdByUserId)
+                                statement.executeUpdate()
+                                statement.generatedKeys.use { keys ->
+                                    if (!keys.next()) {
+                                        throw SQLException("No generated key for venue promotion")
+                                    }
+                                    keys.getLong(1)
                                 }
-                                keys.getLong(1)
                             }
-                        }
-                    selectPromotion(connection, venueId = venueId, promotionId = id)
-                        ?: throw SQLException("Created venue promotion not found")
+                        afterInsert?.invoke(connection, id)
+                        val created =
+                            selectPromotion(connection, venueId = venueId, promotionId = id)
+                                ?: throw SQLException("Created venue promotion not found")
+                        connection.commit()
+                        created
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -145,6 +160,7 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
         clearTerms: Boolean = false,
         startsAt: Instant? = null,
         endsAt: Instant? = null,
+        afterUpdate: ((Connection, VenuePromotion) -> Unit)? = null,
     ): VenuePromotion? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val updates = mutableListOf<String>()
@@ -172,32 +188,75 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
             updates += "ends_at = ?"
             values += it
         }
-        if (updates.isEmpty()) {
+        if (updates.isEmpty() && afterUpdate == null) {
             return getPromotionForManagement(venueId, promotionId)
         }
-        updates += "updated_at = CURRENT_TIMESTAMP"
+        if (updates.isNotEmpty()) {
+            updates += "updated_at = CURRENT_TIMESTAMP"
+        }
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE venue_promotions
-                            SET ${updates.joinToString(", ")}
-                            WHERE venue_id = ? AND id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            values.forEachIndexed { index, value ->
-                                setStatementValue(statement, index + 1, value)
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val result =
+                            if (updates.isEmpty()) {
+                                selectPromotion(
+                                    connection,
+                                    venueId = venueId,
+                                    promotionId = promotionId,
+                                    forUpdate = true,
+                                )
+                            } else {
+                                val updated =
+                                    connection.prepareStatement(
+                                        """
+                                        UPDATE venue_promotions
+                                        SET ${updates.joinToString(", ")}
+                                        WHERE venue_id = ? AND id = ?
+                                        """.trimIndent(),
+                                    ).use { statement ->
+                                        values.forEachIndexed { index, value ->
+                                            setStatementValue(statement, index + 1, value)
+                                        }
+                                        statement.setLong(values.size + 1, venueId)
+                                        statement.setLong(values.size + 2, promotionId)
+                                        statement.executeUpdate()
+                                    }
+                                if (updated == 0) {
+                                    null
+                                } else {
+                                    selectPromotion(connection, venueId = venueId, promotionId = promotionId)
+                                }
                             }
-                            statement.setLong(values.size + 1, venueId)
-                            statement.setLong(values.size + 2, promotionId)
-                            statement.executeUpdate()
+                        if (
+                            result != null &&
+                            afterUpdate == null &&
+                            (startsAt != null || endsAt != null)
+                        ) {
+                            lockPromotionRulesForUpdate(connection, venueId, promotionId)
+                            connection.prepareStatement(
+                                """
+                                UPDATE promotion_rules
+                                SET version = version + 1,
+                                    updated_at = CURRENT_TIMESTAMP
+                                WHERE venue_id = ? AND promotion_id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.setLong(2, promotionId)
+                                statement.executeUpdate()
+                            }
                         }
-                    if (updated == 0) {
-                        null
-                    } else {
-                        selectPromotion(connection, venueId = venueId, promotionId = promotionId)
+                        result?.let { afterUpdate?.invoke(connection, it) }
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
                 }
             } catch (e: SQLException) {
@@ -210,29 +269,43 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
         venueId: Long,
         promotionId: Long,
         status: VenuePromotionStatus,
+        afterUpdate: ((Connection, VenuePromotion) -> Unit)? = null,
     ): VenuePromotion? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE venue_promotions
-                            SET status = ?,
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE venue_id = ? AND id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setString(1, status.dbValue)
-                            statement.setLong(2, venueId)
-                            statement.setLong(3, promotionId)
-                            statement.executeUpdate()
-                        }
-                    if (updated == 0) {
-                        null
-                    } else {
-                        selectPromotion(connection, venueId = venueId, promotionId = promotionId)
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE venue_promotions
+                                SET status = ?,
+                                    updated_at = CURRENT_TIMESTAMP
+                                WHERE venue_id = ? AND id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, status.dbValue)
+                                statement.setLong(2, venueId)
+                                statement.setLong(3, promotionId)
+                                statement.executeUpdate()
+                            }
+                        val result =
+                            if (updated == 0) {
+                                null
+                            } else {
+                                selectPromotion(connection, venueId = venueId, promotionId = promotionId)
+                            }
+                        result?.let { afterUpdate?.invoke(connection, it) }
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
                 }
             } catch (e: SQLException) {
@@ -269,6 +342,7 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
                             if (updated == 0) {
                                 null
                             } else {
+                                lockPromotionRulesForUpdate(connection, venueId, promotionId)
                                 connection.prepareStatement(
                                     """
                                     UPDATE promotion_rules
@@ -734,6 +808,7 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
         connection: Connection,
         venueId: Long,
         promotionId: Long,
+        forUpdate: Boolean = false,
     ): VenuePromotion? =
         connection.prepareStatement(
             """
@@ -741,12 +816,47 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
             FROM venue_promotions p
             JOIN venues v ON v.id = p.venue_id
             WHERE p.venue_id = ? AND p.id = ?
+            ${promotionLockClause(connection, forUpdate)}
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, promotionId)
             statement.executeQuery().use { rs -> if (rs.next()) rs.toPromotion() else null }
         }
+
+    private fun promotionLockClause(
+        connection: Connection,
+        forUpdate: Boolean,
+    ): String =
+        when {
+            !forUpdate -> ""
+            connection.metaData.databaseProductName.equals("PostgreSQL", ignoreCase = true) -> "FOR UPDATE OF p"
+            else -> "FOR UPDATE"
+        }
+
+    private fun lockPromotionRulesForUpdate(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM promotion_rules
+            WHERE venue_id = ? AND promotion_id = ?
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, promotionId)
+            statement.executeQuery().use { rs ->
+                while (rs.next()) {
+                    rs.getLong("id")
+                }
+            }
+        }
+    }
 
     private fun promotionColumns(): String =
         """

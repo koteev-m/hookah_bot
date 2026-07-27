@@ -97,11 +97,13 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
                     val placeholders = itemIds.joinToString(",") { "?" }
                     val sql =
                         """
-                        SELECT id
-                        FROM menu_items
-                        WHERE venue_id = ?
-                          AND is_available = true
-                          AND id IN ($placeholders)
+                        SELECT mi.id
+                        FROM menu_items mi
+                        JOIN menu_categories mc ON mc.id = mi.category_id
+                        WHERE mi.venue_id = ?
+                          AND mi.is_available = true
+                          AND mc.is_active = true
+                          AND mi.id IN ($placeholders)
                         """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
                         statement.setLong(1, venueId)

@@ -6,6 +6,8 @@ import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Statement
+import java.sql.Timestamp
+import java.time.Instant
 import javax.sql.DataSource
 
 data class PromotionAdjustmentRecord(
@@ -21,6 +23,16 @@ data class PromotionAdjustmentRecord(
     val originalPriceMinor: Long,
     val quantity: Int,
     val currency: String,
+    val ruleVersion: Int = 1,
+    val scheduleSnapshotJson: String? = null,
+    val targetSnapshotJson: String? = null,
+    val originalAmountMinor: Long = originalPriceMinor * quantity.toLong(),
+    val finalAmountMinor: Long = (originalAmountMinor - discountMinor).coerceAtLeast(0L),
+    val venueTimezoneSnapshot: String? = null,
+    val appliedAt: Instant? = null,
+    val itemNameSnapshot: String? = null,
+    val baseUnitPriceMinor: Long? = null,
+    val selectedOptionDeltaMinor: Long? = null,
 )
 
 data class PromotionDiscountSummary(
@@ -45,6 +57,13 @@ data class PromotionApplicationInput(
     val dedupeKey: String,
     val adjustments: List<PromotionAdjustmentInput>,
     val rewardItems: List<PromotionRewardItemInput> = emptyList(),
+    val ruleVersion: Int = 1,
+    val scheduleSnapshotJson: String? = null,
+    val targetSnapshotJson: String? = null,
+    val originalTotalMinor: Long = adjustments.sumOf { it.originalAmountMinor },
+    val finalTotalMinor: Long = (originalTotalMinor - discountTotalMinor).coerceAtLeast(0L),
+    val venueTimezoneSnapshot: String? = null,
+    val appliedAt: Instant = Instant.now(),
 )
 
 data class PromotionAdjustmentInput(
@@ -55,6 +74,11 @@ data class PromotionAdjustmentInput(
     val originalPriceMinor: Long,
     val quantity: Int,
     val currency: String,
+    val itemNameSnapshot: String? = null,
+    val baseUnitPriceMinor: Long? = null,
+    val selectedOptionDeltaMinor: Long? = null,
+    val originalAmountMinor: Long = originalPriceMinor * quantity.toLong(),
+    val finalAmountMinor: Long = (originalAmountMinor - discountMinor).coerceAtLeast(0L),
 )
 
 data class PromotionRewardItemInput(
@@ -264,9 +288,16 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
                 discount_percent,
                 discount_total_minor,
                 currency,
-                dedupe_key
+                dedupe_key,
+                rule_version,
+                schedule_snapshot_json,
+                target_snapshot_json,
+                original_total_minor,
+                final_total_minor,
+                venue_timezone_snapshot,
+                applied_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -288,6 +319,13 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
             statement.setLong(12, application.discountTotalMinor)
             statement.setString(13, application.currency)
             statement.setString(14, application.dedupeKey)
+            statement.setInt(15, application.ruleVersion)
+            statement.setString(16, application.scheduleSnapshotJson)
+            statement.setString(17, application.targetSnapshotJson)
+            statement.setLong(18, application.originalTotalMinor)
+            statement.setLong(19, application.finalTotalMinor)
+            statement.setString(20, application.venueTimezoneSnapshot)
+            statement.setTimestamp(21, Timestamp.from(application.appliedAt))
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
                 if (keys.next()) keys.getLong(1) else error("Failed to insert promotion application")
@@ -309,9 +347,14 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
                 discount_percent,
                 original_price_minor,
                 quantity,
-                currency
+                currency,
+                item_name_snapshot,
+                base_unit_price_minor,
+                selected_option_delta_minor,
+                original_amount_minor,
+                final_amount_minor
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, applicationId)
@@ -322,6 +365,11 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
             statement.setLong(6, adjustment.originalPriceMinor)
             statement.setInt(7, adjustment.quantity)
             statement.setString(8, adjustment.currency)
+            statement.setString(9, adjustment.itemNameSnapshot)
+            setNullableLong(statement, 10, adjustment.baseUnitPriceMinor)
+            setNullableLong(statement, 11, adjustment.selectedOptionDeltaMinor)
+            statement.setLong(12, adjustment.originalAmountMinor)
+            statement.setLong(13, adjustment.finalAmountMinor)
             statement.executeUpdate()
         }
     }
@@ -400,7 +448,19 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
         obipa.discount_percent,
         obipa.original_price_minor,
         obipa.quantity,
-        obipa.currency
+        obipa.currency,
+        opa.rule_version,
+        opa.schedule_snapshot_json,
+        opa.target_snapshot_json,
+        opa.original_total_minor AS application_original_total_minor,
+        opa.final_total_minor AS application_final_total_minor,
+        opa.venue_timezone_snapshot,
+        opa.applied_at,
+        obipa.item_name_snapshot,
+        obipa.base_unit_price_minor,
+        obipa.selected_option_delta_minor,
+        obipa.original_amount_minor AS adjustment_original_amount_minor,
+        obipa.final_amount_minor AS adjustment_final_amount_minor
         """.trimIndent()
 
     private fun rsToAdjustmentRecord(rs: java.sql.ResultSet): PromotionAdjustmentRecord =
@@ -417,6 +477,17 @@ class PromotionApplicationRepository(private val dataSource: DataSource?) {
             originalPriceMinor = rs.getLong("original_price_minor"),
             quantity = rs.getInt("quantity"),
             currency = rs.getString("currency"),
+            ruleVersion = rs.getInt("rule_version"),
+            scheduleSnapshotJson = rs.getString("schedule_snapshot_json"),
+            targetSnapshotJson = rs.getString("target_snapshot_json"),
+            originalAmountMinor = rs.getLong("adjustment_original_amount_minor"),
+            finalAmountMinor = rs.getLong("adjustment_final_amount_minor"),
+            venueTimezoneSnapshot = rs.getString("venue_timezone_snapshot"),
+            appliedAt = rs.getTimestamp("applied_at")?.toInstant(),
+            itemNameSnapshot = rs.getString("item_name_snapshot"),
+            baseUnitPriceMinor = rs.getLong("base_unit_price_minor").let { value -> if (rs.wasNull()) null else value },
+            selectedOptionDeltaMinor =
+                rs.getLong("selected_option_delta_minor").let { value -> if (rs.wasNull()) null else value },
         )
 
     private fun setNullableLong(

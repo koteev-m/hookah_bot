@@ -439,7 +439,13 @@ MUST:
 - `VISIT_HISTORY`, `ORDER_HISTORY`, `BOOKING_HISTORY`: guest history combines confirmed visits, closed orders and bookings only after the visit/order/session model is stable.
 - `REPEAT_TEMPLATE`: repeat uses a saved template and applies it on the next verified table context; it must not create an order without QR/table context, selected tab and current menu/stop-list validation.
 - `POST_VISIT_FEEDBACK`: rating 1-5, tags and optional comment only after a confirmed visit/order close signal. Automated Telegram/worker prompts and public review automation remain disabled/future.
-- `VENUE_PROMOTION`: simple venue promotions/banners with title, description, period, terms and visibility/status; do not promise automatic discounts without a real promo engine/accounting path.
+- `VENUE_PROMOTION`: informational Phase 1 remains `DONE / MVP / STAGING-SMOKE-PASSED`.
+  The bounded Happy Hours percentage slice is
+  `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED`:
+  Owner/Manager configure item/category targets, venue-timezone weekday windows, lifecycle and
+  percentage through the existing promotion repositories; Bot and Mini App use one server-owned
+  preview/submit calculation and immutable application ledger. Other executable reward types,
+  promo codes, stacking, notifications and payments remain out of scope.
 - `OPT_IN_NOTIFICATION`: retention/promo notifications require explicit guest opt-in, frequency limits and unsubscribe.
 SHOULD:
 - `PROMO_CODE` with limits/accounting, `LOYALTY_STAMP` / `LOYALTY_POINTS`, `REFERRAL`, segmentation/campaigns, paid placement/promotion boosting, flavor quiz and advanced recommendations remain future work.

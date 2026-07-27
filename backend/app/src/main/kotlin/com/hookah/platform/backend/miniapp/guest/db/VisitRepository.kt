@@ -80,6 +80,8 @@ data class GuestVisitPromotionDiscount(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String? = null,
+    val originalAmountMinor: Long? = null,
+    val finalAmountMinor: Long? = null,
 )
 
 data class GuestVisitOrderItemOption(
@@ -544,17 +546,25 @@ class VisitRepository(private val dataSource: DataSource?) {
         connection.prepareStatement(
             """
             SELECT obi.menu_item_id,
-                   COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
+                   COALESCE(
+                       promo.item_name_snapshot,
+                       obi.item_name_snapshot,
+                       mi.name,
+                       'Позиция #' || obi.menu_item_id
+                   ) AS item_name,
                    SUM(obi.qty) AS qty,
                    obiop.menu_item_option_id,
                    obiop.option_name_snapshot,
                    obiop.price_delta_minor_snapshot,
                    obi.preference_note,
                    CASE
-                       WHEN mi.price_minor IS NULL THEN NULL
-                       ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                       WHEN promo.base_unit_price_minor IS NOT NULL
+                           THEN promo.base_unit_price_minor + COALESCE(promo.selected_option_delta_minor, 0)
+                       WHEN COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) IS NULL THEN NULL
+                       ELSE COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) +
+                           COALESCE(obiop.price_delta_minor_snapshot, 0)
                    END AS price_minor,
-                   mi.currency,
+                   COALESCE(promo.currency, obi.currency_snapshot, mi.currency) AS currency,
                    obi.discount_percent,
                    COALESCE(SUM(promo.discount_minor), 0) AS promo_discount_minor,
                    CASE WHEN opri.reward_order_batch_item_id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward
@@ -563,7 +573,12 @@ class VisitRepository(private val dataSource: DataSource?) {
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
             LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
-                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                SELECT order_batch_item_id,
+                       SUM(discount_minor) AS discount_minor,
+                       MAX(item_name_snapshot) AS item_name_snapshot,
+                       MAX(base_unit_price_minor) AS base_unit_price_minor,
+                       MAX(selected_option_delta_minor) AS selected_option_delta_minor,
+                       MAX(currency) AS currency
                 FROM order_batch_item_promotion_adjustments
                 GROUP BY order_batch_item_id
             ) promo ON promo.order_batch_item_id = obi.id
@@ -576,6 +591,13 @@ class VisitRepository(private val dataSource: DataSource?) {
                      mi.name,
                      mi.price_minor,
                      mi.currency,
+                     obi.item_name_snapshot,
+                     obi.base_unit_price_minor_snapshot,
+                     obi.currency_snapshot,
+                     promo.item_name_snapshot,
+                     promo.base_unit_price_minor,
+                     promo.selected_option_delta_minor,
+                     promo.currency,
                      obiop.menu_item_option_id,
                      obiop.option_name_snapshot,
                      obiop.price_delta_minor_snapshot,
@@ -638,6 +660,27 @@ class VisitRepository(private val dataSource: DataSource?) {
                     END AS promo_label,
                     opa.rule_type,
                     opa.currency,
+                    COALESCE(
+                        SUM(
+                            COALESCE(
+                                NULLIF(obipa.original_amount_minor, 0),
+                                obipa.original_price_minor * obipa.quantity
+                            )
+                        ),
+                        0
+                    ) AS original_total_minor,
+                    COALESCE(
+                        SUM(
+                            COALESCE(
+                                NULLIF(obipa.final_amount_minor, 0),
+                                GREATEST(
+                                    obipa.original_price_minor * obipa.quantity - obipa.discount_minor,
+                                    0
+                                )
+                            )
+                        ),
+                        0
+                    ) AS final_total_minor,
                     COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
                     MIN(opa.id) AS first_application_id
                 FROM order_promotion_applications opa
@@ -649,11 +692,16 @@ class VisitRepository(private val dataSource: DataSource?) {
                   AND obi.is_excluded = FALSE
                   AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
                   AND ${validGuestBatchPredicate("ob")}
-                GROUP BY opa.id, opa.title_snapshot, opa.rule_type, opa.currency
+                GROUP BY opa.id,
+                         opa.title_snapshot,
+                         opa.rule_type,
+                         opa.currency
             )
             SELECT promo_label,
                    rule_type,
                    currency,
+                   NULLIF(SUM(original_total_minor), 0) AS original_total_minor,
+                   COALESCE(SUM(final_total_minor), 0) AS final_total_minor,
                    COALESCE(SUM(discount_minor), 0) AS discount_minor,
                    MIN(first_application_id) AS first_application_id
             FROM application_discounts
@@ -674,6 +722,14 @@ class VisitRepository(private val dataSource: DataSource?) {
                                     discountMinor = discountMinor,
                                     currency = rs.getString("currency"),
                                     ruleType = rs.getString("rule_type"),
+                                    originalAmountMinor =
+                                        rs.getLong("original_total_minor").let { value ->
+                                            if (rs.wasNull()) null else value
+                                        },
+                                    finalAmountMinor =
+                                        rs.getLong("final_total_minor").let { value ->
+                                            if (rs.wasNull()) null else value
+                                        },
                                 ),
                             )
                         }

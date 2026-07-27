@@ -6,6 +6,7 @@ import com.hookah.platform.backend.telegram.db.PromotionRuleRewardOption
 import com.hookah.platform.backend.telegram.db.PromotionRuleTarget
 import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
 import com.hookah.platform.backend.telegram.db.PromotionRuleType
+import com.hookah.platform.backend.telegram.db.PromotionWeekdayWindow
 import com.hookah.platform.backend.telegram.db.VenuePromotionRule
 import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
 import java.time.Instant
@@ -19,6 +20,7 @@ data class PromotionRuleCartItem(
     val priceMinor: Long,
     val currency: String,
     val effectiveType: MenuSemanticType,
+    val menuCategoryId: Long? = null,
 )
 
 data class PromotionRulePreviewAdjustment(
@@ -76,7 +78,9 @@ object PromotionRuleEngine {
                 .asSequence()
                 .filter { it.venueId == venueId }
                 .filter { it.status == VenuePromotionStatus.ACTIVE }
-                .filter { it.matchesNow(now, venueZoneId) }
+                .filter { it.matchesPromotionLifecycle(now) }
+                .filter { it.hasValidExecutableConfiguration() }
+                .filter { isScheduleActive(it, now, venueZoneId) }
                 .toList()
         if (eligibleRules.isEmpty() || cartItems.isEmpty()) {
             return PromotionRulePreviewResult(emptyList())
@@ -85,13 +89,13 @@ object PromotionRuleEngine {
         val percentCandidates =
             cartItems
                 .filter { it.qty > 0 && it.priceMinor > 0 }
-                .flatMap { item ->
+                .mapNotNull { item ->
                     eligibleRules
                         .asSequence()
                         .filter { it.ruleType == PromotionRuleType.HAPPY_HOURS_PERCENT }
                         .filter { it.matchesItem(item) }
                         .mapNotNull { rule -> rule.percentCandidate(item) }
-                        .toList()
+                        .maxWithOrNull(::compareCandidateBenefit)
                 }
         val giftCandidates =
             eligibleRules
@@ -108,9 +112,20 @@ object PromotionRuleEngine {
         )
     }
 
+    fun isScheduleActive(
+        rule: VenuePromotionRule,
+        now: Instant,
+        venueZoneId: ZoneId,
+    ): Boolean = rule.matchesNow(now, venueZoneId)
+
     private fun VenuePromotionRule.percentCandidate(item: PromotionRuleCartItem): PromotionRuleCandidate? {
         val baseMinor = item.priceMinor * item.qty.toLong()
-        val discountMinor = (baseMinor * discountPercent / 100).coerceAtMost(baseMinor)
+        val boundedPercent = discountPercent.coerceIn(0, 100)
+        val discountMinor =
+            (
+                (baseMinor / 100L) * boundedPercent +
+                    (baseMinor % 100L) * boundedPercent / 100L
+            ).coerceAtMost(baseMinor)
         if (discountMinor <= 0L) return null
         return PromotionRuleCandidate(
             ruleId = id,
@@ -118,7 +133,7 @@ object PromotionRuleEngine {
             conflictKey = resolveConflictKey(item.lineId, item.menuItemId),
             monetaryBenefit = discountMinor,
             itemGrossMinor = baseMinor,
-            stackable = stackable,
+            stackable = false,
             priority = priority,
             maxApplicationsPerItem = maxApplicationsPerItem,
             adjustment =
@@ -260,6 +275,25 @@ object PromotionRuleEngine {
         zoneId: ZoneId,
     ): Boolean {
         val local = now.atZone(zoneId)
+        if (
+            ruleType == PromotionRuleType.HAPPY_HOURS_PERCENT &&
+            executableTargetType != null &&
+            weekdayWindows.isEmpty()
+        ) {
+            return false
+        }
+        if (weekdayWindows.isNotEmpty()) {
+            val weekday = local.dayOfWeek.value
+            val localMinute = local.hour * 60 + local.minute
+            return weekdayWindows.any { window ->
+                window.weekday == weekday &&
+                    window.startsMinute in 0..1439 &&
+                    window.endsMinute in 1..1440 &&
+                    window.startsMinute < window.endsMinute &&
+                    localMinute >= window.startsMinute &&
+                    localMinute < window.endsMinute
+            }
+        }
         val allowedDays = daysOfWeek
         if (allowedDays != null && local.dayOfWeek.value !in allowedDays) {
             return false
@@ -274,6 +308,57 @@ object PromotionRuleEngine {
         }
         val time = local.toLocalTime()
         return !time.isBefore(start) && time.isBefore(end)
+    }
+
+    private fun VenuePromotionRule.matchesPromotionLifecycle(now: Instant): Boolean =
+        (promotionStartsAt == null || !now.isBefore(promotionStartsAt)) &&
+            (promotionEndsAt == null || !now.isAfter(promotionEndsAt))
+
+    private fun VenuePromotionRule.hasValidExecutableConfiguration(): Boolean {
+        if (ruleType != PromotionRuleType.HAPPY_HOURS_PERCENT) {
+            return true
+        }
+        val targetType = executableTargetType ?: return true
+        if (
+            discountPercent !in 1..100 ||
+            stackable ||
+            conflictGroup != null ||
+            maxApplicationsPerItem != 1 ||
+            !weekdayWindows.areValidWeekdayWindows()
+        ) {
+            return false
+        }
+        return when (targetType) {
+            PromotionRuleTargetType.MENU_ITEM ->
+                targets.singleOrNull()?.let { target ->
+                    target.targetType == PromotionRuleTargetType.MENU_ITEM && target.menuItemId != null
+                } == true
+            PromotionRuleTargetType.MENU_CATEGORY ->
+                targets.singleOrNull()?.let { target ->
+                    target.targetType == PromotionRuleTargetType.MENU_CATEGORY && target.menuCategoryId != null
+                } == true
+            PromotionRuleTargetType.CATEGORY_TYPE -> false
+        }
+    }
+
+    private fun List<PromotionWeekdayWindow>.areValidWeekdayWindows(): Boolean {
+        if (isEmpty()) {
+            return false
+        }
+        return groupBy { it.weekday }.all { (weekday, windows) ->
+            if (weekday !in 1..7) {
+                return@all false
+            }
+            val sorted = windows.sortedWith(compareBy({ it.startsMinute }, { it.endsMinute }))
+            sorted.all { window ->
+                window.startsMinute in 0..1439 &&
+                    window.endsMinute in 1..1440 &&
+                    window.startsMinute < window.endsMinute
+            } &&
+                sorted.zipWithNext().all { (previous, next) ->
+                    previous.endsMinute <= next.startsMinute
+                }
+        }
     }
 
     private fun VenuePromotionRule.previewLabel(): String =
@@ -359,21 +444,26 @@ object PromotionRuleEngine {
 
     private fun VenuePromotionRule.matchesItem(item: PromotionRuleCartItem): Boolean {
         val effectiveTargets =
-            targets.ifEmpty {
-                listOf(
-                    PromotionRuleTarget(
-                        id = null,
-                        ruleId = id,
-                        targetType = targetType,
-                        semanticType = targetValue,
-                        menuItemId = null,
-                    ),
-                )
+            when {
+                targets.isNotEmpty() -> targets
+                executableTargetType != null -> emptyList()
+                else ->
+                    listOf(
+                        PromotionRuleTarget(
+                            id = null,
+                            ruleId = id,
+                            targetType = targetType,
+                            semanticType = targetValue,
+                            menuItemId = null,
+                        ),
+                    )
             }
         return effectiveTargets.any { target ->
             when (target.targetType) {
                 PromotionRuleTargetType.CATEGORY_TYPE -> target.semanticType == item.effectiveType
                 PromotionRuleTargetType.MENU_ITEM -> target.menuItemId == item.menuItemId
+                PromotionRuleTargetType.MENU_CATEGORY ->
+                    target.menuCategoryId != null && target.menuCategoryId == item.menuCategoryId
             }
         }
     }

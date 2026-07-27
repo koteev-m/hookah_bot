@@ -307,6 +307,7 @@ private fun VenuePromotion.toGuestDto(): GuestVenuePromotionDto =
         terms = terms,
         startsAt = startsAt?.toString(),
         endsAt = endsAt?.toString(),
+        templateType = templateType.dbValue,
     )
 
 private fun VenueShort.displayAddress(): String? = formatVenueDisplayAddress(locationDisplay())

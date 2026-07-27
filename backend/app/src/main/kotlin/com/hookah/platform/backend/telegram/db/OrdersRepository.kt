@@ -8,16 +8,22 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.promotions.PromotionRuleCartItem
 import com.hookah.platform.backend.promotions.PromotionRuleEngine
+import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
 import com.hookah.platform.backend.telegram.ActiveOrderSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.Date
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
+import java.sql.Timestamp
 import java.sql.Types
-import java.time.Instant
+import java.time.Clock
 import java.time.LocalDate
 import java.time.ZoneId
 import javax.sql.DataSource
@@ -85,6 +91,8 @@ data class CreatedOrderBatch(
     val isFirstBatch: Boolean = true,
     val promotionDiscounts: List<CreatedOrderPromotionDiscount> = emptyList(),
     val items: List<CreatedOrderBatchItem> = emptyList(),
+    val pricing: GuestOrderCartPreview? = null,
+    val recalculated: Boolean = false,
 )
 
 data class CreatedOrderPromotionDiscount(
@@ -92,9 +100,16 @@ data class CreatedOrderPromotionDiscount(
     val discountMinor: Long,
     val currency: String,
     val ruleType: String? = null,
+    val promotionId: Long? = null,
+    val ruleId: Long? = null,
+    val ruleVersion: Int? = null,
+    val originalAmountMinor: Long? = null,
+    val finalAmountMinor: Long? = null,
+    val eligibleLineIds: List<Long> = emptyList(),
 )
 
 data class CreatedOrderBatchItem(
+    val lineId: Long? = null,
     val itemId: Long,
     val itemName: String,
     val qty: Int,
@@ -114,6 +129,19 @@ data class GuestOrderCartPreview(
     val finalPayableTotalMinor: Long,
     val currency: String,
     val discounts: List<CreatedOrderPromotionDiscount>,
+    val pricingFingerprint: String,
+    val giftChoices: List<PromotionRulePreviewGiftChoice> = emptyList(),
+)
+
+data class GuestOrderPromotionLineAdjustment(
+    val promotionId: Long?,
+    val promotionTitle: String,
+    val ruleId: Long,
+    val ruleVersion: Int,
+    val ruleType: String,
+    val originalAmountMinor: Long,
+    val discountMinor: Long,
+    val finalAmountMinor: Long,
 )
 
 data class GuestOrderCartPreviewItem(
@@ -128,7 +156,58 @@ data class GuestOrderCartPreviewItem(
     val discountMinor: Long,
     val linePayableMinor: Long,
     val isPromotionReward: Boolean = false,
+    val baseUnitPriceMinor: Long = priceMinor - (selectedOption?.priceDeltaMinor ?: 0L),
+    val selectedOptionDeltaMinor: Long = selectedOption?.priceDeltaMinor ?: 0L,
+    val promotionAdjustment: GuestOrderPromotionLineAdjustment? = null,
 )
+
+private fun GuestOrderCartPreview.calculatePricingFingerprint(): String {
+    val canonical =
+        buildString {
+            append(grossTotalMinor)
+            append('|')
+            append(promoDiscountTotalMinor)
+            append('|')
+            append(loyaltyDiscountTotalMinor)
+            append('|')
+            append(finalPayableTotalMinor)
+            append('|')
+            append(currency)
+            discounts
+                .sortedWith(
+                    compareBy<CreatedOrderPromotionDiscount> { it.ruleId ?: Long.MAX_VALUE }
+                        .thenBy { it.label },
+                )
+                .forEach { discount ->
+                    append("|d:")
+                    append(discount.promotionId)
+                    append(':')
+                    append(discount.ruleId)
+                    append(':')
+                    append(discount.ruleVersion)
+                    append(':')
+                    append(discount.discountMinor)
+                }
+            items.forEach { item ->
+                append("|i:")
+                append(item.itemId)
+                append(':')
+                append(item.qty)
+                append(':')
+                append(item.selectedOption?.optionId)
+                append(':')
+                append(item.priceMinor)
+                append(':')
+                append(item.discountMinor)
+                append(':')
+                append(item.promotionAdjustment?.ruleId)
+            }
+        }
+    return MessageDigest
+        .getInstance("SHA-256")
+        .digest(canonical.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
+}
 
 data class UserActiveOrderSummary(
     val orderId: Long,
@@ -179,6 +258,7 @@ class OrdersRepository(
     private val promotionApplicationRepository: PromotionApplicationRepository? = null,
     private val venuePromotionRuleRepository: VenuePromotionRuleRepository? = null,
     private val loyaltyRepository: LoyaltyRepository? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     suspend fun findActiveOrderId(tableSessionId: Long): Long? {
         val ds = dataSource ?: return null
@@ -658,17 +738,20 @@ class OrdersRepository(
             """
             SELECT
                 obi.menu_item_id,
-                mi.name AS item_name,
+                COALESCE(promo.item_name_snapshot, obi.item_name_snapshot, mi.name) AS item_name,
                 obiop.menu_item_option_id,
                 obiop.option_name_snapshot,
                 obiop.price_delta_minor_snapshot,
                 obi.preference_note,
                 SUM(obi.qty) AS qty,
                 CASE
-                    WHEN mi.price_minor IS NULL THEN NULL
-                    ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                    WHEN promo.base_unit_price_minor IS NOT NULL
+                        THEN promo.base_unit_price_minor + COALESCE(promo.selected_option_delta_minor, 0)
+                    WHEN COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) IS NULL THEN NULL
+                    ELSE COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) +
+                        COALESCE(obiop.price_delta_minor_snapshot, 0)
                 END AS price_minor,
-                mi.currency,
+                COALESCE(promo.currency, obi.currency_snapshot, mi.currency) AS currency,
                 obi.discount_percent,
                 COALESCE(SUM(promo.discount_minor), 0) AS promo_discount_minor,
                 CASE WHEN opri.reward_order_batch_item_id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward
@@ -677,7 +760,12 @@ class OrdersRepository(
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
             LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
-                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                SELECT order_batch_item_id,
+                       SUM(discount_minor) AS discount_minor,
+                       MAX(item_name_snapshot) AS item_name_snapshot,
+                       MAX(base_unit_price_minor) AS base_unit_price_minor,
+                       MAX(selected_option_delta_minor) AS selected_option_delta_minor,
+                       MAX(currency) AS currency
                 FROM order_batch_item_promotion_adjustments
                 GROUP BY order_batch_item_id
             ) promo ON promo.order_batch_item_id = obi.id
@@ -705,12 +793,19 @@ class OrdersRepository(
             GROUP BY
                 obi.menu_item_id,
                 mi.name,
+                obi.item_name_snapshot,
+                promo.item_name_snapshot,
                 obiop.menu_item_option_id,
                 obiop.option_name_snapshot,
                 obiop.price_delta_minor_snapshot,
                 obi.preference_note,
                 mi.price_minor,
                 mi.currency,
+                obi.base_unit_price_minor_snapshot,
+                obi.currency_snapshot,
+                promo.base_unit_price_minor,
+                promo.selected_option_delta_minor,
+                promo.currency,
                 obi.discount_percent,
                 opri.reward_order_batch_item_id
             ORDER BY MIN(obi.id) ASC
@@ -757,7 +852,7 @@ class OrdersRepository(
         tableId: Long,
         venueId: Long,
         tableSessionId: Long,
-        venueZoneId: ZoneId = ZoneId.systemDefault(),
+        venueZoneId: ZoneId = defaultVenueZoneId(),
     ): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
@@ -836,9 +931,10 @@ class OrdersRepository(
         tabId: Long,
         comment: String?,
         items: List<OrderBatchItemInput>,
-        venueZoneId: ZoneId = ZoneId.systemDefault(),
+        venueZoneId: ZoneId = defaultVenueZoneId(),
         selectedGiftChoices: Map<Long, Long> = emptyMap(),
         skippedGiftRuleIds: Set<Long> = emptySet(),
+        expectedPreviewFingerprint: String? = null,
     ): CreatedOrderBatch? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -850,13 +946,6 @@ class OrdersRepository(
                             connection.rollback()
                             return@use null
                         }
-                        val checkoutMenuItems =
-                            loadCheckoutMenuItems(connection, venueId, items.map { it.itemId }.toSet())
-                        if (checkoutMenuItems.size != items.map { it.itemId }.toSet().size) {
-                            connection.rollback()
-                            return@use null
-                        }
-                        val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
                         val existing =
                             findBatchIdempotency(
                                 connection = connection,
@@ -868,6 +957,8 @@ class OrdersRepository(
                         if (existing != null) {
                             val orderDisplay = loadOrderDisplay(connection, existing.orderId)
                             val promotionDiscounts = loadPromotionDiscountsForBatch(connection, existing.batchId)
+                            val createdItems = loadCreatedOrderBatchItems(connection, existing.batchId)
+                            val pricing = buildPersistedBatchPricing(createdItems, promotionDiscounts)
                             connection.commit()
                             return@use CreatedOrderBatch(
                                 orderId = existing.orderId,
@@ -876,8 +967,33 @@ class OrdersRepository(
                                 displayNumber = orderDisplay.displayNumber,
                                 displayDate = orderDisplay.displayDate,
                                 promotionDiscounts = promotionDiscounts,
+                                items = createdItems,
+                                pricing = pricing,
+                                recalculated =
+                                    expectedPreviewFingerprint != null &&
+                                        expectedPreviewFingerprint != pricing.pricingFingerprint,
                             )
                         }
+                        if (
+                            !lockActiveGuestOrderScope(
+                                connection = connection,
+                                venueId = venueId,
+                                tableId = tableId,
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                userId = userId,
+                                now = clock.instant(),
+                            )
+                        ) {
+                            connection.rollback()
+                            return@use null
+                        }
+                        val checkoutMenuItems =
+                            loadCheckoutMenuItems(connection, venueId, items.map { it.itemId }.toSet())
+                        if (checkoutMenuItems.size != items.map { it.itemId }.toSet().size) {
+                            throw InvalidInputException("Some items are unavailable")
+                        }
+                        val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
 
                         val existingOrderId = findActiveOrderForUpdate(connection, tableSessionId)
                         val orderId =
@@ -885,7 +1001,14 @@ class OrdersRepository(
                                 ?: insertActiveOrder(connection, venueId, tableId, tableSessionId, venueZoneId)
                         val orderDisplay = loadOrderDisplay(connection, orderId)
                         val batchId = insertOrderBatch(connection, orderId, tabId, comment)
-                        val insertedItems = insertBatchItems(connection, batchId, items, selectedOptionsByKey)
+                        val insertedItems =
+                            insertBatchItems(
+                                connection = connection,
+                                batchId = batchId,
+                                items = items,
+                                checkoutMenuItems = checkoutMenuItems,
+                                selectedOptionsByKey = selectedOptionsByKey,
+                            )
                         val loyaltyRedemption =
                             applyLoyaltyRedemptionForBatch(
                                 connection = connection,
@@ -944,6 +1067,8 @@ class OrdersRepository(
                                 ),
                         )
                         connection.commit()
+                        val discounts = promotionResult.discounts + listOfNotNull(loyaltyRedemption?.discount)
+                        val pricing = buildPersistedBatchPricing(createdItems, discounts)
                         CreatedOrderBatch(
                             orderId = orderId,
                             batchId = batchId,
@@ -951,8 +1076,12 @@ class OrdersRepository(
                             displayNumber = orderDisplay.displayNumber,
                             displayDate = orderDisplay.displayDate,
                             isFirstBatch = existingOrderId == null,
-                            promotionDiscounts = promotionResult.discounts + listOfNotNull(loyaltyRedemption?.discount),
+                            promotionDiscounts = discounts,
                             items = createdItems,
+                            pricing = pricing,
+                            recalculated =
+                                expectedPreviewFingerprint != null &&
+                                    expectedPreviewFingerprint != pricing.pricingFingerprint,
                         )
                     } catch (e: SQLException) {
                         connection.rollback()
@@ -964,13 +1093,22 @@ class OrdersRepository(
                                 userId = userId,
                                 idempotencyKey = idempotencyKey,
                             )?.let { existing ->
+                                val promotionDiscounts =
+                                    loadPromotionDiscountsForBatch(connection, existing.batchId)
+                                val createdItems = loadCreatedOrderBatchItems(connection, existing.batchId)
+                                val pricing = buildPersistedBatchPricing(createdItems, promotionDiscounts)
                                 return@use CreatedOrderBatch(
                                     orderId = existing.orderId,
                                     batchId = existing.batchId,
                                     idempotencyReplay = true,
                                     displayNumber = existing.displayNumber,
                                     displayDate = existing.displayDate,
-                                    promotionDiscounts = loadPromotionDiscountsForBatch(connection, existing.batchId),
+                                    promotionDiscounts = promotionDiscounts,
+                                    items = createdItems,
+                                    pricing = pricing,
+                                    recalculated =
+                                        expectedPreviewFingerprint != null &&
+                                            expectedPreviewFingerprint != pricing.pricingFingerprint,
                                 )
                             }
                         }
@@ -999,6 +1137,46 @@ class OrdersRepository(
             statement.executeQuery().use { rs -> rs.next() }
         }
     }
+
+    private fun lockActiveGuestOrderScope(
+        connection: Connection,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+        userId: Long,
+        now: java.time.Instant,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT ts.id
+            FROM table_sessions ts
+            JOIN tab t
+              ON t.id = ?
+             AND t.venue_id = ts.venue_id
+             AND t.table_session_id = ts.id
+             AND t.status = 'ACTIVE'
+            JOIN tab_member tm
+              ON tm.tab_id = t.id
+             AND tm.user_id = ?
+             AND tm.role IN ('OWNER', 'MEMBER')
+            WHERE ts.id = ?
+              AND ts.venue_id = ?
+              AND ts.table_id = ?
+              AND ts.status = 'ACTIVE'
+              AND ts.ended_at IS NULL
+              AND ts.expires_at > ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, tabId)
+            statement.setLong(2, userId)
+            statement.setLong(3, tableSessionId)
+            statement.setLong(4, venueId)
+            statement.setLong(5, tableId)
+            statement.setTimestamp(6, Timestamp.from(now))
+            statement.executeQuery().use { rs -> rs.next() }
+        }
 
     private fun lockVenue(
         connection: Connection,
@@ -1031,10 +1209,10 @@ class OrdersRepository(
         venueId: Long,
         tableId: Long,
         tableSessionId: Long,
-        venueZoneId: ZoneId = ZoneId.systemDefault(),
+        venueZoneId: ZoneId = defaultVenueZoneId(),
     ): Long {
         lockVenue(connection, venueId)
-        val displayDate = LocalDate.now(venueZoneId)
+        val displayDate = LocalDate.ofInstant(clock.instant(), venueZoneId)
         val displayNumber = nextOrderDisplayNumber(connection, venueId, displayDate)
         return connection.prepareStatement(
             """
@@ -1123,17 +1301,29 @@ class OrdersRepository(
         connection: Connection,
         batchId: Long,
         items: List<OrderBatchItemInput>,
+        checkoutMenuItems: Map<Long, CheckoutMenuItem>,
         selectedOptionsByKey: Map<OrderBatchItemInputKey, CheckoutSelectedOption> = emptyMap(),
     ): List<InsertedOrderBatchItem> {
         val insertedItems = mutableListOf<InsertedOrderBatchItem>()
         connection.prepareStatement(
             """
-            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, preference_note)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO order_batch_items (
+                order_batch_id,
+                menu_item_id,
+                qty,
+                preference_note,
+                item_name_snapshot,
+                base_unit_price_minor_snapshot,
+                currency_snapshot
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             items.forEach { item ->
+                val menuItem =
+                    checkoutMenuItems[item.itemId]
+                        ?: throw InvalidInputException("Some items are unavailable")
                 statement.setLong(1, batchId)
                 statement.setLong(2, item.itemId)
                 statement.setInt(3, item.qty)
@@ -1142,6 +1332,9 @@ class OrdersRepository(
                 } else {
                     statement.setNull(4, Types.VARCHAR)
                 }
+                statement.setString(5, menuItem.name)
+                statement.setLong(6, menuItem.priceMinor)
+                statement.setString(7, menuItem.currency)
                 statement.executeUpdate()
                 statement.generatedKeys.use { keys ->
                     if (!keys.next()) error("Failed to insert batch item")
@@ -1169,12 +1362,21 @@ class OrdersRepository(
         connection: Connection,
         batchId: Long,
         item: OrderBatchItemInput,
+        checkoutMenuItem: CheckoutMenuItem,
         selectedOption: CheckoutSelectedOption? = null,
     ): InsertedOrderBatchItem =
         connection.prepareStatement(
             """
-            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, preference_note)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO order_batch_items (
+                order_batch_id,
+                menu_item_id,
+                qty,
+                preference_note,
+                item_name_snapshot,
+                base_unit_price_minor_snapshot,
+                currency_snapshot
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -1186,6 +1388,9 @@ class OrdersRepository(
             } else {
                 statement.setNull(4, Types.VARCHAR)
             }
+            statement.setString(5, checkoutMenuItem.name)
+            statement.setLong(6, checkoutMenuItem.priceMinor)
+            statement.setString(7, checkoutMenuItem.currency)
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
                 if (!keys.next()) error("Failed to insert batch item")
@@ -1298,11 +1503,13 @@ class OrdersRepository(
                    mi.name,
                    mi.price_minor,
                    mi.currency,
+                   mi.category_id,
                    COALESCE(mi.item_type, mc.category_type, 'OTHER') AS effective_type
             FROM menu_items mi
-            LEFT JOIN menu_categories mc ON mc.id = mi.category_id
+            JOIN menu_categories mc ON mc.id = mi.category_id
             WHERE mi.venue_id = ?
               AND mi.is_available = TRUE
+              AND mc.is_active = TRUE
               AND mi.id IN ($placeholders)
             """.trimIndent(),
         ).use { statement ->
@@ -1321,6 +1528,7 @@ class OrdersRepository(
                                 name = rs.getString("name")?.takeIf { it.isNotBlank() } ?: "Позиция #$itemId",
                                 priceMinor = rs.getLong("price_minor"),
                                 currency = rs.getString("currency")?.takeIf { it.isNotBlank() } ?: "RUB",
+                                menuCategoryId = rs.getLong("category_id"),
                                 effectiveType = MenuSemanticType.fromDb(rs.getString("effective_type")),
                             ),
                         )
@@ -1334,31 +1542,47 @@ class OrdersRepository(
         venueId: Long,
         userId: Long,
         items: List<OrderBatchItemInput>,
-        venueZoneId: ZoneId = ZoneId.systemDefault(),
+        venueZoneId: ZoneId = defaultVenueZoneId(),
+        selectedGiftChoices: Map<Long, Long> = emptyMap(),
+        skippedGiftRuleIds: Set<Long> = emptySet(),
     ): GuestOrderCartPreview? {
         if (items.isEmpty()) {
             return null
         }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val itemIds = items.map { it.itemId }.toSet()
+        val now = clock.instant()
         val inputs =
             withContext(Dispatchers.IO) {
                 try {
                     ds.connection.use { connection ->
-                        val checkoutMenuItems = loadCheckoutMenuItems(connection, venueId, itemIds)
-                        if (checkoutMenuItems.size != itemIds.size) {
-                            return@use null
+                        val originalAutoCommit = connection.autoCommit
+                        connection.autoCommit = false
+                        try {
+                            val checkoutMenuItems = loadCheckoutMenuItems(connection, venueId, itemIds)
+                            if (checkoutMenuItems.size != itemIds.size) {
+                                connection.rollback()
+                                return@use null
+                            }
+                            val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
+                            val rules =
+                                venuePromotionRuleRepository
+                                    ?.listActiveRulesForVenueAt(connection, venueId, now)
+                                    .orEmpty()
+                            val result =
+                                CartPreviewInputs(
+                                    checkoutMenuItems = checkoutMenuItems,
+                                    selectedOptionsByKey = selectedOptionsByKey,
+                                    activeRules = rules,
+                                )
+                            connection.commit()
+                            result
+                        } catch (e: Exception) {
+                            connection.rollback()
+                            throw e
+                        } finally {
+                            connection.autoCommit = originalAutoCommit
                         }
-                        val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
-                        val rules =
-                            venuePromotionRuleRepository
-                                ?.listActiveRulesForVenueAt(connection, venueId, Instant.now())
-                                .orEmpty()
-                        CartPreviewInputs(
-                            checkoutMenuItems = checkoutMenuItems,
-                            selectedOptionsByKey = selectedOptionsByKey,
-                            activeRules = rules,
-                        )
                     }
                 } catch (e: SQLException) {
                     throw DatabaseUnavailableException()
@@ -1379,6 +1603,7 @@ class OrdersRepository(
                     priceMinor = menuItem.effectivePriceMinor(selectedOption),
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
+                    menuCategoryId = menuItem.menuCategoryId,
                 )
             }
         if (baseItems.size != items.size) {
@@ -1405,7 +1630,7 @@ class OrdersRepository(
         val promotionPreview =
             PromotionRuleEngine.preview(
                 venueId = venueId,
-                now = Instant.now(),
+                now = now,
                 venueZoneId = venueZoneId,
                 cartItems =
                     baseItems
@@ -1419,9 +1644,12 @@ class OrdersRepository(
                                 priceMinor = item.priceMinor,
                                 currency = item.currency,
                                 effectiveType = item.effectiveType,
+                                menuCategoryId = item.menuCategoryId,
                             )
                         },
                 activeRules = inputs.activeRules,
+                selectedGiftChoices = selectedGiftChoices,
+                skippedGiftRuleIds = skippedGiftRuleIds,
             )
         val rulesById = inputs.activeRules.associateBy { it.id }
         val promoDiscounts =
@@ -1432,14 +1660,28 @@ class OrdersRepository(
                         label = adjustment.label.takeIf { it.isNotBlank() } ?: "Акция",
                         ruleType = rule?.ruleType?.dbValue,
                         currency = adjustment.currency,
+                        promotionId = rule?.promotionId,
+                        ruleId = rule?.id,
+                        ruleVersion = rule?.version,
                     )
                 }
                 .map { (key, adjustments) ->
+                    val originalAmount =
+                        adjustments.sumOf { adjustment ->
+                            baseItems.firstOrNull { it.lineId == adjustment.lineId }?.lineGrossMinor() ?: 0L
+                        }
+                    val discountAmount = adjustments.sumOf { it.discountMinor }
                     CreatedOrderPromotionDiscount(
                         label = key.label,
-                        discountMinor = adjustments.sumOf { it.discountMinor },
+                        discountMinor = discountAmount,
                         currency = key.currency,
                         ruleType = key.ruleType,
+                        promotionId = key.promotionId,
+                        ruleId = key.ruleId,
+                        ruleVersion = key.ruleVersion,
+                        originalAmountMinor = originalAmount,
+                        finalAmountMinor = (originalAmount - discountAmount).coerceAtLeast(0L),
+                        eligibleLineIds = adjustments.mapNotNull { it.lineId },
                     )
                 }
         val giftDiscounts =
@@ -1450,6 +1692,9 @@ class OrdersRepository(
                     discountMinor = gift.rewardPriceMinor * gift.rewardQty.toLong(),
                     currency = gift.currency,
                     ruleType = rule?.ruleType?.dbValue,
+                    promotionId = rule?.promotionId,
+                    ruleId = rule?.id,
+                    ruleVersion = rule?.version,
                 )
             }
         val loyaltyDiscount =
@@ -1466,9 +1711,15 @@ class OrdersRepository(
                 .mapNotNull { adjustment -> adjustment.lineId?.let { lineId -> lineId to adjustment.discountMinor } }
                 .groupBy({ it.first }, { it.second })
                 .mapValues { (_, discounts) -> discounts.sum() }
+        val promoAdjustmentByLine =
+            promotionPreview.adjustments
+                .mapNotNull { adjustment -> adjustment.lineId?.let { it to adjustment } }
+                .toMap()
         val previewItems =
             baseItems.map { item ->
                 val promoDiscount = promoDiscountsByLine[item.lineId] ?: 0L
+                val promotionAdjustment = promoAdjustmentByLine[item.lineId]
+                val promotionRule = promotionAdjustment?.let { rulesById[it.ruleId] }
                 val loyaltyDiscount = if (loyaltyPreview?.lineId == item.lineId) loyaltyPreview.discountMinor else 0L
                 val discount = promoDiscount + loyaltyDiscount
                 val gross = item.lineGrossMinor()
@@ -1483,6 +1734,26 @@ class OrdersRepository(
                     lineGrossMinor = gross,
                     discountMinor = discount,
                     linePayableMinor = (gross - discount).coerceAtLeast(0L),
+                    baseUnitPriceMinor = item.priceMinor - (item.selectedOption?.priceDeltaMinor ?: 0L),
+                    selectedOptionDeltaMinor = item.selectedOption?.priceDeltaMinor ?: 0L,
+                    promotionAdjustment =
+                        if (promotionAdjustment == null || promotionRule == null) {
+                            null
+                        } else {
+                            GuestOrderPromotionLineAdjustment(
+                                promotionId = promotionRule.promotionId,
+                                promotionTitle =
+                                    promotionRule.promotionTitle?.takeIf { it.isNotBlank() }
+                                        ?: "Счастливые часы",
+                                ruleId = promotionRule.id,
+                                ruleVersion = promotionRule.version,
+                                ruleType = promotionRule.ruleType.dbValue,
+                                originalAmountMinor = gross,
+                                discountMinor = promotionAdjustment.discountMinor,
+                                finalAmountMinor =
+                                    (gross - promotionAdjustment.discountMinor).coerceAtLeast(0L),
+                            )
+                        },
                 )
             } +
                 promotionPreview.gifts.map { gift ->
@@ -1504,15 +1775,87 @@ class OrdersRepository(
             previewItems.firstOrNull { it.currency.isNotBlank() }?.currency
                 ?: allDiscounts.firstOrNull { it.currency.isNotBlank() }?.currency
                 ?: "RUB"
-        return GuestOrderCartPreview(
-            items = previewItems,
-            grossTotalMinor = previewItems.sumOf { it.lineGrossMinor },
-            promoDiscountTotalMinor = (promoDiscounts + giftDiscounts).sumOf { it.discountMinor },
-            loyaltyDiscountTotalMinor = loyaltyDiscount?.discountMinor ?: 0L,
-            finalPayableTotalMinor = previewItems.sumOf { it.linePayableMinor },
-            currency = currency,
-            discounts = allDiscounts,
-        )
+        val result =
+            GuestOrderCartPreview(
+                items = previewItems,
+                grossTotalMinor = previewItems.sumOf { it.lineGrossMinor },
+                promoDiscountTotalMinor = (promoDiscounts + giftDiscounts).sumOf { it.discountMinor },
+                loyaltyDiscountTotalMinor = loyaltyDiscount?.discountMinor ?: 0L,
+                finalPayableTotalMinor = previewItems.sumOf { it.linePayableMinor },
+                currency = currency,
+                discounts = allDiscounts,
+                pricingFingerprint = "",
+                giftChoices = promotionPreview.giftChoices,
+            )
+        return result.copy(pricingFingerprint = result.calculatePricingFingerprint())
+    }
+
+    private fun buildPersistedBatchPricing(
+        items: List<CreatedOrderBatchItem>,
+        discounts: List<CreatedOrderPromotionDiscount>,
+    ): GuestOrderCartPreview {
+        val promotionDiscounts =
+            discounts.filterNot { discount ->
+                discount.ruleType.equals("LOYALTY_NTH_HOOKAH", ignoreCase = true) ||
+                    discount.label.contains("Лояльность", ignoreCase = true)
+            }
+        val loyaltyDiscounts = discounts - promotionDiscounts.toSet()
+        val previewItems =
+            items.map { item ->
+                val gross = item.priceMinor * item.qty.toLong()
+                val linePromotion =
+                    promotionDiscounts.firstOrNull { discount ->
+                        item.lineId != null && item.lineId in discount.eligibleLineIds
+                    } ?: promotionDiscounts.singleOrNull()?.takeIf { discount ->
+                        discount.eligibleLineIds.isEmpty() && item.promoDiscountMinor > 0L
+                    }
+                GuestOrderCartPreviewItem(
+                    itemId = item.itemId,
+                    itemName = item.itemName,
+                    qty = item.qty,
+                    selectedOption = item.selectedOption,
+                    preferenceNote = item.preferenceNote,
+                    priceMinor = item.priceMinor,
+                    currency = item.currency,
+                    lineGrossMinor = gross,
+                    discountMinor = item.promoDiscountMinor,
+                    linePayableMinor = (gross - item.promoDiscountMinor).coerceAtLeast(0L),
+                    isPromotionReward = item.isPromotionReward,
+                    baseUnitPriceMinor = item.priceMinor - (item.selectedOption?.priceDeltaMinor ?: 0L),
+                    selectedOptionDeltaMinor = item.selectedOption?.priceDeltaMinor ?: 0L,
+                    promotionAdjustment =
+                        linePromotion?.ruleId?.let { ruleId ->
+                            GuestOrderPromotionLineAdjustment(
+                                promotionId = linePromotion.promotionId,
+                                promotionTitle = linePromotion.label,
+                                ruleId = ruleId,
+                                ruleVersion = linePromotion.ruleVersion ?: 1,
+                                ruleType = linePromotion.ruleType ?: PromotionRuleType.HAPPY_HOURS_PERCENT.dbValue,
+                                originalAmountMinor = gross,
+                                discountMinor = item.promoDiscountMinor,
+                                finalAmountMinor = (gross - item.promoDiscountMinor).coerceAtLeast(0L),
+                            )
+                        },
+                )
+            }
+        val grossTotal = previewItems.sumOf { it.lineGrossMinor }
+        val promoTotal = promotionDiscounts.sumOf { it.discountMinor }
+        val loyaltyTotal = loyaltyDiscounts.sumOf { it.discountMinor }
+        val result =
+            GuestOrderCartPreview(
+                items = previewItems,
+                grossTotalMinor = grossTotal,
+                promoDiscountTotalMinor = promoTotal,
+                loyaltyDiscountTotalMinor = loyaltyTotal,
+                finalPayableTotalMinor = (grossTotal - promoTotal - loyaltyTotal).coerceAtLeast(0L),
+                currency =
+                    previewItems.firstOrNull()?.currency
+                        ?: discounts.firstOrNull()?.currency
+                        ?: "RUB",
+                discounts = discounts,
+                pricingFingerprint = "",
+            )
+        return result.copy(pricingFingerprint = result.calculatePricingFingerprint())
     }
 
     private fun applyPromotionRulesForBatch(
@@ -1531,7 +1874,7 @@ class OrdersRepository(
         val applicationRepository = promotionApplicationRepository ?: return PromotionRulesApplicationResult()
         val ruleRepository = venuePromotionRuleRepository ?: return PromotionRulesApplicationResult()
         if (insertedItems.isEmpty()) return PromotionRulesApplicationResult()
-        val now = Instant.now()
+        val now = clock.instant()
         val rules = ruleRepository.listActiveRulesForVenueAt(connection, venueId, now)
         if (rules.isEmpty()) return PromotionRulesApplicationResult()
         val cartItems =
@@ -1546,6 +1889,7 @@ class OrdersRepository(
                     priceMinor = menuItem.effectivePriceMinor(inserted.selectedOption),
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
+                    menuCategoryId = menuItem.menuCategoryId,
                 )
             }
         val preview =
@@ -1590,6 +1934,17 @@ class OrdersRepository(
                                 originalPriceMinor = menuItem.effectivePriceMinor(inserted.selectedOption),
                                 quantity = inserted.qty,
                                 currency = currency,
+                                itemNameSnapshot = menuItem.name,
+                                baseUnitPriceMinor = menuItem.priceMinor,
+                                selectedOptionDeltaMinor = inserted.selectedOption?.priceDeltaMinor ?: 0L,
+                                originalAmountMinor =
+                                    menuItem.effectivePriceMinor(inserted.selectedOption) * inserted.qty.toLong(),
+                                finalAmountMinor =
+                                    (
+                                        menuItem.effectivePriceMinor(inserted.selectedOption) *
+                                            inserted.qty.toLong() -
+                                            adjustment.discountMinor
+                                    ).coerceAtLeast(0L),
                             )
                         }
                     if (adjustmentInputs.isEmpty()) {
@@ -1611,6 +1966,13 @@ class OrdersRepository(
                             currency = currency,
                             dedupeKey = "batch:$batchId:rule:${rule.id}:$currency",
                             adjustments = adjustmentInputs,
+                            ruleVersion = rule.version,
+                            scheduleSnapshotJson = rule.scheduleSnapshotJson(),
+                            targetSnapshotJson = rule.targetSnapshotJson(),
+                            originalTotalMinor = adjustmentInputs.sumOf { it.originalAmountMinor },
+                            finalTotalMinor = adjustmentInputs.sumOf { it.finalAmountMinor },
+                            venueTimezoneSnapshot = venueZoneId.id,
+                            appliedAt = now,
                         )
                     }
                 }
@@ -1623,6 +1985,7 @@ class OrdersRepository(
                         connection = connection,
                         batchId = batchId,
                         item = OrderBatchItemInput(itemId = gift.rewardMenuItemId, qty = gift.rewardQty),
+                        checkoutMenuItem = rewardMenuItem,
                     )
                 val discountMinor = rewardMenuItem.priceMinor * gift.rewardQty.toLong()
                 val label = gift.label.takeIf { it.isNotBlank() } ?: "${rewardMenuItem.name} в подарок"
@@ -1653,6 +2016,11 @@ class OrdersRepository(
                                 originalPriceMinor = rewardMenuItem.priceMinor,
                                 quantity = gift.rewardQty,
                                 currency = rewardMenuItem.currency,
+                                itemNameSnapshot = rewardMenuItem.name,
+                                baseUnitPriceMinor = rewardMenuItem.priceMinor,
+                                selectedOptionDeltaMinor = 0L,
+                                originalAmountMinor = discountMinor,
+                                finalAmountMinor = 0L,
                             ),
                         ),
                     rewardItems =
@@ -1665,10 +2033,42 @@ class OrdersRepository(
                                 labelSnapshot = label,
                             ),
                         ),
+                    ruleVersion = rule.version,
+                    scheduleSnapshotJson = rule.scheduleSnapshotJson(),
+                    targetSnapshotJson = rule.targetSnapshotJson(),
+                    originalTotalMinor = discountMinor,
+                    finalTotalMinor = 0L,
+                    venueTimezoneSnapshot = venueZoneId.id,
+                    appliedAt = now,
                 )
             }
         val applications = percentApplications + giftApplications
         applicationRepository.persistApplications(connection, applications)
+        applications.forEach { application ->
+            analyticsEventRepository?.append(
+                connection = connection,
+                event =
+                    AnalyticsEventRecord(
+                        eventType = "promotion_applied",
+                        payload =
+                            analyticsCorrelationPayload(
+                                venueId = venueId,
+                                orderId = orderId,
+                                batchId = batchId,
+                                extra =
+                                    mapOf(
+                                        "promotionId" to application.promotionId?.toString(),
+                                        "ruleId" to application.ruleId.toString(),
+                                        "ruleVersion" to application.ruleVersion.toString(),
+                                    ),
+                            ),
+                        venueId = venueId,
+                        orderId = orderId,
+                        batchId = batchId,
+                        idempotencyKey = "promotion_applied:${application.dedupeKey}",
+                    ),
+            )
+        }
         return PromotionRulesApplicationResult(
             discounts =
                 applications.map { application ->
@@ -1677,6 +2077,12 @@ class OrdersRepository(
                         discountMinor = application.discountTotalMinor,
                         currency = application.currency,
                         ruleType = application.ruleType,
+                        promotionId = application.promotionId,
+                        ruleId = application.ruleId,
+                        ruleVersion = application.ruleVersion,
+                        originalAmountMinor = application.originalTotalMinor,
+                        finalAmountMinor = application.finalTotalMinor,
+                        eligibleLineIds = application.adjustments.map { it.orderBatchItemId },
                     )
                 },
         )
@@ -1721,56 +2127,84 @@ class OrdersRepository(
     ): List<CreatedOrderPromotionDiscount> =
         connection.prepareStatement(
             """
-            WITH application_discounts AS (
-                SELECT
-                    CASE
-                        WHEN opa.rule_type = 'GIFT_WITH_ITEM' THEN COALESCE(MAX(opri.label_snapshot), opa.title_snapshot)
-                        ELSE opa.title_snapshot
-                    END AS promo_label,
-                    opa.rule_type,
-                    opa.currency,
-                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
-                    MIN(opa.id) AS first_application_id
-                FROM order_promotion_applications opa
-                JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
-                JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
-                JOIN order_batches ob ON ob.id = obi.order_batch_id
-                LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
-                WHERE opa.batch_id = ?
-                  AND ob.status <> 'REJECTED'
-                  AND ob.status <> 'CLOSED'
-                  AND ob.rejected_reason_code IS NULL
-                  AND ob.rejected_reason_text IS NULL
-                  AND obi.is_excluded = FALSE
-                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
-                GROUP BY opa.id, opa.title_snapshot, opa.rule_type, opa.currency
-            )
-            SELECT promo_label,
-                   rule_type,
-                   currency,
-                   COALESCE(SUM(discount_minor), 0) AS discount_minor
-            FROM application_discounts
-            GROUP BY promo_label, rule_type, currency
-            ORDER BY MIN(first_application_id)
+            SELECT
+                CASE
+                    WHEN opa.rule_type = 'GIFT_WITH_ITEM'
+                        THEN COALESCE(
+                            (
+                                SELECT MAX(opri.label_snapshot)
+                                FROM order_promotion_reward_items opri
+                                WHERE opri.application_id = opa.id
+                            ),
+                            opa.title_snapshot
+                        )
+                    ELSE opa.title_snapshot
+                END AS promo_label,
+                opa.rule_type,
+                opa.currency,
+                opa.promotion_id,
+                opa.rule_id,
+                opa.rule_version,
+                obipa.order_batch_item_id,
+                obipa.original_amount_minor,
+                obipa.discount_minor,
+                obipa.final_amount_minor
+            FROM order_promotion_applications opa
+            JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
+            JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
+            JOIN order_batches ob ON ob.id = obi.order_batch_id
+            WHERE opa.batch_id = ?
+              AND ob.status <> 'REJECTED'
+              AND ob.status <> 'CLOSED'
+              AND ob.rejected_reason_code IS NULL
+              AND ob.rejected_reason_text IS NULL
+              AND obi.is_excluded = FALSE
+              AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+            ORDER BY opa.id, obipa.id
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, batchId)
             statement.executeQuery().use { rs ->
-                buildList {
-                    while (rs.next()) {
-                        val discountMinor = rs.getLong("discount_minor")
-                        if (discountMinor > 0L) {
-                            add(
-                                CreatedOrderPromotionDiscount(
-                                    label = rs.getString("promo_label"),
-                                    discountMinor = discountMinor,
-                                    currency = rs.getString("currency"),
-                                    ruleType = rs.getString("rule_type"),
-                                ),
-                            )
-                        }
-                    }
+                val discounts = linkedMapOf<ReplayPromotionDiscountKey, CreatedOrderPromotionDiscount>()
+                while (rs.next()) {
+                    val key =
+                        ReplayPromotionDiscountKey(
+                            label = rs.getString("promo_label"),
+                            ruleType = rs.getString("rule_type"),
+                            currency = rs.getString("currency"),
+                            promotionId =
+                                rs.getLong("promotion_id").let { value ->
+                                    if (rs.wasNull()) null else value
+                                },
+                            ruleId = rs.getLong("rule_id"),
+                            ruleVersion = rs.getInt("rule_version"),
+                        )
+                    val current =
+                        discounts[key] ?: CreatedOrderPromotionDiscount(
+                            label = key.label,
+                            discountMinor = 0L,
+                            currency = key.currency,
+                            ruleType = key.ruleType,
+                            promotionId = key.promotionId,
+                            ruleId = key.ruleId,
+                            ruleVersion = key.ruleVersion,
+                            originalAmountMinor = 0L,
+                            finalAmountMinor = 0L,
+                        )
+                    discounts[key] =
+                        current.copy(
+                            originalAmountMinor =
+                                current.originalAmountMinor.orEmptyAmount() +
+                                    rs.getLong("original_amount_minor"),
+                            discountMinor = current.discountMinor + rs.getLong("discount_minor"),
+                            finalAmountMinor =
+                                current.finalAmountMinor.orEmptyAmount() +
+                                    rs.getLong("final_amount_minor"),
+                            eligibleLineIds =
+                                current.eligibleLineIds + rs.getLong("order_batch_item_id"),
+                        )
                 }
+                discounts.values.filter { it.discountMinor > 0L }
             }
         }
 
@@ -1950,6 +2384,7 @@ class OrdersRepository(
         insertedItems.mapNotNull { inserted ->
             val menuItem = checkoutMenuItems[inserted.menuItemId] ?: return@mapNotNull null
             CreatedOrderBatchItem(
+                lineId = inserted.batchItemId,
                 itemId = inserted.menuItemId,
                 itemName = menuItem.name,
                 qty = inserted.qty,
@@ -1966,22 +2401,38 @@ class OrdersRepository(
     ): List<CreatedOrderBatchItem> =
         connection.prepareStatement(
             """
-            SELECT obi.menu_item_id,
-                   COALESCE(mi.name, 'Позиция #' || obi.menu_item_id) AS item_name,
+            SELECT obi.id AS order_batch_item_id,
+                   obi.menu_item_id,
+                   COALESCE(
+                       promo.item_name_snapshot,
+                       obi.item_name_snapshot,
+                       mi.name,
+                       'Позиция #' || obi.menu_item_id
+                   ) AS item_name,
                    obi.qty,
                    obi.preference_note,
                    obiop.menu_item_option_id,
                    obiop.option_name_snapshot,
                    obiop.price_delta_minor_snapshot,
-                   COALESCE(mi.price_minor, 0) + COALESCE(obiop.price_delta_minor_snapshot, 0) AS price_minor,
-                   COALESCE(mi.currency, 'RUB') AS currency,
+                   CASE
+                       WHEN promo.base_unit_price_minor IS NOT NULL
+                           THEN promo.base_unit_price_minor + COALESCE(promo.selected_option_delta_minor, 0)
+                       ELSE COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor, 0) +
+                           COALESCE(obiop.price_delta_minor_snapshot, 0)
+                   END AS price_minor,
+                   COALESCE(promo.currency, obi.currency_snapshot, mi.currency, 'RUB') AS currency,
                    COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
                    CASE WHEN opri.id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
             LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
-                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                SELECT order_batch_item_id,
+                       SUM(discount_minor) AS discount_minor,
+                       MAX(item_name_snapshot) AS item_name_snapshot,
+                       MAX(base_unit_price_minor) AS base_unit_price_minor,
+                       MAX(selected_option_delta_minor) AS selected_option_delta_minor,
+                       MAX(currency) AS currency
                 FROM order_batch_item_promotion_adjustments
                 GROUP BY order_batch_item_id
             ) promo ON promo.order_batch_item_id = obi.id
@@ -1998,6 +2449,7 @@ class OrdersRepository(
                     while (rs.next()) {
                         add(
                             CreatedOrderBatchItem(
+                                lineId = rs.getLong("order_batch_item_id"),
                                 itemId = rs.getLong("menu_item_id"),
                                 itemName = rs.getString("item_name"),
                                 qty = rs.getInt("qty"),
@@ -2033,6 +2485,15 @@ class OrdersRepository(
         val discounts: List<CreatedOrderPromotionDiscount> = emptyList(),
     )
 
+    private data class ReplayPromotionDiscountKey(
+        val label: String,
+        val ruleType: String?,
+        val currency: String,
+        val promotionId: Long?,
+        val ruleId: Long,
+        val ruleVersion: Int,
+    )
+
     private data class CartPreviewInputs(
         val checkoutMenuItems: Map<Long, CheckoutMenuItem>,
         val selectedOptionsByKey: Map<OrderBatchItemInputKey, CheckoutSelectedOption>,
@@ -2049,6 +2510,7 @@ class OrdersRepository(
         val priceMinor: Long,
         val currency: String,
         val effectiveType: MenuSemanticType,
+        val menuCategoryId: Long,
     ) {
         fun lineGrossMinor(): Long = priceMinor * qty.toLong()
     }
@@ -2057,6 +2519,9 @@ class OrdersRepository(
         val label: String,
         val ruleType: String?,
         val currency: String,
+        val promotionId: Long?,
+        val ruleId: Long?,
+        val ruleVersion: Int?,
     )
 
     private data class CheckoutMenuItem(
@@ -2064,6 +2529,7 @@ class OrdersRepository(
         val name: String,
         val priceMinor: Long,
         val currency: String,
+        val menuCategoryId: Long,
         val effectiveType: MenuSemanticType,
     )
 
@@ -2190,20 +2656,28 @@ class OrdersRepository(
                    obi.discount_percent,
                    COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
                    CASE WHEN opri.id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward,
-                   mi.name AS item_name,
+                   COALESCE(promo.item_name_snapshot, obi.item_name_snapshot, mi.name) AS item_name,
                    obiop.menu_item_option_id,
                    obiop.option_name_snapshot,
                    obiop.price_delta_minor_snapshot,
                    CASE
-                       WHEN mi.price_minor IS NULL THEN NULL
-                       ELSE mi.price_minor + COALESCE(obiop.price_delta_minor_snapshot, 0)
+                       WHEN promo.base_unit_price_minor IS NOT NULL
+                           THEN promo.base_unit_price_minor + COALESCE(promo.selected_option_delta_minor, 0)
+                       WHEN COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) IS NULL THEN NULL
+                       ELSE COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor) +
+                           COALESCE(obiop.price_delta_minor_snapshot, 0)
                    END AS price_minor,
-                   mi.currency
+                   COALESCE(promo.currency, obi.currency_snapshot, mi.currency) AS currency
             FROM order_batch_items obi
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
             LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
-                SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
+                SELECT order_batch_item_id,
+                       SUM(discount_minor) AS discount_minor,
+                       MAX(item_name_snapshot) AS item_name_snapshot,
+                       MAX(base_unit_price_minor) AS base_unit_price_minor,
+                       MAX(selected_option_delta_minor) AS selected_option_delta_minor,
+                       MAX(currency) AS currency
                 FROM order_batch_item_promotion_adjustments
                 GROUP BY order_batch_item_id
             ) promo ON promo.order_batch_item_id = obi.id
@@ -2256,6 +2730,56 @@ class OrdersRepository(
 
     private fun CheckoutMenuItem.effectivePriceMinor(selectedOption: CheckoutSelectedOption?): Long =
         priceMinor + (selectedOption?.priceDeltaMinor ?: 0L)
+
+    private fun VenuePromotionRule.scheduleSnapshotJson(): String =
+        buildJsonObject {
+            put("version", version)
+            promotionStartsAt?.let { put("promotionStartsAt", it.toString()) }
+            promotionEndsAt?.let { put("promotionEndsAt", it.toString()) }
+            put("priority", priority)
+            put("stackable", stackable)
+            put("conflictGroup", conflictGroup)
+            put("maxApplicationsPerItem", maxApplicationsPerItem)
+            put(
+                "windows",
+                buildJsonArray {
+                    weekdayWindows.forEach { window ->
+                        add(
+                            buildJsonObject {
+                                put("weekday", window.weekday)
+                                put("startsMinute", window.startsMinute)
+                                put("endsMinute", window.endsMinute)
+                            },
+                        )
+                    }
+                },
+            )
+        }.toString()
+
+    private fun Long?.orEmptyAmount(): Long = this ?: 0L
+
+    private fun VenuePromotionRule.targetSnapshotJson(): String =
+        buildJsonObject {
+            put(
+                "targets",
+                buildJsonArray {
+                    targets.forEach { target ->
+                        add(
+                            buildJsonObject {
+                                put("type", target.targetType.dbValue)
+                                target.semanticType?.let { put("semanticType", it.dbValue) }
+                                target.menuItemId?.let { put("menuItemId", it) }
+                                target.menuCategoryId?.let { put("menuCategoryId", it) }
+                            },
+                        )
+                    }
+                },
+            )
+        }.toString()
+
+    private companion object {
+        fun defaultVenueZoneId(): ZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE)
+    }
 
     private fun ResultSet.toSelectedOptionDetails(): OrderItemSelectedOptionDetails? {
         val optionId =

@@ -1,9 +1,12 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import kotlinx.coroutines.runBlocking
 import org.flywaydb.core.Flyway
+import org.flywaydb.core.api.MigrationVersion
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.Connection
 import java.sql.DriverManager
@@ -762,7 +765,7 @@ class VenuePromotionRepositoryTest {
                     daysOfWeek = setOf(1, 2, 3, 4, 5),
                 )
 
-            assertEquals(VenuePromotionStatus.ACTIVE, created.status)
+            assertEquals(VenuePromotionStatus.DRAFT, created.status)
             assertEquals(MenuSemanticType.HOOKAH, created.targetValue)
             assertEquals(20, created.discountPercent)
             assertEquals(setOf(1, 2, 3, 4, 5), created.daysOfWeek)
@@ -888,6 +891,863 @@ class VenuePromotionRepositoryTest {
         }
 
     @Test
+    fun `phase two happy hours item draft persists windows and increments version`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-rules-phase-two-item")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
+            val categoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val menuItemId = insertMenuItem(jdbcUrl, fixture.visibleVenueId, categoryId, "Кальян")
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Счастливые часы",
+                    description = "Скидка на кальян",
+                    terms = "По будням",
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val expectedWindows =
+                listOf(
+                    PromotionWeekdayWindow(weekday = 1, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                    PromotionWeekdayWindow(weekday = 5, startsMinute = 12 * 60, endsMinute = 16 * 60),
+                    PromotionWeekdayWindow(weekday = 6, startsMinute = 14 * 60, endsMinute = 17 * 60),
+                )
+
+            val created =
+                ruleRepository.createHappyHoursDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_ITEM,
+                            menuItemId = menuItemId,
+                        ),
+                    discountPercent = 40,
+                    weekdayWindows = expectedWindows.reversed(),
+                    createdByUserId = OWNER_ID,
+                )
+
+            assertEquals(VenuePromotionStatus.DRAFT, created.status)
+            assertEquals(1, created.version)
+            assertEquals(expectedWindows, created.weekdayWindows)
+            assertEquals(PromotionRuleTargetType.MENU_ITEM, created.executableTargetType)
+            assertEquals(PromotionRuleTargetType.MENU_ITEM, created.targets.single().targetType)
+            assertEquals(menuItemId, created.targets.single().menuItemId)
+            assertEquals("Кальян", created.targets.single().menuItemName)
+            assertEquals(
+                created,
+                ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, promotion.id).single(),
+            )
+
+            val readiness =
+                ruleRepository.validateHappyHoursActivationReadiness(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                )
+            assertTrue(readiness.isReady, readiness.errors.joinToString())
+            assertEquals(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE, readiness.venueTimezone)
+            assertEquals(created.id, readiness.rule?.id)
+
+            val updatedWindows =
+                listOf(
+                    PromotionWeekdayWindow(weekday = 2, startsMinute = 13 * 60, endsMinute = 18 * 60),
+                    PromotionWeekdayWindow(weekday = 4, startsMinute = 13 * 60, endsMinute = 18 * 60),
+                )
+            val updated =
+                assertNotNull(
+                    ruleRepository.updateHappyHoursDraftRule(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        ruleId = created.id,
+                        target =
+                            HappyHoursRuleTargetInput(
+                                targetType = PromotionRuleTargetType.MENU_ITEM,
+                                menuItemId = menuItemId,
+                            ),
+                        discountPercent = 50,
+                        weekdayWindows = updatedWindows,
+                    ),
+                )
+
+            assertEquals(2, updated.version)
+            assertEquals(50, updated.discountPercent)
+            assertEquals(updatedWindows, updated.weekdayWindows)
+            assertEquals(2, ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id)?.version)
+
+            val active =
+                assertNotNull(
+                    promotionRepository.setPromotionStatus(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        status = VenuePromotionStatus.ACTIVE,
+                        afterUpdate = { connection, _ ->
+                            ruleRepository.synchronizeHappyHoursPromotionStatus(
+                                connection = connection,
+                                venueId = fixture.visibleVenueId,
+                                promotionId = promotion.id,
+                                status = VenuePromotionStatus.ACTIVE,
+                            )
+                        },
+                    ),
+                )
+            assertEquals(VenuePromotionStatus.ACTIVE, active.status)
+            assertEquals(
+                VenuePromotionStatus.ACTIVE,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id)?.status,
+            )
+
+            val paused =
+                assertNotNull(
+                    promotionRepository.setPromotionStatus(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        status = VenuePromotionStatus.PAUSED,
+                        afterUpdate = { connection, _ ->
+                            ruleRepository.synchronizeHappyHoursPromotionStatus(
+                                connection = connection,
+                                venueId = fixture.visibleVenueId,
+                                promotionId = promotion.id,
+                                status = VenuePromotionStatus.PAUSED,
+                            )
+                        },
+                    ),
+                )
+            assertEquals(VenuePromotionStatus.PAUSED, paused.status)
+            assertEquals(
+                VenuePromotionStatus.PAUSED,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id)?.status,
+            )
+        }
+
+    @Test
+    fun `legacy single and multi rule happy hours can pause and reactivate without conversion`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-phase-two-legacy-reactivation")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Legacy Happy Hours",
+                    description = "Старые правила Telegram",
+                    terms = null,
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val legacyRules =
+                listOf(
+                    ruleRepository.createHappyHoursRule(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        targetValue = MenuSemanticType.HOOKAH,
+                        discountPercent = 20,
+                        createdByUserId = OWNER_ID,
+                        startsTime = LocalTime.of(12, 0),
+                        endsTime = LocalTime.of(18, 0),
+                        daysOfWeek = setOf(1, 2, 3, 4),
+                    ),
+                    ruleRepository.createHappyHoursRule(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        targetValue = MenuSemanticType.TEA,
+                        discountPercent = 10,
+                        createdByUserId = OWNER_ID,
+                        startsTime = LocalTime.of(14, 0),
+                        endsTime = LocalTime.of(17, 0),
+                        daysOfWeek = setOf(5, 6, 7),
+                    ),
+                )
+
+            val readiness =
+                ruleRepository.validateHappyHoursActivationReadiness(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                )
+            assertTrue(readiness.isReady, readiness.errors.joinToString())
+            assertEquals(2, readiness.ruleCount)
+            assertEquals(legacyRules.first().id, readiness.rule?.id)
+
+            suspend fun setPromotionAndRuleStatus(status: VenuePromotionStatus) {
+                assertNotNull(
+                    promotionRepository.setPromotionStatus(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        status = status,
+                        afterUpdate = { connection, _ ->
+                            ruleRepository.synchronizeHappyHoursPromotionStatus(
+                                connection = connection,
+                                venueId = fixture.visibleVenueId,
+                                promotionId = promotion.id,
+                                status = status,
+                            )
+                        },
+                    ),
+                )
+            }
+
+            setPromotionAndRuleStatus(VenuePromotionStatus.ACTIVE)
+            assertEquals(
+                setOf(VenuePromotionStatus.ACTIVE),
+                legacyRules
+                    .map { ruleRepository.getRuleForManagement(fixture.visibleVenueId, it.id)?.status }
+                    .toSet(),
+            )
+
+            setPromotionAndRuleStatus(VenuePromotionStatus.PAUSED)
+            assertEquals(
+                setOf(VenuePromotionStatus.PAUSED),
+                legacyRules
+                    .map { ruleRepository.getRuleForManagement(fixture.visibleVenueId, it.id)?.status }
+                    .toSet(),
+            )
+
+            setPromotionAndRuleStatus(VenuePromotionStatus.ACTIVE)
+            assertEquals(
+                setOf(VenuePromotionStatus.ACTIVE),
+                legacyRules
+                    .map { ruleRepository.getRuleForManagement(fixture.visibleVenueId, it.id)?.status }
+                    .toSet(),
+            )
+        }
+
+    @Test
+    fun `phase two parent callbacks roll back rule update and status together`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-phase-two-atomic-rollback")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
+            val categoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val menuItemId = insertMenuItem(jdbcUrl, fixture.visibleVenueId, categoryId, "Кальян")
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Исходная акция",
+                    description = "Исходное описание",
+                    terms = null,
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val originalWindows =
+                listOf(
+                    PromotionWeekdayWindow(weekday = 1, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                )
+            val rule =
+                ruleRepository.createHappyHoursDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_ITEM,
+                            menuItemId = menuItemId,
+                        ),
+                    discountPercent = 50,
+                    weekdayWindows = originalWindows,
+                    createdByUserId = OWNER_ID,
+                )
+
+            assertFailsWith<IllegalStateException> {
+                promotionRepository.updatePromotion(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    title = "Не должна сохраниться",
+                    afterUpdate = { connection, _ ->
+                        assertNotNull(
+                            ruleRepository.updateHappyHoursDraftRule(
+                                connection = connection,
+                                venueId = fixture.visibleVenueId,
+                                promotionId = promotion.id,
+                                ruleId = rule.id,
+                                target =
+                                    HappyHoursRuleTargetInput(
+                                        targetType = PromotionRuleTargetType.MENU_ITEM,
+                                        menuItemId = menuItemId,
+                                    ),
+                                discountPercent = 25,
+                                weekdayWindows =
+                                    listOf(
+                                        PromotionWeekdayWindow(
+                                            weekday = 6,
+                                            startsMinute = 14 * 60,
+                                            endsMinute = 17 * 60,
+                                        ),
+                                    ),
+                            ),
+                        )
+                        error("force update rollback")
+                    },
+                )
+            }
+            assertEquals(
+                "Исходная акция",
+                promotionRepository.getPromotionForManagement(fixture.visibleVenueId, promotion.id)?.title,
+            )
+            val ruleAfterUpdateRollback =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id))
+            assertEquals(1, ruleAfterUpdateRollback.version)
+            assertEquals(50, ruleAfterUpdateRollback.discountPercent)
+            assertEquals(originalWindows, ruleAfterUpdateRollback.weekdayWindows)
+
+            assertFailsWith<IllegalStateException> {
+                promotionRepository.setPromotionStatus(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    status = VenuePromotionStatus.ACTIVE,
+                    afterUpdate = { connection, _ ->
+                        ruleRepository.synchronizeHappyHoursPromotionStatus(
+                            connection = connection,
+                            venueId = fixture.visibleVenueId,
+                            promotionId = promotion.id,
+                            status = VenuePromotionStatus.ACTIVE,
+                        )
+                        error("force status rollback")
+                    },
+                )
+            }
+            assertEquals(
+                VenuePromotionStatus.DRAFT,
+                promotionRepository.getPromotionForManagement(fixture.visibleVenueId, promotion.id)?.status,
+            )
+            assertEquals(
+                VenuePromotionStatus.DRAFT,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id)?.status,
+            )
+        }
+
+    @Test
+    fun `phase two happy hours category draft rejects overlapping and foreign targets`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-rules-phase-two-category")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
+            val categoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val foreignCategoryId =
+                insertMenuCategory(jdbcUrl, fixture.otherVenueId, "Чужие кальяны", MenuSemanticType.HOOKAH)
+            val foreignMenuItemId =
+                insertMenuItem(jdbcUrl, fixture.otherVenueId, foreignCategoryId, "Чужой кальян")
+            val categoryPromotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Скидка на категорию",
+                    description = "Скидка на все кальяны",
+                    terms = null,
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val categoryRule =
+                ruleRepository.createHappyHoursDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = categoryPromotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_CATEGORY,
+                            menuCategoryId = categoryId,
+                        ),
+                    discountPercent = 25,
+                    weekdayWindows =
+                        listOf(
+                            PromotionWeekdayWindow(weekday = 1, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                        ),
+                    createdByUserId = OWNER_ID,
+                )
+
+            assertEquals(PromotionRuleTargetType.MENU_CATEGORY, categoryRule.executableTargetType)
+            assertEquals(PromotionRuleTargetType.MENU_CATEGORY, categoryRule.targets.single().targetType)
+            assertEquals(categoryId, categoryRule.targets.single().menuCategoryId)
+            assertEquals("Кальяны", categoryRule.targets.single().menuCategoryName)
+            assertEquals(
+                categoryId,
+                ruleRepository.listRuleTargets(categoryRule.id).single().menuCategoryId,
+            )
+            val invalidPromotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Некорректная акция",
+                    description = "Проверка валидации",
+                    terms = null,
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            assertFailsWith<IllegalArgumentException> {
+                ruleRepository.createHappyHoursDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = invalidPromotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_CATEGORY,
+                            menuCategoryId = categoryId,
+                        ),
+                    discountPercent = 20,
+                    weekdayWindows =
+                        listOf(
+                            PromotionWeekdayWindow(weekday = 3, startsMinute = 12 * 60, endsMinute = 16 * 60),
+                            PromotionWeekdayWindow(weekday = 3, startsMinute = 15 * 60, endsMinute = 18 * 60),
+                        ),
+                    createdByUserId = OWNER_ID,
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                ruleRepository.createHappyHoursDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = invalidPromotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_CATEGORY,
+                            menuCategoryId = foreignCategoryId,
+                        ),
+                    discountPercent = 20,
+                    weekdayWindows =
+                        listOf(
+                            PromotionWeekdayWindow(weekday = 3, startsMinute = 12 * 60, endsMinute = 16 * 60),
+                        ),
+                    createdByUserId = OWNER_ID,
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                ruleRepository.createHappyHoursDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = invalidPromotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_ITEM,
+                            menuItemId = foreignMenuItemId,
+                        ),
+                    discountPercent = 20,
+                    weekdayWindows =
+                        listOf(
+                            PromotionWeekdayWindow(weekday = 3, startsMinute = 12 * 60, endsMinute = 16 * 60),
+                        ),
+                    createdByUserId = OWNER_ID,
+                )
+            }
+            assertTrue(
+                ruleRepository.listRulesForPromotionManagement(fixture.visibleVenueId, invalidPromotion.id).isEmpty(),
+            )
+            assertTrue(
+                VenueMenuRepository(dataSource(jdbcUrl))
+                    .deleteCategory(fixture.visibleVenueId, categoryId),
+            )
+            val categoryRuleAfterCascade =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, categoryRule.id))
+            assertEquals(categoryRule.version + 1, categoryRuleAfterCascade.version)
+            assertTrue(categoryRuleAfterCascade.targets.isEmpty())
+        }
+
+    @Test
+    fun `phase two activation readiness rejects incomplete parent timezone windows and target`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-rules-phase-two-readiness")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
+            val categoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Неполная акция",
+                    description = "Нельзя активировать",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val rule =
+                ruleRepository.createHappyHoursDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_CATEGORY,
+                            menuCategoryId = categoryId,
+                        ),
+                    discountPercent = 30,
+                    weekdayWindows =
+                        listOf(
+                            PromotionWeekdayWindow(weekday = 7, startsMinute = 14 * 60, endsMinute = 17 * 60),
+                        ),
+                    createdByUserId = OWNER_ID,
+                )
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    MERGE INTO venue_settings (venue_id, timezone)
+                    KEY (venue_id)
+                    VALUES (?, ?)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, fixture.visibleVenueId)
+                    statement.setString(2, "Invalid/Timezone")
+                    statement.executeUpdate()
+                }
+                connection.prepareStatement(
+                    "DELETE FROM promotion_rule_weekday_windows WHERE rule_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, rule.id)
+                    statement.executeUpdate()
+                }
+                connection.prepareStatement(
+                    "DELETE FROM promotion_rule_menu_category_targets WHERE rule_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, rule.id)
+                    statement.executeUpdate()
+                }
+            }
+
+            val readiness =
+                ruleRepository.validateHappyHoursActivationReadiness(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                )
+
+            assertFalse(readiness.isReady)
+            assertTrue(readiness.errors.any { it.contains("общий период") })
+            assertTrue(readiness.errors.any { it.contains("Часовой пояс") })
+            assertTrue(readiness.errors.any { it.contains("временное окно") })
+            assertTrue(readiness.errors.any { it.contains("ровно одна категория или позиция") })
+            assertTrue(readiness.rule?.targets?.isEmpty() == true)
+        }
+
+    @Test
+    fun `phase two migration backfills legacy happy hours and keeps applications readable`() =
+        runBlocking {
+            val jdbcUrl =
+                "jdbc:h2:mem:promotion-phase-two-backfill-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            migrateJdbcUrl(jdbcUrl, "119")
+            val fixture = seedFixture(jdbcUrl)
+            val categoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val menuItemId = insertMenuItem(jdbcUrl, fixture.visibleVenueId, categoryId, "Кальян")
+            val secondMenuItemId =
+                insertMenuItem(jdbcUrl, fixture.visibleVenueId, categoryId, "Премиум кальян")
+            val legacy =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT COUNT(*)
+                        FROM information_schema.columns
+                        WHERE table_name = 'promotion_rules'
+                          AND column_name = 'version'
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.executeQuery().use { rs ->
+                            assertTrue(rs.next())
+                            assertEquals(0, rs.getInt(1))
+                        }
+                    }
+                    val promotionId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO venue_promotions (
+                                venue_id,
+                                title,
+                                description,
+                                starts_at,
+                                ends_at,
+                                status,
+                                template_type,
+                                created_by_user_id
+                            )
+                            VALUES (?, 'Legacy Happy Hours', 'Legacy rule', ?, ?, 'ACTIVE', 'HAPPY_HOURS_PERCENT', ?)
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, fixture.visibleVenueId)
+                            statement.setTimestamp(2, Timestamp.from(Instant.parse("2020-01-01T00:00:00Z")))
+                            statement.setTimestamp(3, Timestamp.from(Instant.parse("2100-01-01T00:00:00Z")))
+                            statement.setLong(4, OWNER_ID)
+                        }
+                    val ruleId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO promotion_rules (
+                                promotion_id,
+                                venue_id,
+                                rule_type,
+                                target_type,
+                                target_value,
+                                discount_percent,
+                                starts_time,
+                                ends_time,
+                                days_of_week,
+                                status,
+                                priority,
+                                created_by_user_id
+                            )
+                            VALUES (?, ?, 'HAPPY_HOURS_PERCENT', 'CATEGORY_TYPE', 'HOOKAH', 50, ?, ?, '1,3,5', 'ACTIVE', 100, ?)
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, promotionId)
+                            statement.setLong(2, fixture.visibleVenueId)
+                            statement.setTime(3, java.sql.Time.valueOf(LocalTime.of(12, 0)))
+                            statement.setTime(4, java.sql.Time.valueOf(LocalTime.of(18, 0)))
+                            statement.setLong(5, OWNER_ID)
+                        }
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
+                        VALUES (?, 'MENU_ITEM', NULL, ?)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, ruleId)
+                        statement.setLong(2, menuItemId)
+                        statement.executeUpdate()
+                        statement.setLong(2, secondMenuItemId)
+                        statement.executeUpdate()
+                    }
+                    val fallbackDaysRuleId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO promotion_rules (
+                                promotion_id,
+                                venue_id,
+                                rule_type,
+                                target_type,
+                                target_value,
+                                discount_percent,
+                                starts_time,
+                                ends_time,
+                                days_of_week,
+                                status,
+                                priority,
+                                created_by_user_id
+                            )
+                            VALUES (
+                                ?, ?, 'HAPPY_HOURS_PERCENT', 'CATEGORY_TYPE', 'TEA', 10,
+                                ?, ?, 'bad,value', 'DRAFT', 100, ?
+                            )
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, promotionId)
+                            statement.setLong(2, fixture.visibleVenueId)
+                            statement.setTime(3, java.sql.Time.valueOf(LocalTime.of(10, 0)))
+                            statement.setTime(4, java.sql.Time.valueOf(LocalTime.of(11, 0)))
+                            statement.setLong(5, OWNER_ID)
+                        }
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO promotion_rule_targets (rule_id, target_type, semantic_type, menu_item_id)
+                        VALUES (?, 'CATEGORY_TYPE', 'TEA', NULL)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, fallbackDaysRuleId)
+                        statement.executeUpdate()
+                    }
+                    val tableId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO venue_tables (venue_id, table_number)
+                            VALUES (?, 1)
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, fixture.visibleVenueId)
+                        }
+                    val tableSessionId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO table_sessions (
+                                venue_id,
+                                table_id,
+                                started_at,
+                                last_activity_at,
+                                expires_at,
+                                ended_at,
+                                status
+                            )
+                            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'ENDED')
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, fixture.visibleVenueId)
+                            statement.setLong(2, tableId)
+                        }
+                    val orderId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO orders (venue_id, table_id, table_session_id, status)
+                            VALUES (?, ?, ?, 'CLOSED')
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, fixture.visibleVenueId)
+                            statement.setLong(2, tableId)
+                            statement.setLong(3, tableSessionId)
+                        }
+                    val batchId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO order_batches (order_id, author_user_id, source, status)
+                            VALUES (?, ?, 'MINIAPP', 'DELIVERED')
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, orderId)
+                            statement.setLong(2, OWNER_ID)
+                        }
+                    val batchItemId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty)
+                            VALUES (?, ?, 2)
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, batchId)
+                            statement.setLong(2, menuItemId)
+                        }
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO order_batch_item_options (
+                            order_batch_item_id,
+                            menu_item_option_id,
+                            option_name_snapshot,
+                            price_delta_minor_snapshot
+                        )
+                        VALUES (?, NULL, 'Legacy premium option', 25000)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, batchItemId)
+                        statement.executeUpdate()
+                    }
+                    val applicationId =
+                        connection.insertGeneratedId(
+                            """
+                            INSERT INTO order_promotion_applications (
+                                order_id,
+                                batch_id,
+                                venue_id,
+                                user_id,
+                                promotion_id,
+                                rule_id,
+                                title_snapshot,
+                                rule_type,
+                                target_type,
+                                target_value,
+                                discount_percent,
+                                discount_total_minor,
+                                currency,
+                                dedupe_key
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, 'Legacy Happy Hours', 'HAPPY_HOURS_PERCENT',
+                                'CATEGORY_TYPE', 'HOOKAH', 50, 125000, 'RUB', ?)
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, orderId)
+                            statement.setLong(2, batchId)
+                            statement.setLong(3, fixture.visibleVenueId)
+                            statement.setLong(4, OWNER_ID)
+                            statement.setLong(5, promotionId)
+                            statement.setLong(6, ruleId)
+                            statement.setString(7, "legacy:$orderId:$ruleId")
+                        }
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO order_batch_item_promotion_adjustments (
+                            application_id,
+                            order_batch_item_id,
+                            menu_item_id,
+                            discount_minor,
+                            discount_percent,
+                            original_price_minor,
+                            quantity,
+                            currency
+                        )
+                        VALUES (?, ?, ?, 125000, 50, 125000, 2, 'RUB')
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, applicationId)
+                        statement.setLong(2, batchItemId)
+                        statement.setLong(3, menuItemId)
+                        statement.executeUpdate()
+                    }
+                    LegacyPromotionFixture(
+                        promotionId = promotionId,
+                        ruleId = ruleId,
+                        fallbackDaysRuleId = fallbackDaysRuleId,
+                        orderId = orderId,
+                        batchItemId = batchItemId,
+                    )
+                }
+
+            migrateJdbcUrl(jdbcUrl, "120")
+
+            val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
+            val migratedRule =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, legacy.ruleId))
+            assertEquals(1, migratedRule.version)
+            assertEquals(legacy.promotionId, migratedRule.promotionId)
+            assertEquals(VenuePromotionStatus.ACTIVE, migratedRule.status)
+            assertEquals(
+                listOf(
+                    PromotionWeekdayWindow(weekday = 1, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                    PromotionWeekdayWindow(weekday = 3, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                    PromotionWeekdayWindow(weekday = 5, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                ),
+                migratedRule.weekdayWindows,
+            )
+            assertEquals(null, migratedRule.executableTargetType)
+            assertEquals(
+                setOf(menuItemId, secondMenuItemId),
+                migratedRule.targets.mapNotNull { it.menuItemId }.toSet(),
+            )
+            assertEquals(
+                legacy.ruleId,
+                ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).single().id,
+            )
+            assertEquals(
+                (1..7).toList(),
+                assertNotNull(
+                    ruleRepository.getRuleForManagement(fixture.visibleVenueId, legacy.fallbackDaysRuleId),
+                ).weekdayWindows.map { it.weekday },
+            )
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT item_name_snapshot, base_unit_price_minor_snapshot, currency_snapshot
+                    FROM order_batch_items
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, legacy.batchItemId)
+                    statement.executeQuery().use { rs ->
+                        assertTrue(rs.next())
+                        assertEquals("Кальян", rs.getString("item_name_snapshot"))
+                        assertEquals(100_000L, rs.getLong("base_unit_price_minor_snapshot"))
+                        assertEquals("RUB", rs.getString("currency_snapshot"))
+                    }
+                }
+            }
+
+            val adjustment =
+                PromotionApplicationRepository(dataSource(jdbcUrl))
+                    .findAdjustmentsByOrder(legacy.orderId)
+                    .single()
+            assertEquals(1, adjustment.ruleVersion)
+            assertNull(adjustment.scheduleSnapshotJson)
+            assertNull(adjustment.targetSnapshotJson)
+            assertNull(adjustment.venueTimezoneSnapshot)
+            assertNull(adjustment.itemNameSnapshot)
+            assertEquals(100_000L, adjustment.baseUnitPriceMinor)
+            assertEquals(25_000L, adjustment.selectedOptionDeltaMinor)
+            assertEquals(250_000L, adjustment.originalAmountMinor)
+            assertEquals(125_000L, adjustment.finalAmountMinor)
+            assertNotNull(adjustment.appliedAt)
+            Unit
+        }
+
+    @Test
     fun `promotion rule repository replaces category target with menu item targets`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("promotion-rules-menu-item-targets")
@@ -937,6 +1797,17 @@ class VenuePromotionRepositoryTest {
                 updated.targets.map { it.menuItemId },
             )
             assertTrue(updated.targets.all { it.targetType == PromotionRuleTargetType.MENU_ITEM })
+            assertTrue(
+                VenueMenuRepository(dataSource(jdbcUrl))
+                    .deleteItem(fixture.visibleVenueId, ordinaryHookah),
+            )
+            val targetsAfterCascade =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id))
+            assertEquals(updated.version + 1, targetsAfterCascade.version)
+            assertEquals(
+                listOf(premiumHookah),
+                targetsAfterCascade.targets.map { it.menuItemId },
+            )
 
             assertFailsWith<IllegalArgumentException> {
                 ruleRepository.replaceRuleTargetsWithMenuItems(
@@ -990,6 +1861,7 @@ class VenuePromotionRepositoryTest {
             assertEquals(PromotionRewardMode.FIXED_ITEM, created.reward?.rewardMode)
             assertEquals(1, created.reward?.rewardQty)
             assertEquals(PromotionRuleTargetType.CATEGORY_TYPE, created.targets.single().targetType)
+            assertEquals(1, created.version)
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId))
 
             assertNotNull(
@@ -1014,6 +1886,7 @@ class VenuePromotionRepositoryTest {
             assertEquals(updatedRewardItemId, updatedReward.reward?.rewardMenuItemId)
             assertEquals("Морс", updatedReward.reward?.rewardMenuItemName)
             assertEquals(PromotionRewardMode.FIXED_ITEM, updatedReward.reward?.rewardMode)
+            assertEquals(2, updatedReward.version)
 
             val choiceReward =
                 assertNotNull(
@@ -1027,6 +1900,26 @@ class VenuePromotionRepositoryTest {
             assertEquals(
                 setOf(rewardItemId, updatedRewardItemId),
                 choiceReward.reward?.options?.map { it.menuItemId }?.toSet(),
+            )
+            assertEquals(3, choiceReward.version)
+            assertTrue(
+                VenueMenuRepository(dataSource(jdbcUrl))
+                    .deleteItem(fixture.visibleVenueId, updatedRewardItemId),
+            )
+            val rewardAfterCascade =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id))
+            assertEquals(4, rewardAfterCascade.version)
+            assertEquals(
+                setOf(rewardItemId),
+                rewardAfterCascade.reward?.options?.map { it.menuItemId }?.toSet(),
+            )
+            assertFailsWith<DatabaseUnavailableException> {
+                VenueMenuRepository(dataSource(jdbcUrl))
+                    .deleteItem(fixture.visibleVenueId, rewardItemId)
+            }
+            assertEquals(
+                4,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id)?.version,
             )
 
             assertFailsWith<IllegalArgumentException> {
@@ -1113,7 +2006,7 @@ class VenuePromotionRepositoryTest {
         }
 
     @Test
-    fun `promotion rule repository updates stackability settings`() =
+    fun `promotion rule repository keeps happy hours non-stackable`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("promotion-rules-stackability")
             val fixture = seedFixture(jdbcUrl)
@@ -1141,17 +2034,16 @@ class VenuePromotionRepositoryTest {
             assertEquals(null, rule.conflictGroup)
             assertEquals(1, rule.maxApplicationsPerItem)
 
-            val stackable =
-                assertNotNull(
+            assertFailsWith<IllegalArgumentException> {
+                runBlocking {
                     ruleRepository.updateRuleCompatibility(
                         venueId = fixture.visibleVenueId,
                         ruleId = rule.id,
                         stackable = true,
                         conflictGroup = "hookah",
-                    ),
-                )
-            assertTrue(stackable.stackable)
-            assertEquals("hookah", stackable.conflictGroup)
+                    )
+                }
+            }
 
             val nonStackable =
                 assertNotNull(
@@ -1192,6 +2084,13 @@ class VenuePromotionRepositoryTest {
                     discountPercent = 20,
                     createdByUserId = OWNER_ID,
                 )
+            assertNotNull(
+                ruleRepository.setRuleStatus(
+                    venueId = fixture.visibleVenueId,
+                    ruleId = rule.id,
+                    status = VenuePromotionStatus.ACTIVE,
+                ),
+            )
             assertNotNull(
                 promotionRepository.setPromotionStatus(
                     venueId = fixture.visibleVenueId,
@@ -1397,6 +2296,32 @@ class VenuePromotionRepositoryTest {
         return jdbcUrl
     }
 
+    private fun migrateJdbcUrl(
+        jdbcUrl: String,
+        targetVersion: String,
+    ) {
+        Flyway
+            .configure()
+            .dataSource(jdbcUrl, "sa", "")
+            .locations("classpath:db/migration/h2")
+            .target(MigrationVersion.fromVersion(targetVersion))
+            .load()
+            .migrate()
+    }
+
+    private fun Connection.insertGeneratedId(
+        sql: String,
+        bind: (java.sql.PreparedStatement) -> Unit,
+    ): Long =
+        prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
+            bind(statement)
+            statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                assertTrue(keys.next())
+                keys.getLong(1)
+            }
+        }
+
     private fun dataSource(jdbcUrl: String): JdbcDataSource =
         JdbcDataSource().apply {
             setURL(jdbcUrl)
@@ -1563,6 +2488,14 @@ class VenuePromotionRepositoryTest {
         val otherVenueId: Long,
         val hiddenVenueId: Long,
         val blockedVenueId: Long,
+    )
+
+    private data class LegacyPromotionFixture(
+        val promotionId: Long,
+        val ruleId: Long,
+        val fallbackDaysRuleId: Long,
+        val orderId: Long,
+        val batchItemId: Long,
     )
 
     private companion object {

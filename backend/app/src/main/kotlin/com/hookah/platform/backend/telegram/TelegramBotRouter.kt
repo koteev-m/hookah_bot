@@ -100,10 +100,7 @@ import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
 import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
-import com.hookah.platform.backend.promotions.PromotionRuleCartItem
-import com.hookah.platform.backend.promotions.PromotionRuleEngine
 import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
-import com.hookah.platform.backend.promotions.PromotionRulePreviewResult
 import com.hookah.platform.backend.support.SupportAssigneeScope
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageSource
@@ -119,6 +116,8 @@ import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
+import com.hookah.platform.backend.telegram.db.GuestOrderCartPreview
+import com.hookah.platform.backend.telegram.db.GuestOrderCartPreviewItem
 import com.hookah.platform.backend.telegram.db.GuestProfile
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.LinkAndBindResult
@@ -403,6 +402,8 @@ class TelegramBotRouter(
     private data class BotCartPromotionPreview(
         val text: String,
         val discountsByCurrency: Map<String, Long>,
+        val pricingItems: List<GuestOrderCartPreviewItem>,
+        val pricingFingerprint: String,
         val giftChoices: List<PromotionRulePreviewGiftChoice> = emptyList(),
         val loyaltyRedemption: LoyaltyRedemptionPreview? = null,
     )
@@ -9823,25 +9824,10 @@ class TelegramBotRouter(
             showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
             return
         }
-        loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
-        val updated =
-            try {
-                venuePromotionRuleRepository.replaceRuleTargetsWithCategory(
-                    venueId = venueId,
-                    ruleId = ruleId,
-                    semanticType = targetType,
-                )
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        if (updated == null || updated.promotionId != promotionId) {
-            enqueueMessage(chatId, "Правило не найдено.")
-            return
-        }
         enqueueMessage(
             chatId,
-            "Скидка будет действовать на все позиции категории «${humanizeMenuSemanticType(targetType)}».",
+            "Для исполняемой акции выберите конкретную категорию меню в Venue Mini App. " +
+                "Семантическая категория «${humanizeMenuSemanticType(targetType)}» не изменена.",
         )
         showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
     }
@@ -9916,6 +9902,14 @@ class TelegramBotRouter(
         val selected = promotionRuleItemTargetDrafts[key].orEmpty().toList()
         if (selected.isEmpty()) {
             enqueueMessage(chatId, "Выберите хотя бы одну позицию.")
+            showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page = 0)
+            return
+        }
+        if (selected.size != 1) {
+            enqueueMessage(
+                chatId,
+                "В этой версии акция может действовать только на одну конкретную позицию. Выберите одну позицию.",
+            )
             showVenuePromotionRuleTargetItemsEditScreen(chatId, venueId, promotionId, ruleId, targetType, page = 0)
             return
         }
@@ -10927,6 +10921,19 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "Не удалось создать правило. Попробуйте ещё раз.")
                 return
             }
+        if (targetMenuItemIds.size != 1) {
+            dialogStateRepository.clear(chatId)
+            promotionRuleItemTargetDrafts.remove(
+                PromotionRuleItemTargetKey(chatId, venueId, promotionId, null, createTargetType),
+            )
+            enqueueMessage(
+                chatId,
+                "В Telegram можно выбрать одну конкретную позицию. " +
+                    "Акцию на категорию меню настройте в Venue Mini App.",
+            )
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+            return
+        }
         val duplicate =
             try {
                 venuePromotionRuleRepository.findDuplicateHappyHoursRule(
@@ -11063,6 +11070,19 @@ class TelegramBotRouter(
                 return
             }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val promotion = loadVenuePromotionForManagement(chatId, venueId, promotionId) ?: return
+        val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
+        if (
+            promotion.status == VenuePromotionStatus.ACTIVE &&
+            rule.ruleType == PromotionRuleType.HAPPY_HOURS_PERCENT
+        ) {
+            enqueueMessage(
+                chatId,
+                "Сначала приостановите или архивируйте акцию. Активное правило удалить нельзя.",
+            )
+            showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
+            return
+        }
         val archived =
             try {
                 venuePromotionRuleRepository.archiveRule(
@@ -11133,8 +11153,12 @@ class TelegramBotRouter(
             buildString {
                 append("⚖️ Совместимость акций\n\n")
                 append("Текущий режим: ").append(buildVenuePromotionRuleCompatibilityText(rule)).append("\n\n")
-                append("Если несколько акций подходят к одной позиции, система выберет самую выгодную. ")
-                append("Если включить суммирование, эта акция может применяться вместе с другими.")
+                if (rule.ruleType == PromotionRuleType.HAPPY_HOURS_PERCENT) {
+                    append("Happy Hours не суммируются: для строки выбирается одна самая выгодная акция.")
+                } else {
+                    append("Если несколько акций подходят к одной позиции, система выберет самую выгодную. ")
+                    append("Если включить суммирование, эта акция может применяться вместе с другими.")
+                }
             },
             TelegramKeyboards.inlineVenuePromotionRuleCompatibilityActions(
                 venueId = venueId,
@@ -11167,6 +11191,15 @@ class TelegramBotRouter(
             return
         }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
+        if (rule.ruleType == PromotionRuleType.HAPPY_HOURS_PERCENT && stackable) {
+            enqueueMessage(
+                chatId,
+                "Happy Hours в этой версии не суммируются с другими акциями.",
+            )
+            showVenuePromotionRuleDetailByIds(chatId, userId, venueId, promotionId, ruleId)
+            return
+        }
         val updated =
             try {
                 venuePromotionRuleRepository.updateRuleCompatibility(
@@ -11208,6 +11241,12 @@ class TelegramBotRouter(
                             "подарок будет добавляться только в этот период.\n",
                     )
                 }
+                if (rule.hasMultipleWeekdayWindowRanges()) {
+                    append(
+                        "\nДля разных дней настроены разные часы. Точно отредактировать их можно в Mini App. " +
+                            "Сохранение здесь заменит расписание одним общим окном.\n",
+                    )
+                }
                 if (draft != null) {
                     append("\nЧерновик: ").append(buildVenuePromotionRuleScheduleText(draft)).append("\n")
                     append("Расписание сохранится, когда будут выбраны дни и время проведения.")
@@ -11228,6 +11267,16 @@ class TelegramBotRouter(
                 return
             }
         requireVenuePromotionManagementAccess(chatId, userId, venueId) ?: return
+        val rule = loadVenuePromotionRuleForManagement(chatId, venueId, promotionId, ruleId) ?: return
+        if (rule.ruleType == PromotionRuleType.HAPPY_HOURS_PERCENT) {
+            enqueueMessage(
+                chatId,
+                "Для активируемых Happy Hours нужно хотя бы одно временное окно. " +
+                    "Расписание не очищено.",
+            )
+            showVenuePromotionRuleScheduleByIds(chatId, userId, venueId, promotionId, ruleId)
+            return
+        }
         val updated =
             try {
                 venuePromotionRuleRepository.clearRuleSchedule(venueId, ruleId)
@@ -11580,7 +11629,35 @@ class TelegramBotRouter(
         }
         val updated =
             try {
-                venuePromotionRepository.setPromotionStatus(venueId, promotionId, status)
+                if (current.templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+                    venuePromotionRepository.setPromotionStatus(
+                        venueId = venueId,
+                        promotionId = promotionId,
+                        status = status,
+                        afterUpdate = { connection, _ ->
+                            venuePromotionRuleRepository.synchronizeHappyHoursPromotionStatus(
+                                connection = connection,
+                                venueId = venueId,
+                                promotionId = promotionId,
+                                status = status,
+                            )
+                        },
+                    )
+                } else {
+                    venuePromotionRepository.setPromotionStatus(venueId, promotionId, status)
+                }
+            } catch (e: InvalidInputException) {
+                val detail = e.message?.takeIf { it.isNotBlank() } ?: "Проверьте настройки акции."
+                enqueueMessage(
+                    chatId,
+                    if (status == VenuePromotionStatus.ACTIVE) {
+                        "Акцию нельзя включить:\n• $detail"
+                    } else {
+                        "Акцию нельзя приостановить:\n• $detail"
+                    },
+                )
+                showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
+                return
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -11773,6 +11850,14 @@ class TelegramBotRouter(
         if (menuItemTargets.isNotEmpty()) {
             return "${menuItemTargets.size} ${pluralizeRussian(menuItemTargets.size, "позиция", "позиции", "позиций")}"
         }
+        val menuCategoryTarget =
+            rule.targets.firstOrNull {
+                it.targetType == PromotionRuleTargetType.MENU_CATEGORY && it.menuCategoryId != null
+            }
+        if (menuCategoryTarget != null) {
+            return menuCategoryTarget.menuCategoryName?.takeIf(String::isNotBlank)
+                ?: "Категория #${menuCategoryTarget.menuCategoryId}"
+        }
         val categoryTarget =
             rule.targets.firstOrNull {
                 it.targetType == PromotionRuleTargetType.CATEGORY_TYPE && it.semanticType != null
@@ -11786,6 +11871,14 @@ class TelegramBotRouter(
                 it.targetType == PromotionRuleTargetType.MENU_ITEM && it.menuItemId != null
             }
         if (menuItemTargets.isEmpty()) {
+            val menuCategoryTarget =
+                rule.targets.firstOrNull {
+                    it.targetType == PromotionRuleTargetType.MENU_CATEGORY && it.menuCategoryId != null
+                }
+            if (menuCategoryTarget != null) {
+                return menuCategoryTarget.menuCategoryName?.takeIf(String::isNotBlank)
+                    ?: "Категория #${menuCategoryTarget.menuCategoryId}"
+            }
             val categoryTarget =
                 rule.targets.firstOrNull {
                     it.targetType == PromotionRuleTargetType.CATEGORY_TYPE && it.semanticType != null
@@ -11825,8 +11918,33 @@ class TelegramBotRouter(
         }
     }
 
-    private fun buildVenuePromotionRuleScheduleText(rule: VenuePromotionRule): String =
-        buildVenuePromotionRuleScheduleText(rule.toScheduleDraft())
+    private fun buildVenuePromotionRuleScheduleText(rule: VenuePromotionRule): String {
+        val windows =
+            rule.weekdayWindows
+                .filter {
+                    it.weekday in 1..7 &&
+                        it.startsMinute in 0..1439 &&
+                        it.endsMinute in 1..1440 &&
+                        it.startsMinute < it.endsMinute
+                }.sortedWith(
+                    compareBy(
+                        { it.weekday },
+                        { it.startsMinute },
+                        { it.endsMinute },
+                    ),
+                )
+        if (windows.isEmpty()) {
+            return buildVenuePromotionRuleScheduleText(rule.toScheduleDraft())
+        }
+        return windows
+            .groupBy { it.startsMinute to it.endsMinute }
+            .entries
+            .joinToString("; ") { (range, groupedWindows) ->
+                val days = groupedWindows.map { it.weekday }.toSet()
+                "${formatPromotionRuleDays(days)}, ${formatPromotionRuleLocalMinute(range.first)}–" +
+                    formatPromotionRuleLocalMinute(range.second)
+            }
+    }
 
     private fun buildVenuePromotionRuleScheduleText(draft: PromotionRuleScheduleDraft): String {
         val start = draft.startsTime
@@ -11851,6 +11969,15 @@ class TelegramBotRouter(
             startsTime = startsTime,
             endsTime = endsTime,
         )
+
+    private fun formatPromotionRuleLocalMinute(minute: Int): String =
+        "%02d:%02d".format(Locale.ROOT, minute / 60, minute % 60)
+
+    private fun VenuePromotionRule.hasMultipleWeekdayWindowRanges(): Boolean =
+        weekdayWindows
+            .map { it.startsMinute to it.endsMinute }
+            .distinct()
+            .size > 1
 
     private fun buildVenuePromotionRuleTimeText(rule: VenuePromotionRule): String {
         val start = rule.startsTime
@@ -20049,10 +20176,19 @@ class TelegramBotRouter(
 
     private suspend fun resolveVenueZoneId(venueId: Long): ZoneId =
         try {
-            venueSettingsRepository.resolveZoneId(venueId, ZoneId.systemDefault())
+            venueSettingsRepository.resolveZoneId(
+                venueId,
+                ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+            )
         } catch (e: DatabaseUnavailableException) {
-            ZoneId.systemDefault()
+            ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE)
         }
+
+    private suspend fun resolvePromotionVenueZoneId(venueId: Long): ZoneId =
+        venueSettingsRepository.resolvePromotionZoneId(
+            venueId,
+            ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+        )
 
     private suspend fun updateVenueTimezoneFromLocationBestEffort(
         venueId: Long,
@@ -22649,6 +22785,12 @@ class TelegramBotRouter(
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: InvalidInputException) {
+                enqueueMessage(
+                    chatId,
+                    e.message ?: "На эту позицию уже действует акция. Ручную скидку применить нельзя.",
+                )
                 return
             }
         dialogStateRepository.clear(chatId)
@@ -27339,13 +27481,56 @@ class TelegramBotRouter(
             )
             return
         }
-        val totalsByCurrency =
-            items
-                .groupBy { it.currency.uppercase(Locale.ROOT) }
-                .mapValues { entry ->
-                    entry.value.sumOf { it.priceMinor * it.qty.toLong() }
-                }
-        val promotionPreview = buildBotCartPromotionPreview(context.table.venueId, context.userId, items, key)
+        val promotionPreview =
+            try {
+                buildBotCartPromotionPreview(context.table.venueId, context.userId, items, key)
+            } catch (e: DatabaseUnavailableException) {
+                sendBotCartScreenMessage(
+                    chatId,
+                    key,
+                    "Не удалось пересчитать корзину по актуальным ценам. Попробуйте ещё раз.",
+                    TelegramKeyboards.inlineBotMenuCartSummaryActions(
+                        showSplitBillActions = showSplitBillActions,
+                        hasComment = guestComment != null,
+                    ),
+                )
+                return
+            } catch (e: InvalidInputException) {
+                sendBotCartScreenMessage(
+                    chatId,
+                    key,
+                    "Состав или условия корзины изменились. Проверьте доступность позиций и вариантов.",
+                    TelegramKeyboards.inlineBotMenuCartSummaryActions(
+                        showSplitBillActions = showSplitBillActions,
+                        hasComment = guestComment != null,
+                    ),
+                )
+                return
+            }
+        val currentPricedItems =
+            promotionPreview
+                ?.pricingItems
+                ?.filterNot { it.isPromotionReward }
+                ?.takeIf { it.size == items.size }
+        val grossTotalsByCurrency =
+            promotionPreview
+                ?.pricingItems
+                ?.groupBy { it.currency.uppercase(Locale.ROOT) }
+                ?.mapValues { (_, pricedItems) -> pricedItems.sumOf { it.lineGrossMinor } }
+                ?.takeIf { it.isNotEmpty() }
+                ?: items
+                    .groupBy { it.currency.uppercase(Locale.ROOT) }
+                    .mapValues { (_, draftItems) ->
+                        draftItems.sumOf { it.priceMinor * it.qty.toLong() }
+                    }
+        val payableTotalsByCurrency =
+            promotionPreview
+                ?.pricingItems
+                ?.groupBy { it.currency.uppercase(Locale.ROOT) }
+                ?.mapValues { (_, pricedItems) -> pricedItems.sumOf { it.linePayableMinor } }
+                ?.takeIf { it.isNotEmpty() }
+                ?: grossTotalsByCurrency
+        val visiblePromotionPreview = promotionPreview?.takeIf { it.text.isNotBlank() }
         val loyaltyProgressText =
             buildBotCartLoyaltyProgressText(
                 venueId = context.table.venueId,
@@ -27354,17 +27539,23 @@ class TelegramBotRouter(
             )
         val totalText =
             buildBotCartTotalText(
-                totalsByCurrency = totalsByCurrency,
-                promotionPreview = promotionPreview,
+                grossTotalsByCurrency = grossTotalsByCurrency,
+                payableTotalsByCurrency = payableTotalsByCurrency,
+                promotionPreview = visiblePromotionPreview,
             )
-        items.forEach { item ->
-            val lineTotal = formatPrice(item.priceMinor * item.qty.toLong(), item.currency)
+        items.forEachIndexed { index, item ->
+            val pricedItem = currentPricedItems?.get(index)
+            val itemName = pricedItem?.itemName ?: item.name
+            val qty = pricedItem?.qty ?: item.qty
+            val currency = pricedItem?.currency ?: item.currency
+            val lineGrossMinor = pricedItem?.lineGrossMinor ?: item.priceMinor * item.qty.toLong()
+            val lineTotal = formatPrice(lineGrossMinor, currency)
             sendBotCartScreenMessage(
                 chatId,
                 key,
                 buildString {
-                    append("${item.name}\n")
-                    append("Количество: ${item.qty}\n")
+                    append("$itemName\n")
+                    append("Количество: $qty\n")
                     append("Сумма: $lineTotal")
                 },
                 TelegramKeyboards.inlineBotMenuCartItemActions(item.lineId),
@@ -27375,15 +27566,20 @@ class TelegramBotRouter(
             key,
             buildString {
                 append("🧺 Корзина\n")
-                if (promotionPreview != null) {
+                if (visiblePromotionPreview != null) {
                     append(
-                        items.joinToString("\n") { item ->
-                            val lineTotal = item.priceMinor * item.qty.toLong()
-                            "• ${item.name} ×${item.qty} — ${formatCompactMoney(lineTotal, item.currency)}"
-                        },
+                        items.mapIndexed { index, item ->
+                            val pricedItem = currentPricedItems?.get(index)
+                            val itemName = pricedItem?.itemName ?: item.name
+                            val qty = pricedItem?.qty ?: item.qty
+                            val currency = pricedItem?.currency ?: item.currency
+                            val lineGrossMinor =
+                                pricedItem?.lineGrossMinor ?: item.priceMinor * item.qty.toLong()
+                            "• $itemName ×$qty — ${formatCompactMoney(lineGrossMinor, currency)}"
+                        }.joinToString("\n"),
                     )
                     append("\n")
-                    append(promotionPreview.text)
+                    append(visiblePromotionPreview.text)
                     append("\n")
                 }
                 loyaltyProgressText?.let {
@@ -27396,39 +27592,38 @@ class TelegramBotRouter(
             TelegramKeyboards.inlineBotMenuCartSummaryActions(
                 showSplitBillActions = showSplitBillActions,
                 hasComment = guestComment != null,
-                hasGiftChoice = promotionPreview?.giftChoices?.isNotEmpty() == true,
+                hasGiftChoice = visiblePromotionPreview?.giftChoices?.isNotEmpty() == true,
             ),
         )
     }
 
     private fun buildBotCartTotalText(
-        totalsByCurrency: Map<String, Long>,
+        grossTotalsByCurrency: Map<String, Long>,
+        payableTotalsByCurrency: Map<String, Long>,
         promotionPreview: BotCartPromotionPreview?,
     ): String =
         if (promotionPreview == null) {
-            if (totalsByCurrency.size == 1) {
-                val (currency, totalMinor) = totalsByCurrency.entries.first()
+            if (grossTotalsByCurrency.size == 1) {
+                val (currency, totalMinor) = grossTotalsByCurrency.entries.first()
                 "Итого: ${formatPrice(totalMinor, currency)}"
             } else {
                 buildString {
                     append("Итого:\n")
                     append(
-                        totalsByCurrency.entries.joinToString("\n") { (currency, totalMinor) ->
+                        grossTotalsByCurrency.entries.joinToString("\n") { (currency, totalMinor) ->
                             "- ${formatPrice(totalMinor, currency)}"
                         },
                     )
                 }
             }
-        } else if (totalsByCurrency.size == 1) {
-            val (currency, totalMinor) = totalsByCurrency.entries.first()
-            val discountMinor = promotionPreview.discountsByCurrency[currency.uppercase(Locale.ROOT)] ?: 0L
+        } else if (payableTotalsByCurrency.size == 1) {
+            val (currency, payableTotalMinor) = payableTotalsByCurrency.entries.first()
             val label =
                 if (promotionPreview.loyaltyRedemption != null) {
                     "Итого к оплате"
                 } else {
                     "Итого к оплате после акции"
                 }
-            val payableTotalMinor = (totalMinor - discountMinor).coerceAtLeast(0L)
             "$label: ${formatCompactMoney(payableTotalMinor, currency)}"
         } else {
             buildString {
@@ -27440,11 +27635,8 @@ class TelegramBotRouter(
                     },
                 )
                 append(
-                    totalsByCurrency.entries.joinToString("\n") { (currency, totalMinor) ->
-                        val discountMinor =
-                            promotionPreview.discountsByCurrency[currency.uppercase(Locale.ROOT)]
-                                ?: 0L
-                        "- ${formatCompactMoney((totalMinor - discountMinor).coerceAtLeast(0L), currency)}"
+                    payableTotalsByCurrency.entries.joinToString("\n") { (currency, payableTotalMinor) ->
+                        "- ${formatCompactMoney(payableTotalMinor, currency)}"
                     },
                 )
             }
@@ -27485,74 +27677,50 @@ class TelegramBotRouter(
         userId: Long,
         items: List<BotDraftCartItem>,
         key: BotDraftCartKey,
-    ): BotCartPromotionPreview? {
-        if (items.isEmpty()) return null
+    ): BotCartPromotionPreview {
+        if (items.isEmpty()) {
+            throw InvalidInputException("Cart must not be empty")
+        }
         val loyaltyPreview = buildBotCartLoyaltyRedemptionPreview(venueId, userId, items)
-        val now = Instant.now()
-        val rules =
-            try {
-                venuePromotionRuleRepository.listActiveRulesForVenueAt(venueId, now)
-            } catch (e: DatabaseUnavailableException) {
-                return formatBotCartPromotionPreview(PromotionRulePreviewResult(emptyList()), loyaltyPreview)
-            }
-        if (rules.isEmpty()) {
-            return formatBotCartPromotionPreview(
-                PromotionRulePreviewResult(emptyList()),
-                loyaltyPreview,
-            )
-        }
-        val menu =
-            try {
-                guestMenuRepository.getMenu(venueId)
-            } catch (e: DatabaseUnavailableException) {
-                return formatBotCartPromotionPreview(PromotionRulePreviewResult(emptyList()), loyaltyPreview)
-            }
-        val effectiveTypesByItemId =
-            menu.categories
-                .flatMap { category ->
-                    category.items.map { item -> item.id to (item.itemType ?: category.categoryType) }
-                }
-                .toMap()
-        val cartItems =
-            items.mapNotNull { item ->
-                if (
-                    loyaltyPreview != null &&
-                    (
-                        loyaltyPreview.lineId == item.lineId ||
-                            (loyaltyPreview.lineId == null && loyaltyPreview.menuItemId == item.itemId)
-                    )
-                ) {
-                    return@mapNotNull null
-                }
-                val effectiveType = effectiveTypesByItemId[item.itemId] ?: return@mapNotNull null
-                PromotionRuleCartItem(
-                    lineId = item.lineId,
-                    menuItemId = item.itemId,
-                    itemName = item.name,
-                    qty = item.qty,
-                    priceMinor = item.priceMinor,
-                    currency = item.currency,
-                    effectiveType = effectiveType,
-                )
-            }
-        if (cartItems.isEmpty()) {
-            return formatBotCartPromotionPreview(
-                PromotionRulePreviewResult(emptyList()),
-                loyaltyPreview,
-            )
-        }
         val preview =
-            PromotionRuleEngine.preview(
+            ordersRepository.previewGuestOrderBatch(
                 venueId = venueId,
-                now = now,
-                venueZoneId = resolveVenueZoneId(venueId),
-                cartItems = cartItems,
-                activeRules = rules,
+                userId = userId,
+                items =
+                    items.map { item ->
+                        OrderBatchItemInput(
+                            itemId = item.itemId,
+                            qty = item.qty,
+                            selectedOptionId = item.optionId,
+                            preferenceNote = item.preferenceNote,
+                        )
+                    },
+                venueZoneId = resolvePromotionVenueZoneId(venueId),
                 selectedGiftChoices = botGiftChoices[key].orEmpty(),
                 skippedGiftRuleIds = botSkippedGiftRules[key].orEmpty(),
-            )
+            ) ?: throw InvalidInputException("Some items or options are unavailable")
         return formatBotCartPromotionPreview(preview, loyaltyPreview)
     }
+
+    private suspend fun buildBotCartPromotionPreviewOrNotify(
+        chatId: Long,
+        venueId: Long,
+        userId: Long,
+        items: List<BotDraftCartItem>,
+        key: BotDraftCartKey,
+    ): BotCartPromotionPreview? =
+        try {
+            buildBotCartPromotionPreview(venueId, userId, items, key)
+        } catch (e: DatabaseUnavailableException) {
+            enqueueMessage(chatId, "Не удалось пересчитать корзину по актуальным ценам. Попробуйте ещё раз.")
+            null
+        } catch (e: InvalidInputException) {
+            enqueueMessage(
+                chatId,
+                "Состав или условия корзины изменились. Проверьте доступность позиций и вариантов.",
+            )
+            null
+        }
 
     private suspend fun buildBotCartLoyaltyRedemptionPreview(
         venueId: Long,
@@ -27580,47 +27748,32 @@ class TelegramBotRouter(
         }
 
     private fun formatBotCartPromotionPreview(
-        preview: PromotionRulePreviewResult,
+        preview: GuestOrderCartPreview,
         loyaltyPreview: LoyaltyRedemptionPreview?,
-    ): BotCartPromotionPreview? {
-        if (
-            preview.adjustments.isEmpty() &&
-            preview.gifts.isEmpty() &&
-            preview.giftChoices.isEmpty() &&
-            loyaltyPreview == null
-        ) {
-            return null
-        }
+    ): BotCartPromotionPreview {
         val discountsByCurrency =
-            buildMap {
-                preview.adjustments
-                    .groupBy { it.currency.uppercase(Locale.ROOT) }
-                    .forEach { (currency, adjustments) ->
-                        put(currency, adjustments.sumOf { it.discountMinor })
-                    }
-                loyaltyPreview?.let { loyalty ->
-                    val currency = loyalty.currency.uppercase(Locale.ROOT)
-                    put(currency, (this[currency] ?: 0L) + loyalty.discountMinor)
-                }
-            }
+            preview.discounts
+                .groupBy { it.currency.uppercase(Locale.ROOT) }
+                .mapValues { (_, discounts) -> discounts.sumOf { it.discountMinor } }
         val discountLines =
-            preview.adjustments
-                .groupBy { it.label to it.currency }
-                .map { (key, adjustments) ->
-                    val (label, currency) = key
-                    val discountMinor = adjustments.sumOf { it.discountMinor }
-                    "🎁 $label: −${formatCompactMoney(discountMinor, currency)}"
+            preview.discounts
+                .filterNot { discount ->
+                    discount.ruleType.equals("LOYALTY_NTH_HOOKAH", ignoreCase = true)
+                }
+                .map { discount ->
+                    "🎁 ${discount.label}: −${formatCompactMoney(discount.discountMinor, discount.currency)}"
                 }
         val loyaltyLines =
-            loyaltyPreview?.let { loyalty ->
-                listOf(
-                    "🎁 Лояльность: бесплатный кальян −" +
-                        formatCompactMoney(loyalty.discountMinor, loyalty.currency),
-                )
-            } ?: emptyList()
+            preview.discounts
+                .filter { discount ->
+                    discount.ruleType.equals("LOYALTY_NTH_HOOKAH", ignoreCase = true)
+                }
+                .map { discount ->
+                    "🎁 ${discount.label} −${formatCompactMoney(discount.discountMinor, discount.currency)}"
+                }
         val giftLines =
-            preview.gifts.map { gift ->
-                "🎁 ${gift.rewardItemName} в подарок к «${gift.triggerItemName}»"
+            preview.items.filter { it.isPromotionReward }.map { gift ->
+                "🎁 ${gift.itemName} в подарок"
             }
         val giftChoiceLines =
             preview.giftChoices.map {
@@ -27639,8 +27792,10 @@ class TelegramBotRouter(
         return BotCartPromotionPreview(
             text = lines.joinToString("\n"),
             discountsByCurrency = discountsByCurrency,
+            pricingItems = preview.items,
+            pricingFingerprint = preview.pricingFingerprint,
             giftChoices = preview.giftChoices,
-            loyaltyRedemption = loyaltyPreview,
+            loyaltyRedemption = loyaltyPreview.takeIf { loyaltyLines.isNotEmpty() },
         )
     }
 
@@ -27657,13 +27812,15 @@ class TelegramBotRouter(
             warnBotDraftCartScopeMismatch(chatId)
             return
         }
-        val choice =
-            buildBotCartPromotionPreview(
-                context.table.venueId,
-                context.userId,
-                items,
-                key,
-            )?.giftChoices?.firstOrNull()
+        val preview =
+            buildBotCartPromotionPreviewOrNotify(
+                chatId = chatId,
+                venueId = context.table.venueId,
+                userId = context.userId,
+                items = items,
+                key = key,
+            ) ?: return
+        val choice = preview.giftChoices.firstOrNull()
         if (choice == null) {
             enqueueMessage(chatId, "Сейчас нет подарка для выбора.")
             showBotMenuCart(chatId)
@@ -27707,13 +27864,15 @@ class TelegramBotRouter(
             warnBotDraftCartScopeMismatch(chatId)
             return
         }
-        val choice =
-            buildBotCartPromotionPreview(
-                context.table.venueId,
-                context.userId,
-                items,
-                key,
-            )?.giftChoices?.firstOrNull()
+        val preview =
+            buildBotCartPromotionPreviewOrNotify(
+                chatId = chatId,
+                venueId = context.table.venueId,
+                userId = context.userId,
+                items = items,
+                key = key,
+            ) ?: return
+        val choice = preview.giftChoices.firstOrNull()
         if (choice == null) {
             enqueueMessage(chatId, "Сейчас нет подарка для выбора.")
             showBotMenuCart(chatId)
@@ -27804,8 +27963,15 @@ class TelegramBotRouter(
             warnBotDraftCartScopeMismatch(chatId)
             return
         }
-        val promotionPreview = buildBotCartPromotionPreview(context.table.venueId, context.userId, draftItems, key)
-        val pendingGiftChoice = promotionPreview?.giftChoices?.firstOrNull()
+        val promotionPreview =
+            buildBotCartPromotionPreviewOrNotify(
+                chatId = chatId,
+                venueId = context.table.venueId,
+                userId = context.userId,
+                items = draftItems,
+                key = key,
+            ) ?: return
+        val pendingGiftChoice = promotionPreview.giftChoices.firstOrNull()
         if (pendingGiftChoice != null && !skipPendingGiftChoice) {
             val selectedGift = botGiftChoices[key]?.get(pendingGiftChoice.ruleId)
             enqueueMessage(
@@ -27842,17 +28008,27 @@ class TelegramBotRouter(
                     },
                 selectedGiftChoices = botGiftChoices[key].orEmpty(),
                 skippedGiftRuleIds = botSkippedGiftRules[key].orEmpty(),
+                expectedPreviewFingerprint = promotionPreview.pricingFingerprint,
             )
                 ?: return
         clearBotCartScreenMessages(chatId, key)
         clearBotDraftCart(chatId, context.table.tableToken)
         enqueueMessage(
             chatId,
-            "✅ Заказ отправлен.\n${formatTelegramOrderDisplayLabel(
-                createdBatch.orderId,
-                createdBatch.displayNumber,
-                createdBatch.displayDate,
-            )}.\nЧто дальше?",
+            buildString {
+                if (createdBatch.recalculated) {
+                    append("Условия акции изменились. Итог корзины пересчитан.\n\n")
+                }
+                append("✅ Заказ отправлен.\n")
+                append(
+                    formatTelegramOrderDisplayLabel(
+                        createdBatch.orderId,
+                        createdBatch.displayNumber,
+                        createdBatch.displayDate,
+                    ),
+                )
+                append(".\nЧто дальше?")
+            },
             TelegramKeyboards.inlineBotReorderAction(),
         )
     }
@@ -28070,6 +28246,7 @@ class TelegramBotRouter(
         items: List<OrderBatchItemInput>,
         selectedGiftChoices: Map<Long, Long> = emptyMap(),
         skippedGiftRuleIds: Set<Long> = emptySet(),
+        expectedPreviewFingerprint: String? = null,
     ): com.hookah.platform.backend.telegram.db.CreatedOrderBatch? {
         val tableSession =
             try {
@@ -28112,7 +28289,14 @@ class TelegramBotRouter(
                         enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                         return null
                     }
-                tabId.takeIf { isMember }
+                if (!isMember) {
+                    enqueueMessage(
+                        chatId,
+                        "Доступ к счёту изменился. Обновите корзину и попробуйте снова.",
+                    )
+                    return null
+                }
+                tabId
             } else {
                 null
             }
@@ -28146,9 +28330,10 @@ class TelegramBotRouter(
                     tabId = effectiveTabId,
                     comment = comment,
                     items = items,
-                    venueZoneId = resolveVenueZoneId(context.table.venueId),
+                    venueZoneId = resolvePromotionVenueZoneId(context.table.venueId),
                     selectedGiftChoices = selectedGiftChoices,
                     skippedGiftRuleIds = skippedGiftRuleIds,
+                    expectedPreviewFingerprint = expectedPreviewFingerprint,
                 )
             if (createdBatch == null) {
                 enqueueMessage(chatId, "Не удалось оформить заказ, попробуйте ещё раз.")
@@ -28182,18 +28367,10 @@ class TelegramBotRouter(
         comment: String?,
         items: List<OrderBatchItemInput>,
     ) {
-        if (createdBatch.idempotencyReplay) {
-            return
-        }
         val notifier = staffChatNotifier ?: return
         val summary = staffChatCreatedBatchItemsSummary(createdBatch, items, context.table.venueId)
-        val totalCurrency = createdBatch.items.firstOrNull()?.currency
-        val totalPayableMinor =
-            createdBatch.items
-                .takeIf { it.isNotEmpty() }
-                ?.sumOf { item -> item.priceMinor * item.qty }
-                ?.let { gross -> gross - createdBatch.promotionDiscounts.sumOf { it.discountMinor } }
-                ?.coerceAtLeast(0L)
+        val totalCurrency = createdBatch.pricing?.currency
+        val totalPayableMinor = createdBatch.pricing?.finalPayableTotalMinor
         val isReplacementBeforeAccept =
             resolveReplacementBeforeAcceptBatchFlag(
                 venueId = context.table.venueId,

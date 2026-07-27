@@ -206,34 +206,47 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val hasItems =
-                        connection.prepareStatement(
-                            """
-                            SELECT 1
-                            FROM menu_items
-                            WHERE venue_id = ? AND category_id = ?
-                            LIMIT 1
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.setLong(2, categoryId)
-                            statement.executeQuery().use { rs -> rs.next() }
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        if (categoryHasItems(connection, venueId, categoryId)) {
+                            connection.commit()
+                            return@use false
                         }
-                    if (hasItems) {
-                        return@use false
+                        val initialReferences =
+                            loadPromotionRulesReferencingCategory(connection, venueId, categoryId)
+                        lockPromotionRuleReferences(connection, venueId, initialReferences)
+                        if (!lockCategoryNowait(connection, venueId, categoryId)) {
+                            connection.commit()
+                            return@use false
+                        }
+                        if (categoryHasItems(connection, venueId, categoryId)) {
+                            connection.commit()
+                            return@use false
+                        }
+                        val currentReferences =
+                            loadPromotionRulesReferencingCategory(connection, venueId, categoryId)
+                        ensureNoNewPromotionReferences(initialReferences, currentReferences)
+                        bumpPromotionRuleVersions(connection, currentReferences)
+                        val deleted =
+                            connection.prepareStatement(
+                                """
+                                DELETE FROM menu_categories
+                                WHERE id = ? AND venue_id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, categoryId)
+                                statement.setLong(2, venueId)
+                                statement.executeUpdate() > 0
+                            }
+                        connection.commit()
+                        deleted
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
-                    val deleted =
-                        connection.prepareStatement(
-                            """
-                            DELETE FROM menu_categories
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, categoryId)
-                            statement.setLong(2, venueId)
-                            statement.executeUpdate()
-                        }
-                    deleted > 0
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -387,18 +400,39 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val deleted =
-                        connection.prepareStatement(
-                            """
-                            DELETE FROM menu_items
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, itemId)
-                            statement.setLong(2, venueId)
-                            statement.executeUpdate()
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val initialReferences =
+                            loadPromotionRulesReferencingItem(connection, venueId, itemId)
+                        lockPromotionRuleReferences(connection, venueId, initialReferences)
+                        if (!lockItemNowait(connection, venueId, itemId)) {
+                            connection.commit()
+                            return@use false
                         }
-                    deleted > 0
+                        val currentReferences =
+                            loadPromotionRulesReferencingItem(connection, venueId, itemId)
+                        ensureNoNewPromotionReferences(initialReferences, currentReferences)
+                        bumpPromotionRuleVersions(connection, currentReferences)
+                        val deleted =
+                            connection.prepareStatement(
+                                """
+                                DELETE FROM menu_items
+                                WHERE id = ? AND venue_id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, itemId)
+                                statement.setLong(2, venueId)
+                                statement.executeUpdate() > 0
+                            }
+                        connection.commit()
+                        deleted
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -928,6 +962,228 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
+    private fun categoryHasItems(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM menu_items
+            WHERE venue_id = ? AND category_id = ?
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, categoryId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    private fun loadPromotionRulesReferencingCategory(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): List<PromotionRuleReference> =
+        connection.prepareStatement(
+            """
+            SELECT DISTINCT r.id AS rule_id, r.promotion_id
+            FROM promotion_rules r
+            JOIN promotion_rule_menu_category_targets target ON target.rule_id = r.id
+            WHERE r.venue_id = ?
+              AND target.menu_category_id = ?
+            ORDER BY r.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, categoryId)
+            statement.executeQuery().use { rs -> rs.toPromotionRuleReferences() }
+        }
+
+    private fun loadPromotionRulesReferencingItem(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): List<PromotionRuleReference> =
+        connection.prepareStatement(
+            """
+            SELECT DISTINCT r.id AS rule_id, r.promotion_id
+            FROM promotion_rules r
+            WHERE r.venue_id = ?
+              AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM promotion_rule_targets target
+                        WHERE target.rule_id = r.id
+                          AND target.menu_item_id = ?
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM promotion_rule_rewards reward
+                        WHERE reward.rule_id = r.id
+                          AND reward.reward_menu_item_id = ?
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM promotion_rule_rewards reward
+                        JOIN promotion_rule_reward_options option ON option.reward_id = reward.id
+                        WHERE reward.rule_id = r.id
+                          AND option.menu_item_id = ?
+                    )
+              )
+            ORDER BY r.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, itemId)
+            statement.setLong(3, itemId)
+            statement.setLong(4, itemId)
+            statement.executeQuery().use { rs -> rs.toPromotionRuleReferences() }
+        }
+
+    private fun ResultSet.toPromotionRuleReferences(): List<PromotionRuleReference> =
+        buildList {
+            while (next()) {
+                val promotionId = getLong("promotion_id").let { value -> if (wasNull()) null else value }
+                add(
+                    PromotionRuleReference(
+                        ruleId = getLong("rule_id"),
+                        promotionId = promotionId,
+                    ),
+                )
+            }
+        }
+
+    private fun lockPromotionRuleReferences(
+        connection: Connection,
+        venueId: Long,
+        references: List<PromotionRuleReference>,
+    ) {
+        val promotionIds = references.mapNotNull { it.promotionId }.distinct().sorted()
+        if (promotionIds.isNotEmpty()) {
+            val placeholders = promotionIds.joinToString(",") { "?" }
+            connection.prepareStatement(
+                """
+                SELECT id
+                FROM venue_promotions
+                WHERE venue_id = ?
+                  AND id IN ($placeholders)
+                ORDER BY id
+                FOR UPDATE
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                promotionIds.forEachIndexed { index, promotionId ->
+                    statement.setLong(index + 2, promotionId)
+                }
+                statement.executeQuery().use { rs ->
+                    while (rs.next()) {
+                        rs.getLong("id")
+                    }
+                }
+            }
+        }
+
+        val ruleIds = references.map { it.ruleId }.distinct().sorted()
+        if (ruleIds.isEmpty()) {
+            return
+        }
+        val placeholders = ruleIds.joinToString(",") { "?" }
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM promotion_rules
+            WHERE venue_id = ?
+              AND id IN ($placeholders)
+            ORDER BY promotion_id, id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            ruleIds.forEachIndexed { index, ruleId ->
+                statement.setLong(index + 2, ruleId)
+            }
+            statement.executeQuery().use { rs ->
+                while (rs.next()) {
+                    rs.getLong("id")
+                }
+            }
+        }
+    }
+
+    private fun lockCategoryNowait(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM menu_categories
+            WHERE id = ? AND venue_id = ?
+            FOR UPDATE NOWAIT
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, categoryId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    private fun lockItemNowait(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM menu_items
+            WHERE id = ? AND venue_id = ?
+            FOR UPDATE NOWAIT
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, itemId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    private fun ensureNoNewPromotionReferences(
+        initial: List<PromotionRuleReference>,
+        current: List<PromotionRuleReference>,
+    ) {
+        val initialByRuleId = initial.associateBy { it.ruleId }
+        if (current.any { reference -> initialByRuleId[reference.ruleId] != reference }) {
+            throw SQLException(
+                "Promotion configuration changed concurrently with menu deletion",
+                "40001",
+            )
+        }
+    }
+
+    private fun bumpPromotionRuleVersions(
+        connection: Connection,
+        references: List<PromotionRuleReference>,
+    ) {
+        val ruleIds = references.map { it.ruleId }.distinct().sorted()
+        if (ruleIds.isEmpty()) {
+            return
+        }
+        val placeholders = ruleIds.joinToString(",") { "?" }
+        connection.prepareStatement(
+            """
+            UPDATE promotion_rules
+            SET version = version + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id IN ($placeholders)
+            """.trimIndent(),
+        ).use { statement ->
+            ruleIds.forEachIndexed { index, ruleId ->
+                statement.setLong(index + 1, ruleId)
+            }
+            statement.executeUpdate()
+        }
+    }
+
     private fun itemExists(
         connection: Connection,
         venueId: Long,
@@ -1095,4 +1351,9 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
             statement.executeBatch()
         }
     }
+
+    private data class PromotionRuleReference(
+        val ruleId: Long,
+        val promotionId: Long?,
+    )
 }

@@ -244,13 +244,66 @@ type VenuePromotionFixture = {
   id: number
   title: string
   description: string
-  terms: string | null
+  terms?: string | null
   startsAt: string
   endsAt: string
   status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
+  templateType?: 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT'
+  rule?: VenuePromotionRuleFixture | null
 }
 
 type GuestVenuePromotionFixture = Omit<VenuePromotionFixture, 'status'>
+
+type VenuePromotionRuleFixture = {
+  id: number
+  version: number
+  windows: Array<{ weekday: number; startLocal: string; endLocal: string }>
+  target?: {
+    type: 'MENU_CATEGORY' | 'MENU_ITEM'
+    menuCategoryId?: number | null
+    menuItemId?: number | null
+    label?: string | null
+  } | null
+  discountPercent?: number | null
+  readyForActivation: boolean
+  validationIssues: string[]
+}
+
+type VenuePromotionMutationFixture = {
+  title: string
+  description: string
+  terms?: string | null
+  startsAt: string
+  endsAt: string
+  templateType: 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT'
+  rule?: {
+    windows: Array<{ weekday: number; startLocal: string; endLocal: string }>
+    target: {
+      type: 'MENU_CATEGORY' | 'MENU_ITEM'
+      menuCategoryId?: number | null
+      menuItemId?: number | null
+    }
+    discountPercent: number
+  } | null
+}
+
+type CartPreviewFixture = {
+  grossTotalMinor: number
+  promoDiscountTotalMinor: number
+  loyaltyDiscountTotalMinor: number
+  finalPayableTotalMinor: number
+  currency: string
+  discounts: Array<Record<string, unknown>>
+  items: Array<Record<string, unknown>>
+  pricingFingerprint: string
+}
+
+type AddBatchResponseFixture = {
+  orderId: number
+  batchId: number
+  pricing: CartPreviewFixture
+  recalculated: boolean
+}
 
 type BillingInvoiceFixture = {
   id: number
@@ -373,6 +426,7 @@ type AddBatchPayload = {
   tableSessionId: number
   tabId: number
   idempotencyKey?: string
+  previewFingerprint?: string | null
   items: AddBatchItemPayload[]
   comment?: string | null
 }
@@ -721,6 +775,8 @@ async function mockGuestApi(
     favoriteMutationFailureOnce?: boolean
     isolateFavoriteUsers?: boolean
     venueAvailable?: boolean
+    cartPreview?: CartPreviewFixture
+    addBatchResponse?: AddBatchResponseFixture
   } = {}
 ) {
   let structuredMenuCalls = 0
@@ -740,7 +796,8 @@ async function mockGuestApi(
     }
   let activeOrderOptions: ActiveOrderFixtureOptions | null = options.activeOrder === undefined ? {} : options.activeOrder
   const todayStaff = options.todayStaff ?? []
-  const promotions = options.promotions ?? []
+  let promotions = options.promotions ?? []
+  let cartPreview = options.cartPreview ?? null
   const visitHistory = options.visitHistory ?? { items: [], details: {} }
   const defaultFavoriteToken = options.isolateFavoriteUsers ? 'favorite-user-123456789' : 'e2e-session-token'
   const favoriteVenueIdsByToken = new Map<string, Set<number>>([
@@ -1325,6 +1382,10 @@ async function mockGuestApi(
   await page.route('**/api/guest/order/preview', async (route) => {
     const body = (await route.request().postDataJSON()) as { items: AddBatchItemPayload[] }
     previewRequests.push({ items: body.items })
+    if (cartPreview) {
+      await route.fulfill(jsonResponse({ preview: cartPreview }))
+      return
+    }
     const previewItems = body.items.map(buildOrderItem)
     const grossTotalMinor = previewItems.reduce((sum, item) => sum + item.lineGrossMinor, 0)
     await route.fulfill(
@@ -1336,7 +1397,8 @@ async function mockGuestApi(
           finalPayableTotalMinor: grossTotalMinor,
           currency: 'RUB',
           discounts: [],
-          items: previewItems
+          items: previewItems,
+          pricingFingerprint: 'e2e-preview-default'
         }
       })
     )
@@ -1346,6 +1408,10 @@ async function mockGuestApi(
     const body = (await route.request().postDataJSON()) as AddBatchPayload
     addBatchRequests.push(body)
     submittedOrderItems = body.items
+    if (options.addBatchResponse) {
+      await route.fulfill(jsonResponse(options.addBatchResponse))
+      return
+    }
     await route.fulfill(jsonResponse({ orderId: 900, batchId: 444 }))
   })
 
@@ -1499,6 +1565,12 @@ async function mockGuestApi(
     setVenueAvailable: (available: boolean) => {
       venueAvailable = available
     },
+    setPromotions: (items: Array<Omit<VenuePromotionFixture, 'status'>>) => {
+      promotions = items
+    },
+    setCartPreview: (preview: CartPreviewFixture | null) => {
+      cartPreview = preview
+    },
     setFavoriteVenueIds: (userId: number, venueIds: number[]) => {
       const token = options.isolateFavoriteUsers ? `favorite-user-${userId}` : defaultFavoriteToken
       favoriteVenueIdsByToken.set(token, new Set(venueIds))
@@ -1521,6 +1593,7 @@ async function mockVenueShiftExtensionApi(
     publicCardSettings?: PublicCardSettings
     publicReviewUrl?: string | null
     failPublicCardUpdateOnce?: boolean
+    promotionFacts?: boolean
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
@@ -1539,6 +1612,7 @@ async function mockVenueShiftExtensionApi(
   let updatePublicReviewUrlCalls = 0
   let locationProviderCalls = 0
   let failPublicCardUpdateOnce = options.failPublicCardUpdateOnce === true
+  const promotionFacts = options.promotionFacts === true
   let orderServiceCharges: ServiceCharge[] = []
   const rejectedReasons: string[] = []
 
@@ -1615,17 +1689,28 @@ async function mockVenueShiftExtensionApi(
 
   const orderBill = () => {
     const serviceChargeTotal = orderServiceCharges.reduce((sum, charge) => sum + charge.totalMinor, 0)
+    const manualDiscountMinor = promotionFacts ? 0 : 12000
+    const promoDiscountMinor = promotionFacts ? 60000 : 0
     return {
       grossTotalMinor: 120000,
-      manualDiscountTotalMinor: 12000,
-      promoDiscountTotalMinor: 0,
+      manualDiscountTotalMinor: manualDiscountMinor,
+      promoDiscountTotalMinor: promoDiscountMinor,
       loyaltyDiscountTotalMinor: 0,
       excludedTotalMinor: 30000,
       canceledTotalMinor: 0,
       rejectedTotalMinor: 0,
-      finalPayableTotalMinor: 108000 + serviceChargeTotal,
+      finalPayableTotalMinor: 120000 - manualDiscountMinor - promoDiscountMinor + serviceChargeTotal,
       currency: 'RUB',
-      promoDiscounts: [],
+      promoDiscounts: promotionFacts
+        ? [
+            {
+              label: 'Счастливые часы',
+              discountMinor: promoDiscountMinor,
+              currency: 'RUB',
+              ruleType: 'HAPPY_HOURS_PERCENT'
+            }
+          ]
+        : [],
       loyaltyDiscounts: [],
       excludedItems: [
         {
@@ -1697,7 +1782,16 @@ async function mockVenueShiftExtensionApi(
               comment: null,
               createdAt: '2026-06-09T21:30:00+03:00',
               updatedAt: '2026-06-09T21:30:00+03:00',
-              promotionDiscounts: [],
+              promotionDiscounts: promotionFacts
+                ? [
+                    {
+                      label: 'Счастливые часы',
+                      discountMinor: 60000,
+                      currency: 'RUB',
+                      ruleType: 'HAPPY_HOURS_PERCENT'
+                    }
+                  ]
+                : [],
               items: [
                 {
                   batchItemId: 700,
@@ -1707,11 +1801,11 @@ async function mockVenueShiftExtensionApi(
                   priceMinor: 120000,
                   currency: 'RUB',
                   lineGrossMinor: 120000,
-                  manualDiscountMinor: 12000,
-                  promoDiscountMinor: 0,
-                  linePayableMinor: 108000,
+                  manualDiscountMinor: promotionFacts ? 0 : 12000,
+                  promoDiscountMinor: promotionFacts ? 60000 : 0,
+                  linePayableMinor: promotionFacts ? 60000 : 108000,
                   isExcluded: false,
-                  discountPercent: 10,
+                  discountPercent: promotionFacts ? null : 10,
                   itemStatus: 'active'
                 },
                 {
@@ -2292,12 +2386,38 @@ async function mockVenuePromotionsApi(
     role?: 'OWNER' | 'MANAGER' | 'STAFF'
     promotions?: VenuePromotionFixture[]
     nowEpochMs?: number
+    menuCategories?: Array<{ id: number; name: string }>
+    menuItems?: Array<{ id: number; name: string; categoryId: number }>
   } = {}
 ) {
   const role = options.role ?? 'OWNER'
   let promotions = [...(options.promotions ?? [])]
   let nextId = Math.max(0, ...promotions.map((item) => item.id)) + 1
+  let nextRuleId = 1001
   const mutations: string[] = []
+  const menuCategories = options.menuCategories ?? [{ id: 20, name: 'Кальяны' }]
+  const menuItems = options.menuItems ?? [{ id: 200, name: 'Double Apple', categoryId: 20 }]
+
+  const toRuleFixture = (
+    mutation: VenuePromotionMutationFixture,
+    previousRule?: VenuePromotionRuleFixture | null
+  ): VenuePromotionRuleFixture | null => {
+    if (mutation.templateType !== 'HAPPY_HOURS_PERCENT' || !mutation.rule) return null
+    const target = mutation.rule.target
+    const label =
+      target.type === 'MENU_ITEM'
+        ? menuItems.find((item) => item.id === target.menuItemId)?.name
+        : menuCategories.find((category) => category.id === target.menuCategoryId)?.name
+    return {
+      id: previousRule?.id ?? nextRuleId++,
+      version: previousRule ? previousRule.version + 1 : 1,
+      windows: mutation.rule.windows,
+      target: { ...target, label: label ?? null },
+      discountPercent: mutation.rule.discountPercent,
+      readyForActivation: true,
+      validationIssues: []
+    }
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -2377,15 +2497,25 @@ async function mockVenuePromotionsApi(
     const statusMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)\/status$/)
     const itemMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)$/)
     if (path === '/api/venue/1/promotions' && request.method() === 'GET') {
-      await route.fulfill(jsonResponse({ venueId: 1, timezone: promotionVenueTimezone, items: promotions }))
+      await route.fulfill(
+        jsonResponse({
+          venueId: 1,
+          timezone: promotionVenueTimezone,
+          items: promotions,
+          menuCategories,
+          menuItems
+        })
+      )
       return
     }
     if (path === '/api/venue/1/promotions' && request.method() === 'POST') {
-      const body = (await request.postDataJSON()) as Omit<VenuePromotionFixture, 'id' | 'status'>
+      const body = (await request.postDataJSON()) as VenuePromotionMutationFixture
+      const normalizedBody = normalizePromotionMutation(body)
       const promotion: VenuePromotionFixture = {
         id: nextId++,
         status: 'DRAFT',
-        ...normalizePromotionMutation(body)
+        ...normalizedBody,
+        rule: toRuleFixture(normalizedBody)
       }
       promotions = [promotion, ...promotions]
       mutations.push('create')
@@ -2395,6 +2525,25 @@ async function mockVenuePromotionsApi(
     if (statusMatch && request.method() === 'POST') {
       const promotionId = Number(statusMatch[1])
       const body = (await request.postDataJSON()) as { status: 'ACTIVE' | 'PAUSED' }
+      const current = promotions.find((item) => item.id === promotionId)
+      if (
+        body.status === 'ACTIVE' &&
+        current?.templateType === 'HAPPY_HOURS_PERCENT' &&
+        current.rule?.readyForActivation !== true
+      ) {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: 'INVALID_INPUT',
+                message: 'Сначала заполните расписание, категорию или позицию и процент скидки.'
+              }
+            },
+            400
+          )
+        )
+        return
+      }
       promotions = promotions.map((item) => (item.id === promotionId ? { ...item, status: body.status } : item))
       mutations.push(body.status.toLowerCase())
       await route.fulfill(jsonResponse({ promotion: promotions.find((item) => item.id === promotionId) }))
@@ -2402,9 +2551,17 @@ async function mockVenuePromotionsApi(
     }
     if (itemMatch && request.method() === 'PUT') {
       const promotionId = Number(itemMatch[1])
-      const body = (await request.postDataJSON()) as Omit<VenuePromotionFixture, 'id' | 'status'>
+      const body = (await request.postDataJSON()) as VenuePromotionMutationFixture
       const normalizedBody = normalizePromotionMutation(body)
-      promotions = promotions.map((item) => (item.id === promotionId ? { ...item, ...normalizedBody } : item))
+      promotions = promotions.map((item) =>
+        item.id === promotionId
+          ? {
+              ...item,
+              ...normalizedBody,
+              rule: toRuleFixture(normalizedBody, item.rule)
+            }
+          : item
+      )
       mutations.push('update')
       await route.fulfill(jsonResponse({ promotion: promotions.find((item) => item.id === promotionId) }))
       return
@@ -2426,8 +2583,8 @@ async function mockVenuePromotionsApi(
 }
 
 function normalizePromotionMutation(
-  body: Omit<VenuePromotionFixture, 'id' | 'status'>
-): Omit<VenuePromotionFixture, 'id' | 'status'> {
+  body: VenuePromotionMutationFixture
+): VenuePromotionMutationFixture {
   return {
     ...body,
     startsAt: normalizePromotionDateTime(body.startsAt),
@@ -3948,18 +4105,29 @@ test('guest venue card shows today staff without private linkage fields', async 
   expect(todayStaffAfterInfo).toBe(true)
 })
 
-test('guest venue detail shows active promotion content and omits an empty block', async ({ page }) => {
+test('guest sees active happy hours in venue detail and no cart discount outside its window', async ({ page }) => {
+  const referenceInstant = '2030-01-14T09:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
   await installTelegramWebApp(page, 123456789)
-  const now = Date.now()
-  await mockGuestApi(page, {
+  const api = await mockGuestApi(page, {
     promotions: [
       {
         id: 41,
-        title: 'Вечер для друзей',
-        description: 'Специальное предложение для компаний.',
-        terms: 'Подробности уточняйте у персонала.',
-        startsAt: new Date(now - 60 * 60 * 1000).toISOString(),
-        endsAt: new Date(now + 60 * 60 * 1000).toISOString()
+        title: 'Счастливые часы',
+        description: 'Скидка на кальяны днём.',
+        terms: 'По понедельникам.',
+        startsAt: '2030-01-13T21:00:00.000Z',
+        endsAt: '2030-01-20T21:00:00.000Z',
+        templateType: 'HAPPY_HOURS_PERCENT',
+        rule: {
+          id: 601,
+          version: 2,
+          windows: [{ weekday: 1, startLocal: '14:00', endLocal: '17:00' }],
+          target: { type: 'MENU_CATEGORY', menuCategoryId: 20, label: 'Кальянное меню' },
+          discountPercent: 50,
+          readyForActivation: true,
+          validationIssues: []
+        }
       }
     ]
   })
@@ -3969,10 +4137,23 @@ test('guest venue detail shows active promotion content and omits an empty block
 
   const promotions = page.locator('.guest-venue-promotions')
   await expect(promotions.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
-  await expect(promotions).toContainText('Вечер для друзей')
-  await expect(promotions).toContainText('Специальное предложение для компаний.')
-  await expect(promotions).toContainText('Подробности уточняйте у персонала.')
+  await expect(promotions).toContainText('Счастливые часы')
+  await expect(promotions).toContainText('Скидка на кальяны днём.')
+  await expect(promotions).toContainText('По понедельникам.')
   await expect(promotions).toContainText(/с .* по /)
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+  const previewCard = page.locator('.cart-preview-card')
+  await expect.poll(() => api.getPreviewRequests()).toHaveLength(1)
+  await expect(previewCard.getByRole('heading', { name: 'Скидка по позициям' })).toHaveCount(0)
+  await expect(previewCard).not.toContainText('Акция «Счастливые часы»')
+  await expect(previewCard).toContainText(/К оплате.*1[\s\u00a0]500,00\s*₽/)
 })
 
 test('guest favorite venues stay consistent across catalog venue detail and account', async ({ page }) => {
@@ -4343,7 +4524,16 @@ test('guest history shows completed visits and safe closed order detail', async 
               displayDate: '2030-01-11',
               totalMinor: 125000,
               currency: 'RUB',
-              promotionDiscounts: [],
+              promotionDiscounts: [
+                {
+                  label: 'Счастливые часы',
+                  discountMinor: 125000,
+                  currency: 'RUB',
+                  ruleType: 'HAPPY_HOURS_PERCENT',
+                  originalAmountMinor: 250000,
+                  finalAmountMinor: 125000
+                }
+              ],
               items: [
                 {
                   itemId: 200,
@@ -4568,6 +4758,9 @@ test('guest history shows completed visits and safe closed order detail', async 
   await expect(page.getByRole('heading', { name: 'Заказ №42' })).toBeVisible()
   await expect(page.getByText('Загружаем данные...')).toHaveCount(0)
   await expect(page.getByText('Double Apple · Ягодный микс · Пожелание: покрепче ×1')).toBeVisible()
+  await expect(page.getByText(/Счастливые часы:/)).toContainText(
+    /2[\s\u00a0]500,00\s*₽.*−\s*1[\s\u00a0]250,00\s*₽.*=\s*1[\s\u00a0]250,00\s*₽/
+  )
   await expect(page.getByRole('button', { name: '← Назад к истории' })).toBeVisible()
   await expect(page.getByText('Foreign Hookah')).toHaveCount(0)
   await page.getByRole('button', { name: '← Назад к истории' }).click()
@@ -4834,6 +5027,165 @@ test('table context with active order opens category-first order menu and hides 
   await page.getByRole('button', { name: 'Добавить' }).click()
 
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+})
+
+test('guest cart uses current item and option prices and drops a paused promotion on submit', async ({ page }) => {
+  const referenceInstant = '2030-01-14T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  const preview: CartPreviewFixture = {
+    grossTotalMinor: 160000,
+    promoDiscountTotalMinor: 80000,
+    loyaltyDiscountTotalMinor: 0,
+    finalPayableTotalMinor: 80000,
+    currency: 'RUB',
+    pricingFingerprint: 'happy-hours-preview-v3',
+    discounts: [
+      {
+        label: 'Счастливые часы',
+        discountMinor: 80000,
+        currency: 'RUB',
+        ruleType: 'HAPPY_HOURS_PERCENT',
+        promotionId: 501,
+        ruleId: 601,
+        ruleVersion: 3,
+        originalAmountMinor: 160000,
+        finalAmountMinor: 80000,
+        eligibleLineIds: [1]
+      }
+    ],
+    items: [
+      {
+        itemId: 200,
+        name: 'Кальян',
+        qty: 1,
+        selectedOption: {
+          optionId: 301,
+          name: 'Ягодный',
+          priceDeltaMinor: 30000
+        },
+        preferenceNote: null,
+        priceMinor: 160000,
+        currency: 'RUB',
+        lineGrossMinor: 160000,
+        discountMinor: 80000,
+        linePayableMinor: 80000,
+        isPromotionReward: false,
+        promotionAdjustment: {
+          promotionId: 501,
+          promotionTitle: 'Счастливые часы',
+          ruleId: 601,
+          ruleVersion: 3,
+          ruleType: 'HAPPY_HOURS_PERCENT',
+          originalAmountMinor: 160000,
+          discountMinor: 80000,
+          finalAmountMinor: 80000
+        }
+      }
+    ]
+  }
+  const recalculatedPricing: CartPreviewFixture = {
+    ...preview,
+    promoDiscountTotalMinor: 0,
+    finalPayableTotalMinor: 160000,
+    pricingFingerprint: 'happy-hours-submit-paused',
+    discounts: [],
+    items: [
+      {
+        itemId: 200,
+        name: 'Кальян',
+        qty: 1,
+        selectedOption: {
+          optionId: 301,
+          name: 'Ягодный',
+          priceDeltaMinor: 30000
+        },
+        preferenceNote: null,
+        priceMinor: 160000,
+        currency: 'RUB',
+        lineGrossMinor: 160000,
+        discountMinor: 0,
+        linePayableMinor: 160000,
+        isPromotionReward: false,
+        promotionAdjustment: null
+      }
+    ]
+  }
+  const api = await mockGuestApi(page, {
+    menuCategories: [
+      {
+        id: 20,
+        name: 'Кальянное меню',
+        categoryType: 'HOOKAH',
+        items: [
+          {
+            id: 200,
+            name: 'Кальян',
+            priceMinor: 100000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'HOOKAH',
+            options: [{ id: 301, name: 'Ягодный', priceDeltaMinor: 10000, isAvailable: true }]
+          }
+        ]
+      }
+    ],
+    promotions: [
+      {
+        id: 501,
+        title: 'Счастливые часы',
+        description: 'Скидка 50% на кальяны.',
+        startsAt: '2030-01-13T21:00:00.000Z',
+        endsAt: '2030-01-20T21:00:00.000Z',
+        templateType: 'HAPPY_HOURS_PERCENT',
+        rule: {
+          id: 601,
+          version: 3,
+          windows: [{ weekday: 1, startLocal: '12:00', endLocal: '18:00' }],
+          target: { type: 'MENU_ITEM', menuItemId: 200, label: 'Кальян' },
+          discountPercent: 50,
+          readyForActivation: true,
+          validationIssues: []
+        }
+      }
+    ],
+    cartPreview: preview,
+    addBatchResponse: {
+      orderId: 900,
+      batchId: 444,
+      pricing: recalculatedPricing,
+      recalculated: true
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await page.getByRole('button', { name: /Ягодный/ }).click()
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+  const cartLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Ягодный' })
+  await expect(cartLine).toContainText(/1[\s\u00a0]100,00\s*₽/)
+  const previewCard = page.locator('.cart-preview-card')
+  await expect(previewCard).toContainText('Сумма до скидок')
+  await expect(previewCard).toContainText('Акция «Счастливые часы»')
+  await expect(previewCard.getByRole('heading', { name: 'Скидка по позициям' })).toBeVisible()
+  const promotedLine = previewCard.locator('.cart-preview-line').filter({ hasText: 'Кальян · Ягодный × 1' })
+  await expect(promotedLine).toContainText(/Обычная стоимость.*1[\s\u00a0]600,00\s*₽/)
+  await expect(promotedLine).toContainText(/Акция «Счастливые часы».*−800,00\s*₽/)
+  await expect(promotedLine).toContainText(/К оплате.*800,00\s*₽/)
+  await expect.poll(() => api.getPreviewRequests()).toHaveLength(1)
+  expect(api.getPreviewRequests()[0].items).toEqual([{ itemId: 200, qty: 1, selectedOptionId: 301 }])
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+
+  api.setPromotions([])
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(page.locator('.toast')).toHaveText('Условия акции изменились. Итог корзины пересчитан.')
+  expect(api.getAddBatchRequests()).toHaveLength(1)
+  expect(api.getAddBatchRequests()[0].previewFingerprint).toBe('happy-hours-preview-v3')
 })
 
 test('table context without active order hides pre-visit actions and extension entry', async ({ page }) => {
@@ -5273,6 +5625,26 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await expect(page.getByRole('heading', { name: 'Запрос на продление работы заведения' })).toHaveCount(0)
   expect(api.getRejectCalls()).toBe(1)
   expect(api.getRejectedReasons()).toEqual(['Нет свободного времени'])
+})
+
+test('venue bill renders persisted happy hours amounts without recalculating them', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { promotionFacts: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказы' }).click()
+  await page.getByRole('button', { name: 'Открыть' }).click()
+
+  const bill = page.locator('.venue-order-bill')
+  await expect(bill.getByRole('heading', { name: 'Счёт' })).toBeVisible()
+  await expect(bill).toContainText(/Сумма до скидок.*1[\s\u00a0]200,00\s*₽/)
+  await expect(bill).toContainText(/Счастливые часы.*−600,00\s*₽/)
+  await expect(bill).toContainText(/К оплате.*600,00\s*₽/)
+
+  const batch = page.locator('.order-batch').filter({ hasText: 'Основная заявка' })
+  await expect(batch).toContainText('Скидки по заявке')
+  await expect(batch).toContainText(/Счастливые часы.*−600,00\s*₽/)
+  await expect(batch).toContainText(/Акции.*−600,00\s*₽.*к оплате.*600,00\s*₽/)
 })
 
 test('venue staff accepts and closes staff calls queue', async ({ page }) => {
@@ -7002,9 +7374,16 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await form.getByRole('button', { name: 'Сохранить черновик' }).click()
   await expect(page.getByText('Черновик акции создан.')).toBeVisible()
   await expect(form).toBeHidden()
-  await expect(page.locator('.venue-promotion-card').filter({ hasText: 'Вечер для друзей' })).toContainText('Черновик')
+  const informationalCard = page.locator('.venue-promotion-card').filter({ hasText: 'Вечер для друзей' })
+  await expect(informationalCard).toContainText('Черновик')
+  await expect(informationalCard).toContainText('Информационная акция')
   expect(api.getMutations()).toEqual(['create'])
-  expect(api.getPromotions()[0]).toMatchObject({ status: 'DRAFT', ...expectedPeriod })
+  expect(api.getPromotions()[0]).toMatchObject({
+    status: 'DRAFT',
+    templateType: 'TEXT_ONLY',
+    rule: null,
+    ...expectedPeriod
+  })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
@@ -7077,6 +7456,148 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
   await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённое предложение для компаний.')
+})
+
+test('venue owner configures happy hours windows and targets while invalid activation is rejected', async ({ page }) => {
+  const referenceInstant = '2030-01-10T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    nowEpochMs: Date.parse(referenceInstant),
+    promotions: [
+      {
+        id: 901,
+        title: 'Ненастроенные часы',
+        description: 'Черновик без исполняемого правила.',
+        terms: null,
+        startsAt: '2030-01-10T09:00:00.000Z',
+        endsAt: '2030-01-20T09:00:00.000Z',
+        status: 'DRAFT',
+        templateType: 'HAPPY_HOURS_PERCENT',
+        rule: {
+          id: 1901,
+          version: 1,
+          windows: [],
+          target: null,
+          discountPercent: null,
+          readyForActivation: false,
+          validationIssues: ['Добавьте временное окно.', 'Выберите категорию или позицию.']
+        }
+      }
+    ],
+    menuCategories: [{ id: 20, name: 'Кальяны' }],
+    menuItems: [{ id: 200, name: 'Double Apple', categoryId: 20 }]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+
+  const incompleteCard = page.locator('.venue-promotion-card').filter({ hasText: 'Ненастроенные часы' })
+  await expect(incompleteCard).toContainText('Нужно исправить перед публикацией')
+  await incompleteCard.getByRole('button', { name: 'Опубликовать' }).click()
+  await expect(page.getByText('Сначала заполните расписание, категорию или позицию и процент скидки.')).toBeVisible()
+  expect(api.getPromotions().find((promotion) => promotion.id === 901)?.status).toBe('DRAFT')
+  expect(api.getMutations()).toEqual([])
+
+  await page.getByRole('button', { name: 'Создать акцию' }).click()
+  const form = page.locator('.venue-promotion-form')
+  await form.getByLabel('Тип акции').selectOption('HAPPY_HOURS_PERCENT')
+  await expect(form.getByText('Часовой пояс заведения: Europe/Moscow')).toBeVisible()
+  await form.getByLabel('Название акции', { exact: true }).fill('Счастливые часы')
+  await form.getByLabel('Описание', { exact: true }).fill('Скидка на кальяны днём.')
+  await form.getByLabel(/^Условия/).fill('По будням.')
+  await form.getByLabel('Начало', { exact: true }).fill('2030-01-10T12:00')
+  await form.getByLabel('Окончание', { exact: true }).fill('2030-01-20T12:00')
+  await form.getByLabel('Категория или позиция').selectOption('20')
+  await form.getByLabel('Скидка, %').fill('50')
+  await form.getByLabel('Окончание окна 1').fill('24:00')
+  await expect(form.getByLabel('Окончание окна 1')).toHaveValue('24:00')
+  await form.getByLabel('Окончание окна 1').fill('18:00')
+
+  await form.getByRole('button', { name: 'Добавить окно' }).click()
+  await form.getByLabel('День недели, окно 2').selectOption('1')
+  await form.getByLabel('Начало окна 2').fill('17:00')
+  await form.getByLabel('Окончание окна 2').fill('19:00')
+  await form.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(form.getByText('Окна в один день не должны пересекаться: Понедельник.')).toBeVisible()
+  expect(api.getMutations()).toEqual([])
+
+  await form.getByLabel('День недели, окно 2').selectOption('2')
+  await form.getByLabel('Начало окна 2').fill('12:00')
+  await form.getByLabel('Окончание окна 2').fill('18:00')
+  const summary = form.locator('.venue-promotion-rule-summary')
+  await expect(summary).toContainText('Понедельник–вторник, 12:00–18:00')
+  await expect(summary).toContainText('Категория: Кальяны')
+  await expect(summary).toContainText('Скидка: 50%')
+  await expect(form).toContainText('Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.')
+
+  await form.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(page.getByText('Черновик акции создан.')).toBeVisible()
+  const created = api.getPromotions().find((promotion) => promotion.title === 'Счастливые часы')
+  expect(created).toMatchObject({
+    status: 'DRAFT',
+    templateType: 'HAPPY_HOURS_PERCENT',
+    rule: {
+      version: 1,
+      windows: [
+        { weekday: 1, startLocal: '12:00', endLocal: '18:00' },
+        { weekday: 2, startLocal: '12:00', endLocal: '18:00' }
+      ],
+      target: { type: 'MENU_CATEGORY', menuCategoryId: 20, label: 'Кальяны' },
+      discountPercent: 50,
+      readyForActivation: true
+    }
+  })
+
+  const happyHoursCard = page.locator('.venue-promotion-card', {
+    has: page.getByRole('heading', { name: 'Счастливые часы', exact: true })
+  })
+  await expect(happyHoursCard).toContainText('Понедельник–вторник, 12:00–18:00')
+  await expect(happyHoursCard).toContainText('Категория: Кальяны')
+  await happyHoursCard.getByRole('button', { name: 'Редактировать' }).click()
+  await form.getByLabel('Скидка действует на').selectOption('MENU_ITEM')
+  await form.getByLabel('Категория или позиция').selectOption('200')
+  await expect(form.locator('.venue-promotion-rule-summary')).toContainText('Позиция: Double Apple')
+  await form.getByRole('button', { name: 'Сохранить изменения' }).click()
+  await expect(page.getByText('Изменения сохранены.')).toBeVisible()
+
+  const updated = api.getPromotions().find((promotion) => promotion.title === 'Счастливые часы')
+  expect(updated).toMatchObject({
+    rule: {
+      version: 2,
+      target: { type: 'MENU_ITEM', menuItemId: 200, label: 'Double Apple' },
+      readyForActivation: true
+    }
+  })
+  await page
+    .locator('.venue-promotion-card', {
+      has: page.getByRole('heading', { name: 'Счастливые часы', exact: true })
+    })
+    .getByRole('button', { name: 'Опубликовать' })
+    .click()
+  await expect(page.getByText('Акция опубликована.')).toBeVisible()
+  expect(api.getPromotions().find((promotion) => promotion.title === 'Счастливые часы')?.status).toBe('ACTIVE')
+  expect(api.getMutations()).toEqual(['create', 'update', 'active'])
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect(page.locator('.guest-venue-promotions')).toContainText('Счастливые часы')
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await page
+    .locator('.venue-promotion-card', {
+      has: page.getByRole('heading', { name: 'Счастливые часы', exact: true })
+    })
+    .getByRole('button', { name: 'Приостановить' })
+    .click()
+  await expect(page.getByText('Акция приостановлена.')).toBeVisible()
+  expect(api.getPromotions().find((promotion) => promotion.title === 'Счастливые часы')?.status).toBe('PAUSED')
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
 })
 
 test('venue owner sees feedback section and staff does not', async ({ page }) => {

@@ -17,8 +17,10 @@ Current practice:
 - Simple Venue Promotions Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: GitHub Actions
   were green and manual staging smoke covered Owner/Manager/Staff RBAC, current-period Guest
   visibility, unavailable-venue filtering, informational-only totals and Telegram/Mini App state.
-- Executable Promotions Phase 2 is `AUDIT / IMPLEMENTATION PLAN REQUIRED`; no broader executable
-  behavior is release-ready from the current audit alone.
+- Executable Promotions Phase 2 is
+  `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE IMPLEMENTED / LOCAL VALIDATION PASSED`.
+  This is local evidence only; CI, PostgreSQL staging migration and real Telegram/staff-chat smoke
+  remain required before release.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -67,6 +69,16 @@ Required parity coverage:
 Gift, BOGO and free-option tests are not part of the selected Happy Hours percentage first slice.
 They require their own later contract, including explicit guest choice and unavailable-reward
 behavior, before Mini App parity can be claimed.
+
+Current local result for the bounded slice:
+
+- required `*PromotionRuleEngine*`, `*VenuePromotionRepository*`, `*GuestOrderRoutes*`,
+  `*VenueOrdersRepository*` and `*TelegramBotRouter*` selectors passed;
+- additional promotion routes, settings, order repository, History and diagnostics regression
+  selectors passed;
+- `:backend:app:ktlintCheck`, `:backend:app:compileKotlin` and Mini App production build passed;
+- deterministic Mini App Playwright smoke passed `71/71`;
+- no staging deploy or staging smoke has been performed for this slice.
 
 ## GitHub Actions Expectations
 

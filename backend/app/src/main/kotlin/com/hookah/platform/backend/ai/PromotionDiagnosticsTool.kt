@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.ai
 
+import com.hookah.platform.backend.promotions.PromotionRuleEngine
 import com.hookah.platform.backend.telegram.db.PromotionRewardMode
 import com.hookah.platform.backend.telegram.db.PromotionRuleReward
 import com.hookah.platform.backend.telegram.db.PromotionRuleTarget
@@ -10,6 +11,7 @@ import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionRule
 import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
+import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
@@ -21,7 +23,7 @@ data class PromotionDiagnosticsRequest(
     val promotionId: Long,
     val ruleId: Long? = null,
     val now: Instant = Instant.now(),
-    val venueZoneId: ZoneId = ZoneId.systemDefault(),
+    val venueZoneId: ZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
 )
 
 data class PromotionDiagnosticsResult(
@@ -61,7 +63,8 @@ class PromotionDiagnosticsTool(
         val visible = promotion.isVisibleAt(request.now)
         val activeMatchingRules =
             rules.filter { rule ->
-                rule.status == VenuePromotionStatus.ACTIVE && rule.matchesSchedule(request.now, request.venueZoneId)
+                rule.status == VenuePromotionStatus.ACTIVE &&
+                    PromotionRuleEngine.isScheduleActive(rule, request.now, request.venueZoneId)
             }
         val reasons = buildLikelyReasons(promotion, rules, activeMatchingRules, request.now, request.venueZoneId)
         return PromotionDiagnosticsResult(
@@ -90,7 +93,8 @@ class PromotionDiagnosticsTool(
                             add("Статус правила: ${humanizeStatus(rule.status)}")
                             add("Расписание: ${formatSchedule(rule)}")
                             add(
-                                "Расписание активно сейчас: ${if (rule.matchesSchedule(
+                                "Расписание активно сейчас: ${if (PromotionRuleEngine.isScheduleActive(
+                                        rule,
                                         request.now,
                                         request.venueZoneId,
                                     )
@@ -154,7 +158,8 @@ class PromotionDiagnosticsTool(
             }
             val scheduledOut =
                 rules.filter { rule ->
-                    rule.status == VenuePromotionStatus.ACTIVE && !rule.matchesSchedule(now, zoneId)
+                    rule.status == VenuePromotionStatus.ACTIVE &&
+                        !PromotionRuleEngine.isScheduleActive(rule, now, zoneId)
                 }
             if (scheduledOut.isNotEmpty()) {
                 add("Расписание активных правил сейчас не совпадает с текущим временем заведения.")
@@ -183,21 +188,12 @@ class PromotionDiagnosticsTool(
             (startsAt == null || startsAt <= now) &&
             (endsAt == null || endsAt >= now)
 
-    private fun VenuePromotionRule.matchesSchedule(
-        now: Instant,
-        zoneId: ZoneId,
-    ): Boolean {
-        val local = now.atZone(zoneId)
-        if (daysOfWeek != null && local.dayOfWeek.value !in daysOfWeek) return false
-        val start = startsTime
-        val end = endsTime
-        if (start == null && end == null) return true
-        if (start == null || end == null || !start.isBefore(end)) return false
-        val time = local.toLocalTime()
-        return !time.isBefore(start) && time.isBefore(end)
-    }
-
     private fun formatSchedule(rule: VenuePromotionRule): String {
+        if (rule.weekdayWindows.isNotEmpty()) {
+            return rule.weekdayWindows.joinToString("; ") { window ->
+                "${humanizeDay(window.weekday)} ${formatMinute(window.startsMinute)}-${formatMinute(window.endsMinute)}"
+            }
+        }
         val days = rule.daysOfWeek
         val time = formatTimeRange(rule.startsTime, rule.endsTime)
         return when {
@@ -219,6 +215,8 @@ class PromotionDiagnosticsTool(
             )}-${endsTime.format(timeFormatter)}"
         }
 
+    private fun formatMinute(minute: Int): String = "%02d:%02d".format(Locale.ROOT, minute / 60, minute % 60)
+
     private fun formatTargets(targets: List<PromotionRuleTarget>): String =
         if (targets.isEmpty()) {
             "не заданы"
@@ -229,6 +227,8 @@ class PromotionDiagnosticsTool(
                         humanizeSemanticType(target.semanticType?.name)
                     PromotionRuleTargetType.MENU_ITEM ->
                         target.menuItemName ?: "позиция #${target.menuItemId}"
+                    PromotionRuleTargetType.MENU_CATEGORY ->
+                        target.menuCategoryName ?: "категория #${target.menuCategoryId}"
                 }
             }
         }

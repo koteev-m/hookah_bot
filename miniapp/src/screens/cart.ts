@@ -283,6 +283,13 @@ function formatDiscount(amountMinor: number, currency: string) {
   return `−${formatMoney(amountMinor, currency)}`
 }
 
+function formatPromotionLabel(label: string | null | undefined) {
+  const value = label?.trim()
+  if (!value) return 'Акция'
+  if (/^акция(?:\s|$|«)/i.test(value)) return value
+  return `Акция «${value}»`
+}
+
 function compareCartRequestItems(
   left: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null },
   right: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null }
@@ -714,7 +721,7 @@ export function renderCartScreen(options: CartScreenOptions) {
         promoDiscounts.forEach((discount) => {
           appendPreviewRow(
             refs.previewContent,
-            discount.label || 'Акция',
+            formatPromotionLabel(discount.label),
             formatDiscount(discount.discountMinor, discount.currency)
           )
         })
@@ -725,6 +732,45 @@ export function renderCartScreen(options: CartScreenOptions) {
             formatDiscount(discount.discountMinor, discount.currency)
           )
         })
+      }
+      const promotedItems = previewData.items.filter(
+        (item) => item.promotionAdjustment != null && item.promotionAdjustment.discountMinor > 0
+      )
+      if (promotedItems.length) {
+        const lineBreakdown = el('section', { className: 'cart-preview-lines' })
+        lineBreakdown.appendChild(el('h4', { text: 'Скидка по позициям' }))
+        promotedItems.forEach((item) => {
+          const adjustment = item.promotionAdjustment
+          if (!adjustment) return
+          const matchingDiscount = promoDiscounts.find(
+            (discount) =>
+              (discount.promotionId != null && discount.promotionId === adjustment.promotionId) ||
+              (discount.ruleId != null && discount.ruleId === adjustment.ruleId)
+          )
+          const line = el('article', { className: 'cart-preview-line' })
+          const itemTitle = item.selectedOption?.name
+            ? `${item.name} · ${item.selectedOption.name} × ${item.qty}`
+            : `${item.name} × ${item.qty}`
+          line.appendChild(el('h5', { text: itemTitle }))
+          appendPreviewRow(
+            line,
+            'Обычная стоимость',
+            formatMoney(adjustment.originalAmountMinor, item.currency)
+          )
+          appendPreviewRow(
+            line,
+            formatPromotionLabel(adjustment.promotionTitle || matchingDiscount?.label),
+            formatDiscount(adjustment.discountMinor, item.currency)
+          )
+          appendPreviewRow(
+            line,
+            'К оплате',
+            formatMoney(adjustment.finalAmountMinor, item.currency),
+            true
+          )
+          lineBreakdown.appendChild(line)
+        })
+        refs.previewContent.appendChild(lineBreakdown)
       }
       appendPreviewRow(
         refs.previewContent,
@@ -1031,6 +1077,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       tableSessionId: validation.tableSessionId,
       tabId: validation.tabId,
       idempotencyKey: resolveSubmitIdempotencyKey(fingerprint),
+      previewFingerprint: previewData?.pricingFingerprint ?? null,
       comment: validation.comment,
       items
     }
@@ -1062,11 +1109,12 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     resetSubmitIdempotency()
+    const wasRecalculated = result.data.recalculated === true
     clearCart()
     refs.commentInput.value = ''
     refs.commentCounter.textContent = `0/${MAX_COMMENT_LENGTH}`
     updateSubmitState()
-    showToast('Отправлено в заказ')
+    showToast(wasRecalculated ? 'Условия акции изменились. Итог корзины пересчитан.' : 'Отправлено в заказ')
     onNavigateOrder()
   }
 

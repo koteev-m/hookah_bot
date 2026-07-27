@@ -9,6 +9,7 @@ import com.hookah.platform.backend.ai.AiPromotionDiagnosticsCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryType
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.telegram.DialogState
 import com.hookah.platform.backend.telegram.DialogStateType
@@ -249,6 +250,19 @@ class AiTelegramHandler(
             enqueueMessage(chatId, "Помощник пока не настроен.", rootActions(parsed.venueId, parsed.origin))
             return
         }
+        val venueZoneId =
+            try {
+                venueSettingsRepository.resolvePromotionZoneId(
+                    parsed.venueId,
+                    ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                )
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: InvalidInputException) {
+                enqueueMessage(chatId, e.message ?: "Часовой пояс заведения указан некорректно.")
+                return
+            }
         val answer =
             service.diagnosePromotion(
                 AiPromotionDiagnosticsCommand(
@@ -256,7 +270,7 @@ class AiTelegramHandler(
                     venueId = parsed.venueId,
                     promotionId = parsed.promotionId,
                     now = Instant.now(),
-                    venueZoneId = resolveVenueZoneId(parsed.venueId),
+                    venueZoneId = venueZoneId,
                 ),
             )
         enqueueMessage(chatId, answer.text, rootActions(parsed.venueId, parsed.origin))

@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.venue.orders
 
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
@@ -13,6 +14,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -101,6 +103,35 @@ class VenueOrdersRepositoryTest {
         }
 
     @Test
+    fun `operational queue payable keeps promotion price snapshot after menu price edit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("operational-queue-promotion-price-snapshot")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val batchId = seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now())
+            val batchItemId =
+                seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Кальян", priceMinor = 200_000)
+            seedPromotionAdjustment(
+                jdbcUrl = jdbcUrl,
+                fixture = fixture,
+                batchId = batchId,
+                batchItemId = batchItemId,
+                title = "Счастливые часы",
+                ruleType = "HAPPY_HOURS_PERCENT",
+                discountMinor = 100_000,
+                discountPercent = 50,
+            )
+            updateMenuItemPriceForBatchItem(jdbcUrl, batchItemId, priceMinor = 400_000)
+            updateMenuItemCurrencyForBatchItem(jdbcUrl, batchItemId, currency = "USD")
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+
+            val result = repository.listOperationalQueueByOrder(fixture.venueId, 20)
+
+            assertEquals(100_000L, result.single().payableMinor)
+            assertEquals(100_000L, result.single().promoDiscountMinor)
+            assertEquals("RUB", result.single().currency)
+        }
+
+    @Test
     fun `loadOrderDetail returns guest display name from batch author`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("order-detail-author-guest-name")
@@ -173,6 +204,85 @@ class VenueOrdersRepositoryTest {
                 detail.promotionDiscounts.map { it.label to it.discountMinor },
             )
             assertEquals(detail.promotionDiscounts, detail.batches.single().promotionDiscounts)
+        }
+
+    @Test
+    fun `manual item discount is rejected when promotion adjustment exists`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-manual-discount-conflict")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val batchId = seedBatch(jdbcUrl, fixture.orderId, "ACCEPTED", Instant.now())
+            val batchItemId =
+                seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Кальян", priceMinor = 200_000)
+            seedPromotionAdjustment(
+                jdbcUrl = jdbcUrl,
+                fixture = fixture,
+                batchId = batchId,
+                batchItemId = batchItemId,
+                title = "Счастливые часы",
+                ruleType = "HAPPY_HOURS_PERCENT",
+                discountMinor = 100_000,
+                discountPercent = 50,
+            )
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+
+            val error =
+                assertFailsWith<InvalidInputException> {
+                    repository.setBatchItemDiscountPercent(
+                        venueId = fixture.venueId,
+                        orderId = fixture.orderId,
+                        batchItemId = batchItemId,
+                        discountPercent = 10,
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                    )
+                }
+
+            assertEquals(
+                "На эту позицию уже действует акция. Ручную скидку применить нельзя.",
+                error.message,
+            )
+            assertEquals(100_000L to 50, fetchPromotionAdjustment(jdbcUrl, batchItemId))
+        }
+
+    @Test
+    fun `manual item discount does not disclose promotion on foreign batch item`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-manual-discount-foreign-item")
+            val ownFixture = seedActiveOrder(jdbcUrl)
+            seedBatch(jdbcUrl, ownFixture.orderId, "ACCEPTED", Instant.now())
+            val foreignFixture = seedActiveOrder(jdbcUrl)
+            val foreignBatchId = seedBatch(jdbcUrl, foreignFixture.orderId, "ACCEPTED", Instant.now())
+            val foreignBatchItemId =
+                seedBatchItem(
+                    jdbcUrl,
+                    foreignFixture.venueId,
+                    foreignBatchId,
+                    "Чужой кальян",
+                    priceMinor = 200_000,
+                )
+            seedPromotionAdjustment(
+                jdbcUrl = jdbcUrl,
+                fixture = foreignFixture,
+                batchId = foreignBatchId,
+                batchItemId = foreignBatchItemId,
+                title = "Чужая акция",
+                ruleType = "HAPPY_HOURS_PERCENT",
+                discountMinor = 100_000,
+                discountPercent = 50,
+            )
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+
+            val result =
+                repository.setBatchItemDiscountPercent(
+                    venueId = ownFixture.venueId,
+                    orderId = ownFixture.orderId,
+                    batchItemId = foreignBatchItemId,
+                    discountPercent = 10,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+
+            assertFalse(result)
+            assertEquals(100_000L to 50, fetchPromotionAdjustment(jdbcUrl, foreignBatchItemId))
         }
 
     @Test
@@ -927,6 +1037,73 @@ class VenueOrdersRepositoryTest {
             statement.setLong(1, batchItemId)
             statement.executeQuery().use { rs ->
                 if (rs.next()) rs.getLong("menu_item_id") else error("Missing batch item $batchItemId")
+            }
+        }
+
+    private fun updateMenuItemPriceForBatchItem(
+        jdbcUrl: String,
+        batchItemId: Long,
+        priceMinor: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE menu_items
+                SET price_minor = ?
+                WHERE id = (
+                    SELECT menu_item_id
+                    FROM order_batch_items
+                    WHERE id = ?
+                )
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, priceMinor)
+                statement.setLong(2, batchItemId)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
+    }
+
+    private fun updateMenuItemCurrencyForBatchItem(
+        jdbcUrl: String,
+        batchItemId: Long,
+        currency: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE menu_items
+                SET currency = ?
+                WHERE id = (
+                    SELECT menu_item_id
+                    FROM order_batch_items
+                    WHERE id = ?
+                )
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, currency)
+                statement.setLong(2, batchItemId)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
+    }
+
+    private fun fetchPromotionAdjustment(
+        jdbcUrl: String,
+        batchItemId: Long,
+    ): Pair<Long, Int>? =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT discount_minor, discount_percent
+                FROM order_batch_item_promotion_adjustments
+                WHERE order_batch_item_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchItemId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) rs.getLong("discount_minor") to rs.getInt("discount_percent") else null
+                }
             }
         }
 
