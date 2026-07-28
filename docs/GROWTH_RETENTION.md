@@ -63,6 +63,46 @@ Current implementation is **partial**:
   are future and must not be treated as guest order online payment.
 - Persistent template storage, promo codes, loyalty stamps/points, referrals, campaign segmentation and paid placement boosting remain future unless a later implementation summary says otherwise.
 
+## Promotion Compatibility Policy
+
+Status: **AUDIT / FUTURE IMPLEMENTATION**.
+
+Gift With Item smoke observed Happy Hours Percentage and Gift With Item being applied together.
+This is not recorded as a confirmed runtime bug or as a status change for either current slice.
+The product gap is the absence of one explicit cross-promotion conflict policy. Existing bounded
+`no stacking` evidence covers the current per-line percentage/manual-discount and gift reward
+guards; it does not define compatibility between every executable reward type.
+
+All executable promotions must use one server-owned Promotion Compatibility Policy rather than
+separate compatibility settings inside Happy Hours, Gift With Item or any later promotion type.
+The same mechanism must cover Happy Hours, Gift With Item, future cashback, personal discounts,
+loyalty and promo codes and must be reward-type-aware.
+
+Compatibility modes:
+
+- `STACKABLE`: compatible rewards may apply together, for example Happy Hours `-50%` plus free tea.
+- `EXCLUSIVE`: one best offer wins the conflict, for example Happy Hours `-50%` instead of a
+  personal discount `-20%`.
+- `OVERRIDE`: the promotion suppresses all other rewards and discounts in its defined scope.
+
+Resolution must use explicit promotion priority plus a deterministic winner/tie-break policy.
+Rule/database iteration order, client order and timing must never decide the result. Recommended
+defaults are:
+
+| Reward pair | Default policy |
+| --- | --- |
+| Discount vs discount | `EXCLUSIVE`. |
+| Discount vs gift | `STACKABLE`. |
+| Gift vs gift | `EXCLUSIVE`; at most one gift. |
+| Cashback | Separate future policy inside the same compatibility mechanism, after its financial model is defined. |
+
+The Guest sees only the final applied combination and totals, not rejected candidates or internal
+priority. Venue Owner/Manager must receive an understandable explanation of which compatibility
+mode and priority selected or suppressed each offer. The resolver must fail closed against
+accidental discount addition. Manual discount policy must participate in the same compatibility
+decision and preserve server-side actor/RBAC rules; current STAFF denial is not a bypass. Future
+loyalty and cashback must reuse this mechanism rather than add another stacking engine.
+
 ## Terms
 
 | Term | Meaning | Status |
@@ -75,6 +115,7 @@ Current implementation is **partial**:
 | `POST_VISIT_FEEDBACK` | 1-5 rating, tags and optional comment submitted from completed History detail only; internal venue signal. A configured safe public review URL may be offered only after manual `5/5` submit and explicit guest click. | DONE / MVP / staging-smoke-passed. |
 | `VENUE_PROMOTION` | Simple informational venue announcement with title, description, required period, optional terms and lifecycle status. | DONE / MVP / STAGING-SMOKE-PASSED for informational Phase 1. |
 | `EXECUTABLE_PROMOTION` | A server-evaluated schedule + eligibility + reward rule with an immutable application snapshot in the order. | Happy Hours Percent: DONE / STAGING-SMOKE-PASSED. Gift parity: GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT. |
+| `PROMOTION_COMPATIBILITY_POLICY` | One reward-type-aware conflict resolver for all executable promotions and manual discounts. | AUDIT / FUTURE IMPLEMENTATION. |
 | `PROMO_CODE` | Code-based discount/reward with limits and accounting. | After MVP. |
 | `LOYALTY_STAMP` | Simple stamp-card loyalty model. | Future. |
 | `LOYALTY_POINTS` | Points/cashback-style ledger and redemption model. | Future; requires financial model. |
@@ -162,7 +203,8 @@ Platform may moderate growth monetization later, but it is not required for MVP:
 - Preorder depends on booking lifecycle from `docs/BOOKING_LIFECYCLE.md` and reliable `visit_count`.
 - Paid placement depends on Platform billing, moderation and analytics.
 - Cashback/points/flexible loyalty must not be implemented before a correct financial model and discount accounting.
-- Promo codes require limits, abuse controls, accounting and clear conflict rules with manual discounts/loyalty.
+- Promo codes require limits, abuse controls, accounting and the shared Promotion Compatibility
+  Policy for conflicts with manual discounts/loyalty.
 
 Target growth events after implementation:
 - `favorite_venue_added` / `favorite_venue_removed`;

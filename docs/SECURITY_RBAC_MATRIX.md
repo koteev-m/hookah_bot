@@ -1,6 +1,6 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-07-23.
+Дата актуализации: 2026-07-28.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/today-shift/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -132,7 +132,7 @@ These actions require server-side authorization and should require confirmation,
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
 | Staff chat linked/unlinked/tested | Confirmation for unlink; audit/link evidence without raw secrets. |
 | Menu price changed; item archived; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. |
-| Promotion schedule, eligibility, reward, status or stacking policy changed | Owner/Manager own venue only; audit safe old/new rule/version and actor. |
+| Promotion schedule, eligibility, reward, status, compatibility mode/matrix or priority changed | Owner/Manager own venue only; audit safe old/new rule/version, policy/version, priority and actor. |
 | Order force closed; tab reopened | Reason and audit; preserve session/tab boundaries. |
 | Invoice manually marked paid; subscription override changed; billing provider config changed | Platform Owner only, explicit action, reason where needed and safe audit. |
 | Support ticket transferred/closed/assignee changed | Audit status/scope/actor/source; no message text/raw Telegram payloads. |
@@ -151,6 +151,7 @@ These actions require server-side authorization and should require confirmation,
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat hidden. | Platform does not bypass ordinary venue RBAC by default. | Event/audit explorer and analytics exports need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
 | Promotion configuration/status mutation audit | `PARTIAL / P2 FOLLOW-UP`. Promotion management is server-authorized, but there is not yet complete actor plus safe old/new rule/config/status evidence for every mutation. | Record actor, venue/promotion/rule identity, version and safe old/new schedule, target, reward and status evidence. | Do not treat promotion mutation audit as `DONE` until a separate implementation and verification slice closes this gap. |
+| Promotion financial compatibility | Current slices have bounded percentage/manual-discount and gift reward guards, but no documented common cross-promotion conflict policy. Gift smoke observed Happy Hours Percentage and Gift With Item together; this is not a confirmed runtime bug. | One server-owned, reward-type-aware policy uses `STACKABLE`, `EXCLUSIVE` or `OVERRIDE`, explicit priority and deterministic winner/tie-break rules for all executable promotions and manual discounts. | `AUDIT / FUTURE IMPLEMENTATION`. Fail closed against accidental discount addition; later loyalty, promo codes and cashback must reuse the same mechanism. |
 | Staff profiles / today shift | Phase 1 backend + Mini App implementation exists and local smoke passed; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Keep role/privacy smoke in regression; staging UX acceptance is still required before production readiness. |
 | Post-visit feedback | History-only submit, own-venue Owner/Manager read, Owner-only public review URL and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed. | Preserve own-visit/own-venue isolation, Staff denial and manual-only external/follow-up actions. | Platform feedback dashboard, automated prompts and public review automation remain future/disabled. |
 | Staff tips | No runtime implementation yet; canonical future boundaries are `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 external staff tip link + intent only; money does not touch platform in MVP; intent is not proof of payment. | Provider/direct payout needs legal/product decision; Telegram Stars and crypto are not MVP. |
@@ -181,6 +182,13 @@ These actions require server-side authorization and should require confirmation,
 21. Venue Owner/Manager cannot read or follow up feedback from another venue; Manager cannot edit the Owner-only public review URL.
 22. Low-rating follow-up opens only the feedback guest's exact `VENUE_CHAT`, creates no support ticket and posts nothing to staff-chat.
 23. A public review URL reaches Guest only after manual `5/5`, only when validated/configured, and never causes an automatic redirect.
+24. Promotion compatibility, priority and winner resolution are server-owned and deterministic;
+    clients cannot submit a trusted mode, priority, winner, discount or reward.
+25. Promotion compatibility changes are limited to Owner/Manager in their own venue and write safe
+    policy/version, old/new value and actor audit evidence; Staff has no configuration bypass.
+26. Manual discount policy and every executable reward use one compatibility decision that fails
+    closed against accidental discount addition; future loyalty, promo codes and cashback cannot
+    bypass it.
 
 ## Roadmap Status
 
@@ -192,5 +200,7 @@ These actions require server-side authorization and should require confirmation,
 - Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.
 - Dangerous action audit: `PARTIAL` until all listed dangerous actions have verified audit evidence.
 - Promotion configuration/status mutation audit: `PARTIAL / P2 FOLLOW-UP`; complete actor plus safe old/new rule/config/status evidence is not implemented yet.
+- Promotion Compatibility Policy: `AUDIT / FUTURE IMPLEMENTATION`; no common cross-promotion
+  financial conflict policy has implementation or verification evidence yet.
 - Security smoke checklist: `UPDATED`.
 - Post-Visit Feedback RBAC/privacy: `DONE / MVP / STAGING-SMOKE-PASSED`; Platform feedback dashboard remains `FUTURE`.

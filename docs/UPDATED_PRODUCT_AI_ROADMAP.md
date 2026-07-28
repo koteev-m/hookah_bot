@@ -979,6 +979,14 @@ Happy Hours Percent status: **DONE / STAGING-SMOKE-PASSED**.
 Gift parity status:
 **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
+Promotion Compatibility Policy status: **AUDIT / FUTURE IMPLEMENTATION**.
+
+Gift With Item smoke observed Happy Hours Percentage and Gift With Item being applied together.
+This is a product-policy gap, not a confirmed runtime bug in either current slice and not a reason
+to change their statuses. The future slice must add one server-owned compatibility policy for all
+executable promotions; no Happy Hours-, gift-, cashback-, personal-discount-, loyalty- or
+promo-code-specific stacking setting may become a parallel source of truth.
+
 Product UX remains template-based over one Promotion Rules & Rewards Engine:
 
 1. Информационная акция.
@@ -990,6 +998,23 @@ Product UX remains template-based over one Promotion Rules & Rewards Engine:
 
 Happy Hours is a schedule-based percentage preset, not a universal reward form. Schedule,
 targets, no-stacking resolution, preview, submit recalculation, ledger and History stay shared.
+That bounded no-stacking closure does not define cross-reward compatibility; the shared future
+policy must be reward-type-aware and resolve conflicts by compatibility mode, promotion priority
+and a deterministic winner/tie-break rule.
+
+Recommended defaults:
+
+- discount vs discount: `EXCLUSIVE`;
+- discount vs gift: `STACKABLE`;
+- gift vs gift: `EXCLUSIVE`, at most one gift;
+- cashback: a separate future policy within the same mechanism after its financial model exists.
+
+The modes are `STACKABLE` (compatible offers apply together), `EXCLUSIVE` (one best offer wins)
+and `OVERRIDE` (one promotion suppresses other rewards/discounts in scope). Guest surfaces expose
+only the final applied combination. Venue Owner/Manager surfaces must explain the resolved
+mode/priority result. Manual discounts must enter the same resolver without weakening actor/RBAC
+rules, and later loyalty/cashback/promo codes must reuse it. Acceptance requires deterministic,
+server-owned resolution that cannot accidentally add discounts.
 
 Happy Hours closure evidence includes staging creation/activation validation, weekday/time windows,
 item/category targets, current price and selected-option delta, cart preview, submit recalculation,
@@ -1059,7 +1084,8 @@ review and staging cross-surface smoke remain required; do not label this slice
 
 Exact out of scope: BOGO / X+Y, second-item-free, free option/refill, fixed discount, special
 price, cross-visit or cross-batch accumulation, loyalty, promo codes, notifications, paid
-placement, payments/Stars/crypto, arbitrary rule builder and changes to `REPEAT-MANUAL-001`.
+placement, payments/Stars/crypto, arbitrary rule builder, Promotion Compatibility Policy
+implementation and changes to `REPEAT-MANUAL-001`.
 
 Why not reopen full bill / display order number in Mini App:
 - Guest Bill / Display-Number / Full-Bill Parity is already CLOSED / staging smoke passed in current roadmap and Venue Operations docs;

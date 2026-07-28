@@ -203,6 +203,45 @@ STAFF denial and repository defense-in-depth, cross-surface parity and fresh-ins
 fixed/selectable/skip behavior are covered. This is local evidence only; independent
 review, GitHub Actions and staging remain open.
 
+### Promotion Compatibility Policy audit and future quality gate
+
+Status: **AUDIT / FUTURE IMPLEMENTATION**.
+
+Gift With Item smoke observed Happy Hours Percentage and Gift With Item applied together. Record
+this as missing cross-promotion product policy, not as a confirmed runtime bug or a status change
+for Happy Hours or Gift With Item. Existing `no stacking` evidence remains bounded to the current
+per-line percentage/manual-discount and gift reward guards.
+
+The future implementation must prove one server-owned, reward-type-aware compatibility resolver
+for Happy Hours, Gift With Item, personal discounts, loyalty, promo codes and future cashback.
+Separate stacking/conflict switches inside individual promotion types are not acceptable.
+
+Required future coverage:
+
+- `STACKABLE` applies every compatible offer and produces one stable final combination;
+- `EXCLUSIVE` selects exactly one best offer by explicit promotion priority and a deterministic
+  tie-breaker;
+- `OVERRIDE` suppresses every other reward/discount in its defined scope;
+- discount vs discount defaults to `EXCLUSIVE`; discount vs gift defaults to `STACKABLE`; gift vs
+  gift defaults to `EXCLUSIVE` with at most one gift;
+- cashback remains a separate future policy within the same resolver and is not enabled before
+  its financial/accounting model is defined;
+- identical candidates resolve identically regardless of database iteration order, client,
+  request ordering, retry or concurrent submit;
+- preview and submit use the same current policy/version, revalidate changed state and persist the
+  applied combination plus enough safe decision evidence to explain winner/suppression;
+- Guest Bot/Mini App show only the final applied combination and totals; Venue Owner/Manager see a
+  clear explanation of the effective mode, priority and winner/suppression reason;
+- no path accidentally adds discounts, and zero-bound, rounding, idempotency, bill, History and
+  staff-chat persisted-fact parity remain intact;
+- manual discounts enter the same compatibility decision while preserving actor/RBAC policy,
+  including current STAFF denial and direct/stale action rejection;
+- future loyalty, cashback and promo codes reuse this gate rather than introduce another resolver.
+
+The observed Happy Hours plus gift combination matches the recommended discount-vs-gift default
+only after that policy is explicitly implemented, configured and verified. This audit alone is no
+runtime or release evidence.
+
 ## GitHub Actions Expectations
 
 Current CI jobs:
